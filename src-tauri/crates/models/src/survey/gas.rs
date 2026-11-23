@@ -22,6 +22,7 @@
 //! engine's helpers; `wire` holds the slot boundary.
 
 mod budget;
+mod collapse;
 mod drops;
 mod physics;
 mod profile;
@@ -49,6 +50,15 @@ mod tests;
 )]
 mod differential_tests;
 
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and an exact zero budget \
+              is what one assertion checks"
+)]
+mod collapse_tests;
+
 use std::collections::VecDeque;
 
 use crate::config::{DpvRig, GasConfig, ReservePreset};
@@ -62,9 +72,10 @@ use budget::{
     all_thirds_backgas_turn, backgas_fraction, backgas_turn_pressure, cylinder_usable_bars,
     effective_preset, free_backgas_turn, penetration_budget,
 };
+use collapse::{one_per_shown, Runs};
 use drops::{
-    apply_stage_drop_overrides, cumulative, default_drop_stations, place_stage_drops,
-    stage_drop_plans,
+    apply_stage_drop_overrides, cumulative, default_drop_indices, default_drop_stations,
+    place_stage_drops, stage_drop_plans,
 };
 use physics::edge_gas_basis;
 pub use profile::GasProfilePoint;
@@ -91,15 +102,22 @@ pub struct GasReach {
     pub turn_frontier: Vec<StationId>,
     pub max_reachable_gas: f64,
     pub budget_litres: f64,
-    /// The planned route origin -> way points -> target, one entry per node. A junction is one
-    /// node, so there are no merge hops; a route that doubles back repeats a station.
+    /// The planned route origin -> way points -> target, one entry per station passed. A junction
+    /// is one node, so there are no merge hops (D18); consecutive nodes that show one station
+    /// across loop-closure ties (a closure that archives one end, RS 6) are one entry too, so
+    /// there are no closure hops between them either. A route that doubles back repeats a
+    /// station. An entry names its run's first node (where the route arrives), except the last,
+    /// which names the route target.
     pub route: Vec<StationId>,
-    /// Per route node: the line whose slot names the node on the wire and whose slot z is its
-    /// depth (the arriving swum leg's line, else the departing one's, else the station's lowest
-    /// line id).
+    /// Per route entry: the node the route arrives at and the node it leaves by. They differ only
+    /// for an entry that collapsed a run of ties (RS 6); each leg is drawn from the leaving node of
+    /// one entry to the arriving node of the next.
+    pub route_ends: Vec<[StationId; 2]>,
+    /// Per route entry: the line whose slot names the entry on the wire (the arriving swum leg's
+    /// line, else the departing one's, else the station's lowest line id).
     pub route_lines: Vec<Option<LineId>>,
     /// Per route leg: the shot that joins its two stations (a swum leg), or `None` for a closure
-    /// tie.
+    /// tie between two stations (a closure that keeps both names).
     pub route_shots: Vec<Option<ShotLocation>>,
     /// Per route leg: that shot's kind (`None` for a tie).
     pub route_leg_kinds: Vec<Option<ShotKind>>,
@@ -227,6 +245,16 @@ impl Project {
         let n = stations.len();
         // The MEASURED positions (#34): per dense station, z without any line's hand move.
         let coords = dense_coords(topology, positions);
+        // RS 6: which nodes show one station across a loop-closure tie. A step between two route
+        // nodes is a tie iff no shot joins them; nothing collapses when no closure archives an
+        // end, which keeps such a project's field exactly what it was.
+        let shot_between = self.shot_between_map();
+        let shown_index = self.shown_index();
+        let one_station = |u: usize, v: usize| -> bool {
+            !shown_index.is_empty()
+                && !shot_between.contains_key(&(u.min(v), u.max(v)))
+                && shown_index.shown(stations[u]) == shown_index.shown(stations[v])
+        };
 
         let entrance_roots = || -> Vec<usize> {
             self.entrance_stations()
@@ -407,7 +435,29 @@ impl Project {
         // which depends on these very overrides - and the two coincide whenever the delta is 0.
         let default_thresholds = cumulative(plans.iter().map(|p| p.safe_in_litres));
         let base_view = budget_view(&walk, endpoint_idx, base_budget, scooter_limit);
-        let default_drop_nodes = default_drop_stations(&base_view, &default_thresholds);
+        let default_drop_idx = default_drop_indices(&base_view, &default_thresholds);
+        let default_drop_nodes = default_drop_stations(&base_view, &default_drop_idx);
+        // A drop pinned on another node of its default station (the loop end its station shows
+        // across a tie, RS 6) is the same place, so it is the no-op a release in place is (D18:
+        // likewise another slot of a junction).
+        let base_runs = Runs::of(base_view.route.len(), |i| {
+            one_station(base_view.route[i], base_view.route[i + 1])
+        });
+        let resolved_overrides: Vec<Option<usize>> = resolved_overrides
+            .iter()
+            .enumerate()
+            .map(|(k, &pin)| {
+                let (Some(si), Some(&j)) = (pin, default_drop_idx.get(k)) else {
+                    return pin;
+                };
+                match base_runs.run_holding(j) {
+                    Some((first, last)) if base_view.route[first..=last].contains(&si) => {
+                        base_view.route.get(j).copied()
+                    }
+                    _ => pin,
+                }
+            })
+            .collect();
 
         let (thresholds, stage_drop_bars, stage_drop_over_reserve, budget_delta) =
             apply_stage_drop_overrides(
@@ -492,6 +542,12 @@ impl Project {
             })
             .map(|u| stations[u])
             .collect();
+        // Each turn station once (D18): a loop end and its kept end are one station (RS 6).
+        let turn_frontier = if shown_index.is_empty() {
+            turn_frontier
+        } else {
+            one_per_shown(&turn_frontier, |s| shown_index.shown(s))
+        };
 
         let route: Vec<StationId> = route_nodes.iter().map(|&i| stations[i]).collect();
         // Drop indices along the route (not stations): a way-point route can revisit a station,
@@ -505,7 +561,6 @@ impl Project {
         // The legs: a leg is a real **swum** leg iff a shot joins its two stations (a shot,
         // including a reference/jump shot the diver swims); otherwise it is a loop-closure tie,
         // a zero-distance graph edge whose endpoints are the *same* surveyed point.
-        let shot_between = self.shot_between_map();
         let route_shots: Vec<Option<ShotLocation>> = route_nodes
             .windows(2)
             .map(|w| {
@@ -676,7 +731,13 @@ impl Project {
             conservative,
         );
 
-        GasReach {
+        // RS 6: the runs of the node route that show one station collapse to one entry, after
+        // every number above was measured on the node route.
+        let runs = Runs::of(route_nodes.len(), |i| {
+            one_station(route_nodes[i], route_nodes[i + 1])
+        });
+        let route_ends = route.iter().map(|&s| [s, s]).collect();
+        let mut reach = GasReach {
             stations,
             gas_to_reach,
             reachable,
@@ -685,6 +746,7 @@ impl Project {
             budget_litres,
             final_turn: route_target.map(|t| topology.stations()[t]),
             route,
+            route_ends,
             route_lines,
             route_shots,
             route_leg_kinds: leg_kinds,
@@ -706,7 +768,9 @@ impl Project {
             scooter_drop_waypoint,
             route_runtime_min,
             turn_on_scooter_range,
-        }
+        };
+        reach.collapse_route(&runs);
+        reach
     }
 
     /// The connecting shot's kind for each ordered route leg; `None` for a loop-closure tie

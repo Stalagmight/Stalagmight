@@ -9,7 +9,12 @@
 //! (identity, BASE, a clean dirty bit, the project's undo policy), and the
 //! history rule applied ([`InheritedUndo`]). Only then is anything locked or
 //! written, and the cache file is always version 2: a legacy revision is
-//! upgraded on install (its original stays on the server).
+//! upgraded on install (its original stays on the server). So is a version 2
+//! revision an earlier build wrote (no `archived-stations` feature, plan
+//! 2026-11-23 RS 8.2): the cache gets the upgraded survey, its notice points
+//! at the server's revision, and its history (of the survey before the
+//! upgrade) is dropped. Only a download that opens read-only keeps its bytes;
+//! its copy stays the earlier file, upgraded at every open.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -128,11 +133,15 @@ pub(super) struct PreparedDownload {
     /// A migrated legacy revision's record parity (dive-plan pins, plan 10.3).
     legacy_parity: Option<LegacyParity>,
     /// A migrated legacy revision's conversion notice (stations the upgrade
-    /// moved), as a local upgrade raises it (review finding G-speleodb-1).
+    /// moved), as a local upgrade raises it (review finding G-speleodb-1), or
+    /// an earlier version 2 revision's upgrade notice.
     pub(super) conversion: Option<ConversionNotice>,
     /// The revision whose bytes these are, when the caller named it
     /// ([`Self::holding_revision`]); `None` when it is not known.
     revision: Option<String>,
+    /// A read-only earlier version 2 revision: the cache copy keeps its
+    /// bytes, so the opened copy is still the earlier file (RS 8.2).
+    upgrade_pending: bool,
 }
 
 impl PreparedDownload {
@@ -192,16 +201,29 @@ impl PreparedDownload {
         let Self {
             mut project,
             extras,
-            history_dropped,
+            mut history_dropped,
             legacy_parity,
             conversion,
+            upgrade_pending,
             ..
         } = self;
         project.file_path = Some(dest);
         let mut file = FileState::from_v2(extras, fingerprint, None);
         file.legacy_parity = legacy_parity;
         file.conversion = conversion;
-        let history = file.saved_history.clone();
+        file.upgrade_pending = upgrade_pending;
+        let mut history = file.saved_history.clone();
+        // A read-only earlier revision (RS 8.2) opens upgraded over a copy
+        // that still holds the earlier survey: its history (the Unwind's
+        // waiver keeps one) describes that survey, so it is not loaded (the
+        // banner says so) and the copy keeps it, as a local open of such a
+        // file does (data review finding data-4).
+        if upgrade_pending {
+            if !history.is_empty() {
+                history_dropped = Some(HistoryDropped::EarlierVersion);
+            }
+            history = History::default();
+        }
         Opened {
             project,
             file,
@@ -236,13 +258,16 @@ impl AppState {
                 _ => SpeleoDbError::Io(format!("could not read the downloaded project: {e}")),
             })?;
         let mut conversion = None;
+        let mut upgrade_pending = false;
         let (project, mut extras, original, unreadable, legacy_parity) = match sniff(&bytes) {
             Format::V2 => {
-                let decoded = decode(&bytes, options).map_err(|e| decode_refusal(&e))?;
-                let unreadable = decoded
+                let mut decoded = decode(&bytes, options).map_err(|e| decode_refusal(&e))?;
+                let mut unreadable = decoded
                     .notes
                     .iter()
-                    .any(|n| matches!(n, DecodeNote::HistoryDropped { .. }));
+                    .any(|n| matches!(n, DecodeNote::HistoryDropped { .. }))
+                    .then_some(HistoryDropped::Unreadable);
+                let read_only = decoded.read_only().is_some();
                 if let Some(reason) = decoded.read_only() {
                     tracing::warn!(
                         features = ?reason.unknown_features,
@@ -251,13 +276,36 @@ impl AppState {
                         "speleodb: the download was made with a newer Stalagmight; it opens read-only"
                     );
                 }
-                (
-                    decoded.project,
-                    decoded.extras,
-                    Some(bytes),
-                    unreadable.then_some(HistoryDropped::Unreadable),
-                    None,
-                )
+                let mut original = Some(bytes);
+                if let Some(report) = decoded.upgrade() {
+                    tracing::info!(
+                        records = report.records,
+                        swapped = report.swapped.len(),
+                        closures_archived = report.closures_archived,
+                        read_only,
+                        purpose = "install a downloaded revision an earlier build wrote",
+                        "speleodb: upgraded the revision to kept stations in memory"
+                    );
+                    if read_only {
+                        // Nothing this build does not understand may be lost:
+                        // the copy keeps the earlier bytes, upgraded at open.
+                        upgrade_pending = true;
+                        conversion = ConversionNotice::of_upgrade(&report);
+                    } else {
+                        // Converted on install, as a legacy revision is: the
+                        // cache gets the upgraded survey, and its history (of
+                        // the survey before the upgrade) is dropped.
+                        original = None;
+                        conversion =
+                            ConversionNotice::of_upgrade(&report).map(ConversionNotice::downloaded);
+                        if !decoded.extras.history.is_empty() {
+                            unreadable = Some(HistoryDropped::EarlierVersion);
+                        }
+                        decoded.extras.history = History::default();
+                        decoded.extras.generator = super::project_io::generator();
+                    }
+                }
+                (decoded.project, decoded.extras, original, unreadable, None)
             }
             Format::Legacy => {
                 drop(bytes);
@@ -277,11 +325,9 @@ impl AppState {
                 );
                 // The cache copy is version 2 at once and nothing local keeps
                 // the original: the notice points at the server's revision.
-                conversion = ConversionNotice::of_migration(
-                    &migrated.report,
-                    &migrated.extras.names_changed,
-                )
-                .map(ConversionNotice::downloaded);
+                conversion =
+                    ConversionNotice::of_migration(&migrated.report, &migrated.extras.changes)
+                        .map(ConversionNotice::downloaded);
                 let mut project = migrated.project;
                 if !migrated.extras.validation_stored {
                     project.settings.validation = config.validation;
@@ -341,6 +387,7 @@ impl AppState {
             legacy_parity,
             conversion,
             revision: None,
+            upgrade_pending,
         })
     }
 

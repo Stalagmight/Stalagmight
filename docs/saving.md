@@ -400,6 +400,20 @@ converted when you save" instead of "Saved": the frontend asks
 save's `legacy_converted` clears it (demo issue N-6). A conversion that raised
 no notice reads the same.
 
+A version 2 file an earlier build of version 2 wrote (its `requires` lacks
+`archived-stations`, [kept stations](plans/2026-11-23_kept-stations.md) 8.2)
+takes the same route once it is open: the open upgrades it in memory
+(`Decoded::upgrade`) and marks it pending (`FileState::upgrade_pending`), the
+status bar reads the same, the conversion notice leads with "Upgraded from an
+earlier version 2 file", its history is not loaded (the banner says so), and
+its first save goes through `legacy_upgrade::upgrade`, whose steps 2 and 3 have
+nothing to do for a JSON file: the original is kept in Recovery and replaced.
+Until then the file is still a version 2 file, so local-only rewrites work on
+it; they copy `requires`, the body and the unread history, and the file stays
+the earlier one. A Recents rename of such a closed file is a local-only
+rewrite too. A SpeleoDB revision of that kind is converted on install, like a
+0.6.0 revision.
+
 A legacy file is not always one file. Beside a file an old build was killed
 writing sits a HOT `-journal`: it holds the before-images of the pages the
 interrupted write had already put into the file, so only the pair is the survey

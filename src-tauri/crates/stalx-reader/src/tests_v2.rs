@@ -4,7 +4,9 @@
 
 #![expect(clippy::unwrap_used, reason = "test assertions")]
 
-use stalagmight_models::survey::{ClosureStrategy, LineMeta, Project, StartAt, ZeroDatum};
+use stalagmight_models::survey::{
+    ClosureEnd, ClosureStrategy, LineMeta, Project, StartAt, ZeroDatum,
+};
 use stalagmight_models::{GpsCoordinates, ShotData};
 use stalagmight_persistence::persistence::stalx_v2::{self, Extras, Mode};
 use tempfile::TempDir;
@@ -167,6 +169,7 @@ fn reads_every_part_of_a_json_file() {
         .map(|c| (c.station, c.text.as_str()))
         .collect();
     assert_eq!(comments, [(hub_at, "hub"), (at(hub.side, 2), "lead")]);
+    assert!(survey.shown_as.is_empty(), "no closure archives an end");
 
     assert_eq!(survey.zero_datums.len(), 1);
     assert_eq!(survey.zero_datums[0].station, at(hub.main, 0));
@@ -207,6 +210,49 @@ fn reads_every_part_of_a_json_file() {
         .unwrap();
     assert_eq!((loose_start.x, loose_start.y), (500.0, 250.0));
     assert!(survey.zero_datums[0].residual_m.unwrap() < 1e-9);
+}
+
+/// A loop end a closure archives (RS 9): its positions keep its own Station
+/// ID (it is a point of its own), they show the kept end's name, its own
+/// comment is hidden, and `shown_as` maps it to the kept end. Injection: read
+/// node names, and Side 2 reads its own name.
+#[test]
+fn a_closure_archived_end_reads_as_its_kept_end() {
+    let (mut project, hub) = hub_project();
+    let closure = project
+        .closures
+        .iter_mut()
+        .find(|c| c.id == hub.closure)
+        .unwrap();
+    closure.archived = Some(ClosureEnd::B);
+    let (kept, archived) = (closure.a, closure.b);
+    assert!(project.validate().is_empty(), "{:?}", project.validate());
+    assert_ne!(project.station(archived).unwrap().name, "17");
+
+    let survey = read_bytes(&encoded(&project), &with_stations()).unwrap();
+
+    let side = survey.sections.iter().find(|s| s.id == hub.side).unwrap();
+    assert_eq!(side.station_ids[2], archived);
+    assert_eq!(name_at(&survey, at(hub.side, 2)), "17");
+    assert_eq!(name_at(&survey, at(hub.main, 4)), "17");
+    assert_eq!(
+        survey.shown_as,
+        std::collections::BTreeMap::from([(archived, kept)])
+    );
+    let comments: Vec<(StationId, &str)> = survey
+        .station_comments
+        .iter()
+        .map(|c| (c.station, c.text.as_str()))
+        .collect();
+    assert_eq!(comments, [(at(hub.main, 2), "hub")]);
+    assert_eq!(survey.loop_closures.len(), 1);
+    super::tests::assert_names_unique_per_section(&survey);
+    let stations = survey.stations.unwrap();
+    let own = stations
+        .iter()
+        .find(|p| p.station == at(hub.side, 2))
+        .unwrap();
+    assert_eq!(own.station_id, archived, "its own point");
 }
 
 #[test]
@@ -304,7 +350,11 @@ fn a_rule_broken_under_an_unknown_feature_is_newer_not_corrupt() {
         .to_string();
     let dangling = closure_line.replacen("\"b\":", "\"b\":999999,\"was_b\":", 1);
     let broken = edited(&bytes, &closure_line, &dangling);
-    let newer = edited(&broken, "\"requires\":[]", "\"requires\":[\"zz-future\"]");
+    let newer = edited(
+        &broken,
+        "\"requires\":[\"archived-stations\"]",
+        "\"requires\":[\"archived-stations\",\"zz-future\"]",
+    );
     let err = read_bytes(&newer, &ReadOptions::default()).unwrap_err();
     assert_eq!(
         invalid_kind(&err),
@@ -368,8 +418,8 @@ fn an_unknown_required_feature_is_read_and_flagged() {
     let (project, _) = hub_project();
     let bytes = edited(
         &encoded(&project),
-        "\"requires\":[]",
-        "\"requires\":[\"from-the-future\"]",
+        "\"requires\":[\"archived-stations\"]",
+        "\"requires\":[\"archived-stations\",\"from-the-future\"]",
     );
 
     let survey = read_bytes(&bytes, &ReadOptions::default()).unwrap();
@@ -460,4 +510,143 @@ fn an_old_file_and_its_json_conversion_read_the_same() {
         s
     };
     assert_eq!(same(&from_sqlite), same(&from_json));
+}
+
+/// A version 2 file an earlier build wrote (no `archived-stations`, a U1
+/// alias row) reads as the app upgrades it: the junction keeps the station
+/// on its longest line (Main, 30 m) on both sections, and Side's own "M2",
+/// which the earlier build showed beside the junction's alias "S0", keeps
+/// its name beside the junction's M2 (RS-FX5: Side shows the junction with
+/// Main's dot, which counts for no uniqueness); the Station IDs tell them
+/// apart.
+#[test]
+fn an_earlier_version_2_file_reads_upgraded() {
+    let text = "{\"format\":\"stalx\",\"version\":2,\"solver\":1,\"requires\":[],\n\
+        \"conventions\":{\"length\":\"m\",\"angles\":\"deg\",\"azimuth\":\"cw-from-north\",\
+        \"inclination\":\"+down\",\"depth\":\"+down\",\"local\":\"enu-m\",\
+        \"gps\":\"wgs84-deg\",\"temperature\":\"degC\"},\n\
+        \"project\":{\"name\":\"Earlier\",\"created\":\"2026-11-01T00:00:00Z\",\
+        \"modified\":\"2026-11-01T00:00:00Z\"},\n\
+        \"counters\":{\"station\":20,\"closure\":1,\"section\":0},\n\
+        \"stations\":[\n[0,\"M0\"],\n[1,\"M1\"],\n\
+        [2,\"M2\",{\"aliases\":[[9,\"S0\",1]]}],\n[3,\"M2\"],\n[4,\"S2\"]\n],\n\
+        \"lines\":[\n\
+        {\"id\":0,\"name\":\"Main\",\"color\":\"#f00\",\"start\":0},\n\
+        [\"u1\",1,15.0,0.0,0.0,0.0,0.0],\n[\"u2\",2,15.0,0.0,0.0,0.0,0.0],\n\
+        {\"id\":1,\"name\":\"Side\",\"color\":\"#0f0\",\"start\":2},\n\
+        [\"u3\",3,5.0,90.0,90.0,0.0,0.0],\n[\"u4\",4,5.0,90.0,90.0,0.0,0.0]\n],\n\
+        \"placements\":[\n{\"station\":0,\"x\":0.0,\"y\":0.0}\n],\n\
+        \"end\":true}\n";
+    let survey = read_bytes(text.as_bytes(), &ReadOptions::default()).unwrap();
+    assert_eq!(survey.newer_content, None);
+    let (main, side) = (survey.sections[0].id, survey.sections[1].id);
+    assert_eq!(name_at(&survey, at(main, 2)), "M2");
+    assert_eq!(name_at(&survey, at(side, 0)), "M2");
+    assert_eq!(name_at(&survey, at(side, 1)), "M2");
+    let side_ids = &survey.sections[1].station_ids;
+    assert_ne!(side_ids[0], side_ids[1]);
+}
+
+/// Record owners (RS-FX4): a junction merged into another with a record of
+/// its own reads as the junction it is (each slot shows the kept station,
+/// the archived ones nowhere), and a file whose record owners cycle is
+/// corrupt, refused at once. Injection: drop A6 from `validate` and the
+/// cycle reads.
+#[test]
+fn record_owners_read_and_a_cycle_is_corrupt() {
+    let (mut project, hub) = hub_project();
+    let far = project
+        .add_line(meta("Far"), StartAt::New, vec![leg(0.0)])
+        .unwrap();
+    let far_start = project.line(far).unwrap().start;
+    project.set_placement(far_start, -400.0, 90.0).unwrap();
+    let loose_start = project.line(hub.loose).unwrap().start;
+    let far_end = *project.line_stations(far).unwrap().last().unwrap();
+    let branch_end = *project.line_stations(hub.branch).unwrap().last().unwrap();
+    // Far's end merged into Loose's start (Loose's kept), then that junction
+    // into Branch's end (Branch's kept): Far's station is archived inside
+    // Loose's, which is archived in Branch's end.
+    project
+        .merge_stations_auto(far_end, loose_start, loose_start)
+        .unwrap();
+    project
+        .merge_stations_auto(loose_start, branch_end, branch_end)
+        .unwrap();
+    assert!(project.validate().is_empty(), "{:?}", project.validate());
+    let records = &project.station(branch_end).unwrap().archived;
+    assert_eq!(
+        records.iter().map(|r| (r.id, r.into)).collect::<Vec<_>>(),
+        [(far_end, Some(loose_start)), (loose_start, None)]
+    );
+    let bytes = encoded(&project);
+    let survey = read_bytes(&bytes, &ReadOptions::default()).unwrap();
+    let kept = project.station(branch_end).unwrap().name.clone();
+    for (section, index) in [(hub.loose, 0), (far, 1), (hub.branch, 1)] {
+        assert_eq!(name_at(&survey, at(section, index)), kept);
+    }
+    let loose = survey.sections.iter().find(|s| s.id == hub.loose).unwrap();
+    assert_eq!(loose.station_ids[0], branch_end);
+    super::tests::assert_names_unique_per_section(&survey);
+
+    let own = format!("{{\"id\":{loose_start},\"name\":");
+    let cycle = edited(
+        &bytes,
+        &own,
+        &format!("{{\"id\":{loose_start},\"into\":{far_end},\"name\":"),
+    );
+    let err = read_bytes(&cycle, &ReadOptions::default()).unwrap_err();
+    assert_eq!(invalid_kind(&err), Some(InvalidKind::Corrupt), "{err}");
+}
+
+/// RS-FX5, the user's example: Main / 12 is kept at Branch's start (Branch's
+/// own station there archived), and Branch's own 13th station keeps its
+/// surveyed name "12". The reader lists "12" at both Branch positions, as
+/// the app shows them, and the Station IDs keep them apart: Branch's start
+/// is the junction's id (merged with Main's 12), its 12th position its own.
+#[test]
+fn a_sections_own_12_reads_apart_from_its_dotted_junction() {
+    let mut p = Project::new("Dotted", None);
+    let main = p
+        .add_line(
+            meta("Main"),
+            StartAt::New,
+            (0..14).map(|_| leg(0.0)).collect(),
+        )
+        .unwrap();
+    let branch = p
+        .add_line(
+            meta("Branch"),
+            StartAt::New,
+            (0..12).map(|_| leg(0.0)).collect(),
+        )
+        .unwrap();
+    let start = p.line(branch).unwrap().start;
+    p.set_placement(start, 500.0, 500.0).unwrap();
+    for line in [main, branch] {
+        let chain: Vec<u32> = p.line(line).unwrap().stations().collect();
+        for (i, s) in chain.into_iter().enumerate() {
+            p.station_mut(s).unwrap().name = i.to_string();
+        }
+    }
+    let m12 = p.line(main).unwrap().station(12).unwrap();
+    let b0 = p.line(branch).unwrap().station(0).unwrap();
+    let own_12 = p.line(branch).unwrap().station(12).unwrap();
+    let out = p.merge_stations(b0, m12, m12, &[]).unwrap();
+    assert!(out.identities.lettered.is_empty());
+    assert!(p.validate().is_empty(), "{:?}", p.validate());
+
+    let survey = read_bytes(&encoded(&p), &ReadOptions::default()).unwrap();
+    assert_eq!(name_at(&survey, at(branch, 0)), "12");
+    assert_eq!(name_at(&survey, at(branch, 12)), "12");
+    assert_eq!(name_at(&survey, at(main, 12)), "12");
+    let section = survey.sections.iter().find(|s| s.id == branch).unwrap();
+    assert_eq!(section.station_ids[0], m12, "the junction's id");
+    assert_eq!(section.station_ids[12], own_12, "Branch's own");
+    assert_ne!(m12, own_12);
+    assert!(survey
+        .station_merges
+        .iter()
+        .any(|m| [m.a, m.b] == [at(main, 12), at(branch, 0)]
+            || [m.a, m.b] == [at(branch, 0), at(main, 12)]));
+    super::tests::assert_names_unique_per_section(&survey);
 }

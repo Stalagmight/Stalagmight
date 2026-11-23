@@ -47,7 +47,7 @@ use std::task::Poll;
 use std::time::Duration;
 
 use semver::{Prerelease, Version};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::utils::config::BundleType;
 use tauri::{AppHandle, Emitter, Manager, State, Url};
 use tauri_plugin_updater::{Update, UpdaterExt};
@@ -200,7 +200,7 @@ fn install_dir_is_writable() -> bool {
 /// A discriminated union rather than an `Option<info>`: "no update" and "there
 /// is one" are different states in the banner, and the payload must not be able
 /// to travel without the arm that says it is real.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AppUpdateStatus {
     /// Nothing newer is published for this platform on this track. Also the
@@ -236,7 +236,7 @@ pub struct AppUpdateProgress {
 /// the frontend: a transfer in flight keeps the download (Restart works again once
 /// the transfer has finished), while any other failure drops the banner back to
 /// Download, since the bytes may be what failed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AppUpdateInstallError {
     /// A SpeleoDB transfer the user started is still running and the user did

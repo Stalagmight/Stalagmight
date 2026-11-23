@@ -22,7 +22,9 @@ use super::types::{Extras, History, IgnoredWarning, LocalState, Mode, PushOption
 use super::write::{
     boolean, date, float, integer, normalized_date, signed, small, string, time, Obj,
 };
-use super::{CONVENTIONS, DEFAULT_GENERATOR, KNOWN_FEATURES, PREFIX, SOLVER, VERSION};
+use super::{
+    ARCHIVED_STATIONS, CONVENTIONS, DEFAULT_GENERATOR, KNOWN_FEATURES, PREFIX, SOLVER, VERSION,
+};
 use crate::models::UndoMode;
 
 /// What an encode did beside writing the survey.
@@ -149,7 +151,10 @@ fn write_head(
     out.extend_from_slice(b",\"solver\":");
     small(out, SOLVER);
     out.extend_from_slice(b",\"requires\":");
+    // RS 8.1: every file this build writes follows the kept-stations rules
+    // and says so, whatever it holds (U-P2-12).
     let mut requires: Vec<&str> = extras.requires.iter().map(String::as_str).collect();
+    requires.push(ARCHIVED_STATIONS);
     requires.sort_unstable();
     requires.dedup();
     strings(out, requires);
@@ -408,6 +413,10 @@ fn write_body(
             small(o.key("b_via"), u64::from(via));
         }
         string(o.key("strategy"), tokens::strategy(closure.strategy));
+        if let Some(end) = closure.archived {
+            // RS 8.1: the end the closure archives.
+            string(o.key("archived"), &end.to_string());
+        }
         o.close();
         Ok(())
     })?;
@@ -493,44 +502,51 @@ fn write_station(out: &mut Vec<u8>, station: &Station) {
     small(out, u64::from(station.id));
     out.push(b',');
     string(out, &station.name);
-    if station.comment.is_some() || !station.aliases.is_empty() || station.external.is_some() {
+    if station.comment.is_some() || station.external.is_some() || !station.archived.is_empty() {
         out.push(b',');
         let mut o = Obj::open(out);
         if let Some(comment) = &station.comment {
             string(o.key("comment"), comment);
         }
-        if !station.aliases.is_empty() {
-            let b = o.key("aliases");
+        if let Some(external) = &station.external {
+            string(o.key("external"), external);
+        }
+        if !station.archived.is_empty() {
+            // RS 8.1 (feature `archived-stations`): each record an object
+            // `{id, name, comment?, external?, into?, lines?}`; `into` is
+            // the record it was archived under (RS-FX4).
+            let b = o.key("archived");
             b.push(b'[');
-            for (i, alias) in station.aliases.iter().enumerate() {
+            for (i, record) in station.archived.iter().enumerate() {
                 if i > 0 {
                     b.push(b',');
                 }
-                // `[id]`, `[id, name]`, or with the line that knew the
-                // station by it `[id, name, line]` (`null` for no name).
-                b.push(b'[');
-                small(b, u64::from(alias.id));
-                match (&alias.name, alias.line) {
-                    (Some(name), line) => {
-                        b.push(b',');
-                        string(b, name);
-                        if let Some(line) = line {
-                            b.push(b',');
-                            small(b, u64::from(line));
-                        }
-                    }
-                    (None, Some(line)) => {
-                        b.extend_from_slice(b",null,");
-                        small(b, u64::from(line));
-                    }
-                    (None, None) => {}
+                let mut r = Obj::open(b);
+                small(r.key("id"), u64::from(record.id));
+                string(r.key("name"), &record.name);
+                if let Some(comment) = &record.comment {
+                    string(r.key("comment"), comment);
                 }
-                b.push(b']');
+                if let Some(external) = &record.external {
+                    string(r.key("external"), external);
+                }
+                if let Some(into) = record.into {
+                    small(r.key("into"), u64::from(into));
+                }
+                if !record.lines.is_empty() {
+                    let l = r.key("lines");
+                    l.push(b'[');
+                    for (j, line) in record.lines.iter().enumerate() {
+                        if j > 0 {
+                            l.push(b',');
+                        }
+                        small(l, u64::from(*line));
+                    }
+                    l.push(b']');
+                }
+                r.close();
             }
             b.push(b']');
-        }
-        if let Some(external) = &station.external {
-            string(o.key("external"), external);
         }
         o.close();
     }

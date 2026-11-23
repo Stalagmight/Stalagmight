@@ -1,21 +1,18 @@
 /**
- * A junction's station details (UX-7, H-frontend-wire-5): a junction is ONE
- * station several lines pass, so "Also on" names the other lines through
- * it, never the station itself again ("3a | Side" read as merged with
- * itself); and the ids and names merged into it (its aliases) show as "Also
- * known as", so a surveyor can still find a retired name from the notes.
+ * A junction's station details (UX-7, H-frontend-wire-5, RS 6): a junction
+ * is ONE station several lines pass, and under RS every line shows the
+ * station the merge kept. "Also on" names the other lines through it, never
+ * the station itself again and never a name of their own; the stations the
+ * merges archived in it are listed under "Archived here", each with the line
+ * whose own station it was, so a surveyor can still find it from the notes.
+ * On a line whose own station was archived (a foreign slot) the details say
+ * whose station it shows; a loop end opens with what it is shown as.
  *
- * Demo finding N-3: each fact once. The details said one fact three times
- * ("Junction: 0 on North Passage", "Merged with: North Passage", "Also known
- * as: 0 on North Passage (Station ID 9)"). Now each "Also on" row names the
- * other line, the name it shows the station by and the Station ID it had
- * there when that differs (`North Passage 0 (Station ID 9)`); there is no
- * Junction row, and "Also known as" lists only the aliases no row shows.
- * I-9: the heading reads the same for every junction ("Merged with" was
- * wrong on a Split Line Here junction). Injections: putting the Junction row
- * back fails "says each fact once"; dropping the `shown` filter from
- * `StationAliases` fails it too; dropping the Station ID from a row fails
- * "names each other line with its own name and Station ID".
+ * Demo finding N-3: each fact once, no Junction row. I-9: the heading reads
+ * the same for every junction. Injections: putting a per-line name back on an
+ * "Also on" row fails "names the other lines only"; dropping the foreign
+ * sentence fails "says whose station a foreign slot shows"; dropping the
+ * loop-end lead fails the loop-end case.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -57,7 +54,8 @@ function stations(): Station[] {
   const junction = (at: ReturnType<typeof ref>, other: ReturnType<typeof ref>): Station => ({
     ...plain(at.line_id, at.station_index, 11, '3a'),
     merged_with: [other],
-    aliases: [{ id: 20, name: '0' }, { id: 21, name: null }],
+    // Records (RS 3): history ones here, naming no line.
+    archived: [{ id: 20, name: '0', lines: [] }, { id: 21, name: '', lines: [] }],
   });
   return [
     plain(MAIN, 0, 10, '2'),
@@ -82,54 +80,50 @@ beforeEach(() => {
 });
 
 /**
- * I-3: a line merged onto a station keeps its own name for it. Side shows the
- * junction (Station ID 11) as its own "0" (the alias naming Side), Main as
- * "3a"; the details say which name is on which line.
+ * RS 4.1: Side's own "0" (Station ID 20) was archived by the merge, so Side
+ * shows the kept station "3a" (Station ID 11) too, with Main's dot: its slot
+ * is foreign.
  */
-function perLineStations(): Station[] {
+function keptStations(): Station[] {
   const list = stations();
-  const aliases = [{ id: 20, name: '0', line: SIDE }];
-  list[1] = { ...list[1]!, aliases };
-  list[3] = { ...list[3]!, name: '0', aliases };
+  const archived = [{ id: 20, name: '0', lines: [SIDE] }];
+  list[1] = { ...list[1]!, archived };
+  list[3] = { ...list[3]!, archived, shown: { id: 11, home_line: MAIN, foreign: true, loop_end: false } };
   return list;
 }
 
-describe('a junction each line shows by its own name', () => {
+describe('a junction that shows its kept station on every line', () => {
   beforeEach(() => {
     const { project } = useProjectStore.getState();
-    const list = perLineStations();
+    const list = keptStations();
     useProjectStore.setState({ stations: list, surveyData: surveyDataFromLegacy(project!.lines, list) });
   });
 
-  it("names the slot by its line's name, and each other line by its own name", () => {
+  it('says whose station a foreign slot shows, and the archived station of its line', () => {
     useUIStore.getState().setSelection({ type: 'station', stationRef: ref(SIDE, 0) });
     render(<DetailPanel />);
-    expect(screen.getByTestId('station-detail-name')).toHaveTextContent(/^Name:0$/);
+    expect(screen.getByTestId('station-detail-name')).toHaveTextContent(/^Name:3a$/);
+    expect(screen.getByTestId('station-detail-belongs')).toHaveTextContent('3a belongs to Main.');
     expect(screen.getByTestId('station-detail-line')).toHaveTextContent(/^Line:Side$/);
     expect(screen.getByTestId('station-detail-id')).toHaveTextContent('11');
-    // Main shows the junction by its own name and Station ID: nothing more to say.
-    expect(screen.getByTestId(`station-detail-other-name-${MAIN}-1`)).toHaveTextContent(/^3a$/);
-    // Side's own former Station ID: its name is on the Name row already.
-    expect(screen.getByTestId('station-detail-alias-20')).toHaveTextContent(/^Station ID 20 on Side$/);
+    expect(screen.getByTestId('station-detail-record-20')).toHaveTextContent("0 (Station ID 20), Side's own station");
   });
 
-  it('names each other line with its own name and Station ID (N-3)', () => {
+  it('names the other lines only, each with its detach button (RS 6)', () => {
     render(<DetailPanel />);
     expect(screen.getByTestId('station-detail-name')).toHaveTextContent(/^Name:3a$/);
+    expect(screen.queryByTestId('station-detail-belongs')).toBeNull();
     const block = screen.getByTestId('station-detail-merged-with');
-    expect(block).toHaveTextContent(/^Also on:/);
+    expect(block).toHaveTextContent(/^Also on:Side$/);
     expect(screen.getByTestId(`station-${SIDE}-0-link`)).toHaveTextContent('Side');
-    expect(screen.getByTestId(`station-detail-other-name-${SIDE}-0`)).toHaveTextContent(/^0 \(Station ID 20\)$/);
     expect(screen.getByTestId(`detail-unmerge-${SIDE}-0`)).toHaveAccessibleName('Detach Side from this station');
   });
 
-  it('says each fact once: no Junction row, no alias a row already shows (N-3)', () => {
+  it('says each fact once: no Junction row, the archived station listed once (N-3)', () => {
     render(<DetailPanel />);
     const panel = screen.getByTestId('station-detail');
     expect(screen.queryByTestId('station-detail-junction')).toBeNull();
     expect(panel.textContent).not.toMatch(/Junction:|Merged with/);
-    // Side's alias is on its "Also on" row, so "Also known as" has nothing left.
-    expect(screen.queryByTestId('station-detail-aliases')).toBeNull();
     expect(panel.textContent?.match(/Station ID 20/g)).toHaveLength(1);
   });
 
@@ -140,20 +134,15 @@ describe('a junction each line shows by its own name', () => {
   // fails.
   it('names the station\'s line once, in the Line row, which links to it (V-8)', () => {
     render(<DetailPanel />);
-    const panel = screen.getByTestId('station-detail');
+    // Visible text: a pill's home-line dot also says "(Main)" to a screen
+    // reader (RS-FX6, P2-5), which is no second visible naming.
+    const panel = screen.getByTestId('station-detail').cloneNode(true) as HTMLElement;
+    panel.querySelectorAll('.sr-only').forEach((el) => el.remove());
     expect(panel.textContent?.match(/Main(?! Line)/g)).toHaveLength(1);
     const line = screen.getByTestId('station-detail-line');
     expect(line).toHaveTextContent(/^Line:Main$/);
     expect(line.querySelector(`[data-testid="line-${MAIN}-link"]`)).not.toBeNull();
     expect(screen.getAllByTestId(`line-${MAIN}-link`)).toHaveLength(1);
-  });
-
-  it('shows no "(on line)" when every line shows the junction by one name', () => {
-    useProjectStore.setState({ stations: stations(), surveyData: surveyDataFromLegacy(useProjectStore.getState().project!.lines, stations()) });
-    render(<DetailPanel />);
-    expect(screen.getByTestId('station-detail-name')).toHaveTextContent(/^Name:3a$/);
-    // Side shows it as the Name row says: its row names the line only.
-    expect(screen.queryByTestId(`station-detail-other-name-${SIDE}-0`)).toBeNull();
   });
 
   it('shows no other lines for a station on one line', () => {
@@ -164,13 +153,52 @@ describe('a junction each line shows by its own name', () => {
   });
 });
 
+describe('a loop end in the station details (RS 6, U-P2-15)', () => {
+  it('opens with what it is shown as, and its own station hidden', () => {
+    // Side 1 (Station ID 22, "1") is a loop end: closure 5 shows it as Main / 4.
+    const { project } = useProjectStore.getState();
+    const list = stations();
+    list[4] = { ...list[4]!, name: '4', shown: { id: 12, home_line: MAIN, foreign: true, loop_end: true, loop_closure: 5n } };
+    const loop_closures = [
+      {
+        id: 5n, station_a: ref(MAIN, 2), station_b: ref(SIDE, 1), path_length: 10, misclosure_distance: 0.5,
+        error_percentage: 5, horizontal_misclosure: 0.5, vertical_misclosure: 0, strategy: 'Batch', is_aligned: false,
+        archived: { end: 'b', station: { id: 22, name: '1', home_line: SIDE }, shown_as: { id: 12, name: '4', home_line: MAIN } },
+      },
+    ];
+    useProjectStore.setState({
+      project: { ...project!, loop_closures } as unknown as Project,
+      stations: list,
+      surveyData: surveyDataFromLegacy(project!.lines, list),
+    });
+    useUIStore.getState().setSelection({ type: 'station', stationRef: ref(SIDE, 1) });
+    render(<DetailPanel />);
+    expect(screen.getByTestId('station-detail-loop-end')).toHaveTextContent('Loop closure end, shown as Main / 4');
+    expect(screen.getByTestId('station-detail-loop-end-own')).toHaveTextContent(
+      'Its own station 1 (Station ID 22) is hidden. Removing the closure brings it back.',
+    );
+    expect(screen.getByTestId('station-detail-id')).toHaveTextContent('12');
+    expect(screen.queryByTestId('station-detail-belongs')).toBeNull();
+    // RS-FX6, P3-14: Name and Station ID are Main / 4's, the position rows
+    // the loop end's own point; a heading says so. Injection: drop it.
+    const heading = screen.getByTestId('station-detail-loop-end-position');
+    expect(heading).toHaveTextContent("This end's own position:");
+    expect(heading.nextElementSibling).toHaveTextContent(/^X:/);
+  });
+
+  it('heads no position rows for a station that is no loop end', () => {
+    render(<DetailPanel />);
+    expect(screen.queryByTestId('station-detail-loop-end-position')).toBeNull();
+  });
+});
+
 describe('a junction made by Split Line Here (I-9)', () => {
   it('reads like every other junction: "Also on", never "Merged with"', () => {
-    // Both halves show the split station by one name and one Station ID: no
-    // alias, nothing merged.
+    // Both halves show the split station by one name and one Station ID:
+    // nothing archived.
     const list = stations().map((s) => {
       const plain = { ...s };
-      delete plain.aliases;
+      delete plain.archived;
       return plain;
     });
     useProjectStore.setState({ stations: list, surveyData: surveyDataFromLegacy(useProjectStore.getState().project!.lines, list) });
@@ -179,8 +207,7 @@ describe('a junction made by Split Line Here (I-9)', () => {
     expect(block).toHaveTextContent(/^Also on:/);
     expect(block.textContent).not.toContain('Merged');
     expect(block).toHaveTextContent(/^Also on:Side$/);
-    expect(screen.queryByTestId(`station-detail-other-name-${SIDE}-0`)).toBeNull();
-    expect(screen.queryByTestId('station-detail-aliases')).toBeNull();
+    expect(screen.queryByTestId('station-detail-records')).toBeNull();
   });
 });
 
@@ -207,26 +234,55 @@ describe('junction station details', () => {
     expect(link).toHaveAccessibleName(/Side/);
   });
 
-  it('shows the names and Station IDs merged into it as "Also known as"', () => {
+  // RS-FX6, P2-7: a history record says it is on no line now, not "kept
+  // for its Station ID", which said nothing to a surveyor.
+  it('lists the stations archived in it under "Archived here"', () => {
     render(<DetailPanel />);
-    const aliases = screen.getByTestId('station-detail-aliases');
-    expect(aliases).toHaveTextContent('Also known as');
-    expect(screen.getByTestId('station-detail-alias-20')).toHaveTextContent('0 (Station ID 20)');
-    expect(screen.getByTestId('station-detail-alias-21')).toHaveTextContent('Station ID 21');
-    // No line knows the station by them, so no "Also on" row shows them.
-    expect(screen.queryByTestId(`station-detail-other-name-${SIDE}-0`)).toBeNull();
+    const records = screen.getByTestId('station-detail-records');
+    expect(records).toHaveTextContent('Archived here');
+    expect(screen.getByTestId('station-detail-record-20')).toHaveTextContent('0 (Station ID 20), no longer on any line');
+    expect(screen.getByTestId('station-detail-record-21')).toHaveTextContent('21 (Station ID 21), no longer on any line');
   });
 
-  it('a station with no aliases shows no "Also known as"', () => {
+  /** RS-FX4: a record archived inside another (its `into`) is listed under
+   *  it, as Detach brings the two back together; a record whose owner is
+   *  missing or whose owners cycle is listed at the top, so each is listed
+   *  once. Injection: rendering every record at the top level fails it. */
+  it('lists a record archived inside another under it', () => {
+    const list = stations().map((s) =>
+      s.archived
+        ? {
+            ...s,
+            archived: [
+              { id: 21, name: 'R0', into: 20, lines: [SIDE] },
+              { id: 23, name: 'Q0', into: 99, lines: [] },
+              { id: 20, name: 'X1', lines: [MAIN] },
+            ],
+          }
+        : s,
+    );
+    useProjectStore.setState({ stations: list, surveyData: surveyDataFromLegacy(useProjectStore.getState().project!.lines, list) });
+    render(<DetailPanel />);
+    const inside = screen.getByTestId('station-detail-record-20-inside');
+    expect(inside).toContainElement(screen.getByTestId('station-detail-record-21'));
+    expect(inside).toHaveAccessibleName('Archived inside X1');
+    expect(screen.getByTestId('station-detail-record-21')).toHaveTextContent("R0 (Station ID 21), Side's own station");
+    expect(screen.getByTestId('station-detail-record-20')).toHaveTextContent("X1 (Station ID 20), Main's own station");
+    expect(inside).not.toContainElement(screen.getByTestId('station-detail-record-23'));
+    expect(screen.getAllByTestId(/^station-detail-record-\d+$/)).toHaveLength(3);
+  });
+
+  it('a station with nothing archived shows no "Archived here"', () => {
     useUIStore.getState().setSelection({ type: 'station', stationRef: ref(MAIN, 2) });
     render(<DetailPanel />);
-    expect(screen.queryByTestId('station-detail-aliases')).toBeNull();
+    expect(screen.queryByTestId('station-detail-records')).toBeNull();
   });
 
-  it('a binary-loaded station carries its aliases through the SoA', () => {
+  it('a binary-loaded station carries its records through the SoA', () => {
     const data = useProjectStore.getState().surveyData!;
-    expect(data.stationAliases.get(1)).toEqual([{ id: 20, name: '0' }, { id: 21, name: null }]);
-    expect(data.stationAliases.get(3)).toEqual([{ id: 20, name: '0' }, { id: 21, name: null }]);
-    expect(data.stationAliases.has(0)).toBe(false);
+    const records = [{ id: 20, name: '0', lines: [] }, { id: 21, name: '', lines: [] }];
+    expect(data.stationArchived.get(1)).toEqual(records);
+    expect(data.stationArchived.get(3)).toEqual(records);
+    expect(data.stationArchived.has(0)).toBe(false);
   });
 });

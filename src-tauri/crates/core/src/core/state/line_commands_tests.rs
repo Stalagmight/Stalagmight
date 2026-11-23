@@ -380,10 +380,12 @@ fn create_line_reports_validation_warnings_with_the_shots_labels() {
     );
 }
 
-/// Reverse Line's warnings name each station as the line shows it (I-3):
-/// Side's station 2 survived a merge with Main's station 1, so Main knows
-/// the junction by an alias ("1"). Injection: naming it by the station's own
-/// name fails it with "Main: 2 \u{2192} 2".
+/// Reverse Line's warnings name each station as the line shows it (RS 4.1):
+/// Side's station 2 is kept by a merge with Main's station 1, so Main shows
+/// the junction as "2" with Side's dot, beside its own station 2 (RS-FX5),
+/// so the warning's plain text qualifies the dotted one: `2 (Side)`.
+/// Injection: naming the junction by Main's archived record fails it with
+/// "Main: 2 \u{2192} 1".
 #[test]
 fn reverse_line_warnings_name_a_junction_as_the_line_shows_it() {
     use super::topology_kit::{deep, empty, line_at, open, st};
@@ -401,9 +403,9 @@ fn reverse_line_warnings_name_a_junction_as_the_line_shows_it() {
         vec![heading_shot(90.0, 4.0), heading_shot(90.0, 4.0)],
     );
     let j = st(&p, side, 2);
-    p.merge_stations(st(&p, main, 1), j).unwrap();
-    assert_eq!(p.name_on(j, main), Some("1"));
-    assert_eq!(p.name_on(j, side), Some("2"));
+    p.merge_keeping_stationary(st(&p, main, 1), j).unwrap();
+    assert_eq!(p.shown_name(j), Some("2"));
+    assert_eq!(p.shown_name(st(&p, main, 2)), Some("2"));
     let opened = open(&p);
     let r = opened.state.execute(Command::ReverseLine {
         line_id: main,
@@ -418,7 +420,7 @@ fn reverse_line_warnings_name_a_junction_as_the_line_shows_it() {
         .collect();
     assert_eq!(messages.len(), 1, "{:?}", r.warnings);
     assert!(
-        messages[0].starts_with("Shot Main: 2 \u{2192} 1 "),
+        messages[0].starts_with("Shot Main: 2 \u{2192} 2 (Side) "),
         "{messages:?}"
     );
 }
@@ -467,6 +469,8 @@ fn joined_pair(state: &AppState) -> (LineId, LineId) {
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 1),
         station_b: StationRef::new(b, 0),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "{:?}", merged.error);
     (a, b)
@@ -881,12 +885,16 @@ fn merge_allowed_across_inert_closure_but_rejected_when_connected() {
             StationRef::new(a, 0),
             StationRef::new(b, 1),
             ClosureStrategy::Batch,
+            None,
+            &[],
         )
         .unwrap();
     });
     let r = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 1),
         station_b: StationRef::new(b, 0),
+        keep: None,
+        renames: None,
     });
     assert!(r.success, "merge across an inert closure: {:?}", r.error);
     assert!(project(&state).validate().is_empty());
@@ -896,6 +904,8 @@ fn merge_allowed_across_inert_closure_but_rejected_when_connected() {
     let r = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 0),
         station_b: StationRef::new(b, 1),
+        keep: None,
+        renames: None,
     });
     assert!(!r.success, "stations already connected must be refused");
 }
@@ -911,6 +921,8 @@ fn loop_through_a_closure(state: &AppState) -> (LineId, LineId) {
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 2),
         station_b: StationRef::new(b, 0),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "{:?}", merged.error);
     edit(state, |p| {
@@ -918,6 +930,8 @@ fn loop_through_a_closure(state: &AppState) -> (LineId, LineId) {
             StationRef::new(a, 0),
             StationRef::new(b, 1),
             ClosureStrategy::default(),
+            None,
+            &[],
         )
         .unwrap();
     });
@@ -937,9 +951,14 @@ fn undo_unmerge_restores_converted_closure_and_position() {
     assert_eq!(before.closures.len(), 1);
 
     let r = run_model(&state, "unmerge_station_pair", |p| {
-        p.unmerge_station_pair(StationRef::new(a, 2), StationRef::new(b, 0))
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        p.unmerge_station_pair(
+            StationRef::new(a, 2),
+            StationRef::new(b, 0),
+            crate::models::survey::NameAnswers::RuleL,
+            None,
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
     });
     assert!(r.success, "{:?}", r.error);
     let converted = project(&state);
@@ -973,9 +992,13 @@ fn undo_unmerge_singular_restores_converted_closure_and_position() {
     let (a, b) = loop_through_a_closure(&state);
     let before = project(&state);
     let r = run_model(&state, "unmerge_stations", |p| {
-        p.unmerge_station(StationRef::new(b, 0))
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        p.unmerge_station(
+            StationRef::new(b, 0),
+            crate::models::survey::NameAnswers::RuleL,
+            None,
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
     });
     assert!(r.success, "{:?}", r.error);
     assert!(project(&state).closures.is_empty());
@@ -1000,15 +1023,21 @@ fn test_unmerge_removes_only_specific_merge() {
         let r = state.execute(Command::MergeStations {
             station_a: x,
             station_b: y,
+            keep: None,
+            renames: None,
         });
         assert!(r.success, "{:?}", r.error);
     }
     assert_eq!(project(&state).merge_pairs().len(), 2);
 
     let r = run_model(&state, "unmerge_stations", |p| {
-        p.unmerge_station(StationRef::new(a, 1))
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        p.unmerge_station(
+            StationRef::new(a, 1),
+            crate::models::survey::NameAnswers::RuleL,
+            None,
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
     });
     assert!(r.success, "{:?}", r.error);
     let pairs = project(&state).merge_pairs();
@@ -1021,9 +1050,13 @@ fn test_unmerge_undo_restores_merge() {
     let state = new_state();
     let (a, _b) = joined_pair(&state);
     let r = run_model(&state, "unmerge_stations", |p| {
-        p.unmerge_station(StationRef::new(a, 1))
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        p.unmerge_station(
+            StationRef::new(a, 1),
+            crate::models::survey::NameAnswers::RuleL,
+            None,
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
     });
     assert!(r.success, "{:?}", r.error);
     assert!(project(&state).merge_pairs().is_empty());
@@ -1072,6 +1105,8 @@ fn split_converts_orphaned_bridge_closure_immediately() {
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 3),
         station_b: StationRef::new(b, 0),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "{:?}", merged.error);
     edit(&state, |p| {
@@ -1079,6 +1114,8 @@ fn split_converts_orphaned_bridge_closure_immediately() {
             StationRef::new(a, 0),
             StationRef::new(b, 1),
             ClosureStrategy::default(),
+            None,
+            &[],
         )
         .unwrap();
     });
@@ -1128,6 +1165,8 @@ fn split_line_does_not_promote_a_bridge_closure_across_two_anchored_components()
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 3),
         station_b: StationRef::new(b, 3),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "{:?}", merged.error);
     // C is a second, independently anchored survey, tied by a closure only.
@@ -1137,6 +1176,8 @@ fn split_line_does_not_promote_a_bridge_closure_across_two_anchored_components()
             StationRef::new(b, 2),
             StationRef::new(c, 0),
             ClosureStrategy::Batch,
+            None,
+            &[],
         )
         .unwrap();
     });
@@ -1185,6 +1226,8 @@ fn redo_insert_shot_keeps_merged_stations_aligned() {
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 2),
         station_b: StationRef::new(b, 0),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "{:?}", merged.error);
     let original = project(&state);

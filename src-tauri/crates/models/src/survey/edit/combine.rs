@@ -21,13 +21,20 @@
 //!    piece, or across a closure inside one piece), M's line is detached from
 //!    the junction on the path between them nearest M (it gets a new station
 //!    there) and a `Batch` closure ties the two stations of that torn
-//!    junction;
+//!    junction; every tear is a restoring detach (RS 4.4: the torn line takes
+//!    back the archived station naming it, or keeps the junction while the
+//!    other lines take theirs), and the tear closure archives the end that
+//!    does not hold the identity the torn slot showed, so nothing visible
+//!    changes and Remove Closure gives the line its own station back;
 //! 3. when both sides are held by placement datums, M's line is also detached
 //!    from every junction whose far part holds one (refused only when both
 //!    lines carry a placement datum on their own stations, as today);
-//! 4. the other line's join station is folded into the kept line's (its id
-//!    and name become aliases; the comment follows the dialog's pick), the
-//!    other line is reversed when needed and its shots join the kept line;
+//! 4. the other line's join station is folded into the kept line's (it is
+//!    archived in it with its native lines but the absorbed one, RS 4.4; the
+//!    comment follows the dialog's pick when it becomes history; a closure
+//!    between the two that archives the kept line's join keeps the other's
+//!    identity instead, RS 4.1 step 4), the other line is reversed when
+//!    needed and its shots join the kept line;
 //! 5. snaps the move tears, and snaps across the two sides (which would tie
 //!    the combined line to itself), become `Batch`; the fixed side's hand move
 //!    wins at the join (today's rule), the other line's hand moves move to the
@@ -37,9 +44,13 @@
 //!
 //! Then, as today: closures the combine leaves across one shot are removed
 //! (#746); of two closures left on the same two stations the one the solve
-//! takes stays (#749); station names are letter-prefixed when they collide
-//! (`plan_combine_prefixes`); the other line's bearings turn to the kept
-//! line's north reference when the two differ.
+//! takes stays (#749), taking the dropped one's archive when it has none;
+//! station names are letter-prefixed when they collide
+//! (`plan_combine_prefixes`, on the names the lines show); the other line's
+//! bearings turn to the kept line's north reference when the two differ.
+//! The epilogue is every op's (RS 3): the A4 restore, the closure-archive
+//! normalisation and rule L for what still repeats (on the combined line
+//! and on third lines through a renamed junction).
 //!
 //! Everything the dialog shows ([`CombineReport`]) is read off the combine
 //! itself, run on a copy: the preview is the same code as the command.
@@ -48,7 +59,7 @@ use crate::{
     CombineJoinKind, CombineStationRenames, KeptMovesReason, LineEnd, LineId, StationId, StationRef,
 };
 
-use super::super::{ClosureId, LoopClosure};
+use super::super::{ArchivedStation, ClosureId, IdentityReport, LoopClosure};
 
 mod apply;
 mod plan;
@@ -164,6 +175,25 @@ pub struct CombineReport {
     pub closures_replaced: Vec<ReplacedClosure>,
     pub moved_with_joined_station: Option<JoinedMove>,
     pub station_renames: Option<CombineStationRenames>,
+    /// The closure between the two join stations that archived the kept
+    /// line's: the joined station shows the other line's join station (RS
+    /// 4.1 step 4), and the dialog says why.
+    pub join_keep_forced_by: Option<ClosureId>,
+    /// The join station not kept, when it stays archived for lines of its
+    /// own besides the absorbed one (it was native on a third line too):
+    /// its record, naming those lines, which show the kept join station from
+    /// now on (with a dot), its comment hidden with it until Detach Line
+    /// from Station brings it back. The comment pick does not apply then
+    /// (RS 4.4: it applies only when that station becomes history), and the
+    /// dialog says so. `None` when it becomes history or the join is shared.
+    pub join_archived: Option<ArchivedStation>,
+    /// What the combine's epilogue did to identities (RS 3): restores,
+    /// dropped closure archives (the join's for the kept join station
+    /// first, RS 1.3), rule-L letters and the comments it hides.
+    pub identities: IdentityReport,
+    /// Stations under another id after the combine, `(old, new)`: the
+    /// forced join identity and the restores.
+    pub reidentified: Vec<(StationId, StationId)>,
 }
 
 impl CombineReport {
@@ -182,6 +212,10 @@ impl CombineReport {
             closures_replaced: Vec::new(),
             moved_with_joined_station: None,
             station_renames: None,
+            join_keep_forced_by: None,
+            join_archived: None,
+            identities: IdentityReport::default(),
+            reidentified: Vec::new(),
         }
     }
 }

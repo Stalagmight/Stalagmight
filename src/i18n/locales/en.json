@@ -1205,10 +1205,9 @@
       "lead": "{{station}} is where {{count}} lines meet. Choose what comes off:",
       "leadWaiting": "{{station}} is where {{count}} lines meet.",
       "comesOff": "{{line}} comes off: it gets back {{name}} (Station ID {{id}}); {{keeper}} keeps station {{station}}.",
-      "commentStaysWith": "The station's comment stays with {{keeper}}. If part of it was {{line}}'s own, copy it over after detaching.",
       "explainComesOff": "{{line}} keeps its shots, and a datum or loop closure set on it goes with it. Undo puts it back.",
-      "explain": "The line you detach keeps its shots and gets its own station here, with no comment. A datum or loop closure set on that line goes with it. The other lines stay joined, and Undo puts it back.",
-      "explainKeeps": "{{others}} keep their shots and come off together on one station of their own here, with no comment, and a datum or loop closure set on them goes with them. {{line}} keeps this station and its comment. Undo puts it back.",
+      "explain": "The line you detach keeps its shots and gets its own station here. A datum or loop closure set on that line goes with it. The other lines stay joined, and Undo puts it back.",
+      "explainKeeps": "{{others}} keep their shots and come off together on one station of their own here, and a datum or loop closure set on them goes with them. {{line}} keeps this station and its comment. Undo puts it back.",
       "restores": "{{line}} comes off and gets back the station it had here before the merge.",
       "keeps_one": "{{line}} keeps this station, and {{others}} comes off.",
       "keeps_other": "{{line}} keeps this station, and {{others}} come off together: they stay joined.",
@@ -1219,17 +1218,28 @@
       "resultOff": "{{line}}: {{name}}, Station ID {{id}} (comes off)",
       "resultOffNew": "{{line}}: {{name}}, Station ID {{id}} (comes off with a new station)",
       "resultOffWith": "{{line}}: {{name}}, Station ID {{id}} (comes off with {{joined}})",
-      "resultOffShared": "{{line}}: {{name}}, Station ID {{id}} (comes off with {{joined}}, sharing its station; its own Station ID {{alias}} stays only as an alias, and detaching {{line}} afterwards gives it back)",
       "resultStays": "{{line}}: {{name}}, Station ID {{id}} (stays)",
-      "resultStaysAlias": "{{line}}: {{name}}, Station ID {{id}} (stays; the Station ID it had here before the merge, {{alias}}, is kept as an alias)",
-      "commentStays": "The station's comment stays with the other lines. If part of it was {{line}}'s own, copy it over after detaching.",
       "thisLine": "{{line}} (the line you clicked)",
       "notFound": "Station not found.",
       "close": "Close",
       "cancel": "Cancel",
       "confirm": "Detach",
       "working": "Detaching...",
-      "failed": "Failed to detach the line"
+      "failed": "Failed to detach the line",
+      "comesBack_one": "It gets back {{name}} (Station ID {{id}}).",
+      "comesBack_other": "They get back {{name}} (Station ID {{id}}).",
+      "comesBackComment": "With its comment: \"{{comment}}\"",
+      "staysInside": "{{station}} (Station ID {{id}}) stays archived inside it: detach {{line}} again to get it back.",
+      "staysInsideWith": "{{station}} (Station ID {{id}}) stays archived inside it, with {{inner}} archived inside {{station}}: detach {{line}} again to get it back.",
+      "insideStation": "{{station}} (Station ID {{id}})",
+      "offTogether_one": "{{lines}} comes off with {{line}}: they were one station before the merge.",
+      "offTogether_other": "{{lines}} come off with {{line}}: they were one station before the merge.",
+      "shownBefore": "{{line}} showed {{station}} here through a loop closure; it will show {{name}}.",
+      "shownElsewhereLead": "Elsewhere, a loop closure or a merge the detach makes changes what these stations show:",
+      "shownElsewhere": "{{line}}: {{after}} where it showed {{before}}",
+      "restLead": "The lines that come off show:",
+      "restFailed": "That choice could not be checked, so the lines that come off show the station chosen for them.",
+      "lettersStay": "A name that took a letter earlier because of this station keeps it."
     },
     "saveConflict": {
       "title": "The project file changed on disk",
@@ -1300,11 +1310,29 @@
       "datumShift_other": "{{piece}} are placed by their own GPS. They move {{distance}} m to meet the other piece, and their zero datum at {{station}} becomes a GPS fix.",
       "datumShiftAfterMove_one": "{{piece}} is placed by its own GPS. The merge moves it to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
       "datumShiftAfterMove_other": "{{piece}} are placed by their own GPS. The merge moves them to meet the other piece, and their zero datum at {{station}} becomes a GPS fix.",
-      "moves_one": "{{piece}} moves {{distance}} m to join {{station}}.",
-      "moves_other": "{{piece}} move {{distance}} m to join {{station}}.",
+      "moves_one": "{{piece}} moves {{distance}} m onto {{station}}'s position.",
+      "moves_other": "{{piece}} move {{distance}} m onto {{station}}'s position.",
       "depths": "Depths {{readings}} become {{joined}}: the joined station takes the mean of its depth readings.",
       "depthReading": "{{depth}} ({{line}})",
-      "alreadyJoined": "{{station}} is already where {{lines}} meet."
+      "depthReadings": "{{depth}} ({{line}}, {{count}} readings)",
+      "alreadyJoined": "{{station}} is already where {{lines}} meet.",
+      "stationA": "Station A:",
+      "stationB": "Station B:",
+      "keepLead": "Keep (the station kept is shown on every line):",
+      "holdsDatum": "(zero datum)",
+      "keepForced": "A loop closure already shows these two stations as one, so its kept station stays.",
+      "renamedLines_one": "{{lines}} will show {{station}}.",
+      "renamedLines_other": "{{lines}} will show {{station}}.",
+      "archived": "{{station}} is archived.",
+      "archivedWithComment": "{{station}} is archived with its comment.",
+      "archivedInside": "{{station}} (Station ID {{id}}), archived inside {{hidden}} by an earlier merge, stays inside it: a second Detach brings it back.",
+      "detachBringsBack": "Detach Line from Station brings {{station}} back.",
+      "repeat": "{{line}} already has a station {{name}} (Station ID {{id}}); it keeps its name, and {{line}} shows {{name}} twice, the junction with {{home}}'s dot.",
+      "repeatLoopEnd": "{{line}} already has a station {{name}} (Station ID {{id}}); it keeps its name, and {{line}} shows {{name}} twice, once at a loop end with the loop mark.",
+      "loopEndShown": "It was the hidden end of a loop closure: the closure stays, and {{station}} is shown at that end too.",
+      "cancel": "Cancel",
+      "confirm": "Merge",
+      "working": "Merging..."
     },
     "importBlocked": {
       "title": "Importing DMP",
@@ -1741,7 +1769,8 @@
       "gap": "GPS is {{distance}} m {{direction}} of the surveyed position.",
       "gapExceeds": "That is more than the {{threshold}} m expected over {{distance}} m of survey from the zero datum that places this survey. Check the GPS reading and the survey; you can still save.",
       "gapExceedsNoDistance": "That is more than the {{threshold}} m expected. Check the GPS reading and the survey; you can still save.",
-      "editingDisabled": "Editing is disabled in the current view"
+      "editingDisabled": "Editing is disabled in the current view",
+      "loopEndDatum": "This station is {{station}}: the datum goes on its own point."
     },
     "zeroDatumSelection": {
       "title": "Select Zero Datum Line",
@@ -1872,7 +1901,82 @@
       "replacedByFormerSnap": "Loop closure <a/> to <b/>, left from a snap whose stations had moved apart, becomes an ordinary loop closure on the same two stations and takes its place.",
       "replacedByClosure": "Loop closure <a/> to <b/>, already there, ties the same two stations and takes its place.",
       "replacedWhy_one": "Two loop closures on the same two stations would count one loop twice, so the combine keeps the one the Closures Computed View adjusts. Undo brings this one back.",
-      "replacedWhy_other": "Two loop closures on the same two stations would count one loop twice, so the combine keeps the one the Closures Computed View adjusts. Undo brings these back."
+      "replacedWhy_other": "Two loop closures on the same two stations would count one loop twice, so the combine keeps the one the Closures Computed View adjusts. Undo brings these back.",
+      "joinArchived_one": "{{station}} stays the own station of {{lines}}, which shows {{kept}} from now on; {{station}} and its comment come back with Detach Line from Station, so the comment choice does not apply to it.",
+      "joinArchived_other": "{{station}} stays the own station of {{lines}}, which show {{kept}} from now on; {{station}} and its comment come back with Detach Line from Station, so the comment choice does not apply to it."
+    },
+    "keptStations": {
+      "collisionsLead_one": "One name would then repeat on a line. Choose which station takes a new name:",
+      "collisionsLead_other": "{{count}} names would then repeat on a line. Choose which station takes a new name for each:",
+      "collision": "On {{line}}, {{name}} would name two stations",
+      "rename": "Rename {{station}} (Station ID {{id}}) to {{to}}",
+      "renameComesBack": "Rename the station that comes back ({{station}}, Station ID {{id}}) to {{to}}",
+      "renameKept": "Rename the kept station ({{station}}, Station ID {{id}}) to {{to}}",
+      "renameOwn": "Rename the {{name}} that is on {{line}} now (Station ID {{id}}) to {{to}}",
+      "shownAsThroughClosure": "shown as {{station}} through a loop closure",
+      "editingDisabled": "Editing is disabled in the current view.",
+      "commentHidden": "{{station}}'s comment (\"{{comment}}\") is hidden. Undo brings it back."
+    },
+    "closure": {
+      "keepLead": "Both ends show:",
+      "keepBoth": "Keep both names",
+      "ruleKOtherEndArchived": "{{keep}} cannot be kept here: it would hide {{other}}, which another loop closure already shows as {{shown}}.",
+      "ruleKShowsOtherEnd": "{{keep}} cannot be kept here: a loop closure already shows it as {{other}}.",
+      "ruleKNotAllowed": "{{keep}} cannot be kept here because of another loop closure at these ends.",
+      "keepsBoth": "Each end keeps its own name.",
+      "keepsBothShown": "No name changes.",
+      "staysShownAs": "{{station}} stays shown as {{shown}} through another loop closure.",
+      "hidden": "{{station}} is hidden: its point stays on the map, without a label. Remove Closure brings it back.",
+      "hiddenWithComment": "{{station}} and its comment are hidden: its point stays on the map, without a label. Remove Closure brings them back.",
+      "renamedLines_one": "{{lines}} will show the kept station there.",
+      "renamedLines_other": "{{lines}} will show the kept station there."
+    },
+    "removeClosure": {
+      "rowComesBack": "({{name}} comes back)",
+      "comesBack_one": "{{station}} comes back: {{lines}} shows it again instead of {{shown}}.",
+      "comesBack_other": "{{station}} comes back: {{lines}} show it again instead of {{shown}}.",
+      "commentComesBack": "Its comment comes back too: \"{{comment}}\"",
+      "nothingBack": "Both ends already show their own names, so no name changes.",
+      "nothingBackShown": "No name changes.",
+      "comesBackPlain": "{{station}} comes back."
+    },
+    "shownIdentity": {
+      "titleName": "Rename Station",
+      "titleComment": "Station Comment",
+      "titleBatch": "Edit Stations",
+      "batchLead_one": "One station this edit changes is shown on other lines too:",
+      "batchLead_other": "{{count}} stations this edit changes are shown on other lines too:",
+      "batchBelongs": "On {{line}}, {{name}} belongs to {{home}}.",
+      "batchLoopEnd": "On {{line}}, {{name}} is shown as {{station}} through a loop closure.",
+      "batchLines": "The edit changes it on {{lines}}.",
+      "batchHeld": "Nothing is changed until you choose: the edit is applied whole or not at all.",
+      "batchProceed_one": "Apply the edit",
+      "batchProceed_other": "Apply all {{count}} edits",
+      "belongs": "{{name}} belongs to {{line}}.",
+      "loopEnd": "Shown as {{station}} through a loop closure.",
+      "changes": {
+        "name": "A new name changes it on every line it is on.",
+        "comment": "A new comment changes it on every line it is on.",
+        "both": "A new name and comment change it on every line it is on."
+      },
+      "proceedOn": {
+        "name": "Rename {{station}} to {{to}} on {{lines}}",
+        "comment": "Change the comment of {{station}} on {{lines}}",
+        "both": "Rename {{station}} to {{to}} and change its comment on {{lines}}"
+      },
+      "proceedTo": {
+        "name": "Rename {{station}} to {{to}}",
+        "comment": "Change the comment of {{station}}",
+        "both": "Rename {{station}} to {{to}} and change its comment"
+      },
+      "proceedLoop": {
+        "name": "Rename {{station}}",
+        "comment": "Change the comment of {{station}}",
+        "both": "Change {{station}}"
+      },
+      "removeClosure": "Remove the closure",
+      "detach": "Detach {{line}} to get back its own station {{name}}",
+      "cancel": "Cancel"
     }
   },
   "undo": {
@@ -1997,6 +2101,8 @@
     "stationColumns": {
       "index": "Stn",
       "name": "Name",
+      "homeQualifier": "({{line}})",
+      "loopEndQualifier": "(loop end)",
       "stationId": "Station ID",
       "x": "X",
       "y": "Y",
@@ -2171,20 +2277,22 @@
       "gpsReading": "GPS reading (not the surveyed position)",
       "distanceGradientRoot": "Distance gradient root",
       "alsoOn": "Also on",
-      "alsoOnHint": "The other lines through this station. They share it, its Station ID and its comment, and each shows it by its own name. A Station ID beside a line is the one that line had here before a merge; Detach gives it back.",
-      "otherLineName": "{{name}} (Station ID {{id}})",
-      "otherLineId": "Station ID {{id}}",
-      "alsoKnownAs": "Also known as",
-      "alsoKnownAsHint": "Stations merged into this one. They keep their old name and Station ID here, so you can find them from your notes.",
-      "alias": "{{name}} (Station ID {{id}})",
-      "aliasOnLine": "{{name}} on {{line}} (Station ID {{id}})",
-      "aliasIdOnLine": "Station ID {{id}} on {{line}}",
-      "aliasNoName": "Station ID {{id}}",
+      "alsoOnHint": "The other lines through this station. Every line shows it by the same name and Station ID. Detach takes a line off and gives it back its own station.",
       "detachLine": "Detach {{line}} from this station",
       "connected": "Connected",
       "previousShot": "Previous shot",
       "nextShot": "Next shot",
-      "otherLineShots": "On {{line}}"
+      "otherLineShots": "On {{line}}",
+      "archived": "Archived here",
+      "archivedHint": "Stations a merge archived in this one. Each keeps its own name, comment and Station ID, and is shown nowhere until Detach Line from Station on its line brings it back. A station listed under another was archived inside it and comes back with it, still inside it.",
+      "recordInside": "Archived inside {{name}}",
+      "recordOfLines": "{{name}} (Station ID {{id}}), {{lines}}'s own station",
+      "recordHistory": "{{name}} (Station ID {{id}}), no longer on any line",
+      "recordComment": "Comment: {{comment}}",
+      "loopEnd": "Loop closure end, shown as {{station}}",
+      "loopEndOwn": "Its own station {{name}} (Station ID {{id}}) is hidden. Removing the closure brings it back.",
+      "loopEndPosition": "This end's own position:",
+      "belongsTo": "{{name}} belongs to {{line}}."
     },
     "shot": {
       "title": "Shot",
@@ -2238,7 +2346,8 @@
       "latestSurvey": "Latest survey",
       "connections": "Connections",
       "junctions": "Junctions",
-      "zeroDatums": "Zero datums"
+      "zeroDatums": "Zero datums",
+      "stationsHint": "Every surveyed point counts once. The two ends of a loop closure count as two, even when they show one name."
     },
     "projectSettings": {
       "open": "Local settings"
@@ -2250,7 +2359,8 @@
       "viaPrefix": " (via ",
       "viaSuffix": ")",
       "metrics": "Path {{path}} | Error {{error}} | {{percent}}",
-      "unavailable": "Closure metrics unavailable"
+      "unavailable": "Closure metrics unavailable",
+      "archives": "{{hidden}}, the loop end, is shown as {{shown}}. Removing the closure brings it back."
     },
     "multiShot": {
       "title_one": "{{count}} shot selected",
@@ -2866,10 +2976,13 @@
     },
     "conversion": {
       "lead": "Converted from the old file format.",
+      "upgradedLead": "Upgraded from an earlier version 2 file.",
+      "bringsBack": "Detach Line from Station or Remove Closure brings each one back.",
       "notYetSaved": "It is saved in the new format the next time you save; the original file is kept and can be restored from Recent Projects (right-click, Restore an earlier copy).",
       "saved": "Saved in the new format; the original file is kept and can be restored from Recent Projects (right-click, Restore an earlier copy).",
       "savedAsNewFile": "Saved in the new format as a new file; the original file is unchanged.",
       "downloaded": "This computer's copy is already converted; the original revision is unchanged on SpeleoDB, in the project's Revision history.",
+      "readOnly": "It is only shown converted: the file is open read-only, so nothing is saved and the file stays as it is.",
       "details": "Details",
       "hideDetails": "Hide details",
       "dismiss": "Dismiss"
@@ -4352,6 +4465,25 @@
     "stationNameTaken": "{{line}} already has a station named \"{{name}}\". Station names must be unique within their line.",
     "stationId": "Station ID",
     "stationName": "Name",
-    "nameInvalidChars": "A name cannot contain control characters or invisible formatting characters."
+    "nameInvalidChars": "A name cannot contain control characters or invisible formatting characters.",
+    "loopEnd": "loop end",
+    "loopEndLabel": "{{station}} (loop end on {{line}})",
+    "loopEndPinLabel": "{{own}} (loop end, shown as {{station}})",
+    "loopEndPinLabelLine": "Loop end on {{line}}, shown as {{station}}",
+    "homeMarkTitle": "Belongs to {{line}}",
+    "homeMarkLabel": "({{line}})",
+    "foreignLabel": "{{station}} ({{home}})"
+  },
+  "notices": {
+    "identities": {
+      "letter": "{{station}} to {{to}}",
+      "stationId": "Station ID {{id}}",
+      "lettered": "Renamed {{renamed}} so no line shows a name twice.",
+      "restored": "{{station}} (Station ID {{id}}) is shown again.",
+      "commentHidden": "{{station}}'s comment (\"{{comment}}\") is hidden: Undo brings it back.",
+      "unarchived_one": "A loop closure's hidden end shows its own name again.",
+      "unarchived_other": "{{count}} loop closures' hidden ends show their own names again.",
+      "hiddenComment": "{{station}}'s comment (\"{{comment}}\") is hidden: Undo brings it back."
+    }
   }
 }

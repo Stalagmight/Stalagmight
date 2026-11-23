@@ -195,6 +195,8 @@ fn a_merge_resolves_slots_and_undoes() {
     let r = state.execute(Command::MergeStations {
         station_a: crate::models::StationRef::new(free, 0),
         station_b: crate::models::StationRef::new(main, 3),
+        keep: None,
+        renames: None,
     });
     assert!(r.success, "{:?}", r.error);
     let merged = project_of(&state);
@@ -206,6 +208,8 @@ fn a_merge_resolves_slots_and_undoes() {
     let r = state.execute(Command::MergeStations {
         station_a: crate::models::StationRef::new(free, 7),
         station_b: crate::models::StationRef::new(main, 3),
+        keep: None,
+        renames: None,
     });
     assert!(!r.success);
     assert_eq!(canonical(&project_of(&state)), canonical(&original));
@@ -510,7 +514,11 @@ fn a_file_with_an_unknown_required_feature_opens_read_only() {
     let dir = TempDir::new().unwrap();
     let path = write_v2(dir.path(), &survey(), &Extras::default());
     let text = std::fs::read_to_string(&path).unwrap();
-    let patched = text.replacen("\"requires\":[]", "\"requires\":[\"x-from-the-future\"]", 1);
+    let patched = text.replacen(
+        "\"requires\":[\"archived-stations\"]",
+        "\"requires\":[\"archived-stations\",\"x-from-the-future\"]",
+        1,
+    );
     assert_ne!(patched, text);
     std::fs::write(&path, patched.as_bytes()).unwrap();
     let state = open(&path);
@@ -553,7 +561,11 @@ fn a_rule_broken_under_an_unknown_feature_is_refused_as_newer_not_corrupt() {
         )
     );
     assert!(broken.contains("\"Off line\""));
-    let newer = broken.replacen("\"requires\":[]", "\"requires\":[\"x-from-the-future\"]", 1);
+    let newer = broken.replacen(
+        "\"requires\":[\"archived-stations\"]",
+        "\"requires\":[\"archived-stations\",\"x-from-the-future\"]",
+        1,
+    );
 
     std::fs::write(&path, newer.as_bytes()).unwrap();
     let state = AppState::new().unwrap();
@@ -591,6 +603,8 @@ fn a_closure_past_the_id_space_is_refused_and_saves_keep_working() {
         station_a: crate::models::StationRef::new(main, 3),
         station_b: crate::models::StationRef::new(branch, 2),
         closure_strategy: crate::models::ClosureStrategy::Batch,
+        keep: None,
+        renames: None,
     });
     assert!(!r.success, "a closure id past the bound was minted");
     assert!(project_of(&state).closures.is_empty());

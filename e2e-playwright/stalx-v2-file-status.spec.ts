@@ -214,8 +214,10 @@ test.describe('.stalx v2 file status', () => {
   test('an old-format file the conversion moved says so once, until dismissed', async ({ page }) => {
     await page.evaluate(() =>
       (window as unknown as MockWindow).__MOCK_SET_CONVERSION_NOTICE__({
+        source: 'old_format',
         changes: ['4 stations moved by up to 0.42 m', '1 station changed depth by 0.30 m'],
         details: [],
+        brings_back: false,
         file: 'not_yet_saved',
       })
     );
@@ -257,31 +259,93 @@ test.describe('.stalx v2 file status', () => {
     await expect(page.locator('[data-toast-key="legacy-converted"]')).toBeVisible();
   });
 
-  test('a long list of renamed stations sits behind Details', async ({ page }) => {
-    const details = Array.from({ length: 30 }, (_, i) => `Branch ${i + 1} / 0 is now shown as ${(i + 1) * 19}`);
+  test('a long list of stations shown under another name sits behind Details', async ({ page }) => {
+    const details = Array.from({ length: 30 }, (_, i) => `Branch ${i + 1} / 0 is now shown as Main / ${(i + 1) * 19}`);
     await page.evaluate(
       (d) =>
         (window as unknown as MockWindow).__MOCK_SET_CONVERSION_NOTICE__({
-          changes: ['30 stations are now shown under another name'],
+          source: 'old_format',
+          changes: ["30 stations are now shown under another station's name"],
           details: d,
+          brings_back: true,
           file: 'not_yet_saved',
         }),
       details
     );
     await createProject(page, 'Big Old Format');
 
-    await expect(page.getByTestId('conversion-notice-text')).toHaveText('30 stations are now shown under another name.');
+    await expect(page.getByTestId('conversion-notice-text')).toHaveText("30 stations are now shown under another station's name.");
+    await expect(page.getByTestId('conversion-notice-brings-back')).toHaveText(
+      'Detach Line from Station or Remove Closure brings each one back.'
+    );
     await expect(page.getByTestId('conversion-notice-details')).toHaveCount(0);
     await page.getByTestId('conversion-notice-details-button').click();
     await expect(page.getByTestId('conversion-notice-details').locator('li')).toHaveCount(30);
-    await expect(page.getByTestId('conversion-notice-details')).toContainText('Branch 1 / 0 is now shown as 19');
+    await expect(page.getByTestId('conversion-notice-details')).toContainText('Branch 1 / 0 is now shown as Main / 19');
+  });
+
+  // Kept stations (plan 2026-11-23 RS 8.2): a version 2 file an earlier build
+  // wrote is upgraded on open and says so with its own lead; the status bar
+  // says the file on disk is still the older one until the converting save.
+  test('an earlier version 2 file upgraded on open says so with its own lead', async ({ page }) => {
+    await page.evaluate(() =>
+      (window as unknown as MockWindow).__MOCK_SET_CONVERSION_NOTICE__({
+        source: 'earlier_version_2',
+        changes: ['Main / M2 is now shown as Side / S0'],
+        details: [],
+        brings_back: true,
+        file: 'not_yet_saved',
+      })
+    );
+    await page.evaluate(() => (window as unknown as MockWindow).__MOCK_SET_LEGACY_ORIGIN__(true));
+    await createProject(page, 'Earlier Version 2');
+
+    const banner = page.getByTestId('conversion-notice-banner');
+    await expect(page.getByTestId('conversion-notice-lead')).toHaveText('Upgraded from an earlier version 2 file.');
+    await expect(banner).not.toContainText('old file format');
+    await expect(page.getByTestId('conversion-notice-text')).toHaveText('Main / M2 is now shown as Side / S0.');
+    await expect(page.getByTestId('save-status')).toHaveText('Old format: converted when you save');
+
+    await page.keyboard.press('Control+s');
+    await expect(page.getByTestId('save-status')).toHaveText('Saved');
+    await expect(page.getByTestId('conversion-notice-save')).toContainText('Saved in the new format');
+  });
+
+  // A read-only earlier file (it also requires a feature this build does not
+  // know) is only shown upgraded and is never saved, so its banner promises
+  // no save (data review finding data-4).
+  test('a read-only earlier version 2 file promises no save', async ({ page }) => {
+    await page.evaluate(() => {
+      const w = window as unknown as MockWindow;
+      w.__MOCK_SET_READ_ONLY_REASON__(
+        'made with a newer Stalagmight; it requires features this version does not know: lofts'
+      );
+      w.__MOCK_SET_CONVERSION_NOTICE__({
+        source: 'earlier_version_2',
+        changes: ['Main / M2 is now shown as Side / S0'],
+        details: [],
+        brings_back: true,
+        file: 'read_only',
+      });
+      w.__MOCK_SET_LEGACY_ORIGIN__(true);
+    });
+    await createProject(page, 'Earlier And Newer');
+
+    await expect(page.getByTestId('conversion-notice-lead')).toHaveText('Upgraded from an earlier version 2 file.');
+    await expect(page.getByTestId('conversion-notice-save')).toHaveText(
+      'It is only shown converted: the file is open read-only, so nothing is saved and the file stays as it is.'
+    );
+    await expect(page.getByTestId('conversion-notice-banner')).not.toContainText('next time you save');
+    await expect(page.getByTestId('save-status')).toHaveAttribute('data-save-state', 'read-only');
   });
 
   test('the converting save with the banner dismissed confirms with a toast', async ({ page }) => {
     await page.evaluate(() =>
       (window as unknown as MockWindow).__MOCK_SET_CONVERSION_NOTICE__({
+        source: 'old_format',
         changes: ['1 station moved by 0.40 m'],
         details: [],
+        brings_back: false,
         file: 'not_yet_saved',
       })
     );

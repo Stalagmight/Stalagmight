@@ -28,7 +28,7 @@ fn an_add_offsets_ids_re_mints_closures_and_keeps_names_unique() {
     let t = free_line(&mut target, [0.0, 0.0], run(90.0, 3, 10.0));
     with_section(&mut target, t, "Upper level");
     let (t0, t3) = (at(&target, t, 0), at(&target, t, 3));
-    ok(target.create_closure(t0, None, t3, None, ClosureStrategy::Batch));
+    ok(target.create_closure(t0, None, t3, None, ClosureStrategy::Batch, None, &[]));
     target.settings.default_azimuth_reference = Some(AzimuthReference {
         correction: 1.0,
         ..AzimuthReference::default()
@@ -39,9 +39,10 @@ fn an_add_offsets_ids_re_mints_closures_and_keeps_names_unique() {
     let s = free_line(&mut source, [7.0, 8.0], run(0.0, 3, 5.0));
     with_section(&mut source, s, "Upper level");
     let (s0, s3) = (at(&source, s, 0), at(&source, s, 3));
-    let source_closure = ok(source.create_closure(s0, Some(s), s3, None, ClosureStrategy::Move))
-        .value
-        .closure;
+    let source_closure =
+        ok(source.create_closure(s0, Some(s), s3, None, ClosureStrategy::Move, None, &[]))
+            .value
+            .closure;
 
     let base = target.counters.next_station_id;
     let target_before = xy_all(&target);

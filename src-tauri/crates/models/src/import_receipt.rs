@@ -105,37 +105,35 @@ impl ImportReceipt {
     /// shipped back over IPC: at most [`Self::MAX_WARNINGS`] entries (the rest
     /// folded into one "... and N more warnings" summary), each clamped to
     /// [`Self::MAX_WARNING_LEN`] chars on a char boundary (never a raw byte
-    /// slice - a warning can embed arbitrary user-controlled text).
+    /// slice - a warning can embed arbitrary user-controlled text). The
+    /// per-line entries and the notes (`info`, which an import fills with one
+    /// entry per archived station, RS 9) get the same bounds.
     pub fn cap_warnings(&mut self) {
-        if self.warnings.len() > Self::MAX_WARNINGS {
-            let overflow = self.warnings.len() - Self::MAX_WARNINGS;
-            self.warnings.truncate(Self::MAX_WARNINGS);
-            self.warnings.push(format!(
-                "... and {overflow} more warning{}",
-                if overflow == 1 { "" } else { "s" }
-            ));
-        }
-        for warning in &mut self.warnings {
-            if let Some((cut, _)) = warning.char_indices().nth(Self::MAX_WARNING_LEN) {
-                warning.truncate(cut);
-            }
-        }
+        cap_entries(&mut self.warnings, "warning");
         // The same bounds for the per-line entries, which a hostile file can
         // multiply just as easily (one per line).
         if let Some(problems) = self.line_problems.as_mut() {
-            if problems.len() > Self::MAX_WARNINGS {
-                let overflow = problems.len() - Self::MAX_WARNINGS;
-                problems.truncate(Self::MAX_WARNINGS);
-                problems.push(format!(
-                    "... and {overflow} more line{}",
-                    if overflow == 1 { "" } else { "s" }
-                ));
-            }
-            for line in problems.iter_mut() {
-                if let Some((cut, _)) = line.char_indices().nth(Self::MAX_WARNING_LEN) {
-                    line.truncate(cut);
-                }
-            }
+            cap_entries(problems, "line");
+        }
+        cap_entries(&mut self.info, "note");
+    }
+}
+
+/// At most [`ImportReceipt::MAX_WARNINGS`] of `entries` (the rest folded into
+/// one "... and N more {noun}s" entry), each clamped to
+/// [`ImportReceipt::MAX_WARNING_LEN`] chars on a char boundary.
+fn cap_entries(entries: &mut Vec<String>, noun: &str) {
+    if entries.len() > ImportReceipt::MAX_WARNINGS {
+        let overflow = entries.len() - ImportReceipt::MAX_WARNINGS;
+        entries.truncate(ImportReceipt::MAX_WARNINGS);
+        entries.push(format!(
+            "... and {overflow} more {noun}{}",
+            if overflow == 1 { "" } else { "s" }
+        ));
+    }
+    for entry in entries.iter_mut() {
+        if let Some((cut, _)) = entry.char_indices().nth(ImportReceipt::MAX_WARNING_LEN) {
+            entry.truncate(cut);
         }
     }
 }

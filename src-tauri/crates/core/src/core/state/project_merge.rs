@@ -229,6 +229,20 @@ impl AppState {
                 severity: WarningSeverity::Warning,
             });
         }
+        // A source converted as it was read (RS 8.2, 8.3) says so: the
+        // merged file shows it converted, with no banner of its own.
+        for (path, source) in source_paths.iter().zip(&sources) {
+            if let Some(notice) = &source.converted {
+                result.warnings.push(ValidationWarning {
+                    code: "SOURCE_CONVERTED".to_string(),
+                    message: super::project_add::converted_source_note(
+                        &merge_source_label(path),
+                        notice,
+                    ),
+                    severity: WarningSeverity::Warning,
+                });
+            }
+        }
         result
     }
 }

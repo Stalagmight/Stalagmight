@@ -246,6 +246,8 @@ fn merge(state: &AppState, a: StationRef, b: StationRef, batched: bool) -> Comma
     let merge = Command::MergeStations {
         station_a: a,
         station_b: b,
+        keep: None,
+        renames: None,
     };
     state.execute(if batched {
         Command::Batch {
@@ -463,6 +465,8 @@ fn every_command_that_removes_one_reports_it_by_its_stations_before_the_edit() {
             "unmerge" => state.execute(Command::UnmergeStationPair {
                 station_a: slot(y, 1),
                 station_b: slot(x, 0),
+                renames: None,
+                rest_keep: None,
             }),
             "delete line" => state.execute(Command::DeleteLine { line_id: y }),
             "delete shot" => state.execute(Command::DeleteShot {

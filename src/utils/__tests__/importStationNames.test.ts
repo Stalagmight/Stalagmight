@@ -14,6 +14,9 @@ import {
   suggestionTargetStationLabel,
 } from '../importStationNames';
 import type { EditableShot } from '../../components/common/editableShot';
+import '../../i18n';
+import { identityLabels } from '../stationIdentity';
+import type { Station } from '../../types/project';
 
 const row = (mnemoStation?: number): EditableShot =>
   ({
@@ -133,7 +136,23 @@ describe('dmpFileStationName', () => {
 });
 
 describe('DMP wizard station labels', () => {
-  const labels = { stationName: () => 'A7' };
+  // Main Line (5): station 1 is its own A7; station 2 shows Upstream's 12
+  // through a merge (a foreign slot, RS 6).
+  const labels = identityLabels({
+    stations: [
+      { station_ref: { line_id: 5, station_index: 1 }, id: 9, name: 'A7' },
+      {
+        station_ref: { line_id: 5, station_index: 2 },
+        id: 12,
+        name: '12',
+        shown: { id: 12, home_line: 6, foreign: true, loop_end: false },
+      },
+    ] as Station[],
+    lines: [
+      { id: 5, name: 'Main Line' },
+      { id: 6, name: 'Upstream' },
+    ],
+  });
 
   it('names an incoming station with its line', () => {
     expect(dmpFileStationLabel(4, 'Upstream')).toBe('Upstream / 4');
@@ -146,6 +165,12 @@ describe('DMP wizard station labels', () => {
     expect(
       suggestionTargetStationLabel(labels, { targetType: 'importing', existingLineId: null, existingLineName: 'Dive 2' }, 3)
     ).toBe('Dive 2 / 3');
+  });
+
+  it('says whose station an existing foreign slot shows (RS-FX5)', () => {
+    expect(
+      suggestionTargetStationLabel(labels, { targetType: 'existing', existingLineId: 5, existingLineName: 'Main Line' }, 2)
+    ).toBe('Main Line / 12 (Upstream)');
   });
 
   it("names an incoming target line by the user's rename in the wizard, the file's name until then", () => {

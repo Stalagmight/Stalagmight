@@ -13,6 +13,7 @@ use crate::models::survey::{
 };
 use crate::models::{LineId, StationId, MAX_LINE_ID, MAX_SECTION_ID};
 
+use super::super::kept::{self, Before, Comments, IdentityChanges};
 use super::super::stalx_v2::normalized_date;
 use super::convert::{self, Credits};
 use super::merges::{self, Fate};
@@ -34,8 +35,8 @@ pub(super) struct Built {
     pub(super) tie_origins: BTreeMap<ClosureId, TieOrigin>,
     /// Legacy shot `(line, uuid after the load)` -> migrated uuid.
     pub(super) final_uuid: HashMap<(LineId, String), String>,
-    /// The slots whose name changed (`MigratedExtras::names_changed`).
-    pub(super) names_changed: Vec<super::NameChange>,
+    /// What lines show differently than 0.6.0 showed (`MigratedExtras::changes`).
+    pub(super) changes: IdentityChanges,
 }
 
 /// What a migrated `Tie` closure was in the legacy file (plan 7.2.1, 7.2.4).
@@ -71,7 +72,7 @@ pub(super) fn build(
     report.merges_dropped_dangling = merges.count(Fate::DroppedDangling);
     count_torn_collapses(legacy, &slots, &merges, report);
     let station_plan = stations::plan(lp, &slots, &merges, report)?;
-    let of_slot = station_plan.of_slot;
+    let mut of_slot = station_plan.of_slot;
 
     let mut project = Project::new_at(lp.name.clone(), lp.location.clone(), lp.created_at);
     project.modified_at = lp.modified_at;
@@ -103,6 +104,24 @@ pub(super) fn build(
     //    none usable), chains mapped through the station plan.
     let (lines, final_uuid) = build_lines(legacy, &slots, &of_slot, report)?;
     project.lines_mut().extend(lines);
+
+    // 2b. Kept stations (plan 2026-11-23 RS 8.3): every line shows what
+    //     0.6.0 showed on it so far (each member its own name and comment);
+    //     each junction now keeps its member on the longest line (rule K over
+    //     own lines), the others staying records. A junction that keeps a
+    //     record's member takes its Station ID, so the slots are re-keyed
+    //     before anything else refers to them.
+    let Ok(before) = Before::of(&project, Comments::Own, &kept::no_deadline);
+    let Ok(swapped) = kept::keep_longest(&mut project, Comments::Own, &kept::no_deadline);
+    report.kept_by_length = swapped.len();
+    if !swapped.is_empty() {
+        let rekeyed: HashMap<StationId, StationId> = swapped.into_iter().collect();
+        for station in &mut of_slot {
+            if let Some(&new) = rekeyed.get(station) {
+                *station = new;
+            }
+        }
+    }
 
     // 3. Hand moves, per line (a merged member's move stays on its line).
     let hand = resolve_map(lp, &slots, &lp.station_offsets);
@@ -174,12 +193,19 @@ pub(super) fn build(
     // 7. Entrance overrides where the new default would differ from 0.6.0's.
     write_entrance_overrides(lp, &datum_sources, &mut project, report);
 
-    // 8. Names unique on every line (each line shows what 0.6.0 showed, so
-    //    only a repeat 0.6.0 already had is lettered), then what changed per
-    //    slot for the conversion notice.
-    settle_junction_names(&mut project, report);
-    let names_changed = names_changed(lp, &slots, &of_slot, &project);
-    report.names_changed = names_changed.len();
+    // 8. Kept stations, continued (RS 8.3): each closure (the demoted merges
+    //    included) shows the end rule K does not keep as the kept one, in
+    //    list order, when C1 and C2 allow it; then names unique on every line
+    //    by rule L (a station shown on more lines is never lettered for one
+    //    shown on fewer, and chain order never decides); then what each slot
+    //    shows differently than 0.6.0 did, for the conversion notice.
+    let Ok(settled) = kept::settle(&mut project, &before, &kept::no_deadline);
+    report.closures_archived = settled.closures_archived;
+    report.closures_keep_both = settled.changes.closures_keep_both.len();
+    report.stations_renamed = settled.lettered.len();
+    report.names_changed = settled.changes.names.len();
+    report.shown_as_other = settled.changes.shown_as_other();
+    report.comments_hidden = settled.changes.comments_hidden.len();
 
     report.held_gauges_dropped = lp.held_gauges.len();
     report.gauge_pairs_dropped = lp
@@ -194,7 +220,7 @@ pub(super) fn build(
         legacy_snap_alignment,
         tie_origins,
         final_uuid,
-        names_changed,
+        changes: settled.changes,
     })
 }
 
@@ -366,6 +392,7 @@ fn build_closures(
             b: sb,
             b_via: vb,
             strategy: ClosureStrategy::Tie,
+            archived: None, // step 8 gives it one (RS 8.3)
         };
         let origin = if fate == Fate::DemotedSameLine {
             TieOrigin::SameLineMerge
@@ -405,6 +432,7 @@ fn build_closures(
             b: sb,
             b_via: vb,
             strategy,
+            archived: None, // step 8 gives it one (RS 8.3)
         };
         built.push((migrated, snap, !keep_id, origin));
     }
@@ -603,49 +631,4 @@ fn write_entrance_overrides(
             report.entrance_overrides_written += 1;
         }
     }
-}
-
-/// Plan 5.3 per line (review findings D-migration-upgrade-8, UX-3 and the
-/// real-app demo's I-3). Every line shows the names 0.6.0 showed on it: a
-/// junction by its survivor's name on the survivor's line and by each
-/// member's alias on that member's line. So nothing repeats on a line unless
-/// the 0.6.0 file already did; such a repeat is lettered, later in chain
-/// order (the letter-suffix rule), on the name that line shows.
-pub(super) fn settle_junction_names(project: &mut Project, report: &mut MigrationReport) {
-    let lines: Vec<LineId> = project.lines().iter().map(|l| l.id).collect();
-    for line in lines {
-        report.stations_renamed += project.uniquify_line_names(line).len();
-    }
-}
-
-/// Every legacy slot whose line now shows another name than 0.6.0 gave that
-/// slot (the stored name, else its index, as 0.6.0 showed it), in slot
-/// order.
-fn names_changed(
-    lp: &old::Project,
-    slots: &Slots,
-    of_slot: &[StationId],
-    project: &Project,
-) -> Vec<super::NameChange> {
-    let names = resolve_map(lp, slots, &lp.station_names);
-    let mut out = Vec::new();
-    for (dense, &station) in of_slot.iter().enumerate() {
-        let slot = slots.slot(dense);
-        let from = names
-            .by_slot
-            .get(&dense)
-            .cloned()
-            .unwrap_or_else(|| slot.station_index.to_string());
-        let Some(to) = project.name_on(station, slot.line_id).map(str::to_string) else {
-            continue;
-        };
-        if from != to {
-            out.push(super::NameChange {
-                line: project.line_label_of(slot.line_id),
-                from,
-                to,
-            });
-        }
-    }
-    out
 }

@@ -30,7 +30,9 @@ order: 1
   panel and can be hidden on the map. See
   [Grouping lines into sections](../workflows/grouping-lines-into-sections.md).
 - **Merging** two stations connects the lines they are on. That is how
-  separate lines become one cave. See
+  separate lines become one cave. The merged station is the one you keep,
+  shown on every line through it; the other is archived with its name and
+  comment, and **Detach Line from Station** brings it back. See
   [Merging stations](../workflows/merging-stations.md).
 - **Loop closure**: where survey lines meet up again, completing a loop. It is
   shown as a dashed line and does not move the measured survey. The adjusted
@@ -102,14 +104,27 @@ afterwards:
   file (an [MNemo import](../workflows/importing-from-mnemo.md) uses the MNemo
   station numbers) and names any others by the rules above. A name the line
   already has gets a letter: a second `5` becomes `5a`, a second `Sump`
-  becomes `Sump-a`.
+  becomes `Sump-a`. A station a line shows with another line's coloured dot
+  (a merged station kept on its own line) or with the loop mark (a loop
+  closure end) does not take up its name on that line: the line may have a
+  station of its own with that name too.
 
 ### Labels at merged stations
 
-Merged stations are one point on the map, so the **Station IDs** and
-**Station names** labels draw one label there, not one per line. It is the
-station of the line that runs through the point rather than one that starts
-or ends there: where a side line starts from station `Junction` of the main
-line, the map and the exported image show `Junction`, not the side line's
-`0`. Where two lines meet end to end, the label is the station that ends its
-line, not the one that starts the next.
+A merged station is one station: the one the merge kept, with its name and
+Station ID on every line through it. Where a side line was merged onto
+station `Junction` of the main line and `Junction` was kept, the side line
+shows `Junction` too, with a dot in the main line's colour that says the
+station belongs to another line (hover the dot: "Belongs to Main"; the data
+table's Name column reads `Junction (Main)`). The side line's own `0` is archived: it is
+listed under **Archived here** in the station's **Details**, its name is free
+to use again on the side line, and **Detach Line from Station** brings it
+back. The **Station IDs** and **Station names** labels draw the kept station
+once.
+
+A loop closure can show its two ends as one station in the same way: the
+hidden end keeps its own point on the map, but gets no label, and its slot
+carries a small loop mark. **Remove Closure** brings its name back. Its
+**Details** show the station it is shown as, then its own point's position;
+a Plan pin on it names it by its own station first: `Loop / L8 (loop end,
+shown as Main / 8)`.

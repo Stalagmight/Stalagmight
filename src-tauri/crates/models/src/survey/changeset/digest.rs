@@ -42,8 +42,8 @@ pub struct ProjectFieldChange {
 pub enum StationField {
     Name,
     Comment,
-    /// Values are the alias count.
-    Aliases,
+    /// Values are the archived-record count.
+    Archived,
     External,
 }
 
@@ -257,10 +257,10 @@ impl Changeset {
                 text(b.as_ref()),
             );
         }
-        for (id, a, b) in s.aliases.iter().flat_map(FieldCol::rows) {
+        for (id, a, b) in s.archived.iter().flat_map(FieldCol::rows) {
             push(
                 id,
-                StationField::Aliases,
+                StationField::Archived,
                 Val::Int(a.len() as u64),
                 Val::Int(b.len() as u64),
             );

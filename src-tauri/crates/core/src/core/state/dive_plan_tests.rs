@@ -920,9 +920,12 @@ fn a_pin_on_a_merged_away_station_follows_the_survivor() {
     let side_start = station_at(&project, slot(side, 0));
     let main_end = station_at(&project, slot(main, 3));
     let pinned = anchor(&project, slot(side, 0));
-    let merged = project.merge_stations(side_start, main_end).unwrap().value;
+    let merged = project
+        .merge_keeping_stationary(side_start, main_end)
+        .unwrap()
+        .value;
     assert_eq!(
-        merged.retired, side_start,
+        merged.archived, side_start,
         "the side piece moved onto the main line"
     );
     assert!(!project.stations.contains_key(&side_start));
@@ -963,7 +966,7 @@ fn a_pin_on_a_junction_stays_on_its_line_when_the_line_is_detached() {
     let (mut project, _main, branch, junction) = junction_fixture();
     let pinned = anchor(&project, slot(branch, 0));
     let at = xy(&project, slot(branch, 0));
-    project.detach_line(junction, branch).unwrap();
+    project.detach_line_auto(junction, branch, None).unwrap();
     assert_ne!(station_at(&project, slot(branch, 0)), junction);
     let placed = place(&project, &pinned).unwrap();
     assert_eq!(placed, slot(branch, 0));
@@ -1048,7 +1051,7 @@ fn combine_fixture(
         LineEnd::End => p.line(line).unwrap().stations().last().unwrap(),
     };
     let (join_k, join_o) = (end(&project, k, kept_end), end(&project, o, other_end));
-    project.merge_stations(join_o, join_k).unwrap();
+    project.merge_keeping_stationary(join_o, join_k).unwrap();
     (project, k, o)
 }
 

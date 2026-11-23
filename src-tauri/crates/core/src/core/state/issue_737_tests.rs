@@ -75,7 +75,7 @@ fn shot_id(state: &AppState, line: LineId, position: usize) -> ShotId {
 
 /// A closure through the model's create operation (its refusals apply).
 fn close(p: &mut Project, a: StationId, b: StationId, strategy: ClosureStrategy) -> ClosureId {
-    p.create_closure(a, None, b, None, strategy)
+    p.create_closure(a, None, b, None, strategy, None, &[])
         .unwrap()
         .value
         .closure
@@ -231,6 +231,8 @@ fn a_closure_on_a_junction_is_removed_by_the_shot_it_collapses() {
             a4,
             None,
             ClosureStrategy::LeastSquaresWeighted,
+            None,
+            &[],
         )
         .unwrap()
         .value
@@ -522,7 +524,8 @@ fn delete_fuzz(seed0: u64, cases: usize, snaps: bool) -> DeleteFuzz {
                 let s = add_from(&mut p, &name, x, vec![shot(azimuth, length)]);
                 lines.push(s);
                 let end = st(&p, s, 1);
-                let Ok(created) = p.create_closure(end, Some(s), y, None, ClosureStrategy::Move)
+                let Ok(created) =
+                    p.create_closure(end, Some(s), y, None, ClosureStrategy::Move, None, &[])
                 else {
                     continue;
                 };
@@ -541,7 +544,7 @@ fn delete_fuzz(seed0: u64, cases: usize, snaps: bool) -> DeleteFuzz {
         for _ in 0..(2 + next(4)) {
             let x = stations[next(stations.len() as u64) as usize];
             let y = stations[next(stations.len() as u64) as usize];
-            let _ = p.create_closure(x, None, y, None, ClosureStrategy::Batch);
+            let _ = p.create_closure(x, None, y, None, ClosureStrategy::Batch, None, &[]);
         }
         let state = state_with(p);
         let before = project(&state);
@@ -671,6 +674,8 @@ fn the_connectivity_check_carries_the_backend_refusal() {
         station_a: slot(a, 1),
         station_b: slot(a, 2),
         closure_strategy: crate::models::ClosureStrategy::Batch,
+        keep: None,
+        renames: None,
     });
     assert!(!created.success);
     assert_eq!(created.error.as_deref(), Some(refusal.as_str()));
@@ -715,6 +720,8 @@ fn a_tie_onto_a_closed_junction_is_the_closure_already_there() {
         station_a: slot(c, 0),
         station_b: slot(a, 2),
         closure_strategy: crate::models::ClosureStrategy::Batch,
+        keep: None,
+        renames: None,
     });
     assert!(!created.success);
     assert_eq!(created.error.as_deref(), Some(duplicate));

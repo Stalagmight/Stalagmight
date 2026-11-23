@@ -150,12 +150,16 @@ fn two_closures_on_one_station(closures_to: [u32; 2]) -> (AppState, LineId, Line
     ok(state.execute(Command::MergeStations {
         station_a: StationRef::new(c, 1),
         station_b: StationRef::new(b, 2),
+        keep: None,
+        renames: None,
     }));
     for to in closures_to {
         ok(state.execute(Command::CreateLoopClosure {
             station_a: StationRef::new(b, 2),
             station_b: StationRef::new(a, to),
             closure_strategy: ClosureStrategy::Batch,
+            keep: None,
+            renames: None,
         }));
     }
     assert_sound(&state);
@@ -321,11 +325,15 @@ fn one_closure_on_the_deleted_station_is_still_promoted() {
     ok(state.execute(Command::MergeStations {
         station_a: StationRef::new(c, 1),
         station_b: StationRef::new(b, 2),
+        keep: None,
+        renames: None,
     }));
     ok(state.execute(Command::CreateLoopClosure {
         station_a: StationRef::new(b, 2),
         station_b: StationRef::new(a, 1),
         closure_strategy: ClosureStrategy::Batch,
+        keep: None,
+        renames: None,
     }));
     delete_last_shot_of(&state, b);
     assert_sound(&state);

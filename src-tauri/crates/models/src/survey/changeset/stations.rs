@@ -10,9 +10,9 @@ use serde::de::{self, SeqAccess, Visitor};
 use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::{LineId, StationId};
+use crate::StationId;
 
-use super::super::{Station, StationAlias};
+use super::super::{ArchivedStation, Station};
 use super::bits::Same;
 use super::values::IdRuns;
 use super::{Direction, Refusal};
@@ -49,8 +49,9 @@ pub(crate) struct StationChanges {
     pub(crate) name: Option<FieldCol<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) comment: Option<FieldCol<Option<String>>>,
+    /// The archived records (RS 10), each a whole object row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) aliases: Option<FieldCol<Vec<StationAlias>>>,
+    pub(crate) archived: Option<FieldCol<Vec<ArchivedStation>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) external: Option<FieldCol<Option<String>>>,
 }
@@ -92,7 +93,7 @@ impl StationChanges {
         let mut out = Self::default();
         let mut name = ColBuilder::new();
         let mut comment = ColBuilder::new();
-        let mut aliases = ColBuilder::new();
+        let mut archived = ColBuilder::new();
         let mut external = ColBuilder::new();
         let (mut b, mut a) = (before.iter().peekable(), after.iter().peekable());
         loop {
@@ -103,7 +104,7 @@ impl StationChanges {
                         let id = **bid;
                         name.visit(id, &bs.name, &as_.name);
                         comment.visit(id, &bs.comment, &as_.comment);
-                        aliases.visit(id, &bs.aliases, &as_.aliases);
+                        archived.visit(id, &bs.archived, &as_.archived);
                         external.visit(id, &bs.external, &as_.external);
                     }
                     b.next();
@@ -125,7 +126,7 @@ impl StationChanges {
         }
         out.name = name.finish();
         out.comment = comment.finish();
-        out.aliases = aliases.finish();
+        out.archived = archived.finish();
         out.external = external.finish();
         out
     }
@@ -135,7 +136,7 @@ impl StationChanges {
             && self.del.is_empty()
             && self.name.is_none()
             && self.comment.is_none()
-            && self.aliases.is_none()
+            && self.archived.is_none()
             && self.external.is_none()
     }
 
@@ -185,7 +186,7 @@ impl StationChanges {
         }
         col(self.name.as_ref(), stations, direction, |s| &s.name)?;
         col(self.comment.as_ref(), stations, direction, |s| &s.comment)?;
-        col(self.aliases.as_ref(), stations, direction, |s| &s.aliases)?;
+        col(self.archived.as_ref(), stations, direction, |s| &s.archived)?;
         col(self.external.as_ref(), stations, direction, |s| &s.external)?;
         Ok(())
     }
@@ -219,8 +220,8 @@ impl StationChanges {
         col(self.comment.as_ref(), stations, direction, |s| {
             &mut s.comment
         });
-        col(self.aliases.as_ref(), stations, direction, |s| {
-            &mut s.aliases
+        col(self.archived.as_ref(), stations, direction, |s| {
+            &mut s.archived
         });
         col(self.external.as_ref(), stations, direction, |s| {
             &mut s.external
@@ -228,9 +229,9 @@ impl StationChanges {
     }
 }
 
-/// A station image, written as `[id, name]` or `[id, name, {comment, aliases,
-/// external}]` (aliases as `[id]`, `[id, name]` or, with the line that knew
-/// the station by it, `[id, name, line]` / `[id, null, line]`).
+/// A station image, written as `[id, name]` or `[id, name, {comment,
+/// external, archived}]` (each archived record an object `{id, name,
+/// comment?, external?, lines?}`, every field carried, RS 10).
 #[derive(Debug, Clone)]
 pub(crate) struct StationRow(pub(crate) Station);
 
@@ -239,74 +240,17 @@ pub(crate) struct StationRow(pub(crate) Station);
 struct StationExtras {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     comment: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    aliases: Vec<AliasRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     external: Option<String>,
-}
-
-struct AliasRow(StationAlias);
-
-impl Serialize for AliasRow {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let alias = &self.0;
-        let len = match (&alias.name, alias.line) {
-            (_, Some(_)) => 3,
-            (Some(_), None) => 2,
-            (None, None) => 1,
-        };
-        let mut seq = s.serialize_seq(Some(len))?;
-        seq.serialize_element(&alias.id)?;
-        if len > 1 {
-            seq.serialize_element(&alias.name)?;
-        }
-        if let Some(line) = alias.line {
-            seq.serialize_element(&line)?;
-        }
-        seq.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for AliasRow {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        type Parts = (StationId, Option<String>, Option<LineId>);
-        let parts: Parts = {
-            struct V;
-            impl<'de> Visitor<'de> for V {
-                type Value = Parts;
-                fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                    f.write_str("[id], [id, name] or [id, name or null, line]")
-                }
-                fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-                    let id = seq
-                        .next_element()?
-                        .ok_or_else(|| de::Error::custom("an alias without its id"))?;
-                    let name: Option<Option<String>> = seq.next_element()?;
-                    let line: Option<LineId> = seq.next_element()?;
-                    if matches!(name, Some(None)) && line.is_none() {
-                        return Err(de::Error::custom("an alias with a null name and no line"));
-                    }
-                    if seq.next_element::<de::IgnoredAny>()?.is_some() {
-                        return Err(de::Error::custom("an alias with extra elements"));
-                    }
-                    Ok((id, name.flatten(), line))
-                }
-            }
-            d.deserialize_seq(V)?
-        };
-        Ok(Self(StationAlias {
-            id: parts.0,
-            name: parts.1,
-            line: parts.2,
-        }))
-    }
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    archived: Vec<ArchivedStation>,
 }
 
 impl Serialize for StationRow {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let station = &self.0;
         let extras =
-            station.comment.is_some() || !station.aliases.is_empty() || station.external.is_some();
+            station.comment.is_some() || station.external.is_some() || !station.archived.is_empty();
         let mut seq = s.serialize_seq(Some(if extras { 3 } else { 2 }))?;
         seq.serialize_element(&station.id)?;
         seq.serialize_element(&station.name)?;
@@ -326,12 +270,11 @@ impl Serialize for ExtrasRef<'_> {
         if let Some(comment) = &station.comment {
             map.serialize_entry("comment", comment)?;
         }
-        if !station.aliases.is_empty() {
-            let rows: Vec<AliasRow> = station.aliases.iter().cloned().map(AliasRow).collect();
-            map.serialize_entry("aliases", &rows)?;
-        }
         if let Some(external) = &station.external {
             map.serialize_entry("external", external)?;
+        }
+        if !station.archived.is_empty() {
+            map.serialize_entry("archived", &station.archived)?;
         }
         map.end()
     }
@@ -360,8 +303,8 @@ impl<'de> Deserialize<'de> for StationRow {
                     id,
                     name,
                     comment: extras.comment,
-                    aliases: extras.aliases.into_iter().map(|a| a.0).collect(),
                     external: extras.external,
+                    archived: extras.archived,
                 }))
             }
         }

@@ -168,6 +168,13 @@ mod datum_entrance_tests;
 mod datum_ui_tests;
 #[cfg(test)]
 #[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod earlier_version2_tests;
+#[cfg(test)]
+#[expect(
     clippy::expect_used,
     clippy::panic,
     clippy::print_stderr,
@@ -202,6 +209,12 @@ mod history_labels_tests;
               equality is what it checks, and the profiler prints"
 )]
 mod import_commands_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod import_identity_tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used)]
 mod import_pipeline_tests;
@@ -258,6 +271,13 @@ mod issue_738_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod issue_756_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod kept_station_commands_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
@@ -391,6 +411,12 @@ mod reverse_tests;
     reason = "test kit: a setup step that fails is a broken fixture"
 )]
 mod robustness_kit;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod rs_wire_dump_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -580,7 +606,7 @@ mod tests_support;
 
 pub use app_state::AppState;
 pub use command_import::VirtualShotMode;
-pub use conversion_notice::{ConversionFile, ConversionNoticeView};
+pub use conversion_notice::{ConversionFile, ConversionNoticeView, ConversionSource};
 pub use open_file::{
     EXTERNALLY_MODIFIED_CODE, FILE_EXISTS_MARKER, FILE_MISSING_MARKER, READ_ONLY_FILE_CODE,
 };

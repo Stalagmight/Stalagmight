@@ -383,7 +383,8 @@ fn test_station_merge_repositioning() {
 
     // Merge station 0:1 (end of A at y=10) with station 1:0 (start of B)
     // Since A has zero datum, B will move to align
-    let result = project.merge_stations(station_of(&project, a, 1), station_of(&project, b, 0));
+    let result =
+        project.merge_keeping_stationary(station_of(&project, a, 1), station_of(&project, b, 0));
     assert!(result.is_ok(), "{result:?}");
     assert_valid(&project);
 
@@ -423,7 +424,7 @@ fn test_unmerge_keeps_position() {
 
     // Merge then unmerge
     project
-        .merge_stations(station_of(&project, a, 1), station_of(&project, b, 0))
+        .merge_keeping_stationary(station_of(&project, a, 1), station_of(&project, b, 0))
         .unwrap();
 
     let merged = station_of(&project, a, 1) == station_of(&project, b, 0);
@@ -434,7 +435,12 @@ fn test_unmerge_keeps_position() {
         .collect();
 
     project
-        .unmerge_station_pair(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unmerge_station_pair(
+            StationRef::new(a, 1),
+            StationRef::new(b, 0),
+            survey::NameAnswers::RuleL,
+            None,
+        )
         .unwrap();
     assert_valid(&project);
 
@@ -473,11 +479,13 @@ fn test_duplicate_merge_rejection() {
     );
 
     // First merge succeeds
-    let result1 = project.merge_stations(station_of(&project, a, 1), station_of(&project, b, 0));
+    let result1 =
+        project.merge_keeping_stationary(station_of(&project, a, 1), station_of(&project, b, 0));
     assert!(result1.is_ok());
 
     // Second merge fails: the two slots are one station now
-    let result2 = project.merge_stations(station_of(&project, a, 1), station_of(&project, b, 0));
+    let result2 =
+        project.merge_keeping_stationary(station_of(&project, a, 1), station_of(&project, b, 0));
     assert!(result2.is_err());
     assert!(result2.unwrap_err().to_string().contains("already merged"));
 }
@@ -501,7 +509,7 @@ fn test_delete_line_cleanup() {
     );
 
     project
-        .merge_stations(station_of(&project, a, 1), station_of(&project, b, 0))
+        .merge_keeping_stationary(station_of(&project, a, 1), station_of(&project, b, 0))
         .unwrap();
 
     assert_eq!(project.project_wire().station_merges.len(), 1);
@@ -563,14 +571,16 @@ fn test_merge_nonexistent_station_fails() {
 
     // Try to merge with non-existent station
     assert!(project.station_at(StationRef::new(99, 0)).is_none());
-    let result = project.merge_stations(station_of(&project, a, 0), 9_999);
+    let result = project.merge_keeping_stationary(station_of(&project, a, 0), 9_999);
     assert!(result.is_err());
     // And through the command, which resolves the slot first
     let state = app();
     create_line_cmd(&state, "A", vec![create_shot_data(0.0, 10.0, 5.0, 5.0)]);
     let result = state.execute(Command::MergeStations {
         station_a: StationRef::new(0, 0),
-        station_b: StationRef::new(99, 0), // doesn't exist
+        station_b: StationRef::new(99, 0), // doesn't exist,
+        keep: None,
+        renames: None,
     });
     assert!(!result.success);
 }
@@ -606,7 +616,7 @@ fn test_loop_detection_simple() {
 
     // First merge end of A to start of B (connects them)
     project
-        .merge_stations(station_of(&project, a, 2), station_of(&project, b, 0))
+        .merge_keeping_stationary(station_of(&project, a, 2), station_of(&project, b, 0))
         .unwrap();
 
     // Create loop closure between start of A and end of B (already connected)
@@ -614,6 +624,8 @@ fn test_loop_detection_simple() {
         StationRef::new(a, 0),
         StationRef::new(b, 2),
         survey::ClosureStrategy::Batch,
+        None,
+        &[],
     );
 
     // This should succeed and create a loop closure
@@ -643,7 +655,7 @@ fn test_loop_closure_error_calculation() {
 
     // Connect them in a way that creates a loop
     project
-        .merge_stations(
+        .merge_keeping_stationary(
             station_of(&project, a, 1), // End of A
             station_of(&project, b, 0), // Start of B
         )
@@ -654,6 +666,8 @@ fn test_loop_closure_error_calculation() {
         StationRef::new(a, 0), // Start of A
         StationRef::new(b, 1), // End of B
         survey::ClosureStrategy::Batch,
+        None,
+        &[],
     );
 
     let created = result.unwrap().value;
@@ -937,11 +951,15 @@ fn test_comprehensive_undo_types() {
         Command::MergeStations {
             station_a: StationRef::new(a, 2),
             station_b: StationRef::new(b, 0),
+            keep: None,
+            renames: None,
         },
         Command::CreateLoopClosure {
             station_a: StationRef::new(a, 0),
             station_b: StationRef::new(b, 1),
             closure_strategy: ClosureStrategy::Batch,
+            keep: None,
+            renames: None,
         },
         Command::SetShotKind {
             line_id: b,
@@ -2257,7 +2275,7 @@ fn test_save_load_with_station_merges() {
 
     // Add a merge
     project
-        .merge_stations(station_of(&project, a, 1), station_of(&project, b, 0))
+        .merge_keeping_stationary(station_of(&project, a, 1), station_of(&project, b, 0))
         .unwrap();
 
     let loaded = round_trip(&project);
@@ -2336,6 +2354,8 @@ fn test_save_load_with_loop_closures() {
             StationRef::new(a, 0),
             StationRef::new(a, 3),
             survey::ClosureStrategy::default(),
+            None,
+            &[],
         )
         .unwrap();
 
@@ -2900,7 +2920,7 @@ fn test_merge_projects_preserves_station_merges() {
 
     // Merge last station of line 0 with first station of line 1
     project1
-        .merge_stations(station_of(&project1, a, 1), station_of(&project1, b, 0))
+        .merge_keeping_stationary(station_of(&project1, a, 1), station_of(&project1, b, 0))
         .unwrap();
     write_v2(&project1, &path1);
 

@@ -452,12 +452,21 @@ fn operate(
                 Command::MergeStations {
                     station_a,
                     station_b,
+                    keep: None,
+                    renames: None,
                 },
             ),
             _ => ("merge stations", none()),
         },
         15 => match slot(p, rng) {
-            Some(station_ref) => exec("unmerge stations", Command::UnmergeStations { station_ref }),
+            Some(station_ref) => exec(
+                "unmerge stations",
+                Command::UnmergeStations {
+                    station_ref,
+                    renames: None,
+                    rest_keep: None,
+                },
+            ),
             None => ("unmerge stations", none()),
         },
         16 => match (slot(p, rng), slot(p, rng)) {
@@ -471,6 +480,8 @@ fn operate(
                     } else {
                         ClosureStrategy::Batch
                     },
+                    keep: None,
+                    renames: None,
                 },
             ),
             _ => ("create closure", none()),
@@ -478,7 +489,10 @@ fn operate(
         17 => match p.closures.get(rng.below(p.closures.len().max(1))) {
             Some(c) => exec(
                 "remove closure",
-                Command::RemoveLoopClosure { closure_id: c.id },
+                Command::RemoveLoopClosure {
+                    closure_id: c.id,
+                    renames: None,
+                },
             ),
             None => ("remove closure", none()),
         },
@@ -1389,7 +1403,11 @@ fn read_only_files_are_never_written() {
         let text =
             String::from_utf8(encode(&p, &Extras::default(), Mode::Normal).unwrap_or_default())
                 .unwrap_or_default();
-        let text = text.replacen("\"requires\":[]", "\"requires\":[\"zz-future\"]", 1);
+        let text = text.replacen(
+            "\"requires\":[\"archived-stations\"]",
+            "\"requires\":[\"archived-stations\",\"zz-future\"]",
+            1,
+        );
         std::fs::write(&path, &text).unwrap_or_else(|e| panic!("{e}"));
         let original = survey_members(text.as_bytes());
         let mut state = open(&path).unwrap_or_else(|e| panic!("seed {seed}: {e}"));

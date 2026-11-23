@@ -25,6 +25,10 @@
 //!   anything else ("measure, do not re-derive"). The orphan-closure sweep
 //!   runs afterwards, since a piece that loses its datum can no longer hold a
 //!   closure to another piece.
+//!
+//! A datum set through the slot of a loop end that a closure archives (it
+//! shows the kept end's identity, RS 5.4) goes on that node, where its own
+//! position is, and the result says so ([`DatumSet::shown_as`]).
 
 use crate::{
     validate_gps_accuracy, DatumRole, GpsCoordinates, LineId, StationId, StationRef,
@@ -54,6 +58,10 @@ pub struct DatumSet {
     pub change: DatumChange,
     /// Its role afterwards.
     pub role: Option<DatumRole>,
+    /// The identity the datum's station shows when a loop closure archives
+    /// it (RS 5.4, U-P2-15): the datum is on the loop end's own position,
+    /// not on the station it is shown as, and the action says so.
+    pub shown_as: Option<StationId>,
 }
 
 impl Project {
@@ -117,15 +125,13 @@ impl Project {
         };
         let (index, change) = outcome.value;
         let role = self.datum_roles().get(index).copied().flatten();
-        Ok(OpOutcome {
-            value: DatumSet {
-                index,
-                change,
-                role,
-            },
-            anchors: outcome.anchors,
-            sweep: outcome.sweep,
-        })
+        let shown = self.shown(station);
+        Ok(outcome.map(|_| DatumSet {
+            index,
+            change,
+            role,
+            shown_as: (shown != station).then_some(shown),
+        }))
     }
 
     /// [`Self::set_datum`] on a slot: its station, attached via its line.
@@ -235,11 +241,7 @@ impl Project {
         let value = op(self);
         let violations = self.validate();
         if violations.is_empty() {
-            Ok(OpOutcome {
-                value,
-                anchors: super::AnchorReport::default(),
-                sweep: super::SweepReport::default(),
-            })
+            Ok(OpOutcome::unchanged(value))
         } else {
             *self = backup;
             Err(OpError::Invalid(violations))

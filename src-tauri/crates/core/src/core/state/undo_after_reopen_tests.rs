@@ -205,6 +205,8 @@ fn a_combine_undone_after_a_reopen_keeps_every_shot_uuid() {
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(k, 2),
         station_b: StationRef::new(o, 0),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "{:?}", merged.error);
     save_close_reopen(&state, &path);
@@ -226,11 +228,15 @@ fn a_combine_across_a_closure_undone_after_a_reopen_keeps_every_shot_uuid() {
         Command::MergeStations {
             station_a: StationRef::new(k, 0),
             station_b: StationRef::new(o, 1),
+            keep: None,
+            renames: None,
         },
         Command::CreateLoopClosure {
             station_a: StationRef::new(k, 1),
             station_b: StationRef::new(o, 0),
             closure_strategy: ClosureStrategy::Batch,
+            keep: None,
+            renames: None,
         },
     ] {
         let result = state.execute(command);
@@ -386,6 +392,8 @@ fn both_stacks_survive_a_reopen_in_order_and_step_exactly() {
     let r = state.execute(Command::MergeStations {
         station_a: StationRef::new(side, 0),
         station_b: StationRef::new(main, 2),
+        keep: None,
+        renames: None,
     });
     assert!(r.success, "{:?}", r.error);
     states.push(survey(&state));
@@ -472,11 +480,15 @@ fn open(path: &Path) -> AppState {
     state
 }
 
-/// The entry text with its `"v":1` version swapped for `version`.
+/// The entry text with its version swapped for `version`.
 fn with_version(entry: &RawJson, version: u32) -> RawJson {
+    let current = format!(
+        "{{\"v\":{},",
+        crate::models::survey::changeset::HISTORY_FORMAT_VERSION
+    );
     let text = entry
         .as_str()
-        .replacen("{\"v\":1,", &format!("{{\"v\":{version},"), 1);
+        .replacen(&current, &format!("{{\"v\":{version},"), 1);
     assert_ne!(
         text,
         entry.as_str(),
@@ -533,7 +545,10 @@ fn an_unreadable_entry_drops_the_whole_history_with_the_banner() {
         rewrite_history(&path, |history| {
             let undo = history.undo.pop().unwrap();
             let replaced = match damage {
-                0 => with_version(&undo, 2),
+                0 => with_version(
+                    &undo,
+                    crate::models::survey::changeset::HISTORY_FORMAT_VERSION + 1,
+                ),
                 1 => {
                     let text = undo
                         .as_str()
@@ -541,7 +556,13 @@ fn an_unreadable_entry_drops_the_whole_history_with_the_banner() {
                     RawJson::parse(&text).unwrap()
                 }
                 _ => {
-                    let text = undo.as_str().replacen("{\"v\":1,", "{\"v\":1,\"zz\":0,", 1);
+                    let current = format!(
+                        "{{\"v\":{},",
+                        crate::models::survey::changeset::HISTORY_FORMAT_VERSION
+                    );
+                    let text = undo
+                        .as_str()
+                        .replacen(&current, &format!("{current}\"zz\":0,"), 1);
                     RawJson::parse(&text).unwrap()
                 }
             };

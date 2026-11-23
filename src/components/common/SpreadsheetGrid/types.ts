@@ -116,6 +116,14 @@ export interface GridSelection {
   active: CellCoord;
 }
 
+/**
+ * What a host's `onEdit` returns when it holds a typed edit for an answer
+ * (the stations grid asks whose station a dotted cell shows first): the grid
+ * then keeps the active cell on the edited one instead of moving on with
+ * Enter, so the cursor is where the prompt is about (RS-FX8, N6).
+ */
+export const EDIT_HELD = 'held' as const;
+
 /** A single resolved edit emitted to the host. `value` is already coerced. */
 export interface CellEdit {
   row: number;

@@ -117,7 +117,7 @@ pub(super) fn close(
     b: StationRef,
     strategy: ClosureStrategy,
 ) -> ClosureId {
-    p.create_closure_at(a, b, strategy)
+    p.create_closure_at(a, b, strategy, None, &[])
         .unwrap()
         .value
         .closure
@@ -260,6 +260,8 @@ pub(super) fn merge(state: &AppState, a: StationRef, b: StationRef) -> CommandRe
         Command::MergeStations {
             station_a: a,
             station_b: b,
+            keep: None,
+            renames: None,
         },
     )
 }

@@ -397,11 +397,15 @@ fn actions() -> Vec<(&'static str, Prepare)> {
             command(Command::MergeStations {
                 station_a: StationRef::new(b.island, 0),
                 station_b: StationRef::new(b.mid(), 10),
+                keep: None,
+                renames: None,
             })
         }),
         ("detach (unmerge stations)", |b| {
             command(Command::UnmergeStations {
                 station_ref: StationRef::new(b.mid(), 0),
+                renames: None,
+                rest_keep: None,
             })
         }),
         ("move station", |b| {

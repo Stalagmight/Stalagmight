@@ -4,9 +4,21 @@ use crate::{Section, StationRef, MAX_SECTION_ID, MAX_STATION_ID};
 
 use super::test_helpers::{add, at, flat, gps, project, three_line_junction};
 use super::{
-    ClosureEnd, ClosureStrategy, CounterKind, NameConflict, NumberField, Project, StartAt, Station,
-    StationAlias, Violation, ZeroDatum, MAX_SHOTS_PER_LINE,
+    ArchivedStation, ClosureEnd, ClosureStrategy, CounterKind, NameConflict, NumberField, Project,
+    StartAt, Station, Violation, ZeroDatum, MAX_SHOTS_PER_LINE,
 };
+
+/// A record with a name and the lines it names.
+fn record(id: crate::StationId, name: &str, lines: Vec<crate::LineId>) -> ArchivedStation {
+    ArchivedStation {
+        id,
+        name: name.to_string(),
+        comment: None,
+        external: None,
+        into: None,
+        lines,
+    }
+}
 
 /// The base survey validates, and `mutate` makes it report `expected` (among
 /// possibly others).
@@ -57,18 +69,18 @@ fn an_out_of_range_station_id_is_reported() {
 }
 
 #[test]
-fn an_alias_equal_to_a_live_id_is_reported() {
+fn an_archived_id_equal_to_a_live_id_is_reported() {
     expect_violation(
         |p| {
-            p.stations.get_mut(&0).unwrap().aliases.push(StationAlias {
-                id: 1,
-                name: None,
-                line: None,
-            });
+            p.stations
+                .get_mut(&0)
+                .unwrap()
+                .archived
+                .push(record(1, "old", Vec::new()));
         },
-        &Violation::AliasCollision {
+        &Violation::ArchivedIdCollision {
             station: 0,
-            alias: 1,
+            archived: 1,
         },
     );
 }
@@ -380,11 +392,11 @@ fn counters_must_be_above_every_id_in_use() {
     );
     expect_violation(
         |p| {
-            p.stations.get_mut(&0).unwrap().aliases.push(StationAlias {
-                id: 40,
-                name: Some("old".to_string()),
-                line: None,
-            });
+            p.stations
+                .get_mut(&0)
+                .unwrap()
+                .archived
+                .push(record(40, "old", Vec::new()));
         },
         &Violation::CounterNotAbove {
             counter: CounterKind::Station,
@@ -517,20 +529,19 @@ fn a_non_finite_validation_threshold_is_reported() {
 }
 
 #[test]
-fn an_alias_id_outside_the_station_id_space_is_reported() {
+fn an_archived_id_outside_the_station_id_space_is_reported() {
     expect_violation(
         |p| {
             let host = *p.stations.keys().next().unwrap();
             p.counters.next_station_id = MAX_STATION_ID;
-            p.station_mut(host).unwrap().aliases.push(StationAlias {
-                id: MAX_STATION_ID,
-                name: None,
-                line: None,
-            });
+            p.station_mut(host)
+                .unwrap()
+                .archived
+                .push(record(MAX_STATION_ID, "old", Vec::new()));
         },
-        &Violation::AliasOutOfRange {
+        &Violation::ArchivedIdOutOfRange {
             station: 0,
-            alias: MAX_STATION_ID,
+            archived: MAX_STATION_ID,
         },
     );
 }
@@ -686,29 +697,29 @@ fn map_based_reports(p: &Project) -> Vec<Violation> {
             continue;
         };
         let mut seen: BTreeMap<&str, crate::StationId> = BTreeMap::new();
+        let mut reported: Vec<(crate::StationId, crate::StationId)> = Vec::new();
         for &station in chain {
-            // The name the line shows: the latest alias naming the line, when
-            // it has a name, else the station's own.
-            let Some(name) = p.stations.get(&station).map(|s| {
-                s.aliases
-                    .iter()
-                    .rev()
-                    .find(|a| a.line == Some(line.id))
-                    .and_then(|a| a.name.as_deref())
-                    .unwrap_or(s.name.as_str())
-            }) else {
+            // The name the line shows: the shown identity's (RS 5.1; no
+            // record's name counts).
+            let identity = p.shown(station);
+            let Some(name) = p.stations.get(&identity).map(|s| s.name.as_str()) else {
                 continue;
             };
             match seen.get(name) {
-                Some(&first) if first != station => out.push(Violation::DuplicateStationName {
-                    line: line.id,
-                    name: name.to_string(),
-                    first,
-                    second: station,
-                }),
+                Some(&first) if first != identity => {
+                    if !reported.contains(&(first, identity)) {
+                        reported.push((first, identity));
+                        out.push(Violation::DuplicateStationName {
+                            line: line.id,
+                            name: name.to_string(),
+                            first,
+                            second: identity,
+                        });
+                    }
+                }
                 Some(_) => {}
                 None => {
-                    seen.insert(name, station);
+                    seen.insert(name, identity);
                 }
             }
         }
@@ -782,18 +793,14 @@ fn the_fast_checks_report_what_the_map_based_ones_did() {
                     }
                 }
                 5 => {
-                    // The line knows a station by an alias named like
-                    // another station (the name it shows there, I-3).
+                    // A record named like another station: shown nowhere,
+                    // its name counts for no line (RS 3).
                     let station = stations[below(stations.len())];
                     let name = p.stations[&station].name.clone();
                     let to = p.line(line).unwrap().shots[index].to;
                     let id = 700_000 + below(1_000) as u32;
                     if let Some(s) = p.stations.get_mut(&to) {
-                        s.aliases.push(StationAlias {
-                            id,
-                            name: Some(name),
-                            line: Some(line),
-                        });
+                        s.archived.push(record(id, &name, vec![line]));
                     }
                 }
                 _ => {
@@ -923,13 +930,14 @@ fn every_derived_position_is_finite_within_the_bounds() {
         .all(|(_, c)| c.iter().all(|v| v.is_finite())));
 }
 
-/// An alias's line must pass through its station (invariant 2, like a
-/// `via`), and that line shows the station by the alias's name (I-3): the
-/// station's own name does not count there, the alias's does (invariant 8).
-/// Injection: compare station names in `check_names` (the old rule) and the
-/// alias named like L1's own end validates.
+/// A record's lines must pass through its station (A2, like a `via`), a
+/// line is named by one record of a station at most (A3), and a station on a
+/// line keeps a native line (A4). A record's name counts on no line (N8): a
+/// line may show another station by it. Injection: count record names in
+/// `check_names` (the U1 rule) and the end named like the record validates
+/// no more.
 #[test]
-fn an_alias_line_must_pass_its_station_and_names_it_on_that_line() {
+fn records_follow_a2_to_a4_and_their_names_count_nowhere() {
     let (mut p, [l0, l1, _]) = three_line_junction();
     let s1 = at(&p, l0, 1);
     let l1_end = at(&p, l1, 2);
@@ -940,73 +948,126 @@ fn an_alias_line_must_pass_its_station_and_names_it_on_that_line() {
         v,
         Violation::DuplicateStationName { line, .. } if *line == l1
     )));
-    // L1 knows s1 by an alias: it shows it as "0", so its own end may be
-    // named like the junction.
-    let alias = p.mint_station_id().unwrap();
-    p.stations.get_mut(&s1).unwrap().aliases.push(StationAlias {
-        id: alias,
-        name: Some("0".to_string()),
-        line: Some(l1),
-    });
+    p.stations.get_mut(&l1_end).unwrap().name = "end".to_string();
+    // A record of s1 naming L1 (L1's own station there was archived),
+    // named like L1's end: shown nowhere, so nothing collides.
+    let id = p.mint_station_id().unwrap();
+    p.stations
+        .get_mut(&s1)
+        .unwrap()
+        .archived
+        .push(record(id, "end", vec![l1]));
     assert_eq!(p.validate(), Vec::new());
-    assert!(p.known_by_alias_on(s1, l1));
-    assert!(!p.known_by_alias_on(s1, l0));
-    assert_eq!(p.name_on(s1, l1), Some("0"));
-    assert_eq!(p.name_on(s1, l0), Some(name.as_str()));
-    // L1 holds "0" for s1: its end may not take it, by hand or in a rename.
-    assert!(p.conflicts_with_name(l1_end, &name).is_empty());
+    assert!(!p.is_native(s1, l1));
+    assert!(p.is_native(s1, l0));
+    assert!(p.is_foreign_slot(StationRef::new(l1, 0)));
+    assert!(!p.is_foreign_slot(StationRef::new(l0, 1)));
+    assert_eq!(p.home_line(s1), Some(l0));
+    assert_eq!(p.shown_name(s1), Some(name.as_str()), "every line shows s1");
+    // A rename of s1 is checked only on the lines it is native on (RS-FX5):
+    // L1 shows it through a foreign slot, which counts for no uniqueness,
+    // so "end" is free; on L0 a native station's name is not.
+    assert!(p.conflicts_with_name(s1, "end").is_empty());
+    let l0_next = at(&p, l0, 2);
+    let taken = p.stations[&l0_next].name.clone();
     assert_eq!(
-        p.conflicts_with_name(l1_end, "0"),
+        p.conflicts_with_name(s1, &taken),
         vec![NameConflict {
-            line: l1,
-            other: s1
+            line: l0,
+            other: l0_next
         }]
     );
-    let mut taken = p.clone();
-    taken.stations.get_mut(&l1_end).unwrap().name = "0".to_string();
+    // And L1's end may take the name s1 shows on L1's foreign slot.
+    let mut dotted = p.clone();
+    dotted.stations.get_mut(&l1_end).unwrap().name = name;
+    assert_eq!(dotted.validate(), Vec::new());
+    // A3: a second record naming L1.
+    let mut twice = p.clone();
+    let second = twice.mint_station_id().unwrap();
+    twice
+        .stations
+        .get_mut(&s1)
+        .unwrap()
+        .archived
+        .push(record(second, "again", vec![l1]));
     assert_eq!(
-        taken.validate(),
-        vec![Violation::DuplicateStationName {
+        twice.validate(),
+        vec![Violation::LineNamedTwice {
+            station: s1,
             line: l1,
-            name: "0".to_string(),
-            first: s1,
-            second: l1_end,
+            first: id,
+            second,
         }]
     );
-    // Renaming through L1's slot renames the alias (L1 alone); through L0's
-    // slot the station's own name (every line without an alias).
-    assert_eq!(p.lines_sharing_name_on(s1, l1), vec![l1]);
-    assert_eq!(p.lines_sharing_name_on(s1, l0), vec![l0]);
-    let mut renamed = p.clone();
-    renamed.set_name_on(s1, l1, "J".to_string());
+    // A4: records name every line through s1.
+    let mut covered = p.clone();
+    let other = covered.mint_station_id().unwrap();
+    covered
+        .stations
+        .get_mut(&s1)
+        .unwrap()
+        .archived
+        .push(record(other, "zero", vec![l0]));
     assert_eq!(
-        (renamed.name_on(s1, l1), renamed.name_on(s1, l0)),
-        (Some("J"), Some(name.as_str()))
+        covered.validate(),
+        vec![Violation::NoNativeLine { station: s1 }]
     );
-    renamed.set_name_on(s1, l0, "K".to_string());
-    assert_eq!(
-        (renamed.name_on(s1, l1), renamed.name_on(s1, l0)),
-        (Some("J"), Some("K"))
-    );
-    assert_eq!(renamed.validate(), Vec::new());
-
-    // A line that does not pass the station is a stale hint.
+    // A2: a line that does not pass the station is stale.
     let s0 = at(&p, l0, 0);
-    let other = p.mint_station_id().unwrap();
-    p.stations.get_mut(&s0).unwrap().aliases.push(StationAlias {
-        id: other,
-        name: None,
-        line: Some(l1),
-    });
+    let stale = p.mint_station_id().unwrap();
+    p.stations
+        .get_mut(&s0)
+        .unwrap()
+        .archived
+        .push(record(stale, "gone", vec![l1]));
     assert_eq!(
         p.validate(),
-        vec![Violation::StaleAliasLine {
+        vec![Violation::StaleArchivedLine {
             station: s0,
-            alias: other,
+            archived: stale,
             line: l1
         }]
     );
     let dropped = p.drop_stale_attachments();
-    assert_eq!(dropped.alias_lines, vec![(s0, other)]);
-    assert_eq!(p.validate(), Vec::new());
+    assert_eq!(dropped.archived_lines, vec![(s0, stale, l1)]);
+    assert_eq!(p.validate(), Vec::new(), "a record with no line is history");
+    assert!(p.stations[&s0].archived[0].is_history());
+}
+
+/// Pre-PR review (RS-FX9 item 4): the three owner-fault messages (A6) read
+/// as one sentence each. Injection: on 3b6bdf77e each held an 18-space gap
+/// mid-sentence (a lost `\` line continuation), and this test fails there.
+#[test]
+fn the_owner_fault_messages_read_as_one_sentence() {
+    let cases = [
+        (
+            Violation::DanglingArchivedOwner {
+                station: 7,
+                archived: 40,
+                into: 99,
+            },
+            "archived station 40 of station 7 is archived under 99, which is no other \
+             archived station of it",
+        ),
+        (
+            Violation::ArchivedUnderHistory {
+                station: 7,
+                archived: 40,
+                into: 41,
+            },
+            "archived station 40 of station 7 is archived under 41, which names no line",
+        ),
+        (
+            Violation::ArchivedOwnerCycle {
+                station: 7,
+                archived: 40,
+            },
+            "archived station 40 of station 7 is archived under itself through other \
+             archived stations",
+        ),
+    ];
+    for (violation, text) in cases {
+        assert_eq!(violation.to_string(), text);
+        assert!(!text.contains("  "), "{text:?}");
+    }
 }

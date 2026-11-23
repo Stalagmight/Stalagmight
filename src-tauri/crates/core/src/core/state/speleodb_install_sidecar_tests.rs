@@ -352,18 +352,19 @@ fn a_pulled_legacy_revision_that_moved_stations_raises_the_conversion_notice() {
             let opened = state.execute(crate::core::Command::OpenProject { path: dest.clone() });
             assert!(opened.success, "{:?}", opened.error);
             let notice = state.take_conversion_notice();
+            // RS 8.3: C shows its start by the kept junction's name (B's
+            // station, so named by B); its own 1 keeps its name beside the
+            // dotted 1 (RS-FX5).
+            let names = ["Line 3 / 0 is now shown as Line 2 / 1"];
+            let notice = notice.expect("a notice");
             if !drift {
-                assert_eq!(
-                    notice, None,
-                    "a clean revision changes nothing a line shows"
-                );
+                assert_eq!(notice.changes, names, "a clean revision: the names");
                 continue;
             }
-            let notice = notice.expect("a notice");
             assert_eq!(
                 notice.changes,
-                ["2 stations moved by up to 5.00 m"],
-                "only the moves, no name: {notice:?}"
+                ["2 stations moved by up to 5.00 m", names[0]],
+                "the moves and the names: {notice:?}"
             );
             // The cache is version 2 already and nothing local keeps the
             // original: the notice points at the server's revision, never at a

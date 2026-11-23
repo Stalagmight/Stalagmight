@@ -78,6 +78,8 @@ fn closure(state: &AppState, a: StationRef, b: StationRef) -> crate::core::Comma
             station_a: a,
             station_b: b,
             closure_strategy: WireStrategy::Batch,
+            keep: None,
+            renames: None,
         },
     )
 }
@@ -109,6 +111,8 @@ fn a_merge_on_one_line_is_refused_in_0_6_0_words() {
         Command::MergeStations {
             station_a: slot(line, 0),
             station_b: slot(line, 1),
+            keep: None,
+            renames: None,
         },
     );
     assert_eq!(error, "Cannot merge stations from the same line");
@@ -129,7 +133,7 @@ fn a_merge_makes_one_station_records_one_entry_and_undoes_exactly() {
         history(state)[0],
         (
             "merge_stations".to_string(),
-            "Merge stations A / 1 and B / 0".to_string()
+            "Merge A / 1 into B / 0 (keeps 0)".to_string()
         )
     );
     assert_round_trip(state, &before, "merge");
@@ -147,6 +151,8 @@ fn a_merge_of_connected_stations_routes_to_the_closure_dialog() {
         Command::MergeStations {
             station_a: slot(c, 1),
             station_b: slot(a, 0),
+            keep: None,
+            renames: None,
         },
     );
     assert_eq!(
@@ -160,6 +166,8 @@ fn a_merge_of_connected_stations_routes_to_the_closure_dialog() {
             Command::MergeStations {
                 station_a: slot(c, 9),
                 station_b: slot(a, 0),
+                keep: None,
+                renames: None,
             },
         ),
         "One or both stations do not exist"
@@ -350,6 +358,8 @@ fn create_loop_closure_deferred_strategy_is_rejected() {
             station_a: slot(line, 0),
             station_b: slot(line, 2),
             closure_strategy: WireStrategy::ProportionalByLength,
+            keep: None,
+            renames: None,
         },
     );
     assert_eq!(
@@ -369,6 +379,8 @@ fn create_loop_closure_refuses_in_0_6_0_order_and_words() {
         station_a: x,
         station_b: y,
         closure_strategy: WireStrategy::Batch,
+        keep: None,
+        renames: None,
     };
     assert_eq!(
         refused(state, create(slot(a, 0), slot(b, 5))),
@@ -403,12 +415,24 @@ fn remove_loop_closure_undoes_exactly_and_refuses_an_unknown_id() {
     closure(state, slot(a, 0), slot(b, 1));
     let id = project(state).closures[0].id;
     let before = snapshot(state);
-    run(state, Command::RemoveLoopClosure { closure_id: id });
+    run(
+        state,
+        Command::RemoveLoopClosure {
+            closure_id: id,
+            renames: None,
+        },
+    );
     assert!(project(state).closures.is_empty());
     assert_eq!(history(state)[0].0, "remove_loop_closure");
     assert_round_trip(state, &before, "remove closure");
     assert_eq!(
-        refused(state, Command::RemoveLoopClosure { closure_id: id + 7 }),
+        refused(
+            state,
+            Command::RemoveLoopClosure {
+                closure_id: id + 7,
+                renames: None
+            }
+        ),
         "Loop closure not found"
     );
 }
@@ -434,6 +458,8 @@ fn an_unmerge_that_orphans_a_closure_promotes_it_and_one_undo_restores_both() {
         Command::UnmergeStationPair {
             station_a: slot(a, 2),
             station_b: slot(b, 0),
+            renames: None,
+            rest_keep: None,
         },
     );
     assert!(r.warnings.is_empty(), "a promotion is logged, not reported");
@@ -458,6 +484,8 @@ fn unmerge_on_a_station_off_a_junction_is_a_no_op_that_keeps_redo() {
         state,
         Command::UnmergeStations {
             station_ref: slot(a, 0),
+            renames: None,
+            rest_keep: None,
         },
     );
     assert!(r.warnings.is_empty());
@@ -469,6 +497,8 @@ fn unmerge_on_a_station_off_a_junction_is_a_no_op_that_keeps_redo() {
         state,
         Command::UnmergeStations {
             station_ref: slot(a, 9),
+            renames: None,
+            rest_keep: None,
         },
     );
     assert_same(&snapshot(state), &before, "nothing changed");
@@ -483,6 +513,8 @@ fn unmerge_pair_needs_two_slots_of_one_station() {
     let pair = |x: StationRef, y: StationRef| Command::UnmergeStationPair {
         station_a: x,
         station_b: y,
+        renames: None,
+        rest_keep: None,
     };
     for (x, y) in [
         (slot(a, 0), slot(b, 1)),
@@ -527,6 +559,8 @@ fn unmerge_on_a_hub_of_three_lines_detaches_only_that_line() {
         state,
         Command::UnmergeStations {
             station_ref: slot(b, 0),
+            renames: None,
+            rest_keep: None,
         },
     );
     let p = project(state);
@@ -591,7 +625,7 @@ fn removing_a_zero_datum_reports_the_closure_its_sweep_removes() {
     p.set_datum_at(slot(a, 0), origin(), None).unwrap();
     p.set_datum_at(slot(b, 0), gps_at(0.0, -20.0), None)
         .unwrap();
-    p.create_closure_at(slot(b, 1), slot(a, 1), ClosureStrategy::Batch)
+    p.create_closure_at(slot(b, 1), slot(a, 1), ClosureStrategy::Batch, None, &[])
         .unwrap();
     let b1 = st(&p, b, 1);
     p.push_closure(a1, Some(c), b1, Some(b), ClosureStrategy::Batch);
@@ -983,6 +1017,8 @@ fn unmerging_one_junction_of_a_chain_moves_nothing() {
         state,
         Command::UnmergeStations {
             station_ref: slot(a, 1),
+            renames: None,
+            rest_keep: None,
         },
     );
     let p = project(state);
@@ -1175,6 +1211,8 @@ fn a_loop_closure_closes_a_triangle_of_merged_lines() {
             Command::MergeStations {
                 station_a: slot(c, 2),
                 station_b: slot(a, 0),
+                keep: None,
+                renames: None,
             }
         ),
         "Stations are already connected. Use Create Loop Closure instead."
@@ -1323,10 +1361,14 @@ fn a_batch_of_topology_commands_is_one_entry_with_every_warning() {
                     station_a: slot(a, 1),
                     station_b: slot(b, 1),
                     closure_strategy: WireStrategy::Batch,
+                    keep: None,
+                    renames: None,
                 },
                 Command::MergeStations {
                     station_a: slot(a, 1),
                     station_b: slot(b, 1),
+                    keep: None,
+                    renames: None,
                 },
             ],
             label: None,
@@ -1354,6 +1396,8 @@ fn a_topology_history_undoes_through_the_file_after_a_reopen() {
         state,
         Command::UnmergeStations {
             station_ref: slot(c, 0),
+            renames: None,
+            rest_keep: None,
         },
     );
     let edited = snapshot(state);

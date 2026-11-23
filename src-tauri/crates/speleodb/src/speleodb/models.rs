@@ -100,7 +100,7 @@ pub struct RevisionHistory {
 /// [#218] One commit projected for the frontend revision-history view. A read-only
 /// slice of [`RevisionCommit`] carrying only what the UI renders (no token, no
 /// server-internal fields). The list is server-ordered (newest first).
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub struct SpeleoRevision {
     /// 40-hex git commit SHA.
@@ -248,7 +248,7 @@ pub struct SpeleoFileAccess {
     pub release_context: Option<SpeleoReleaseContext>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "../../bindings/")]
 pub enum SpeleoAccessVerification {
@@ -382,7 +382,7 @@ pub struct SpeleoOpenResult {
 }
 
 /// Why an open returned the cached copy read-only, without the server's say.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
 pub enum SpeleoReadOnlyOpen {
@@ -401,7 +401,7 @@ pub enum SpeleoReadOnlyOpen {
 /// lock and reconciling the open project against the server. A discriminated
 /// union (`kind`) the webview branches on. Errors (no permission, anomalies,
 /// network) surface through the `Err(SpeleoErrorDto)` channel instead.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StartEditingResult {
@@ -425,7 +425,7 @@ pub enum StartEditingResult {
 
 /// Outcome of `speleodb_done` (#197): push the open project's edits, then release
 /// the lock and return to read-only.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DoneResult {
@@ -489,7 +489,7 @@ pub enum DoneResult {
 
 /// Outcome of `speleodb_update` (#197): a read-only refresh of the open project
 /// against the server (no lock taken).
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum UpdateResult {
@@ -516,7 +516,7 @@ pub enum UpdateResult {
 /// the lock's holder (farm finding P2-take-remote-editable). The lock is the
 /// account's, so another session of the same account can hand it back (its
 /// Close), and the session's own claim cannot know.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EditingStopped {
@@ -626,7 +626,7 @@ pub struct SpeleoLinkStatus {
 /// The local copy's relationship to the server tip (the reconcile verdict,
 /// projected for the UI). Drives the action button (T2c): `RemoteAhead` → pull,
 /// `Conflict` → resolve. Derived from [`super::sync::reconcile_verdict`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteState {
@@ -643,7 +643,7 @@ pub enum RemoteState {
 /// Outcome of `speleodb_push` (T2d): push the open project's edits **without**
 /// releasing the lock (unlike [`DoneResult`], which releases). The lock is
 /// retained in every arm so editing continues.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PushResult {

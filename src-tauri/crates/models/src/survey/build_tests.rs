@@ -4,7 +4,7 @@
 use crate::{ShotData, StationRef, FEATURE_ID_STRIDE};
 
 use super::test_helpers::{add, add_on, at, flat, meta, project, three_line_junction, try_add};
-use super::{BuildError, ClosureStrategy, Line, NameConflict, StartAt, Station, StationAlias};
+use super::{ArchivedStation, BuildError, ClosureStrategy, Line, NameConflict, StartAt, Station};
 
 #[test]
 fn add_line_mints_one_station_per_shot_and_names_them_by_index() {
@@ -120,13 +120,16 @@ fn the_line_id_is_one_above_the_highest_and_insert_line_refuses_a_taken_id() {
 }
 
 #[test]
-fn inserting_a_station_raises_the_counter_past_it_and_its_aliases() {
+fn inserting_a_station_raises_the_counter_past_it_and_its_records() {
     let mut p = project();
     let mut station = Station::new(10, "ten");
-    station.aliases.push(StationAlias {
+    station.archived.push(ArchivedStation {
         id: 25,
-        name: Some("old".to_string()),
-        line: None,
+        name: "old".to_string(),
+        comment: None,
+        external: None,
+        into: None,
+        lines: Vec::new(),
     });
     p.insert_station(station).unwrap();
     assert_eq!(p.counters.next_station_id, 26);
@@ -135,7 +138,7 @@ fn inserting_a_station_raises_the_counter_past_it_and_its_aliases() {
         Err(BuildError::StationIdTaken(10))
     );
     assert_eq!(
-        p.insert_station(Station::new(25, "alias")),
+        p.insert_station(Station::new(25, "archived")),
         Err(BuildError::StationIdTaken(25))
     );
     assert_eq!(p.mint_station("next"), Ok(26));
@@ -192,28 +195,14 @@ fn junction_names_are_checked_on_every_line_they_are_on() {
             other: s1
         }]
     );
-    // The letter rule makes the renamed station unique on all its lines.
-    assert_eq!(p.uniquify_station_name(s1), Some("1aa".to_string()));
+    // Rule L letters the station on fewer lines (`a`, on L1 only), free on
+    // every line it is native on.
+    let before = p.clone();
+    let letters = p.letter_collisions(&before);
+    assert_eq!(letters.len(), 1);
+    assert_eq!((letters[0].station, letters[0].other), (a, s1));
+    assert_eq!(p.stations[&a].name, "1aa");
     assert!(p.name_conflicts(s1).is_empty());
-    assert_eq!(p.uniquify_station_name(s1), None);
-    assert!(p.is_valid());
-}
-
-#[test]
-fn uniquify_line_names_keeps_the_first_holder_and_suffixes_later_ones() {
-    let (mut p, [l0, _, l2]) = three_line_junction();
-    for i in 1..4 {
-        let station = at(&p, l0, i);
-        p.stations.get_mut(&station).unwrap().name = "5".to_string();
-    }
-    // s3 is also on L2, whose other station is "x0".
-    p.stations.get_mut(&at(&p, l2, 0)).unwrap().name = "5b".to_string();
-    let renamed = p.uniquify_line_names(l0);
-    assert_eq!(renamed, vec![at(&p, l0, 2), at(&p, l0, 3)]);
-    let names: Vec<&str> = (1..4)
-        .map(|i| p.stations[&at(&p, l0, i)].name.as_str())
-        .collect();
-    assert_eq!(names, ["5", "5a", "5c"]);
     assert!(p.is_valid());
 }
 

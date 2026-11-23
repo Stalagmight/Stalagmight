@@ -395,6 +395,8 @@ fn unmerging_moves_the_piece_whose_fix_is_promoted_onto_its_gps() {
         Command::UnmergeStationPair {
             station_a: slot(a, 2),
             station_b: slot(b, 0),
+            renames: None,
+            rest_keep: None,
         },
     );
     let p = project(state);
@@ -562,6 +564,8 @@ fn no_placement_datum_is_left_off_its_gps_by_a_promotion() {
         Command::UnmergeStationPair {
             station_a: slot(a, 5),
             station_b: slot(b, 0),
+            renames: None,
+            rest_keep: None,
         },
     );
     let p = project(&opened.state);
@@ -809,6 +813,8 @@ fn fix_and_twin(
             station_a: slot(x, closure_at),
             station_b: slot(y, 0),
             closure_strategy: ClosureStrategy::Batch,
+            keep: None,
+            renames: None,
         },
     );
     assert_eq!(

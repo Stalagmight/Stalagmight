@@ -3,7 +3,7 @@
 
 use crate::models::ShotKind;
 
-use super::test_helpers::{generate, text_of, SMALL};
+use super::test_helpers::{generate, text_of, REQUIRES, SMALL};
 use super::{
     decode, encode, rewrite_local, DecodeError, DecodeNote, DecodeOptions, Decoded, EncodeError,
     Mode,
@@ -71,7 +71,11 @@ fn a_newer_major_version_is_refused_before_the_body_is_read() {
 
 #[test]
 fn an_unknown_required_feature_opens_read_only() {
-    let text = small_text(2).replacen("\"requires\":[]", "\"requires\":[\"zz-future\"]", 1);
+    let text = small_text(2).replacen(
+        REQUIRES,
+        "\"requires\":[\"archived-stations\",\"zz-future\"]",
+        1,
+    );
     let decoded = open(&text).unwrap();
     let reason = decoded.read_only().unwrap();
     assert_eq!(reason.unknown_features, vec!["zz-future".to_string()]);

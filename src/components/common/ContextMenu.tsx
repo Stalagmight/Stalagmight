@@ -22,6 +22,7 @@ import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MENU_ROW_HEIGHT_PX, MENU_ROW_HINT_HEIGHT_PX, MenuRow, MenuSeparator } from './MenuRow';
 import { ChevronRightIcon } from './icons';
 import { showBlockedNotice } from '../../utils/blockedNotice';
+import { removeClosureAsking } from '../../utils/keptStationActions';
 import { anchorOf, SubmenuFlyout, type SubmenuAnchor } from './ContextSubmenu';
 import { CAVE_SECTION_VIEW_LABEL_KEYS, caveSectionHeaderMenuItems, caveSectionLineMenuItems } from './caveSectionMenuItems';
 
@@ -179,7 +180,7 @@ export default function ContextMenu() {
   // A remote SpeleoDB project without the lock is read-only (T2a) - treat it like
   // closure-adjusted for the right-click edit items.
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
-  const { project, stations, setShotKind, removeLoopClosure, fileReadOnlyReason } = useProjectStore();
+  const { project, stations, setShotKind, fileReadOnlyReason } = useProjectStore();
   // A file made with a newer Stalagmight refuses every edit (plan 6.4).
   const fileReadOnly = (fileReadOnlyReason ?? null) !== null;
 
@@ -555,7 +556,9 @@ export default function ContextMenu() {
               trackContextMenuAction('remove-closure', 'context-menu');
               trackDialogComplete('context-menu');
               closeDialog();
-              void removeLoopClosure(directClosures[0]!.closureId);
+              // Asks first when its hidden end comes back or a name would
+              // repeat (RS 7); otherwise removes it at once.
+              void removeClosureAsking(directClosures[0]!.closureId, target.ref);
               return;
             }
 

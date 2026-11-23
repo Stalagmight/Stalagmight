@@ -1,7 +1,7 @@
 // Command and IPC payload types generated from Rust.
 
 import type { ShotData, StationRef, Coordinates, GpsCoordinates, ClosureStrategy, ShotUpdates, LineId, ShotId, LineUpdates } from './project';
-import type { CreditEdit, CreditTargets } from './ipc.generated';
+import type { CreditEdit, CreditTargets, StationRename } from './ipc.generated';
 
 export type {
   CommandResult,
@@ -74,8 +74,12 @@ export type BatchCommand =
   // one undo has to bring both back.
   | { type: 'delete_line'; line_id: LineId }
   | { type: 'untrack_import'; file_hashes: string[]; line_hashes: string[] }
-  | { type: 'create_loop_closure'; station_a: StationRef; station_b: StationRef; closure_strategy: ClosureStrategy }
-  | { type: 'merge_stations'; station_a: StationRef; station_b: StationRef }
+  // Kept and archived stations (RS 4.1, 5.2): `keep` is the Station ID kept
+  // (a closure without it keeps both names), `renames` the dialog's answers
+  // to the name collisions (absent: rule L letters them). The Merge and
+  // Create Loop Closure dialogs pass them.
+  | { type: 'create_loop_closure'; station_a: StationRef; station_b: StationRef; closure_strategy: ClosureStrategy; keep?: number; renames?: StationRename[] }
+  | { type: 'merge_stations'; station_a: StationRef; station_b: StationRef; keep?: number; renames?: StationRename[] }
   | { type: 'move_line'; line_id: number; offset: Coordinates }
   | { type: 'move_segment'; line_id: number; offset: Coordinates }
   | { type: 'move_station'; station_ref: StationRef; offset: Coordinates }

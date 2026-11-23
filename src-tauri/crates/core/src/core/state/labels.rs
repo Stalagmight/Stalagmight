@@ -116,34 +116,84 @@ impl<'p> NameBook<'p> {
     /// the name that line knows it by).
     pub(crate) fn station_name(&self, slot: StationRef) -> Option<String> {
         let id = self.project.topology().station_at(slot)?;
-        Some(self.project.name_on(id, slot.line_id)?.to_string())
+        Some(self.project.shown_name(id)?.to_string())
     }
 
-    /// `Line name / station name` of the station at a slot.
+    /// The `(kept, archived)` slots of a closure between slots `a` and `b`
+    /// keeping the station with Station ID `keep`; `None` when `keep` is
+    /// neither end.
+    fn closure_keep(
+        &self,
+        a: StationRef,
+        b: StationRef,
+        keep: StationId,
+    ) -> Option<(StationRef, StationRef)> {
+        let topology = self.project.topology();
+        if topology.station_at(a)? == keep {
+            Some((a, b))
+        } else if topology.station_at(b)? == keep {
+            Some((b, a))
+        } else {
+            None
+        }
+    }
+
+    /// The name the slot shows as plain text, a dotted slot or a loop end
+    /// qualified (`12 (Main)`, `12 (loop end on Side)`;
+    /// `Project::slot_name_text`, RS-FX5).
+    pub(crate) fn station_name_text(&self, slot: StationRef) -> Option<String> {
+        self.project.topology().station_at(slot)?;
+        Some(self.project.slot_name_text(slot))
+    }
+
+    /// `Line name / station name` of the station at a slot, a dotted slot or
+    /// a loop end qualified (`Side / 12 (Main)`, `Main / 12 (loop end on
+    /// Side)`; `Project::slot_text`, RS-FX5).
     pub(crate) fn station(&self, slot: StationRef) -> Option<String> {
-        let name = self.station_name(slot)?;
-        Some(format!("{} / {name}", self.line(slot.line_id)?))
+        self.line(slot.line_id)?;
+        self.project.slot_text(slot)
     }
 
     /// The slots of the lines a detach at `slot` takes off the station
-    /// there: the slot itself, or, when its line keeps the station
-    /// (`Project::detach_keeps`), one slot of each other line, in slot order
-    /// ([`detach`]). The slot alone when it does not exist.
+    /// there, one per line in slot order ([`detach`]): when its line keeps
+    /// the station (`Project::detach_keeps`), every other line; when an
+    /// archived station names its line, every line of the former junction
+    /// that comes back with it (the archived station's subtree, RS 4.2,
+    /// RS-FX4); else the slot itself. The slot alone when it does not exist.
     fn detached_slots(&self, slot: StationRef) -> Vec<StationRef> {
         let topology = self.project.topology();
         let Some(station) = topology.station_at(slot) else {
             return vec![slot];
         };
-        if !self.project.detach_keeps(station, slot.line_id) {
-            return vec![slot];
-        }
+        let off_lines: Vec<LineId> = if self.project.detach_keeps(station, slot.line_id) {
+            topology
+                .lines_of(station)
+                .into_iter()
+                .filter(|&line| line != slot.line_id)
+                .collect()
+        } else {
+            let together = self.project.stations.get(&station).and_then(|s| {
+                let record = s.record_for(slot.line_id)?;
+                let top = s.record_top(record.id).map_or(record.id, |t| t.id);
+                Some(s.subtree_lines(top))
+            });
+            match together {
+                Some(lines) if lines.len() > 1 => lines,
+                _ => return vec![slot],
+            }
+        };
         let mut off: Vec<StationRef> = Vec::new();
         for &other in topology.slots_of(station) {
-            if other.line_id != slot.line_id && off.iter().all(|o| o.line_id != other.line_id) {
+            if off_lines.contains(&other.line_id) && off.iter().all(|o| o.line_id != other.line_id)
+            {
                 off.push(other);
             }
         }
-        off
+        if off.is_empty() {
+            vec![slot]
+        } else {
+            off
+        }
     }
 
     /// A slot of a line that stays on the station at `slot` when the lines
@@ -168,9 +218,12 @@ impl<'p> NameBook<'p> {
             .copied()
             .filter(stays)
             .collect();
+        // The station's native lines once, not a scan of its records per
+        // slot (RS-FX9).
+        let native = self.project.native_lines(station);
         staying
             .iter()
-            .find(|s| !self.project.known_by_alias_on(station, s.line_id))
+            .find(|s| native.contains(&s.line_id))
             .or_else(|| staying.first())
             .copied()
     }
@@ -189,10 +242,10 @@ impl<'p> NameBook<'p> {
             .shots
             .iter()
             .position(|s| s.id == shot_id)?;
-        let index = u32::try_from(index).ok()?;
-        let from = self.station_name(StationRef::new(line_id, index))?;
-        let to = self.station_name(StationRef::new(line_id, index.checked_add(1)?))?;
-        Some(format!("{}: {from} \u{2192} {to}", self.line(line_id)?))
+        let at = u32::try_from(index).ok()?;
+        self.station_name(StationRef::new(line_id, at))?;
+        self.station_name(StationRef::new(line_id, at.checked_add(1)?))?;
+        Some(self.project.shot_text(line_id, index))
     }
 
     /// The name of Section `id`, or `#id`.
@@ -229,6 +282,54 @@ fn holder(names: &NameBook<'_>, holder: &CommentHolder) -> String {
     }
 }
 
+/// `Merge Side / 0 into Main / 12 (keeps 12)` (RS 6): the station archived,
+/// the station kept (on the slots the user picked), and the kept name. The
+/// kept station is the command's `keep`, unless a loop closure between the
+/// two forces its kept end (RS 4.1 step 4); absent, the stationary one. On a
+/// project after the merge (an import's preview rows: a join keeps the
+/// target, RS 4.1) the kept slot is the one on a native line.
+fn merge_label(
+    names: &NameBook<'_>,
+    a: StationRef,
+    b: StationRef,
+    keep: Option<StationId>,
+) -> String {
+    let project = names.project;
+    let topology = project.topology();
+    let (Some(na), Some(nb)) = (topology.station_at(a), topology.station_at(b)) else {
+        return "Merge stations".to_string();
+    };
+    let kept = project
+        .forced_merge_keep(na, nb)
+        .map(|(_, kept)| kept)
+        .or(keep.filter(|&k| k == na || k == nb))
+        .unwrap_or_else(|| project.merge_direction(na, nb).0);
+    // Worded after the merge (an import's preview rows), both slots are one
+    // node: the kept station's slot is the one on a native line of it.
+    let kept_slot = if na == nb {
+        if project.is_native(na, a.line_id) && !project.is_native(na, b.line_id) {
+            a
+        } else {
+            b
+        }
+    } else if kept == na {
+        a
+    } else {
+        b
+    };
+    let archived_slot = if kept_slot == a { b } else { a };
+    match (
+        names.station(archived_slot),
+        names.station(kept_slot),
+        names.station_name(kept_slot),
+    ) {
+        (Some(archived), Some(kept), Some(name)) => {
+            format!("Merge {archived} into {kept} (keeps {name})")
+        }
+        _ => "Merge stations".to_string(),
+    }
+}
+
 /// `Detach line "Side" from Main / 3`: the line that comes off the station
 /// at `slot`, and the station once, as `Line name / station name` on a line
 /// that stays on it (demo finding V-6: a bare `station 0` was the detached
@@ -238,7 +339,8 @@ fn holder(names: &NameBook<'_>, holder: &CommentHolder) -> String {
 /// knows it by an alias, I-1): then the other lines come off, each getting
 /// back the station it had, and the label names them (`Detach lines "B" and
 /// "C" from Main / 4`), never the line that keeps the station (demo finding
-/// N-2). The station reads on `clicked` (the pair form's first slot, where
+/// N-2). When the slot's line was archived with others as one junction, the
+/// label names every line that comes off with it (RS-FX4). The station reads on `clicked` (the pair form's first slot, where
 /// the user opened the dialog) when its line stays.
 fn detach(names: &NameBook<'_>, slot: StationRef, clicked: Option<StationRef>) -> String {
     let off = names.detached_slots(slot);
@@ -310,20 +412,33 @@ fn describe(cmd: &Command, names: &NameBook<'_>) -> String {
         Command::MergeStations {
             station_a,
             station_b,
-        } => pair("Merge stations", station_a, station_b),
+            keep,
+            ..
+        } => merge_label(names, *station_a, *station_b, *keep),
         // A junction is one station: the menu's "Detach Line from Station"
         // detaches one line from it (plan 5.2; the pair form detaches
         // `station_b`'s line), and the row says so in the same words.
-        Command::UnmergeStations { station_ref } => detach(names, *station_ref, None),
+        Command::UnmergeStations { station_ref, .. } => detach(names, *station_ref, None),
         Command::UnmergeStationPair {
             station_a,
             station_b,
+            ..
         } => detach(names, *station_b, Some(*station_a)),
         Command::CreateLoopClosure {
             station_a,
             station_b,
+            keep,
             ..
-        } => pair("Create loop closure between", station_a, station_b),
+        } => match keep.and_then(|k| names.closure_keep(*station_a, *station_b, k)) {
+            // RS 6: "Create loop closure: Side / 17 shown as Main / 3".
+            Some((kept, archived)) => match (station(&archived), station(&kept)) {
+                (Some(archived), Some(kept)) => {
+                    format!("Create loop closure: {archived} shown as {kept}")
+                }
+                _ => pair("Create loop closure between", station_a, station_b),
+            },
+            None => pair("Create loop closure between", station_a, station_b),
+        },
         Command::SetZeroDatum { station_ref, .. } => on_station("Set zero datum at", station_ref),
         Command::RemoveZeroDatum { station_ref } => {
             on_station("Remove zero datum from", station_ref)
@@ -828,7 +943,7 @@ pub(crate) fn delete_shots_label(
     let station = |index: usize| {
         u32::try_from(index)
             .ok()
-            .and_then(|i| names.station_name(StationRef::new(line_id, i)))
+            .and_then(|i| names.station_name_text(StationRef::new(line_id, i)))
             .unwrap_or_else(|| index.to_string())
     };
     let count = last.saturating_sub(first) + 1;
@@ -905,10 +1020,12 @@ pub(crate) fn referenced_lines(cmd: &Command, out: &mut HashSet<LineId>) {
         Command::MergeStations {
             station_a,
             station_b,
+            ..
         }
         | Command::UnmergeStationPair {
             station_a,
             station_b,
+            ..
         }
         | Command::CreateLoopClosure {
             station_a,
@@ -918,7 +1035,7 @@ pub(crate) fn referenced_lines(cmd: &Command, out: &mut HashSet<LineId>) {
             station(station_a);
             station(station_b);
         }
-        Command::UnmergeStations { station_ref }
+        Command::UnmergeStations { station_ref, .. }
         | Command::SetZeroDatum { station_ref, .. }
         | Command::RemoveZeroDatum { station_ref }
         | Command::SetStationComment { station_ref, .. }
@@ -951,17 +1068,19 @@ fn referenced_slots(cmd: &Command, out: &mut Vec<StationRef>) {
         Command::MergeStations {
             station_a,
             station_b,
+            ..
         }
         | Command::UnmergeStationPair {
             station_a,
             station_b,
+            ..
         }
         | Command::CreateLoopClosure {
             station_a,
             station_b,
             ..
         } => out.extend([*station_a, *station_b]),
-        Command::UnmergeStations { station_ref }
+        Command::UnmergeStations { station_ref, .. }
         | Command::SetZeroDatum { station_ref, .. }
         | Command::RemoveZeroDatum { station_ref }
         | Command::SetStationComment { station_ref, .. }
@@ -1066,7 +1185,7 @@ pub(crate) fn command_refs(project: &Project, cmd: &Command) -> HistoryRefs {
     }
 
     match cmd {
-        Command::RemoveLoopClosure { closure_id } => refs.closures.push(*closure_id),
+        Command::RemoveLoopClosure { closure_id, .. } => refs.closures.push(*closure_id),
         Command::UpdateCaveSection { section_id, .. }
         | Command::DeleteCaveSection { section_id }
         | Command::ApplyCaveSectionColor { section_id }
@@ -1107,19 +1226,22 @@ pub(crate) fn command_preview(project: &Project, cmd: &Command) -> RecordedPrevi
         Command::MergeStations {
             station_a,
             station_b,
+            ..
         }
         | Command::UnmergeStationPair {
             station_a,
             station_b,
+            ..
         } => vec![
             row("Station A", station(station_a)),
             row("Station B", station(station_b)),
         ],
-        Command::UnmergeStations { station_ref } => vec![row("Station", station(station_ref))],
+        Command::UnmergeStations { station_ref, .. } => vec![row("Station", station(station_ref))],
         Command::CreateLoopClosure {
             station_a,
             station_b,
             closure_strategy,
+            ..
         } => vec![
             row(
                 "Stations",
@@ -1127,7 +1249,7 @@ pub(crate) fn command_preview(project: &Project, cmd: &Command) -> RecordedPrevi
             ),
             row("Strategy", closure_strategy.as_str().to_string()),
         ],
-        Command::RemoveLoopClosure { closure_id } => {
+        Command::RemoveLoopClosure { closure_id, .. } => {
             let mut rows = vec![row("Closure ID", closure_id.to_string())];
             if let Some(closure) = project.closures.iter().find(|c| c.id == *closure_id) {
                 let end = |s: StationId, via: Option<LineId>| {
@@ -1216,6 +1338,7 @@ fn command_details(cmd: &Command, names: &NameBook<'_>) -> Option<String> {
         Command::MergeStations {
             station_a,
             station_b,
+            ..
         } => Some(format!(
             "{} \u{2194} {}",
             station(station_a),
@@ -1225,6 +1348,7 @@ fn command_details(cmd: &Command, names: &NameBook<'_>) -> Option<String> {
             station_a,
             station_b,
             closure_strategy,
+            ..
         } => Some(format!(
             "{} \u{2194} {}, {}",
             station(station_a),

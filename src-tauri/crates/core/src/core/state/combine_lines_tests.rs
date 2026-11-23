@@ -317,7 +317,11 @@ fn a_refused_combine_changes_nothing_and_leaves_no_undo_entry() {
     let (p, k, o) = kos();
     let opened = open(&p);
     let text = std::fs::read_to_string(&opened.path).unwrap();
-    let patched = text.replacen("\"requires\":[]", "\"requires\":[\"x-from-the-future\"]", 1);
+    let patched = text.replacen(
+        "\"requires\":[\"archived-stations\"]",
+        "\"requires\":[\"archived-stations\",\"x-from-the-future\"]",
+        1,
+    );
     std::fs::write(&opened.path, patched.as_bytes()).unwrap();
     let state = AppState::new().unwrap();
     let r = state.execute(Command::OpenProject { path: opened.path });
@@ -440,7 +444,7 @@ fn an_ignore_follows_its_shot_through_a_combine_its_undo_and_a_reopen() {
                 vec![shot(0.0, 0.1), shot(0.0, 5.0)],
             );
             let o2 = st(&p, o, 2);
-            p.merge_stations(o2, k1).unwrap();
+            p.merge_keeping_stationary(o2, k1).unwrap();
             o
         } else {
             line_from(&mut p, "O", k1, vec![shot(0.0, 5.0), shot(0.0, 0.1)])
@@ -477,7 +481,7 @@ fn an_end_to_end_combine_undoes_the_reverse_too() {
         vec![credited(0.0, 5.0), credited(45.0, 2.0)],
     );
     let (k1, o2) = (st(&p, k, 1), st(&p, o, 2));
-    p.merge_stations(o2, k1).unwrap();
+    p.merge_keeping_stationary(o2, k1).unwrap();
     let opened = open(&p);
     let state = &opened.state;
     let before = snapshot(state);
@@ -621,7 +625,7 @@ fn the_closures_computed_view_holds_through_undo_redo_and_a_reopen() {
     );
     let k = line_from(&mut p, "K", o1, vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
     let (k2, t0) = (st(&p, k, 2), st(&p, t, 0));
-    p.merge_stations(t0, k2).unwrap();
+    p.merge_keeping_stationary(t0, k2).unwrap();
     close(
         &mut p,
         slot(t, 3),
@@ -711,7 +715,7 @@ fn a_combine_at_a_loop_closure_is_one_undo_step() {
     let k = line_at(&mut p, "K", [0.0, 0.0], vec![shot(90.0, 10.0)]);
     let o = line_at(&mut p, "O", [30.0, 30.0], vec![shot(270.0, 9.6)]);
     let (k0, o1) = (st(&p, k, 0), st(&p, o, 1));
-    p.merge_stations(o1, k0).unwrap();
+    p.merge_keeping_stationary(o1, k0).unwrap();
     close(&mut p, slot(k, 1), slot(o, 0), ClosureStrategy::Batch);
     let (k0_at, k1_at) = (xy(&p, slot(k, 0)), xy(&p, slot(k, 1)));
     let opened = open(&p);
@@ -856,11 +860,11 @@ fn a_combine_removes_the_merge_it_would_tear_across_one_shot() {
     assert!(!combined.topology().is_junction(x1), "O left X's end");
 }
 
-/// The same shape with O merged onto X's end instead of started there: O
-/// knows the junction by an alias ("0", its own start before the merge), so
-/// the warning names O's slot by O's name, as the Combine dialog lists it
-/// (I-3), not by the junction's own name. Injection: naming the slot by the
-/// station's own name (`station.name`) fails it with "O / <X's name>".
+/// The same shape with O merged onto X's end instead of started there: X's
+/// end is kept, so O shows it by X's name too (RS 4.1, with X's dot) and the
+/// warning names both slots by the kept name, as the Combine dialog lists
+/// them, O's dotted one qualified by its home line X (RS-FX5). Injection:
+/// naming O's slot by the archived record's name fails it with "O / 0".
 #[test]
 fn a_removed_merge_names_each_slot_as_its_line_shows_it() {
     let mut p = empty("Passage");
@@ -869,10 +873,14 @@ fn a_removed_merge_names_each_slot_as_its_line_shows_it() {
     let x = line_from(&mut p, "X", k1, vec![shot(90.0, 0.4)]);
     let x1 = st(&p, x, 1);
     let o = line_at(&mut p, "O", [30.0, 30.0], vec![shot(90.0, 5.0)]);
-    p.merge_stations(st(&p, o, 0), x1).unwrap();
+    p.merge_keeping_stationary(st(&p, o, 0), x1).unwrap();
     assert_eq!(st(&p, o, 0), x1, "X's end survives the merge");
-    assert_eq!(p.name_on(x1, o), Some("0"), "O knows it by its own start");
     let own = p.stations.get(&x1).unwrap().name.clone();
+    assert_eq!(
+        p.shown_name(x1),
+        Some(own.as_str()),
+        "O shows the kept name"
+    );
     assert_ne!(own, "0", "the junction's own name is X's");
     p.push_closure(
         k1,
@@ -894,8 +902,8 @@ fn a_removed_merge_names_each_slot_as_its_line_shows_it() {
     assert_eq!(
         warnings,
         vec![format!(
-            "Removed the merge of O / 0 and X / {own}: combining the lines left its two \
-             stations at the two ends of one shot."
+            "Removed the merge of O / {own} (X) and X / {own}: combining the lines left its \
+             two stations at the two ends of one shot."
         )]
     );
 }
@@ -923,7 +931,7 @@ fn a_combine_removes_a_closure_its_join_puts_across_one_shot() {
         vec![shot(0.0, 4.0), shot(270.0, 10.0), shot(180.0, 4.0)],
     );
     let (k0, o3) = (st(&p, k, 0), st(&p, o, 3));
-    p.merge_stations(o3, k0).unwrap();
+    p.merge_keeping_stationary(o3, k0).unwrap();
     close(&mut p, slot(k, 1), slot(o, 0), ClosureStrategy::Batch);
     let opened = open(&p);
     let state = &opened.state;
@@ -935,10 +943,9 @@ fn a_combine_removes_a_closure_its_join_puts_across_one_shot() {
         (o, LineEnd::Start),
         &[(slot(k, 1), slot(o, 0), CombineRemovedKind::LoopClosure)],
     );
-    // By the names before the combine: K is "Joined" now, O is gone. O's
-    // start keeps its "0": the junction on K's start is named "0" on both
-    // lines, and O knows it by its alias (O's own "3"), so the merge
-    // lettered nothing (review findings D-migration-upgrade-8 and UX-3).
+    // By the names before the combine: K is "Joined" now, O is gone. The
+    // junction on K's start is kept, so O shows it as "0" too (dotted), and
+    // O's own start keeps its name beside it (RS-FX5).
     let o0 = p.stations.get(&st(&p, o, 0)).unwrap().name.clone();
     assert_eq!(o0, "0");
     assert_eq!(
@@ -1065,7 +1072,7 @@ fn a_combine_keeps_the_closure_the_solve_takes_over_a_legacy_one() {
     let (b0, b2) = (st(&p, b, 0), st(&p, b, 2));
     let a = line_at(&mut p, "A", [30.0, 30.0], vec![shot(180.0, 4.0)]);
     let a1 = st(&p, a, 1);
-    p.merge_stations(a1, b2).unwrap();
+    p.merge_keeping_stationary(a1, b2).unwrap();
     let legacy = p.push_closure(
         b2,
         Some(b),
@@ -1183,7 +1190,7 @@ fn a_side_by_side_combine_keeps_merged_stations_together_through_a_reopen() {
     let m = line_at(&mut p, "M", [0.0, 0.0], vec![shot(0.0, 10.0)]);
     let o = line_at(&mut p, "O", [-10.0, 0.0], vec![shot(90.0, 10.0)]);
     let (o1, m0) = (st(&p, o, 1), st(&p, m, 0));
-    p.merge_stations(o1, m0).unwrap();
+    p.merge_keeping_stationary(o1, m0).unwrap();
     let k = line_at(&mut p, "K", [-20.0006, 0.0], vec![shot(90.0, 10.0)]);
     let gap = apart(xy(&p, slot(k, 1)), xy(&p, slot(o, 0)));
     assert!(

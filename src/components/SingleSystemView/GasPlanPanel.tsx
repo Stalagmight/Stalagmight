@@ -185,7 +185,7 @@ export function GasPlanPanel() {
 
   const units = gasConfig.units;
   const originLabel = origin
-    ? identity.station(origin, true)
+    ? identity.planStation(origin)
     : t('gasPanel.origin.entrance');
 
   // Way-point readouts, all from the engine (#298) - the panel never re-derives a
@@ -494,7 +494,7 @@ export function GasPlanPanel() {
             <div className="flex items-center gap-2">
               <span data-testid="gas-endpoint-readout" className="font-mono text-xs">
                 {endpoint
-                  ? identity.station(endpoint, true)
+                  ? identity.planStation(endpoint)
                   : t('gasPanel.route.endpointAuto')}
               </span>
               <button
@@ -517,7 +517,7 @@ export function GasPlanPanel() {
                 turnTowardEndpoint
                   ? 'gasPanel.route.endpointOutOfReach'
                   : 'gasPanel.route.endpointUnusable',
-                { station: identity.station(endpointOutOfReach, true) }
+                { station: identity.planStation(endpointOutOfReach) }
               )}
             </p>
           )}
@@ -538,7 +538,7 @@ export function GasPlanPanel() {
                   >
                     <span className="opacity-60 w-4 text-right">{i + 1}.</span>
                     <span className="font-mono flex-1">
-                      {identity.station(w, true)}
+                      {identity.planStation(w)}
                     </span>
                     {unresolved.waypoints[i] && (
                       <span className="text-error" data-testid={`gas-waypoint-unresolved-${i}`}>
@@ -631,7 +631,7 @@ export function GasPlanPanel() {
                   data-testid={`gas-marked-row-${i}`}
                 >
                   <span className="font-mono">
-                    {identity.station(m.station, true)}
+                    {identity.planStation(m.station)}
                   </span>
                   <input
                     type="text"

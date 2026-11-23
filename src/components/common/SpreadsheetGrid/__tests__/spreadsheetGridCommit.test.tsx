@@ -34,7 +34,7 @@ vi.mock('@tanstack/react-virtual', () => ({
 }));
 
 import { SpreadsheetGrid } from '../SpreadsheetGrid';
-import type { CellEdit, GridColumn } from '../types';
+import { EDIT_HELD, type CellEdit, type GridColumn } from '../types';
 
 interface Row {
   id: number;
@@ -222,5 +222,35 @@ describe('SpreadsheetGrid bulk edits with one cell in them', () => {
 
     expect(onBatchEdit).not.toHaveBeenCalled();
     expect(onEdit).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * RS-FX8, N6 (shots 33, 34 of the RS capture): an edit the host holds for an
+ * answer (the stations grid asks whose station a dotted cell shows) moved
+ * the cursor to the next row with Enter while the prompt about the edited
+ * cell was open. A host that returns EDIT_HELD keeps it on the cell; any other
+ * commit moves on as before. Injection: ignore onEdit's return value.
+ */
+describe('SpreadsheetGrid keeps the cursor on a held edit', () => {
+  const activeCellId = () =>
+    document.querySelector('[data-active-cell="true"]')?.getAttribute('data-testid');
+
+  it('stays on the edited cell when the host holds the edit', () => {
+    const onEdit = vi.fn(() => EDIT_HELD);
+    renderGrid({ onEdit });
+    typeInto('grid-cell-0-length', '42');
+    fireEvent.keyDown(screen.getByTestId('grid-cell-editor'), { key: 'Enter' });
+    expect(onEdit).toHaveBeenCalledWith(0, 'length', 42);
+    expect(editor()).toBeNull();
+    expect(activeCellId()).toBe('grid-cell-0-length');
+  });
+
+  it('moves down with Enter when the host takes the edit', () => {
+    const { onEdit } = renderGrid();
+    typeInto('grid-cell-0-length', '42');
+    fireEvent.keyDown(screen.getByTestId('grid-cell-editor'), { key: 'Enter' });
+    expect(onEdit).toHaveBeenCalledWith(0, 'length', 42);
+    expect(activeCellId()).toBe('grid-cell-1-length');
   });
 });

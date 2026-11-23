@@ -67,7 +67,7 @@ fn names(p: &Project, line: LineId) -> Vec<String> {
     p.line(line)
         .unwrap()
         .stations()
-        .map(|s| p.name_on(s, line).unwrap().to_string())
+        .map(|s| p.shown_name(s).unwrap().to_string())
         .collect()
 }
 
@@ -415,7 +415,7 @@ fn the_history_names_lines_and_stations_as_they_were_at_the_edit() {
     // Worded when the merge was made (plan 8.2): Side is named although it
     // is gone now.
     assert_eq!(
-        labels[1], "Merge stations Main Line / 0 and Side / 1",
+        labels[1], "Merge Main Line / 0 into Side / 1 (keeps 1)",
         "{labels:?}"
     );
     assert!(labels[2].starts_with("Update shot"), "{labels:?}");
@@ -424,7 +424,7 @@ fn the_history_names_lines_and_stations_as_they_were_at_the_edit() {
     assert!(state.undo().success);
     let labels: Vec<String> = history(state).into_iter().map(|(_, d)| d).collect();
     assert_eq!(
-        labels[0], "Merge stations Main Line / 0 and Side / 1",
+        labels[0], "Merge Main Line / 0 into Side / 1 (keeps 1)",
         "{labels:?}"
     );
 }
@@ -500,11 +500,13 @@ fn ids_and_names_survive_a_save_and_reopen() {
 
 // === Junction identity (plan 1.2, W identity) ===
 
-/// A merge makes one station with the survivor's id and comment; each line
-/// keeps showing it by its own name (I-3): A by the survivor's "2", B by the
-/// retired station's "0", kept as an alias naming B.
+/// A merge makes one station with the kept station's id, name and comment,
+/// shown on every line (RS 4.1); the other station is archived whole, with
+/// its own comment, as a record naming B. B's own "2" keeps its name
+/// beside the dotted 2 at B's start (RS-FX5: a foreign slot counts for no
+/// uniqueness).
 #[test]
-fn a_merge_shares_one_id_and_name_and_keeps_the_retired_one_as_an_alias() {
+fn a_merge_shares_one_id_and_name_and_archives_the_other_station() {
     let mut p = empty("Junction");
     let a = line_at(&mut p, "A", [0.0, 0.0], shots(2));
     let b = line_at(&mut p, "B", [50.0, 0.0], shots(2));
@@ -520,22 +522,18 @@ fn a_merge_shares_one_id_and_name_and_keeps_the_retired_one_as_an_alias() {
     assert_eq!(st(&p, b, 0), a2, "one station, the survivor's id");
     assert!(!p.stations.contains_key(&b0), "the retired station is gone");
     let survivor = &p.stations[&a2];
-    assert_eq!(survivor.name, "2", "the survivor keeps its name");
-    assert_eq!(
-        survivor.comment.as_deref(),
-        Some("sump"),
-        "and takes the comment"
-    );
+    assert_eq!(survivor.name, "2", "the kept station keeps its name");
+    assert_eq!(survivor.comment, None, "comments are not joined");
     assert_eq!(
         survivor
-            .aliases
+            .archived
             .iter()
-            .map(|alias| (alias.id, alias.name.clone(), alias.line))
+            .map(|r| (r.id, r.name.clone(), r.comment.clone(), r.lines.clone()))
             .collect::<Vec<_>>(),
-        [(b0, Some("0".to_string()), Some(b))]
+        [(b0, "0".to_string(), Some("sump".to_string()), vec![b])]
     );
-    // Every slot of the junction shows the one id and comment, and the name
-    // its own line knows it by.
+    assert_eq!(names(&p, b), ["2", "1", "2"]);
+    // Every slot of the junction shows the one id, name and comment.
     let stations = state.project_state_wire().unwrap().stations;
     let wire: Vec<_> = stations
         .iter()
@@ -544,10 +542,7 @@ fn a_merge_shares_one_id_and_name_and_keeps_the_retired_one_as_an_alias() {
         .collect();
     assert_eq!(
         wire,
-        [
-            (a2, "2".to_string(), Some("sump".to_string())),
-            (a2, "0".to_string(), Some("sump".to_string()))
-        ]
+        [(a2, "2".to_string(), None), (a2, "2".to_string(), None)]
     );
     assert_round_trip(state, &before, "merge");
 }
@@ -567,24 +562,25 @@ fn a_detach_mints_a_station_named_as_the_junction_and_redo_gives_it_back() {
         state,
         Command::UnmergeStations {
             station_ref: slot(b, 0),
+            renames: None,
+            rest_keep: None,
         },
     );
     let p = project(state);
     assert_eq!(st(&p, a, 1), a1, "A keeps the junction's id");
     assert_eq!(st(&p, b, 0), next, "B's slot gets the next id");
     assert_eq!(p.stations[&next].name, p.stations[&a1].name);
-    assert!(p.stations[&next].aliases.is_empty());
+    assert!(p.stations[&next].archived.is_empty());
     assert!(p.stations[&next].comment.is_none());
     let after = identity_snapshot(state);
     assert_undo_redo_exact(state, &before, &after, "detach");
 }
 
 #[test]
-fn a_merge_keeps_the_names_the_moving_line_holds() {
-    // B's own station 1 is named like A:1, which the survivor B:0 becomes.
-    // B shows the junction by its alias (B's own "0"), so a merge renames
-    // nothing and B still reads 0, 1, 2, as 0.6.0 kept each line's own name
-    // for its member (review findings D-migration-upgrade-8, UX-3 and I-3).
+fn a_merge_leaves_the_moving_lines_own_station_its_name() {
+    // B's own station 1 is named like A:1, the kept station B now shows at
+    // its start (RS 4.1) with A's dot: a foreign slot counts for no
+    // uniqueness (RS-FX5), so B keeps its own 1, and A is untouched.
     let mut p = empty("Names");
     let a = line_at(&mut p, "A", [0.0, 0.0], shots(2));
     let b = line_at(&mut p, "B", [50.0, 0.0], shots(2));
@@ -593,8 +589,9 @@ fn a_merge_keeps_the_names_the_moving_line_holds() {
     let before = snapshot(state);
     merge(state, slot(b, 0), slot(a, 1));
     let p = project(state);
-    assert_eq!(names(&p, b), ["0", "1", "2"]);
-    assert!(p.known_by_alias_on(st(&p, a, 1), b));
+    assert_eq!(names(&p, b), ["1", "1", "2"]);
+    assert!(!p.is_native(st(&p, a, 1), b));
+    assert!(p.is_foreign_slot(slot(b, 0)));
     assert_eq!(p.stations[&st(&p, a, 1)].name, "1");
     assert_eq!(
         names(&p, a),

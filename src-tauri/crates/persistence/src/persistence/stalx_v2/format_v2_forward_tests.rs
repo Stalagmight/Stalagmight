@@ -8,7 +8,7 @@ use crate::models::survey::{LineMeta, Project, StartAt};
 use crate::models::{Section, ShotData};
 
 use super::format_v2_doc_tests::example;
-use super::test_helpers::text_of;
+use super::test_helpers::{text_of, REQUIRES};
 use super::{
     decode, encode, rewrite_local, CountLimits, DecodeNote, DecodeOptions, Decoded, Extras, Mode,
     RawJson,
@@ -261,7 +261,11 @@ fn example_with_an_off_line_station() -> String {
 #[test]
 fn a_rule_broken_under_an_unknown_feature_is_newer_not_damaged() {
     let broken = example_with_an_off_line_station();
-    let newer = broken.replacen("\"requires\":[]", "\"requires\":[\"zz-future\"]", 1);
+    let newer = broken.replacen(
+        REQUIRES,
+        "\"requires\":[\"archived-stations\",\"zz-future\"]",
+        1,
+    );
     match decode(newer.as_bytes(), &DecodeOptions::default()) {
         Err(super::DecodeError::NewerFeatures {
             features,
@@ -428,7 +432,11 @@ fn a_different_solver_is_surfaced_only_through_requires() {
     let saved = encode(&decoded.project, &decoded.extras, Mode::Normal).unwrap();
     assert_eq!(text_of(&saved), text, "a save stamps this version's solver");
 
-    let visible = bumped.replacen("\"requires\":[]", "\"requires\":[\"solver-2-layout\"]", 1);
+    let visible = bumped.replacen(
+        REQUIRES,
+        "\"requires\":[\"archived-stations\",\"solver-2-layout\"]",
+        1,
+    );
     let decoded = open(&visible);
     let reason = decoded.read_only().unwrap();
     assert_eq!(reason.unknown_features, vec!["solver-2-layout".to_string()]);

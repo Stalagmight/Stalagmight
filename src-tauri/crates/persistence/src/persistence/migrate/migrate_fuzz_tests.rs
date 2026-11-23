@@ -159,7 +159,7 @@ impl Tally {
     }
 
     fn report(&mut self, r: &MigrationReport) {
-        let fields: [(&str, usize); 17] = [
+        let fields: [(&str, usize); 20] = [
             ("report.merges_collapsed", r.merges_collapsed),
             ("report.merges_demoted_cycle", r.merges_demoted_cycle),
             (
@@ -171,8 +171,11 @@ impl Tally {
                 "report.merges_dropped_redundant",
                 r.merges_dropped_redundant,
             ),
-            ("report.aliases_created", r.aliases_created),
-            ("report.comments_joined", r.comments_joined),
+            ("report.members_archived", r.members_archived),
+            ("report.kept_by_length", r.kept_by_length),
+            ("report.closures_archived", r.closures_archived),
+            ("report.closures_keep_both", r.closures_keep_both),
+            ("report.comments_hidden", r.comments_hidden),
             ("report.stations_renamed", r.stations_renamed),
             ("report.names_changed", r.names_changed),
             ("report.aligned_closures_to_tie", r.aligned_closures_to_tie),
@@ -1523,12 +1526,13 @@ fn migration_fuzz_window() {
         "0.5.5 shape",
         "speleodb link",
         "report.merges_demoted_cycle",
-        // Every merged member's line keeps showing the member's name, by an
-        // alias naming it (I-3), so `names_changed` is 0 on every seed
-        // (`test_support::check` fails a seed that changes a name) and the
-        // window gates the aliases that do it instead.
-        "report.aliases_created",
-        "report.comments_joined",
+        // The kept-stations rules (RS 8.3, checked on every seed by
+        // `test_support::check`): archived members, junctions kept by
+        // length, archived closure ends, hidden comments.
+        "report.members_archived",
+        "report.kept_by_length",
+        "report.closures_archived",
+        "report.comments_hidden",
         "report.hand_moves_carried",
         "report.history_rows_dropped",
         "walk steps",
@@ -2119,6 +2123,30 @@ fn farm_seeds_keep_the_computed_view_within_its_misclosures() {
         let classes = pinned_seed(seed, DEFAULT_KNOBS);
         if let Some(class) = class {
             assert!(classes.contains_key(&class), "seed {seed}: {classes:?}");
+        }
+    }
+}
+
+/// Farm finding dbf19ed85330 (`wire-unexplained | removed_comments`, seeds
+/// 35006357, 35007676, 35010268 and 35010327): a 0.6.0 loop end with an
+/// empty comment, which the migration archives behind its closure's kept
+/// end. The wire now shows the kept end's comment there (RS 5.1), and a
+/// range delete over the loop end lists no comment: the end's own comment
+/// is none, and the kept end's stays. 0.6.0's preview listed the empty
+/// comment, and the wire oracle filtered empty legacy comments only where
+/// the slot now shows none, so it called the difference unexplained.
+/// Injection: record a slot in `empty_comments` only when its wire comment
+/// is gone (the oracle before the fix) and all four seeds fail. RS-FX1
+/// pinned 35006357 too, with a looser excuse (any slot showing another
+/// station whose node has no comment now); the integration keeps only this
+/// one, which cannot also excuse a non-empty 0.6.0 comment the port lost.
+#[test]
+fn farm_seeds_an_empty_comment_on_an_archived_loop_end_is_no_comment() {
+    for seed in [35_006_357, 35_007_676, 35_010_268, 35_010_327] {
+        match run_seed(seed) {
+            Ok(Outcome::Migrated(_)) => {}
+            Ok(_) => panic!("seed {seed}: not migrated"),
+            Err(f) => panic!("seed {seed}: {} {}", f.class, f.detail),
         }
     }
 }

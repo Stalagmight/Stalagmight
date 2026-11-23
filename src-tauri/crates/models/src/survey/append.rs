@@ -1,9 +1,11 @@
 //! Add .stalx / Merge Projects (plan 5.8, 4.4): copy a whole source survey
 //! into this one.
 //!
-//! - Ids: station ids (and aliases) are offset by this project's
-//!   `next_station_id`, so both keep theirs and none collides; lines get the
-//!   next line ids in source order; closures are re-minted; Sections are
+//! - Ids: station ids (and archived records' ids, whose lines are remapped)
+//!   are offset by this project's `next_station_id`, so both keep theirs and
+//!   none collides; lines get the next line ids in source order; closures
+//!   are re-minted and keep their archived end (the epilogue's C1/C2
+//!   normalisation runs over them, RS 4.4); Sections are
 //!   appended with fresh ids and names made unique (`Upper level (2)`); a shot
 //!   uuid this project already holds is re-minted for the copy (newcomers
 //!   yield, as today); a repeated line name gets ` (k)`.
@@ -159,8 +161,9 @@ impl Project {
         };
 
         // The copied lines' ids, in the source's list order (each source line
-        // becomes `first_line + position`): alias hints are remapped by it.
-        let alias_line = |id: LineId| {
+        // becomes `first_line + position`): archived records' lines are
+        // remapped by it.
+        let record_line = |id: LineId| {
             source
                 .lines()
                 .iter()
@@ -172,9 +175,14 @@ impl Project {
         for station in source.stations.values() {
             let mut copy = station.clone();
             copy.id = shift(station.id);
-            for alias in &mut copy.aliases {
-                alias.id = shift(alias.id);
-                alias.line = alias.line.and_then(alias_line);
+            for record in &mut copy.archived {
+                record.id = shift(record.id);
+                record.into = record.into.map(shift);
+                record.lines = record
+                    .lines
+                    .iter()
+                    .filter_map(|&l| record_line(l))
+                    .collect();
             }
             stations.push(copy.id);
             self.insert_station(copy)?;
@@ -278,6 +286,7 @@ impl Project {
                 b: shift(closure.b),
                 b_via: closure.b_via.and_then(line_of),
                 strategy: closure.strategy,
+                archived: closure.archived,
             });
             closure_map.push((closure.id, id));
         }

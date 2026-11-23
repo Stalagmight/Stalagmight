@@ -1,25 +1,40 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
-import { getErrorMessage } from '../../utils/ipc';
+import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
-import { EntityBlob } from '../common/EntityBlob';
+import { StationBlob } from '../common/EntityBlob';
 import { DialogWrapper } from './DialogWrapper';
-import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { getErrorColor } from '../../utils/colors';
 import { formatFixed, formatPercent } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import type { StationRef, ClosureStrategy } from '../../types/project';
 import type { ClosurePreview, BatchCommand } from '../../types/commands';
+import type { LoopClosureNaming } from '../../types/ipc/LoopClosureNaming';
+import type { ClosureKeepPreview } from '../../types/ipc/ClosureKeepPreview';
+import type { KeepCandidate } from '../../types/ipc/KeepCandidate';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
+import { listNames } from '../../utils/listNames';
+import { IdentityPill, StickyDialogFooter, useIdentityLabel } from './keptStationParts';
+
+/** "Keep both names" in the keep choice (no end archived). */
+const BOTH = 'both';
+
+/** The choice the dialog starts on (RS 5.2): rule K's end when it may be
+ *  kept, else "Keep both names". */
+export function defaultClosureChoice(naming: LoopClosureNaming): number | typeof BOTH {
+  return naming.default_keep ?? BOTH;
+}
 
 export default function ClosureDialog() {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
   const { closeDialog, dialogData, clearMergeStations } = useUIStore();
   const { createLoopClosure, executeBatch } = useProjectStore();
-  const labels = useIdentityLabels();
+  const editingBlocked = useEditingBlocked();
 
   const stationA = dialogData.stationA as StationRef | undefined;
   const stationB = dialogData.stationB as StationRef | undefined;
@@ -45,6 +60,36 @@ export default function ClosureDialog() {
   // Move commands to batch with closure for single-undo snap-to-merge
   const preCommands = dialogData.preCommands as BatchCommand[] | undefined;
   const isFromMove = !!preCommands;
+  const strategy: ClosureStrategy = isFromMove ? 'Move' : 'Batch';
+
+  // Which end both ends show (RS 5.2, 7), from `preview_loop_closure`: the
+  // ends that may be kept and "Keep both names", and what each does to names.
+  // Until it answers (or when it is refused, as a refused pair is), Create
+  // keeps both names, as it did before.
+  const [naming, setNaming] = useState<LoopClosureNaming | null>(null);
+  const [choice, setChoice] = useState<number | typeof BOTH>(BOTH);
+  useEffect(() => {
+    setNaming(null);
+    if (!stationA || !stationB || closureRefusal) return;
+    let live = true;
+    Promise.resolve(
+      invokeIpc<LoopClosureNaming>(
+        'preview_loop_closure',
+        { stationA, stationB, closureStrategy: strategy },
+        { purpose: 'preview loop closure names' },
+      ),
+    )
+      .then((answer) => {
+        if (!live || !answer) return;
+        setNaming(answer);
+        setChoice(defaultClosureChoice(answer));
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [stationA, stationB, strategy, closureRefusal]);
+  const option = naming?.options.find((o) => (o.keep ?? BOTH) === choice) ?? null;
 
   const handleClose = () => {
     onCancel?.();
@@ -54,18 +99,42 @@ export default function ClosureDialog() {
 
   const handleCreate = async () => {
     if (!stationA || !stationB) return;
+    if (isEditingBlockedNow()) {
+      setError(t('dialogs.keptStations.editingDisabled'));
+      return;
+    }
 
     setIsLoading(true);
     setError(null);
 
     try {
       if (onBeforeConfirm) await onBeforeConfirm();
+      // The dialog's answers (RS 5.2): the end kept (none: keep both
+      // names), and no renames. Creating a closure repeats no name (the
+      // archived end becomes a loop end, which counts for no name
+      // uniqueness, RS-FX5), so the preview lists no collision; the empty
+      // list still makes a collision the backend found refuse instead of
+      // being lettered unseen. Without the naming preview, neither, and the
+      // closure keeps both names.
+      const answered = option
+        ? {
+            ...(option.keep !== undefined ? { keep: option.keep } : {}),
+            renames: [],
+          }
+        : null;
       // When preCommands exist (snap-to-merge), batch move + closure as single undo operation
-      const effectiveStrategy = isFromMove ? 'Move' as ClosureStrategy : 'Batch';
-      const closureCmd: BatchCommand = { type: 'create_loop_closure', station_a: stationA, station_b: stationB, closure_strategy: effectiveStrategy };
+      const closureCmd: BatchCommand = {
+        type: 'create_loop_closure',
+        station_a: stationA,
+        station_b: stationB,
+        closure_strategy: strategy,
+        ...(answered ?? {}),
+      };
       const result = preCommands
         ? await executeBatch([...preCommands, closureCmd])
-        : await createLoopClosure(stationA, stationB, effectiveStrategy);
+        : answered
+          ? await createLoopClosure(stationA, stationB, strategy, answered)
+          : await createLoopClosure(stationA, stationB, strategy);
       if (result.success) {
         clearMergeStations();
         trackDialogComplete('closure');
@@ -112,16 +181,27 @@ export default function ClosureDialog() {
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station A:</span>
             <span className="inline-flex items-center gap-1.5">
-              <EntityBlob entity="station">{labels.station(stationA, true)}</EntityBlob>
+              <StationBlob station={stationA} withLine />
             </span>
           </div>
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station B:</span>
             <span className="inline-flex items-center gap-1.5">
-              <EntityBlob entity="station">{labels.station(stationB, true)}</EntityBlob>
+              <StationBlob station={stationB} withLine />
             </span>
           </div>
         </div>
+
+        {naming && naming.options.length > 1 && (
+          <ClosureKeepChoice
+            naming={naming}
+            choice={choice}
+            onChoice={setChoice}
+            disabled={isLoading || !!closureRefusal}
+          />
+        )}
+        {naming && <RuleKRefusal naming={naming} />}
+        {option && naming && <ClosureChoiceOutcome option={option} ends={naming.ends} />}
 
         {/* Preview data */}
         {preview && (
@@ -151,22 +231,155 @@ export default function ClosureDialog() {
           </div>
         )}
 
-        {/* Actions */}
-        <div className="flex justify-end gap-2 pt-4 border-t border-border">
+        <StickyDialogFooter testId="closure-footer">
           <Button onClick={handleClose} disabled={isLoading} data-testid="closure-cancel">
             Cancel
           </Button>
           <Button
             variant="primary"
             onClick={handleCreate}
-            disabled={isLoading || !!closureRefusal}
+            disabled={isLoading || !!closureRefusal || editingBlocked}
             title={closureRefusal}
             data-testid="closure-create"
           >
             {isLoading ? 'Creating...' : 'Create Closure'}
           </Button>
-        </div>
+        </StickyDialogFooter>
       </div>
     </DialogWrapper>
+  );
+}
+
+/**
+ * "Both ends show:" (RS 5.2, 7): one radio per end that may be kept, each
+ * that end's pill and the name both ends then show, and "Keep both names"
+ * (the closure hides neither). An end a loop closure already shows as
+ * another says so; an end the rules do not allow (C1, C2) is not offered.
+ */
+function ClosureKeepChoice({
+  naming,
+  choice,
+  onChoice,
+  disabled,
+}: {
+  naming: LoopClosureNaming;
+  choice: number | typeof BOTH;
+  onChoice: (choice: number | typeof BOTH) => void;
+  disabled: boolean;
+}) {
+  const { t } = useTranslation();
+  const label = useIdentityLabel();
+  return (
+    <fieldset className="space-y-1" data-testid="closure-keep">
+      <legend className="text-sm text-text-primary">{t('dialogs.closure.keepLead')}</legend>
+      {naming.allowed.map((id) => {
+        const end = naming.ends.find((e) => e.identity.id === id);
+        if (!end) return null;
+        return (
+          <label key={id} className="flex flex-wrap items-center gap-2 p-1 rounded text-sm hover:bg-background-50">
+            <input
+              type="radio"
+              name="closure-keep"
+              value={id}
+              checked={choice === id}
+              disabled={disabled}
+              onChange={() => onChoice(id)}
+              data-testid={`closure-keep-${id}`}
+            />
+            <IdentityPill slot={end.station} identity={end.identity} testId={`closure-keep-${id}-pill`} />
+            {end.shown_as && (
+              <span className="text-text-secondary" data-testid={`closure-keep-${id}-shown-as`}>
+                {t('dialogs.keptStations.shownAsThroughClosure', { station: label(end.shown_as) })}
+              </span>
+            )}
+          </label>
+        );
+      })}
+      <label className="flex items-center gap-2 p-1 rounded text-sm hover:bg-background-50">
+        <input
+          type="radio"
+          name="closure-keep"
+          value={BOTH}
+          checked={choice === BOTH}
+          disabled={disabled}
+          onChange={() => onChoice(BOTH)}
+          data-testid="closure-keep-both"
+        />
+        <span>{t('dialogs.closure.keepBoth')}</span>
+      </label>
+    </fieldset>
+  );
+}
+
+/**
+ * Why rule K's end may not be kept (RS 5.2, review finding ui-6), from the
+ * backend's reason: C1, keeping it would hide the other end, which another
+ * closure already shows as another station; C2, it is itself shown as the
+ * other end. Shown whenever rule K's end is refused, also when no end may be
+ * kept (no keep choice is offered then).
+ */
+function RuleKRefusal({ naming }: { naming: LoopClosureNaming }) {
+  const { t } = useTranslation();
+  const label = useIdentityLabel();
+  if (naming.rule_k === undefined || naming.allowed.includes(naming.rule_k)) return null;
+  const keep = naming.ends.find((e) => e.identity.id === naming.rule_k);
+  const other = naming.ends.find((e) => e.identity.id !== naming.rule_k);
+  if (!keep) return null;
+  const text =
+    naming.rule_k_refused === 'other_end_archived' && other?.shown_as
+      ? t('dialogs.closure.ruleKOtherEndArchived', {
+          keep: label(keep.identity),
+          other: label(other.identity),
+          shown: label(other.shown_as),
+        })
+      : naming.rule_k_refused === 'kept_shows_other_end' && other
+        ? t('dialogs.closure.ruleKShowsOtherEnd', { keep: label(keep.identity), other: label(other.identity) })
+        : t('dialogs.closure.ruleKNotAllowed', { keep: label(keep.identity) });
+  return (
+    <p className="text-xs text-text-secondary" data-testid="closure-keep-not-allowed">
+      {text}
+    </p>
+  );
+}
+
+/** What the chosen end does (RS 7): the end hidden (its point stays, without
+ *  a label; Remove Closure brings it back) and the lines that show another
+ *  name there, or that keeping both names hides nothing. An end already shown
+ *  as another station through another closure stays so (ui-6), so "each end
+ *  keeps its own name" is said only when neither is. */
+function ClosureChoiceOutcome({ option, ends }: { option: ClosureKeepPreview; ends: KeepCandidate[] }) {
+  const { t } = useTranslation();
+  const labels = useIdentityLabels();
+  const label = useIdentityLabel();
+  if (!option.hidden) {
+    const shownAs = ends.filter((e) => e.shown_as !== undefined);
+    return (
+      <p className="text-sm text-text-secondary" data-testid="closure-keep-outcome">
+        {shownAs.length === 0
+          ? t('dialogs.closure.keepsBoth')
+          : [
+              t('dialogs.closure.keepsBothShown'),
+              ...shownAs.map((e) =>
+                t('dialogs.closure.staysShownAs', { station: label(e.identity), shown: label(e.shown_as!) }),
+              ),
+            ].join(' ')}
+      </p>
+    );
+  }
+  const hasComment = (option.hidden.comment ?? '').trim() !== '';
+  return (
+    <div className="space-y-1 text-sm" data-testid="closure-keep-outcome">
+      <p className="text-text-primary" data-testid="closure-hidden">
+        {t(hasComment ? 'dialogs.closure.hiddenWithComment' : 'dialogs.closure.hidden', { station: label(option.hidden) })}
+      </p>
+      {option.renamed_lines.length > 0 && (
+        <p className="text-text-secondary" data-testid="closure-renamed-lines">
+          {t('dialogs.closure.renamedLines', {
+            count: option.renamed_lines.length,
+            lines: listNames(option.renamed_lines.map(labels.lineName), t),
+          })}
+        </p>
+      )}
+    </div>
   );
 }

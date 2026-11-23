@@ -1,8 +1,10 @@
 /**
  * Station, shot and line identity as the user sees it (SPEC 4.1/4.2).
  *
- * A station is named by its Name (unique within its line), a shot by its two
- * station names (`4 → 5`), a line by its project-unique name. The positional
+ * A station is named by its Name (unique among its line's native slots; a
+ * foreign slot or a loop end may repeat a name on its line, RS-FX5, so plain
+ * text qualifies it: `12 (Main)`, `12 (loop end on Side)`), a shot by its two
+ * station labels (`4 → 5`), a line by its project-unique name. The positional
  * handles the IPC addresses things with - `StationRef{line_id, station_index}`,
  * shot ids, line ids - are session handles that are never shown. Everything
  * user-visible that names a station, shot or line goes through here (or the
@@ -14,15 +16,18 @@
  */
 import i18n from '../i18n';
 import type { Station, StationRef } from '../types/project';
+import type { ShownSlot } from '../types/ipc/ShownSlot';
+import type { ClosureArchive } from '../types/ipc/ClosureArchive';
 import type { SurveyData } from '../types/survey-data';
 import { displayStationName, formatShotLabel, formatStationLabel } from './formatters';
 
-/** The SurveyData columns identity needs (aliases only for a rename check). */
+/** The SurveyData columns identity needs (the shown slots only for a rename
+ *  check through a loop end). */
 export type IdentityData = Pick<
   SurveyData,
   'stationCount' | 'stationLineIds' | 'stationIndices' | 'stationNames' | 'stationIds' | 'lines' | 'shotIds'
 > &
-  Partial<Pick<SurveyData, 'stationAliases'>>;
+  Partial<Pick<SurveyData, 'stationShown'>>;
 
 /** A line as identity needs it: the store's `project.lines` or `SurveyData.lines`. */
 export interface IdentityLine {
@@ -35,6 +40,8 @@ export interface IdentitySource {
   /** Fallback when there is no SurveyData. */
   stations?: ReadonlyArray<Station> | null | undefined;
   lines?: ReadonlyArray<IdentityLine & { shots?: ReadonlyArray<{ id: number }> }> | null | undefined;
+  /** The project's loop closures, for a loop end's own (hidden) station. */
+  closures?: ReadonlyArray<{ id: bigint; archived?: ClosureArchive | undefined }> | null | undefined;
 }
 
 interface RefIndex {
@@ -124,11 +131,11 @@ function idIndexOf(data: IdentityData): Map<number, number[]> {
 }
 
 /**
- * Every slot of the station `ref` is on: the slots that share its Station ID.
+ * Every slot of the station `ref` is on: the slots that share its node id.
  * On the station graph a junction is ONE station that two or more lines pass
- * (plan 9.2), so its slots share one id and comment, while each line shows it
- * by the name that line knows it by (plan 5.3 per line); a station on one line
- * has the one slot. `ref` alone when the station is unknown.
+ * (plan 9.2), so its slots share one id, and every line shows its kept
+ * station (RS 4.1); a station on one line has the one slot. `ref` alone when
+ * the station is unknown.
  */
 export function stationSlotsOf(src: IdentitySource, ref: StationRef): StationRef[] {
   const data = src.surveyData;
@@ -146,42 +153,73 @@ export function stationSlotsOf(src: IdentitySource, ref: StationRef): StationRef
   return (src.stations ?? []).filter((s) => s.id === station.id).map((s) => s.station_ref);
 }
 
-/** The lines the aliases of the station at `ref` name: each shows the station by its alias's name. */
-function aliasLinesOf(src: IdentitySource, ref: StationRef): Set<number> {
-  const data = src.surveyData;
-  let aliases: ReadonlyArray<{ line?: number | null }> | undefined;
-  if (data && data.stationCount > 0) {
-    const g = stationGlobalIndexOf(data, ref);
-    aliases = g === null ? undefined : data.stationAliases?.get(g);
-  } else {
-    aliases = findStationIn(src.stations, ref)?.aliases;
-  }
-  const lines = new Set<number>();
-  for (const alias of aliases ?? []) if (alias.line !== undefined && alias.line !== null) lines.add(alias.line);
-  return lines;
+/** The Station ID the slot at global index `g` shows (RS 6): its shown
+ *  identity's, the node's own unless a loop closure archives the node. */
+function shownIdAt(data: IdentityData, g: number): number | undefined {
+  return data.stationShown?.get(g)?.id ?? data.stationIds[g];
+}
+
+/** The Station ID the station shows, from the `Station[]` list. */
+function shownIdOfStation(station: Station): number {
+  return station.shown?.id ?? station.id;
+}
+
+/** A native slot: it shows its node's own identity on one of the node's
+ *  native lines (no `shown`), so it counts for name uniqueness (N8, RS-FX5). */
+function isNativeAt(data: IdentityData, g: number): boolean {
+  return data.stationShown?.get(g) === undefined;
 }
 
 /**
- * The first line on which ANOTHER station is already shown as `name`, among
- * the lines a rename of the station at `ref` renames it on, or null when the
- * name is free. Each line shows a junction by the name that line knows it by
- * (plan 5.3 per line): renaming it through a line that knows it by an alias
- * renames that line's name only, so only that line is checked; otherwise it
- * renames the station's own name, which every line without an alias of its
- * own shows, so all of those are checked. On one line this is the old
- * per-line check.
+ * The first line on which a NATIVE slot of another station already shows
+ * `name`, among the lines a rename of the station at `ref` is checked on, or
+ * null when the name is free. A rename through any slot renames the identity
+ * the slot shows (RS 5.4: a junction shows its kept station on every line, a
+ * loop end its closure's kept end). N8 holds among native slots only
+ * (RS-FX5): a foreign slot (the dot) and a loop end (the loop mark) count for
+ * no uniqueness. So the rename is checked on the lines that identity is
+ * native on (where a slot shows it with no dot or loop mark), against the
+ * native slots of other identities there, as the backend's
+ * `conflicts_with_name` does; a line that shows it only through a foreign
+ * slot or a loop end is not checked. On one line this is the old per-line
+ * check. A foreign slot or a loop end asks whose station it is first
+ * (`preview_station_identity`, `ShownIdentityPrompt`).
  */
 export function lineWithStationNamed(src: IdentitySource, ref: StationRef, name: string): number | null {
-  const own = stationSlotsOf(src, ref);
-  const ownKeys = new Set(own.map((s) => `${s.line_id}:${s.station_index}`));
-  const aliasLines = aliasLinesOf(src, ref);
-  const sharing = aliasLines.has(ref.line_id)
-    ? own.filter((s) => s.line_id === ref.line_id)
-    : own.filter((s) => !aliasLines.has(s.line_id));
-  for (const slot of sharing) {
-    const names = lineStationNamesOf(src, slot.line_id);
-    for (let i = 0; i < names.length; i++) {
-      if (names[i] === name && !ownKeys.has(`${slot.line_id}:${i}`)) return slot.line_id;
+  const data = src.surveyData;
+  if (data && data.stationCount > 0) {
+    const g = stationGlobalIndexOf(data, ref);
+    const target = g === null ? undefined : shownIdAt(data, g);
+    if (target !== undefined) {
+      const lines: number[] = [];
+      for (const s of idIndexOf(data).get(target) ?? []) {
+        const line = data.stationLineIds[s]!;
+        if (isNativeAt(data, s) && !lines.includes(line)) lines.push(line);
+      }
+      const byLine = refIndexOf(data).byLine;
+      for (const line of lines) {
+        const slots = byLine.get(line) ?? [];
+        for (let i = 0; i < slots.length; i++) {
+          const s = slots[i];
+          if (s === undefined || !isNativeAt(data, s) || data.stationIds[s] === target) continue;
+          if ((data.stationNames.get(s) || String(i)) === name) return line;
+        }
+      }
+      return null;
+    }
+  }
+  const stations = src.stations ?? [];
+  const station = findStationIn(stations, ref);
+  // An unknown station: its own line, against the other native slots there.
+  const target = station ? shownIdOfStation(station) : null;
+  const lines = station
+    ? [...new Set(stations.filter((s) => s.id === target && !s.shown).map((s) => s.station_ref.line_id))]
+    : [ref.line_id];
+  for (const line of lines) {
+    for (const s of stations) {
+      if (s.station_ref.line_id !== line || s.shown) continue;
+      if (station ? s.id === target : s.station_ref.station_index === ref.station_index) continue;
+      if ((s.name || String(s.station_ref.station_index)) === name) return line;
     }
   }
   return null;
@@ -225,7 +263,9 @@ export function onePerStation(src: IdentitySource, refs: readonly StationRef[]):
   return out;
 }
 
-/** The project-unique Station ID of `ref`, or null when the station is unknown. */
+/** The project-unique Station ID of `ref`'s node, or null when the station
+ *  is unknown: what groupings, moves and selections key on. A display of the
+ *  Station ID reads {@link shownStationIdOf}. */
 export function stationIdOf(src: IdentitySource, ref: StationRef): number | null {
   const data = src.surveyData;
   if (data && data.stationCount > 0) {
@@ -233,6 +273,35 @@ export function stationIdOf(src: IdentitySource, ref: StationRef): number | null
     if (g !== null) return data.stationIds[g] ?? null;
   }
   return findStationIn(src.stations, ref)?.id ?? null;
+}
+
+/**
+ * How the slot at `ref` shows its node (RS 6): the Station ID it shows, the
+ * home line whose colour its dot takes, whether it is foreign and whether a
+ * loop closure archives its node. Undefined for a slot that shows its node's
+ * own identity on one of its native lines (no dot, no loop mark), and for an
+ * unknown station.
+ */
+export function shownSlotOf(src: IdentitySource, ref: StationRef): ShownSlot | undefined {
+  const data = src.surveyData;
+  if (data && data.stationCount > 0) {
+    const g = stationGlobalIndexOf(data, ref);
+    if (g !== null) return data.stationShown?.get(g);
+  }
+  return findStationIn(src.stations, ref)?.shown;
+}
+
+/** The Station ID the slot at `ref` shows (RS 6: the Station ID row, the pill
+ *  superscript, the Station ID column), or null when the station is unknown. */
+export function shownStationIdOf(src: IdentitySource, ref: StationRef): number | null {
+  return shownSlotOf(src, ref)?.id ?? stationIdOf(src, ref);
+}
+
+/** The line whose colour the dot after a foreign slot's name takes (its shown
+ *  station's home line, RS 2), or null for a slot that needs no dot. */
+export function homeMarkOf(src: IdentitySource, ref: StationRef): number | null {
+  const shown = shownSlotOf(src, ref);
+  return shown?.foreign && shown.home_line !== undefined ? shown.home_line : null;
 }
 
 /** A line's name for display (sanitized), never its id: "Unnamed line" when it has none. */
@@ -248,21 +317,97 @@ export function lineNameOf(src: IdentitySource, lineId: number): string {
   return lineDisplayName(line?.name);
 }
 
-/** `17`, or `Main Line / 17` with `withLine`. */
+/**
+ * A slot's plain-text label: `17`, or `Main Line / 17` with `withLine`. It is
+ * the one label every text that names a slot without drawing the dot or the
+ * loop mark uses (warnings, toasts, search results, history rows, aria labels,
+ * tooltips, dialog sentences, closure texts), so it says whose station a
+ * dotted slot shows (RS 6, U-P3-8), with or without the line: two slots of one
+ * line may show one name since dotted slots don't collide (RS-FX5), and the
+ * qualifier tells them apart.
+ *
+ * - native: `12`, `Side / 12`;
+ * - foreign (Side's slot showing Main's 12): `12 (Main)`, `Side / 12 (Main)`;
+ * - loop end (a closure on Side shows Main's 3): `3 (loop end on Side)`, and
+ *   with the line, named on the shown station's home line,
+ *   `Main / 3 (loop end on Side)`.
+ *
+ * A pill, which draws the dot and the loop mark itself, takes the bare name
+ * ({@link stationPillLabelOf}); an edit field takes {@link stationNameOf}.
+ */
 export function stationLabelOf(src: IdentitySource, ref: StationRef, withLine = false): string {
   const name = stationNameOf(src, ref);
-  return formatStationLabel(name, withLine ? lineNameOf(src, ref.line_id) : null);
+  const shown = shownSlotOf(src, ref);
+  if (shown?.loop_end) {
+    const home = withLine ? lineNameOf(src, shown.home_line ?? ref.line_id) : null;
+    return i18n.t('identity.loopEndLabel', {
+      station: formatStationLabel(name, home),
+      line: lineNameOf(src, ref.line_id),
+    });
+  }
+  const label = formatStationLabel(name, withLine ? lineNameOf(src, ref.line_id) : null);
+  if (shown?.foreign && shown.home_line !== undefined && shown.home_line !== ref.line_id) {
+    return i18n.t('identity.foreignLabel', { station: label, home: lineNameOf(src, shown.home_line) });
+  }
+  return label;
+}
+
+/**
+ * A slot's bare name for a pill's main part (`12`), where the pill draws the
+ * home-line dot of a foreign slot and the loop mark of a loop end: the dot
+ * and the mark say what {@link stationLabelOf}'s qualifier says in text.
+ */
+export function stationPillLabelOf(src: IdentitySource, ref: StationRef): string {
+  return formatStationLabel(stationNameOf(src, ref));
+}
+
+/**
+ * A Plan mode pin's label (RS 6): `Main Line / 17`, as {@link stationLabelOf}
+ * with the line, except a loop end, which is named by its own station first,
+ * then the station it is shown as: `Loop / L8 (loop end, shown as Main / 8)`.
+ * "Main / 8 (loop end)" read as if Main / 8 were the loop end (RS-FX6,
+ * P3-10). Without the closure's archive (an older backend), `Loop end on
+ * Loop, shown as Main / 8`.
+ */
+export function planStationLabelOf(src: IdentitySource, ref: StationRef): string {
+  const shown = shownSlotOf(src, ref);
+  if (!shown?.loop_end) return stationLabelOf(src, ref, true);
+  const station = formatStationLabel(stationNameOf(src, ref), lineNameOf(src, shown.home_line ?? ref.line_id));
+  const own =
+    shown.loop_closure === undefined
+      ? undefined
+      : src.closures?.find((c) => c.id === shown.loop_closure)?.archived?.station;
+  if (!own) return i18n.t('identity.loopEndPinLabelLine', { line: lineNameOf(src, ref.line_id), station });
+  return i18n.t('identity.loopEndPinLabel', {
+    own: formatStationLabel(own.name, lineNameOf(src, own.home_line ?? ref.line_id)),
+    station,
+  });
 }
 
 /**
  * `4 → 5` (or `Main Line: 4 → 5` with `withLine`) for the shot at 0-based
  * position `shotIndex` of line `lineId`: it runs from station `shotIndex` to
- * station `shotIndex + 1`.
+ * station `shotIndex + 1`. Each end reads its plain-text label without the
+ * line ({@link stationLabelOf}): `12 (Main) → 13`, `Branch: 12 (Main) → 13`,
+ * `Side: 3 (loop end on Side) → 4`. The backend names a shot in its texts
+ * the same way (`Shot Branch: 12 (Main) → 13 has zero length`), which
+ * {@link warningMessageBody} relies on.
  */
 export function shotLabelAt(src: IdentitySource, lineId: number, shotIndex: number, withLine = false): string {
-  const from = stationNameOf(src, { line_id: lineId, station_index: shotIndex });
-  const to = stationNameOf(src, { line_id: lineId, station_index: shotIndex + 1 });
+  const from = stationLabelOf(src, { line_id: lineId, station_index: shotIndex });
+  const to = stationLabelOf(src, { line_id: lineId, station_index: shotIndex + 1 });
   return formatShotLabel(from, to, withLine ? lineNameOf(src, lineId) : null);
+}
+
+/**
+ * A shot pill's main part, `12 → 13`: each end's bare name, where the pill
+ * draws each end's dot and loop mark ({@link stationPillLabelOf}).
+ */
+export function shotPillLabelAt(src: IdentitySource, lineId: number, shotIndex: number): string {
+  return formatShotLabel(
+    stationPillLabelOf(src, { line_id: lineId, station_index: shotIndex }),
+    stationPillLabelOf(src, { line_id: lineId, station_index: shotIndex + 1 }),
+  );
 }
 
 /** The 0-based position of shot `shotId` in line `lineId`, or null when it is not there. */
@@ -298,10 +443,26 @@ export interface IdentityLabels {
   onePerStation: (refs: readonly StationRef[]) => StationRef[];
   /** The datum the station shows (see {@link datumOfStation}). */
   datumOf: <D extends { station_ref: StationRef }>(datums: readonly D[] | null | undefined, ref: StationRef) => D | undefined;
+  /** The node's Station ID (groupings; see {@link stationIdOf}). */
   stationId: (ref: StationRef) => number | null;
+  /** The Station ID the slot shows (displays; see {@link shownStationIdOf}). */
+  shownStationId: (ref: StationRef) => number | null;
+  /** How the slot shows its node (see {@link shownSlotOf}). */
+  shown: (ref: StationRef) => ShownSlot | undefined;
+  /** The home-line dot a foreign slot carries (see {@link homeMarkOf}). */
+  homeMark: (ref: StationRef) => number | null;
   lineName: (lineId: number) => string;
+  /** A slot's plain-text label, qualified for a dotted slot (see {@link stationLabelOf}). */
   station: (ref: StationRef, withLine?: boolean) => string;
+  /** A station pill's bare main part (see {@link stationPillLabelOf}). */
+  stationPill: (ref: StationRef) => string;
+  /** A Plan pin's label (see {@link planStationLabelOf}). */
+  planStation: (ref: StationRef) => string;
+  /** A shot's plain-text label, each end qualified (see {@link shotLabelAt}). */
   shotAt: (lineId: number, shotIndex: number, withLine?: boolean) => string;
+  /** A shot pill's bare main part (see {@link shotPillLabelAt}). */
+  shotPillAt: (lineId: number, shotIndex: number) => string;
+  /** {@link shotLabelAt} for a shot addressed by its id (see {@link shotLabelOf}). */
   shot: (lineId: number, shotId: number, withLine?: boolean) => string | null;
 }
 
@@ -314,9 +475,15 @@ export function identityLabels(src: IdentitySource): IdentityLabels {
     onePerStation: (refs) => onePerStation(src, refs),
     datumOf: (datums, ref) => datumOfStation(src, datums, ref),
     stationId: (ref) => stationIdOf(src, ref),
+    shownStationId: (ref) => shownStationIdOf(src, ref),
+    shown: (ref) => shownSlotOf(src, ref),
+    homeMark: (ref) => homeMarkOf(src, ref),
     lineName: (lineId) => lineNameOf(src, lineId),
     station: (ref, withLine) => stationLabelOf(src, ref, withLine),
+    stationPill: (ref) => stationPillLabelOf(src, ref),
+    planStation: (ref) => planStationLabelOf(src, ref),
     shotAt: (lineId, shotIndex, withLine) => shotLabelAt(src, lineId, shotIndex, withLine),
+    shotPillAt: (lineId, shotIndex) => shotPillLabelAt(src, lineId, shotIndex),
     shot: (lineId, shotId, withLine) => shotLabelOf(src, lineId, shotId, withLine),
   };
 }
@@ -324,10 +491,12 @@ export function identityLabels(src: IdentitySource): IdentityLabels {
 /**
  * A survey warning's message without the shot it opens with ("has zero
  * length"), for a view that shows the shot itself (the Warnings tab's shot
- * pill). The backend names the shot by its line and stations
- * (`Shot Main Line: 4 → 5 has zero length`), so the prefix is matched against
- * the same label; a message that does not open with it (a datum warning, or
- * one computed before a rename) is returned unchanged.
+ * pill). The backend names the shot by its line and stations, each end
+ * qualified as {@link shotLabelAt} qualifies it (`Shot Main Line: 4 → 5 has
+ * zero length`, `Shot Branch: 12 (Main) → 13 has zero length`), so the
+ * prefix is matched against the same label; a message that does not open
+ * with it (a datum warning, or one computed before a rename) is returned
+ * unchanged.
  */
 export function warningMessageBody(
   labels: Pick<IdentityLabels, 'shotAt'>,

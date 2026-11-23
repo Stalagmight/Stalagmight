@@ -135,6 +135,12 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.plan_refs_for_anchors",
     "command.preview_delete_shot",
     "command.preview_detach_line",
+    // Kept and archived stations (plan 2026-11-23, RS 7): the Create Loop
+    // Closure and Remove Closure dialogs' naming previews, and "whose
+    // station is this" before a rename or comment edit.
+    "command.preview_loop_closure",
+    "command.preview_remove_loop_closure",
+    "command.preview_station_identity",
     "command.preview_zero_datum",
     "command.pull_mnemo",
     "command.push_frontend_log",
@@ -295,6 +301,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.reverse-line",
     "action.dialog.line-adjust",
     "action.dialog.settings",
+    "action.dialog.shown-identity-edit",
     "action.dialog.open-from-speleodb",
     "action.dialog.speleodb-done",
     "action.dialog.speleodb-divergence",
@@ -372,6 +379,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.reverse-line",
     "dialog-cancel.line-adjust",
     "dialog-cancel.settings",
+    "dialog-cancel.shown-identity-edit",
     "dialog-cancel.open-from-speleodb",
     "dialog-cancel.speleodb-done",
     "dialog-cancel.speleodb-divergence",
@@ -485,6 +493,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.reverse-line",
     "dwell.dialog.line-adjust",
     "dwell.dialog.settings",
+    "dwell.dialog.shown-identity-edit",
     "dwell.dialog.open-from-speleodb",
     "dwell.dialog.speleodb-done",
     "dwell.dialog.speleodb-divergence",
@@ -650,6 +659,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.reverse-line",
     "active-dwell.dialog.line-adjust",
     "active-dwell.dialog.settings",
+    "active-dwell.dialog.shown-identity-edit",
     "active-dwell.dialog.open-from-speleodb",
     "active-dwell.dialog.speleodb-done",
     "active-dwell.dialog.speleodb-divergence",
@@ -1240,7 +1250,12 @@ mod tests {
         //   + 1 the save prompt's reopen check (pre-PR review finding 1),
         //       made the reload itself, one operation (pre-PR delta review
         //       finding 2): command.reload_project_full_binary = 753.
-        assert_eq!(EVENT_NAMES.len(), 753);
+        //   + 3 kept and archived stations (RS 7): command.preview_loop_closure,
+        //       command.preview_remove_loop_closure,
+        //       command.preview_station_identity = 756.
+        //   + 4 the data table's "whose station is this?" prompt (RS 5.4): the
+        //       full per-dialog set for shown-identity-edit = 760.
+        assert_eq!(EVENT_NAMES.len(), 760);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

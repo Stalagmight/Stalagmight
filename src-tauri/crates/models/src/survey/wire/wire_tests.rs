@@ -153,38 +153,59 @@ fn a_junction_shares_its_identity_and_lists_its_other_slots() {
     }
 }
 
-/// A merged station's retired ids and names (its aliases, each with the
-/// line that knew it by it) ride every slot of it, for the station details'
-/// "Also known as"; a station without any sends none (H-frontend-wire-5).
-/// Each slot carries the name its own line shows the junction by (I-3): the
-/// moving line its old name, the other line the survivor's; the Station ID
-/// is the junction's one id on both. Injection: send the station's own name
-/// on every slot (`s.name` in `stations_wire`) and the moving line's slot
-/// reads `0`.
+/// A merged station's archived records (each with the lines whose own
+/// station it was) ride every slot of it, for the station details; a
+/// station without any sends none (H-frontend-wire-5). The slot whose line
+/// a record names is foreign (RS 6): it shows the kept Station ID with the
+/// kept station's home-line dot; the kept line's slot carries no `shown`.
+/// Every slot shows the kept station's name (RS 4.1): the moving line's slot
+/// reads `0` too, and the moving line's own `0` keeps its name beside it
+/// (RS-FX5: a foreign slot counts for no uniqueness), told apart by the
+/// foreign slot's `shown` and their Station IDs. The Station ID is the
+/// junction's one id on both of its slots. Injection: send the slot's own record name and the moving line's
+/// slot reads `2`.
 #[test]
-fn a_merged_stations_aliases_ride_every_slot() {
+fn a_merged_stations_records_ride_every_slot() {
     let mut p = project();
     let a = free_line(&mut p, [0.0, 0.0], run(90.0, 2, 10.0));
     let b = free_line(&mut p, [100.0, 50.0], run(0.0, 2, 5.0));
-    let (a2, b0) = (at(&p, a, 2), at(&p, b, 0));
+    let (a0, a2, b0) = (at(&p, a, 0), at(&p, a, 2), at(&p, b, 0));
     let a2_name = p.stations[&a2].name.clone();
-    let merged = p.merge_stations(a2, b0).unwrap();
-    assert_eq!((merged.value.survivor, merged.value.retired), (b0, a2));
+    let merged = p.merge_keeping_stationary(a2, b0).unwrap();
+    assert_eq!((merged.value.kept, merged.value.archived), (b0, a2));
+    assert!(merged.identities.lettered.is_empty());
     let stations = p.stations_wire(&p.raw_positions());
-    assert_eq!(station_at(&stations, slot(a, 2)).name, "2");
+    assert_eq!(station_at(&stations, slot(a, 2)).name, "0");
     assert_eq!(station_at(&stations, slot(b, 0)).name, "0");
+    assert_eq!(station_at(&stations, slot(a, 0)).name, "0");
+    assert_eq!(station_at(&stations, slot(a, 0)).id, a0);
+    assert_eq!(station_at(&stations, slot(a, 0)).shown, None, "native");
     assert_eq!(station_at(&stations, slot(a, 2)).id, b0);
     assert_eq!(station_at(&stations, slot(b, 0)).id, b0);
-    let expected = Some(vec![crate::StationAliasWire {
+    let expected = Some(vec![crate::ArchivedStationWire {
         id: a2,
-        name: Some(a2_name),
-        line: Some(a),
+        name: a2_name,
+        comment: None,
+        into: None,
+        lines: vec![a],
     }]);
-    assert_eq!(station_at(&stations, slot(a, 2)).aliases, expected);
-    assert_eq!(station_at(&stations, slot(b, 0)).aliases, expected);
-    assert_eq!(station_at(&stations, slot(a, 1)).aliases, None);
+    assert_eq!(station_at(&stations, slot(a, 2)).archived, expected);
+    assert_eq!(station_at(&stations, slot(b, 0)).archived, expected);
+    assert_eq!(station_at(&stations, slot(a, 1)).archived, None);
+    assert_eq!(
+        station_at(&stations, slot(a, 2)).shown,
+        Some(crate::ShownSlot {
+            id: b0,
+            home_line: Some(b),
+            foreign: true,
+            loop_end: false,
+            loop_closure: None,
+        })
+    );
+    assert_eq!(station_at(&stations, slot(b, 0)).shown, None);
+    assert_eq!(station_at(&stations, slot(a, 1)).shown, None);
     let json = serde_json::to_value(station_at(&stations, slot(b, 0))).unwrap();
-    assert_eq!(json["aliases"][0]["id"], serde_json::json!(a2));
+    assert_eq!(json["archived"][0]["id"], serde_json::json!(a2));
 }
 
 #[test]

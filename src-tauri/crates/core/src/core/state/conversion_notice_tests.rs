@@ -6,9 +6,10 @@
 //! list behind Details, and the file's state for the sentence on saving.
 //! Synthetic verifications only.
 
-use super::conversion_notice::{ConversionFile, ConversionNotice, NAMES_INLINE};
+use super::conversion_notice::{ConversionFile, ConversionNotice, ConversionSource, NAMES_INLINE};
 use crate::persistence::migrate::{
-    Axis, ClassStats, ExpectedClass, Mismatch, NameChange, Verification,
+    Axis, ClassStats, ClosureKeepsBoth, CommentHidden, ExpectedClass, IdentityChanges, Mismatch,
+    NameChange, Verification,
 };
 
 fn mismatch(station_index: u32, axis: Axis, displacement_m: f64) -> Mismatch {
@@ -38,11 +39,54 @@ fn moved(slots: usize, max_displacement_m: f64) -> Verification {
     v
 }
 
-fn rename(line: &str, from: &str, to: &str) -> NameChange {
+/// A slot now showing another station, `kept_line`'s `to`.
+fn shown_as(line: &str, from: &str, kept_line: &str, to: &str) -> NameChange {
     NameChange {
         line: line.to_owned(),
         from: from.to_owned(),
         to: to.to_owned(),
+        lettered: false,
+        kept_line: Some(kept_line.to_owned()),
+    }
+}
+
+/// A slot whose own station now has a letter suffix.
+fn lettered(line: &str, from: &str, to: &str) -> NameChange {
+    NameChange {
+        line: line.to_owned(),
+        from: from.to_owned(),
+        to: to.to_owned(),
+        lettered: true,
+        kept_line: None,
+    }
+}
+
+/// The change lists, with the lines in order of first appearance.
+fn identity(names: Vec<NameChange>, hidden: &[(&str, &str)]) -> IdentityChanges {
+    let comments_hidden: Vec<CommentHidden> = hidden
+        .iter()
+        .enumerate()
+        .map(|(i, (line, station))| CommentHidden {
+            line: (*line).to_owned(),
+            station: (*station).to_owned(),
+            identity: u32::try_from(i).unwrap_or(u32::MAX),
+        })
+        .collect();
+    let mut lines: Vec<String> = Vec::new();
+    for line in names
+        .iter()
+        .map(|n| &n.line)
+        .chain(comments_hidden.iter().map(|c| &c.line))
+    {
+        if !lines.contains(line) {
+            lines.push(line.clone());
+        }
+    }
+    IdentityChanges {
+        names,
+        comments_hidden,
+        closures_keep_both: Vec::new(),
+        lines,
     }
 }
 
@@ -150,41 +194,50 @@ fn nothing_visible_raises_nothing() {
     assert_eq!(changes(&v), None);
 }
 
-/// A few renamed stations are said one by one, the line named first ("North
-/// Passage / 0", never "North Passage 0"); more than the banner lists are
-/// counted, and every one of them goes behind Details. Joined comments come
-/// last. Injection: list every rename inline again and a 30-name conversion
-/// is a wall of text with no Details.
+/// A few changes are said one by one, the line named first ("North Passage /
+/// 0", never "North Passage 0"), a station shown as another by that
+/// station's line too; the banner then says Detach Line from Station or
+/// Remove Closure brings them back. More than the banner lists are counted
+/// by kind, and every one goes behind Details, grouped by line. Injection:
+/// list every entry inline again and a 30-junction conversion is a wall of
+/// text with no Details.
 #[test]
-fn renamed_stations_are_named_by_line_and_a_long_list_goes_behind_details() {
-    let report = crate::persistence::migrate::MigrationReport {
-        comments_joined: 1,
-        ..Default::default()
-    };
-    let few = vec![
-        rename("North Passage", "0", "3"),
-        rename("East Loop", "0", "2"),
-    ];
+fn changes_are_named_by_line_and_a_long_list_goes_behind_details() {
+    let report = crate::persistence::migrate::MigrationReport::default();
+    let few = identity(
+        vec![
+            shown_as("North Passage", "0", "Main", "3"),
+            lettered("East Loop", "2", "2a"),
+        ],
+        &[("North Passage", "0")],
+    );
     let view = ConversionNotice::of_migration(&report, &few)
         .expect("a notice")
         .view(false);
+    assert_eq!(view.source, ConversionSource::OldFormat);
     assert_eq!(
         view.changes,
         [
-            "North Passage / 0 is now shown as 3",
-            "East Loop / 0 is now shown as 2",
-            "a merged station's two comments were joined",
+            "North Passage / 0 is now shown as Main / 3",
+            "the comment of North Passage / 0 is hidden",
+            "East Loop / 2 is now shown as 2a",
         ]
     );
     assert!(view.details.is_empty());
+    assert!(view.brings_back);
 
-    let many: Vec<NameChange> = (1..=NAMES_INLINE + 2)
-        .map(|i| rename(&format!("Branch {i}"), "0", &format!("{}", i * 19)))
+    let mut names: Vec<NameChange> = (1..=NAMES_INLINE + 2)
+        .map(|i| shown_as(&format!("Branch {i}"), "0", "Main", &format!("{}", i * 19)))
         .collect();
-    let report = crate::persistence::migrate::MigrationReport {
-        comments_joined: 3,
-        ..Default::default()
-    };
+    names.push(lettered("Branch 1", "19", "19a"));
+    let mut many = identity(
+        names,
+        &[("Branch 2", "0"), ("Branch 3", "0"), ("Branch 4", "0")],
+    );
+    many.closures_keep_both.push(ClosureKeepsBoth {
+        a: "Side / 17".to_owned(),
+        b: "Main / 3".to_owned(),
+    });
     let view = ConversionNotice::of_migration(&report, &many)
         .expect("a notice")
         .view(false);
@@ -192,14 +245,55 @@ fn renamed_stations_are_named_by_line_and_a_long_list_goes_behind_details() {
         view.changes,
         [
             format!(
-                "{} stations are now shown under another name",
+                "{} stations are now shown under another station's name",
                 NAMES_INLINE + 2
             ),
-            "the comments of 3 merged stations were joined".to_owned(),
+            "1 station now has a letter suffix".to_owned(),
+            "3 stations' comments are now hidden".to_owned(),
+            "1 loop closure keeps both names".to_owned(),
         ]
     );
-    assert_eq!(view.details.len(), NAMES_INLINE + 2);
-    assert_eq!(view.details[0], "Branch 1 / 0 is now shown as 19");
+    assert_eq!(view.details.len(), NAMES_INLINE + 2 + 1 + 3 + 1);
+    assert_eq!(
+        view.details[..3],
+        [
+            "Branch 1 / 0 is now shown as Main / 19",
+            "Branch 1 / 19 is now shown as 19a",
+            "Branch 2 / 0 is now shown as Main / 38",
+        ],
+        "grouped by line"
+    );
+    assert_eq!(
+        view.details.last().map(String::as_str),
+        Some("the loop closure between Side / 17 and Main / 3 keeps both names")
+    );
+}
+
+/// Letters alone bring nothing back: the banner says nothing of Detach Line
+/// from Station or Remove Closure.
+#[test]
+fn letters_alone_do_not_say_what_brings_them_back() {
+    let report = crate::persistence::migrate::MigrationReport::default();
+    let only_letters = identity(vec![lettered("Side", "2", "2a")], &[]);
+    let view = ConversionNotice::of_migration(&report, &only_letters)
+        .expect("a notice")
+        .view(false);
+    assert!(!view.brings_back);
+}
+
+/// An earlier version 2 file's upgrade raises the notice with its own lead,
+/// and only when a line shows something differently.
+#[test]
+fn an_earlier_version_2_upgrade_has_its_own_lead() {
+    let mut report = crate::persistence::stalx_v2::UpgradeReport::default();
+    assert!(ConversionNotice::of_upgrade(&report).is_none());
+    report.changes = identity(vec![shown_as("Main", "M2", "Side", "S0")], &[]);
+    let view = ConversionNotice::of_upgrade(&report)
+        .expect("a notice")
+        .view(false);
+    assert_eq!(view.source, ConversionSource::EarlierVersion2);
+    assert_eq!(view.changes, ["Main / M2 is now shown as Side / S0"]);
+    assert_eq!(view.file, ConversionFile::NotYetSaved);
 }
 
 /// A legacy SpeleoDB revision converted on download keeps no local original:
@@ -227,8 +321,90 @@ fn the_file_state_says_where_the_original_is() {
 #[test]
 fn a_rename_shows_no_bidi_control() {
     let report = crate::persistence::migrate::MigrationReport::default();
-    let view = ConversionNotice::of_migration(&report, &[rename("Side\u{202e}", "0", "3")])
+    let changes = identity(vec![lettered("Side\u{202e}", "0", "0a")], &[]);
+    let view = ConversionNotice::of_migration(&report, &changes)
         .expect("a notice")
         .view(false);
-    assert_eq!(view.changes, ["Side / 0 is now shown as 3"]);
+    assert_eq!(view.changes, ["Side / 0 is now shown as 0a"]);
+}
+
+/// The banner's lead is picked by the source's serde string, and the
+/// frontend's map is keyed by the generated TS spelling: the two must be the
+/// same string (RS-FX6, P2-3: serde's `snake_case` wrote
+/// `earlier_version2`, ts-rs `earlier_version_2`, so the earlier version 2
+/// banner had no lead). Injection: drop the variant's `serde(rename)`.
+#[test]
+fn the_source_serialises_as_its_typescript_literal() {
+    use ts_rs::TS;
+    let decl = ConversionSource::decl();
+    for (source, literal) in [
+        (ConversionSource::OldFormat, "old_format"),
+        (ConversionSource::EarlierVersion2, "earlier_version_2"),
+    ] {
+        assert_eq!(
+            serde_json::to_value(source).ok(),
+            Some(serde_json::Value::String(literal.to_owned()))
+        );
+        assert!(
+            decl.contains(&format!("\"{literal}\"")),
+            "{literal} is not in {decl}"
+        );
+    }
+}
+
+/// One station on two lines hides one comment (RS-FX6, P3-9): the earlier
+/// file's M4 on Main and Annex was counted and listed once per line. It is
+/// counted once and listed once, with its lines. Injection: count
+/// `comments_hidden.len()` again and the banner says "2 stations' comments".
+#[test]
+fn one_station_on_two_lines_hides_one_comment() {
+    let report = crate::persistence::stalx_v2::UpgradeReport {
+        changes: IdentityChanges {
+            names: vec![
+                shown_as("Main", "M2", "Side", "S0"),
+                shown_as("Main", "M4", "Side", "S4"),
+                shown_as("Annex", "M4", "Side", "S4"),
+                lettered("Annex", "A1", "A1a"),
+            ],
+            comments_hidden: vec![
+                CommentHidden {
+                    line: "Main".to_owned(),
+                    station: "M4".to_owned(),
+                    identity: 4,
+                },
+                CommentHidden {
+                    line: "Annex".to_owned(),
+                    station: "M4".to_owned(),
+                    identity: 4,
+                },
+            ],
+            closures_keep_both: Vec::new(),
+            lines: vec!["Main".to_owned(), "Annex".to_owned()],
+        },
+        ..Default::default()
+    };
+    let view = ConversionNotice::of_upgrade(&report)
+        .expect("a notice")
+        .view(false);
+    assert!(
+        view.changes
+            .contains(&"1 station's comment is now hidden".to_owned()),
+        "{:?}",
+        view.changes
+    );
+    let hidden: Vec<&String> = view
+        .details
+        .iter()
+        .filter(|d| d.starts_with("the comment of"))
+        .collect();
+    assert_eq!(hidden, ["the comment of M4 on Main and Annex is hidden"]);
+    // Listed under the first line it is on, after that line's names.
+    assert_eq!(
+        view.details[..3],
+        [
+            "Main / M2 is now shown as Side / S0",
+            "Main / M4 is now shown as Side / S4",
+            "the comment of M4 on Main and Annex is hidden",
+        ]
+    );
 }

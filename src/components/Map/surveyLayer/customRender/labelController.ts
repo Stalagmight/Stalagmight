@@ -76,6 +76,7 @@ import {
   EMIT_SLACK,
   ADAPTIVE_EMIT_MAX,
   emitSlackFor,
+  shadowedByKind,
   type RevealReservation,
 } from './labelReveal';
 import { labelColorContextFrom, type StationLabelText } from './labelText';
@@ -664,14 +665,19 @@ export class SurveyLabelController {
       // in a line-only build that reserves slots: there a name hidden now may
       // still hold a slot (labelReveal's held-back rule), so keep every name,
       // hidden ones at an unreachable reveal, and the reveal-only rerun replays
-      // it. Line names are few, so this costs nothing.
+      // it. Line names are few, so this costs nothing. A label a shown line
+      // name beats is kept the same way (hidden), so turning line names off
+      // brings it back on the reveal-only rerun, with no rebuild (RS-FX8, N1).
+      const underNames = this.kindVisible[LABEL_KIND.LINE_NAME]
+        ? shadowedByKind(descriptors, extents, full, LABEL_KIND.LINE_NAME, zoom, vpCtx.worldPixelScale)
+        : null;
       const keptDesc: LabelDescriptor[] = [];
       const keptShaped: ShapedLabel[] = [];
       const keptExtents: (ExtentEm | null)[] = [];
       const keptReveal: number[] = [];
       for (let i = 0; i < descriptors.length; i++) {
         const never = full[i]! === REVEAL_NEVER;
-        if (never && reserved === undefined) continue;
+        if (never && reserved === undefined && underNames?.has(i) !== true) continue;
         keptDesc.push(descriptors[i]!);
         keptShaped.push(shaped[i]!);
         keptExtents.push(extents[i]!);

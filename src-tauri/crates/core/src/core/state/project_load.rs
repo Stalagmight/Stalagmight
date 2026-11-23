@@ -6,7 +6,13 @@
 //!   or unknown structural content opens read-only (`Extras.read_only`); an
 //!   invalid survey is refused with the salvage route's message; the history
 //!   is decoded entry by entry and dropped whole with the banner on any
-//!   failure;
+//!   failure. A file an earlier build of version 2 wrote (no
+//!   `archived-stations` feature) is upgraded in memory as it opens (plan
+//!   2026-11-23 RS 8.2, `Decoded::upgrade`) and then behaves as a legacy
+//!   file does: the status bar says it is the older format, its notice says
+//!   what lines show differently, its history is dropped with the banner,
+//!   and its first save keeps the original in Recovery
+//!   (`FileState::upgrade_pending`);
 //! - legacy SQLite: `migrate::migrate_path_for_app` with the user's
 //!   least-squares config (the frozen 0.6.0 open, then the conversion and its
 //!   verification). The project remembers its legacy origin: the first save
@@ -233,7 +239,8 @@ impl AppState {
             })?;
         match sniff(&bytes) {
             Format::V2 => {
-                let decoded = decode(&bytes, &options).map_err(|e| decode_error(path, &e))?;
+                let mut decoded = decode(&bytes, &options).map_err(|e| decode_error(path, &e))?;
+                let upgrade = decoded.upgrade();
                 for note in &decoded.notes {
                     match note {
                         // Informative by the format's rule: a newer writer
@@ -265,12 +272,14 @@ impl AppState {
                 let mut file =
                     FileState::from_v2(decoded.extras, fingerprint, Some(Arc::clone(&bytes)));
                 // A mark over exactly BASE's survey is stale (S2): the copy opens
-                // clean, and the open's local-only save writes that.
+                // clean, and the open's local-only save writes that. It judges
+                // the bytes on disk, so an earlier version 2 file upgraded below
+                // is judged as the file it still is until its first save.
                 super::speleodb_base_survey::settle_on_open(&mut file, &bytes);
-                let history = file.saved_history.clone();
+                let mut history = file.saved_history.clone();
                 // An unreadable history member was already dropped by the
                 // decoder (tier 3); the banner says so.
-                let history_dropped = decoded
+                let mut history_dropped = decoded
                     .notes
                     .iter()
                     .any(|n| {
@@ -280,6 +289,26 @@ impl AppState {
                         )
                     })
                     .then_some(HistoryDropped::Unreadable);
+                if let Some(report) = upgrade {
+                    tracing::info!(
+                        records = report.records,
+                        swapped = report.swapped.len(),
+                        closures_archived = report.closures_archived,
+                        lettered = report.lettered,
+                        purpose = "open a version 2 file an earlier build wrote",
+                        "Upgraded the project to kept stations in memory; the first save writes it"
+                    );
+                    // Its history describes the survey before the upgrade: it
+                    // is not loaded (the banner says so), and a local-only
+                    // rewrite keeps it in the file until that save.
+                    if !history.is_empty() {
+                        history_dropped = Some(HistoryDropped::EarlierVersion);
+                    }
+                    history = History::default();
+                    file.upgrade_pending = true;
+                    file.conversion =
+                        super::conversion_notice::ConversionNotice::of_upgrade(&report);
+                }
                 file.dirty = false;
                 Ok(Opened {
                     project,

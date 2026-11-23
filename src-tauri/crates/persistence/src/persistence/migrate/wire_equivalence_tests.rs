@@ -234,7 +234,8 @@ struct Case<'a> {
     /// Stations tied by `Tie` closures, grouped (a demoted merge's two
     /// stations are in one group).
     tie_group: BTreeMap<StationId, StationId>,
-    /// Slots whose legacy comment is the empty string (no comment now).
+    /// Slots whose legacy comment is the empty string (no comment now, even
+    /// where the slot shows another station's).
     empty_comments: BTreeSet<StationRef>,
     /// Closure ids the legacy file did not have (`Tie`s the migration made
     /// from demoted merges, reminted ids).
@@ -434,6 +435,50 @@ impl<'a> Case<'a> {
             .is_some_and(|s| self.p.topology().is_junction(s))
     }
 
+    /// Whether `slot` shows another station than the one its line knew
+    /// there (RS 2): a record names its line at its node, or a loop closure
+    /// archives its node.
+    fn foreign(&self, slot: StationRef) -> bool {
+        self.station(slot).is_some_and(|node| {
+            self.p.record_naming(node, slot.line_id).is_some() || self.p.is_closure_archived(node)
+        })
+    }
+
+    /// Whether the name change of `slot` from `o`'s to `n`'s is one the
+    /// conversion notice lists for the slot's line.
+    fn declared_name(&self, slot: StationRef, o: &Value, n: &Value) -> bool {
+        let (Some(from), Some(to)) = (o["name"].as_str(), n["name"].as_str()) else {
+            return false;
+        };
+        let line = self.p.line_label_of(slot.line_id);
+        self.migrated
+            .extras
+            .changes
+            .names
+            .iter()
+            .any(|c| c.line == line && c.from == from && c.to == to)
+    }
+
+    /// Whether the comment `slot` shows may differ from `o`'s: the slot shows
+    /// another station (its comment), and the slot's own comment, when it had
+    /// one, is listed as hidden.
+    fn declared_comment(&self, slot: StationRef, o: &Value) -> bool {
+        if !self.foreign(slot) {
+            return false;
+        }
+        if o["comment"].as_str().is_none_or(str::is_empty) {
+            return true;
+        }
+        let line = self.p.line_label_of(slot.line_id);
+        let name = o["name"].as_str().unwrap_or_default();
+        self.migrated
+            .extras
+            .changes
+            .comments_hidden
+            .iter()
+            .any(|c| c.line == line && c.station == name)
+    }
+
     fn tied(&self, a: StationRef, b: StationRef) -> bool {
         match (self.station(a), self.station(b)) {
             (Some(a), Some(b)) => self.tie_group.get(&a) == self.tie_group.get(&b),
@@ -497,41 +542,47 @@ impl<'a> Case<'a> {
             return;
         }
         let junction = self.junction(slot);
-        // A junction's name is per line (I-3): every slot, a junction's
-        // included, shows the name 0.6.0 showed there, so a different name is
-        // explained only by a letter the migration gave a repeat.
-        for (key, class) in [
-            (
-                "id",
-                Some("identity: a junction shares the survivor's Station ID"),
-            ),
-            ("name", None),
-            (
-                "comment",
-                Some("identity: a junction shares one (joined) comment"),
-            ),
-        ] {
-            if o.get(key) != n.get(key) {
-                if key == "comment"
-                    && o.get(key) == Some(&Value::String(String::new()))
-                    && n.get(key).is_none()
-                {
-                    self.empty_comments.insert(slot);
-                    self.tally
-                        .note("identity: an empty legacy comment is no comment");
-                } else if let Some(class) = class.filter(|_| junction) {
-                    self.tally.note(class);
-                } else if key == "name" && self.migrated.report.stations_renamed > 0 {
-                    self.tally.note(
-                        "identity: a name letter-suffixed by the migration (unique per line)",
-                    );
-                } else {
-                    self.fail(format!(
-                        "{view} {slot}: {key} {:?} -> {:?}",
-                        o.get(key),
-                        n.get(key)
-                    ));
-                }
+        // An empty 0.6.0 comment is no comment, whatever the slot shows now:
+        // a loop end a closure archives shows its kept end's comment (RS
+        // 5.1), and the end's own comment, none, is what a delete takes (farm
+        // finding dbf19ed85330).
+        if o.get("comment") == Some(&Value::String(String::new())) {
+            self.empty_comments.insert(slot);
+        }
+        // RS 8.3: a slot shows its node's identity (a junction's kept station,
+        // on every line) or, at an end a loop closure archives, the kept
+        // end's. So an id differs only at a junction; a name differs only
+        // where the conversion notice lists it (another station shown, or a
+        // letter by rule L); and a slot that shows another station than the
+        // one its line knew there shows that station's comment, its own
+        // comment, if it had one, being listed as hidden.
+        for key in ["id", "name", "comment"] {
+            if o.get(key) == n.get(key) {
+                continue;
+            }
+            if key == "comment"
+                && o.get(key) == Some(&Value::String(String::new()))
+                && n.get(key).is_none()
+            {
+                self.tally
+                    .note("identity: an empty legacy comment is no comment");
+            } else if key == "id" && junction {
+                self.tally
+                    .note("identity: a junction shows its kept station's Station ID on every line");
+            } else if key == "name" && self.declared_name(slot, o, n) {
+                self.tally.note(
+                    "identity: a name the conversion notice lists (another station shown, or a letter)",
+                );
+            } else if key == "comment" && self.declared_comment(slot, o) {
+                self.tally.note(
+                    "identity: a slot showing another station shows its comment (its own listed as hidden)",
+                );
+            } else {
+                self.fail(format!(
+                    "{view} {slot}: {key} {:?} -> {:?}",
+                    o.get(key),
+                    n.get(key)
+                ));
             }
         }
         self.merged_with(slot, o, n);
@@ -1720,7 +1771,8 @@ fn legacy_surveys_project_to_todays_payloads_up_to_the_declared_differences() {
     // The generator exercises junctions, so the declared junction classes
     // must actually be seen (a vacuous pass would hide a broken projection).
     for class in [
-        "identity: a junction shares the survivor's Station ID",
+        "identity: a junction shows its kept station's Station ID on every line",
+        "identity: a name the conversion notice lists (another station shown, or a letter)",
         "project: line_offsets dropped from the wire",
         "station_merges: derived star pairs (first slot to each other slot)",
     ] {
@@ -1814,13 +1866,13 @@ fn deleting_a_first_shot_at_a_junction_moves_nothing_today_keeps_still() {
         .unwrap()
         .project;
     let junction = p.station_at(StationRef::new(0, 0)).unwrap();
-    let member = p.line_alias(junction, 3).cloned().unwrap();
+    let member = p.record_naming(junction, 3).cloned().unwrap();
     let shot = p.line(0).unwrap().shots[0].id;
     let done = p.delete_shot(0, shot).unwrap();
     assert!(!done.value.station_deleted);
     assert_eq!(p.station_at(StationRef::new(3, 0)), Some(member.id));
     assert_eq!(done.report.reidentified, vec![(junction, member.id)]);
-    assert_eq!(p.stations[&member.id].name, member.name.unwrap());
+    assert_eq!(p.stations[&member.id].name, member.name);
     assert!(done.report.sweep.promoted.is_empty());
     assert_eq!(done.value.closures_removed.len(), 1, "the member's Tie");
 }

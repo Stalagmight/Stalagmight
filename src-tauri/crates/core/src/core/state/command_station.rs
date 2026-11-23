@@ -15,8 +15,8 @@ use std::collections::BTreeMap;
 
 use super::commands::{Applied, Record};
 use crate::core::{Command, ValidationWarning, WarningSeverity};
-use crate::models::survey::{ClosureId, LoopClosure, OpError, Project, SweepReport};
-use crate::models::{StationRef, CLOSURE_REMOVED_MERGED_ENDS};
+use crate::models::survey::{ClosureId, LoopClosure, NameAnswers, OpError, Project, SweepReport};
+use crate::models::{StationId, StationRef, StationRename, CLOSURE_REMOVED_MERGED_ENDS};
 
 /// 0.6.0's refusal of a merge between two stations of one line.
 const MERGE_SAME_LINE: &str = "Cannot merge stations from the same line";
@@ -137,6 +137,17 @@ fn text_or(missing: &'static str) -> impl Fn(OpError) -> String {
     }
 }
 
+/// The dialog's answers of a command as the model takes them (RS 4.1,
+/// 4.2, 5.2, 5.3): `(Station ID, name)` pairs, or `None` when no dialog
+/// asked (rule L letters every collision).
+fn answers(renames: Option<&Vec<StationRename>>) -> Option<Vec<(StationId, String)>> {
+    renames.map(|list| {
+        list.iter()
+            .map(|r| (r.station_id, r.name.clone()))
+            .collect()
+    })
+}
+
 /// The execute pipeline's mutation for the station topology family
 /// (`commands.rs` dispatches here; plan 9.1). Runs inside `run_recorded`,
 /// which snapshots, validates, captures and records around it; `record` is
@@ -150,33 +161,89 @@ pub(super) fn apply(
         Command::MergeStations {
             station_a,
             station_b,
-        } => merge(project, *station_a, *station_b),
-        Command::UnmergeStations { station_ref } => unmerge(project, record, *station_ref),
+            keep,
+            renames,
+        } => merge(
+            project,
+            (*station_a, *station_b),
+            *keep,
+            answers(renames.as_ref()),
+        ),
+        Command::UnmergeStations {
+            station_ref,
+            renames,
+            rest_keep,
+        } => unmerge(
+            project,
+            record,
+            *station_ref,
+            answers(renames.as_ref()),
+            *rest_keep,
+        ),
         Command::UnmergeStationPair {
             station_a,
             station_b,
-        } => unmerge_pair(project, record, *station_a, *station_b),
+            renames,
+            rest_keep,
+        } => unmerge_pair(
+            project,
+            record,
+            (*station_a, *station_b),
+            answers(renames.as_ref()),
+            *rest_keep,
+        ),
         Command::CreateLoopClosure {
             station_a,
             station_b,
             closure_strategy,
+            keep,
+            renames,
         } => {
-            let outcome = project
-                .create_closure_at(*station_a, *station_b, (*closure_strategy).into())
-                .map_err(text_or(NO_SUCH_STATIONS))?;
+            let strategy = (*closure_strategy).into();
+            // No `renames`: no dialog asked, so rule L letters what the
+            // archive shows twice. `keep` absent: "Keep both names".
+            let outcome = if let Some(renames) = answers(renames.as_ref()) {
+                project.create_closure_at(*station_a, *station_b, strategy, *keep, &renames)
+            } else {
+                let (a, b) = project
+                    .resolve_slot_pair(*station_a, *station_b)
+                    .map_err(text_or(NO_SUCH_STATIONS))?;
+                project.create_closure_auto(
+                    a.station,
+                    Some(a.line),
+                    b.station,
+                    Some(b.line),
+                    strategy,
+                    *keep,
+                )
+            }
+            .map_err(text_or(NO_SUCH_STATIONS))?;
             let closure = outcome.value.closure;
             tracing::debug!(
                 closure_id = closure.id,
                 ?station_a,
                 ?station_b,
+                archived = ?closure.archived,
                 purpose = "add loop closure to improve accuracy",
                 "Loop closure created"
             );
             record.refs.closures.push(closure.id);
-            Ok(Applied::default())
+            Ok(Applied {
+                identities: project.identity_notice(&outcome.identities),
+                ..Applied::default()
+            })
         }
-        Command::RemoveLoopClosure { closure_id } => {
-            let outcome = project.remove_closure(*closure_id).map_err(text)?;
+        Command::RemoveLoopClosure {
+            closure_id,
+            renames,
+        } => {
+            // No `renames`: no dialog asked, so rule L letters a name the
+            // end that comes back repeats.
+            let outcome = match answers(renames.as_ref()) {
+                Some(renames) => project.remove_closure(*closure_id, &renames),
+                None => project.remove_closure_auto(*closure_id),
+            }
+            .map_err(text)?;
             tracing::debug!(
                 closure_id,
                 station_a = outcome.value.a,
@@ -184,7 +251,10 @@ pub(super) fn apply(
                 purpose = "remove loop closure from project",
                 "Loop closure removed"
             );
-            Ok(Applied::default())
+            Ok(Applied {
+                identities: project.identity_notice(&outcome.identities),
+                ..Applied::default()
+            })
         }
         Command::SetZeroDatum {
             station_ref,
@@ -219,13 +289,16 @@ pub(super) fn apply(
     }
 }
 
-/// Merge Stations (plan 5.1): `a`'s piece moves onto `b` unless `a`'s is
-/// placed and `b`'s is not (plan 4.2). Two stations of one line are refused
-/// first, in 0.6.0's words.
+/// Merge Stations (plan 5.1, RS 4.1): `a`'s piece moves onto `b` unless
+/// `a`'s is placed and `b`'s is not (plan 4.2). `keep` is the station kept
+/// (absent: the stationary one, which a merge kept before RS); `renames` the
+/// dialog's answers (absent: rule L letters every collision). Two stations
+/// of one line are refused first, in 0.6.0's words.
 fn merge(
     project: &mut Project,
-    station_a: StationRef,
-    station_b: StationRef,
+    (station_a, station_b): (StationRef, StationRef),
+    keep: Option<StationId>,
+    renames: Option<Vec<(StationId, String)>>,
 ) -> Result<Applied, String> {
     if station_a.line_id == station_b.line_id {
         return Err(MERGE_SAME_LINE.to_string());
@@ -234,7 +307,12 @@ fn merge(
         .resolve_slot_pair(station_a, station_b)
         .map_err(text_or(NO_SUCH_STATIONS))?;
     let names = ClosureNames::of(project);
-    let outcome = project.merge_stations(a.station, b.station).map_err(|e| {
+    let keep = keep.unwrap_or_else(|| project.merge_direction(a.station, b.station).0);
+    let outcome = match &renames {
+        Some(renames) => project.merge_stations(a.station, b.station, keep, renames),
+        None => project.merge_stations_auto(a.station, b.station, keep),
+    }
+    .map_err(|e| {
         tracing::warn!(
             ?station_a,
             ?station_b,
@@ -247,8 +325,9 @@ fn merge(
     tracing::debug!(
         ?station_a,
         ?station_b,
-        survivor = outcome.value.survivor,
-        retired = outcome.value.retired,
+        kept = outcome.value.kept,
+        archived = outcome.value.archived,
+        keep_forced_by = ?outcome.value.keep_forced_by,
         purpose = "connect survey lines",
         "Stations merged"
     );
@@ -260,27 +339,42 @@ fn merge(
             ONE_POINT_BY_MERGE,
             "merge",
         ),
+        identities: project.identity_notice(&outcome.identities),
         ..Applied::default()
     })
 }
 
-/// Unmerge Stations (plan 5.2): detach the slot's line from its junction.
-/// A no-op off a junction, and (as 0.6.0) at a slot that names no station.
+/// The model's answers for a detach: the dialog's renames, or rule L.
+fn name_answers(renames: Option<&[(StationId, String)]>) -> NameAnswers<'_> {
+    match renames {
+        Some(renames) => NameAnswers::Renames(renames),
+        None => NameAnswers::RuleL,
+    }
+}
+
+/// Unmerge Stations (plan 5.2, RS 4.2): detach the slot's line from its
+/// junction, with the dialog's renames and remaining-junction pick. A
+/// no-op off a junction, and (as 0.6.0) at a slot that names no station.
 fn unmerge(
     project: &mut Project,
     record: &mut Record,
     station_ref: StationRef,
+    renames: Option<Vec<(StationId, String)>>,
+    rest_keep: Option<StationId>,
 ) -> Result<Applied, String> {
     if project.resolve_slot(station_ref).is_err() {
         return Ok(Applied::default());
     }
     let names = ClosureNames::of(project);
-    let outcome = project.unmerge_station(station_ref).map_err(text)?;
+    let outcome = project
+        .unmerge_station(station_ref, name_answers(renames.as_deref()), rest_keep)
+        .map_err(text)?;
     if let Some(detached) = &outcome.value {
         tracing::info!(
             station = detached.station,
             line = detached.line,
             new_station = detached.new_station,
+            restored = detached.restored,
             purpose = "disconnect merged stations",
             "Line detached from its junction"
         );
@@ -294,30 +388,39 @@ fn unmerge(
             ONE_POINT_BY_PROMOTION,
             "unmerge",
         ),
+        identities: project.identity_notice(&outcome.identities),
         ..Applied::default()
     })
 }
 
-/// Unmerge Station Pair (plan 5.2, E6): the two slots must be one station on
-/// two lines; `b`'s line is detached from it. 0.6.0 answered one refusal for
-/// any pair it found no direct merge for, a slot that names nothing included.
+/// Unmerge Station Pair (plan 5.2, E6, RS 4.2): the two slots must be one
+/// station on two lines; `b`'s line is detached from it. 0.6.0 answered one
+/// refusal for any pair it found no direct merge for, a slot that names
+/// nothing included.
 fn unmerge_pair(
     project: &mut Project,
     record: &mut Record,
-    station_a: StationRef,
-    station_b: StationRef,
+    (station_a, station_b): (StationRef, StationRef),
+    renames: Option<Vec<(StationId, String)>>,
+    rest_keep: Option<StationId>,
 ) -> Result<Applied, String> {
     if project.resolve_slot_pair(station_a, station_b).is_err() {
         return Err(OpError::NotDirectlyMerged.to_string());
     }
     let names = ClosureNames::of(project);
     let outcome = project
-        .unmerge_station_pair(station_a, station_b)
+        .unmerge_station_pair(
+            station_a,
+            station_b,
+            name_answers(renames.as_deref()),
+            rest_keep,
+        )
         .map_err(text)?;
     tracing::info!(
         station = outcome.value.station,
         line = outcome.value.line,
         new_station = outcome.value.new_station,
+        restored = outcome.value.restored,
         purpose = "disconnect selected merged station pair",
         "Line detached from its junction"
     );
@@ -330,6 +433,7 @@ fn unmerge_pair(
             ONE_POINT_BY_PROMOTION,
             "unmerge pair",
         ),
+        identities: project.identity_notice(&outcome.identities),
         ..Applied::default()
     })
 }
@@ -358,6 +462,7 @@ fn remove_datum(project: &mut Project, station_ref: StationRef) -> Result<Applie
             ONE_POINT_BY_PROMOTION,
             "remove zero datum",
         ),
+        identities: project.identity_notice(&outcome.identities),
         ..Applied::default()
     })
 }

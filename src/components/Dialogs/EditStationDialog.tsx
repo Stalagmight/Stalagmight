@@ -23,6 +23,7 @@ import type { StationRef } from '../../types/project';
 import type { DatumGap } from '../../types/ipc/DatumGap';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { stationRenameProblem, stationNameProblemMessage } from '../../utils/nameValidation';
+import { editNeedsOwnerPrompt, ShownIdentityPrompt } from './ShownIdentityPrompt';
 
 const DIALOG_ID = 'edit-station';
 
@@ -53,7 +54,10 @@ export default function EditStationDialog() {
 
   const lineName = stationRef ? labels.lineName(stationRef.line_id) : '';
   const storedName = stationRef ? labels.stationName(stationRef) : '';
-  const stationId = stationRef ? labels.stationId(stationRef) : null;
+  // The Station ID the slot shows (RS 6): a foreign slot or a loop end shows
+  // its kept station's.
+  const stationId = stationRef ? labels.shownStationId(stationRef) : null;
+  const shownSlot = stationRef ? labels.shown(stationRef) : undefined;
 
   // The datum already stored on this station, if any: its role and accuracy.
   // On a junction it may be listed on another of the station's slots.
@@ -76,13 +80,18 @@ export default function EditStationDialog() {
   const [nameRefusal, setNameRefusal] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A rename or comment edit through a foreign slot or a loop end says whose
+  // station it changes first (RS 5.4); Save then shows the prompt instead of
+  // saving, and going on saves.
+  const [askingOwner, setAskingOwner] = useState(false);
   const gpsInputRef = useRef<HTMLInputElement>(null);
 
   const accuracy = parseDatumAccuracy(accuracyInput);
 
   const nameChanged = name.trim() !== storedName;
-  // A junction's name must be free on every line through it (plan 5.3), so
-  // the message names the line the name is taken on.
+  // The name must be free among the native slots of every line the shown
+  // station is native on (plan 5.3, RS-FX5), so the message names the line
+  // the name is taken on.
   const nameTakenOn = stationRef && nameChanged ? labels.stationNameTakenOn(stationRef, name.trim()) : null;
   const nameProblem = stationRef && nameChanged ? stationRenameProblem(name, nameTakenOn) : null;
   const nameError = nameProblem
@@ -174,7 +183,9 @@ export default function EditStationDialog() {
     }
   }, []);
 
-  const handleSave = async () => {
+  const commentChanged = station ? comment !== (station.comment ?? '') : false;
+
+  const handleSave = async (ownerConfirmed = false) => {
     if (!stationRef || !station || isLoading) return;
     if (isEditingBlockedNow()) {
       setError(t('dialogs.editStation.editingDisabled'));
@@ -182,6 +193,11 @@ export default function EditStationDialog() {
     }
 
     if (nameProblem !== null) return;
+    if (!ownerConfirmed && (nameChanged || commentChanged) && editNeedsOwnerPrompt(shownSlot)) {
+      setAskingOwner(true);
+      return;
+    }
+    setAskingOwner(false);
 
     // Every check the dialog can make runs BEFORE anything is sent, so a Save
     // with a field to fix changes nothing (no rename landing ahead of a
@@ -310,7 +326,7 @@ export default function EditStationDialog() {
     gpsInput !== originalGpsInput ||
     (isZeroDatum && showAccuracy && accuracyInput.trim() !== String(storedAccuracy)) ||
     (isZeroDatum && entranceToSend !== undefined) ||
-    comment !== (station.comment ?? '') ||
+    commentChanged ||
     nameChanged
   ) : false;
 
@@ -374,11 +390,13 @@ export default function EditStationDialog() {
 
         {station.merged_with.length > 0 && (
           <div className="border-t border-border pt-3">
-            <span className="text-sm text-text-secondary">Also on:</span>
-            <ul className="mt-1">
+            {/* Every line shows the junction's one station (RS 6): the
+                other lines are named, not their names for it. */}
+            <span className="text-sm text-text-secondary">{t('detailPanel.station.alsoOn')}:</span>
+            <ul className="mt-1" data-testid="edit-station-also-on">
               {station.merged_with.map((ref, i) => (
                 <li key={i} className="text-sm">
-                  {labels.station(ref, true)}
+                  {labels.lineName(ref.line_id)}
                 </li>
               ))}
             </ul>
@@ -487,6 +505,11 @@ export default function EditStationDialog() {
                   )}
                 </>
               )}
+              {shownSlot?.loop_end && (
+                <p className="text-xs text-text-secondary pt-1" data-testid="station-datum-loop-end">
+                  {t('dialogs.editStation.loopEndDatum', { station: labels.station(stationRef, true) })}
+                </p>
+              )}
               {storedDatum && (
                 <p className="text-xs text-text-secondary pt-1" data-testid="station-datum-role">
                   {t('dialogs.editStation.roleLabel')}{' '}
@@ -530,13 +553,25 @@ export default function EditStationDialog() {
           )}
         </div>
 
+        {askingOwner ? (
+          <div className="pt-4 border-t border-border">
+            <ShownIdentityPrompt
+              stationRef={stationRef}
+              edit={nameChanged && commentChanged ? 'both' : nameChanged ? 'name' : 'comment'}
+              newName={nameChanged ? name.trim() : undefined}
+              onProceed={() => void handleSave(true)}
+              onCancel={() => setAskingOwner(false)}
+              busy={isLoading}
+            />
+          </div>
+        ) : (
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={closeDialog} disabled={isLoading} data-testid="edit-station-cancel">
             Cancel
           </Button>
           <Button
             variant="primary"
-            onClick={handleSave}
+            onClick={() => void handleSave()}
             disabled={isLoading || editingBlocked || nameProblem !== null}
             title={editingBlocked ? t('dialogs.editStation.editingDisabled') : (nameError ?? undefined)}
             data-testid="edit-station-save"
@@ -544,6 +579,7 @@ export default function EditStationDialog() {
             {isLoading ? 'Saving...' : 'Save'}
           </Button>
         </div>
+        )}
       </div>
     </DialogWrapper>
   );

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use serde::de::{self, DeserializeSeed, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
-use crate::models::survey::{Line, Shot, Station, StationAlias};
+use crate::models::survey::{ArchivedStation, Line, Shot, Station};
 use crate::models::{
     AzimuthReference, CorrectionSource, LineId, NorthReference, Person, ShotKind, StationId,
     SurveyCredit, SurveyDirection,
@@ -358,7 +358,7 @@ impl<'de> Visitor<'de> for StationExtrasSeed<'_, '_> {
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
-        const KEYS: [&str; 3] = ["comment", "aliases", "external"];
+        const KEYS: [&str; 4] = ["comment", "aliases", "external", "archived"];
         let ctx = self.ctx;
         let mut mask = 0;
         let mut others = OtherKeys::new();
@@ -372,15 +372,199 @@ impl<'de> Visitor<'de> for StationExtrasSeed<'_, '_> {
             match index {
                 0 => self.station.comment = Some(value(&mut map, ctx, "comment")?),
                 1 => {
+                    // An earlier version 2 file's U1 alias rows, read in
+                    // the form the load-time upgrade consumes (RS 8.2 step
+                    // 1, `super::upgrade`): each a record naming its line
+                    // (the latest naming a line names it, the earlier ones
+                    // are history; a nameless one takes the name the line
+                    // showed, the station's own).
                     ctx.field = "aliases";
+                    let mut aliases = Vec::new();
                     map.next_value_seed(AliasesSeed {
                         ctx: &mut *ctx,
-                        out: &mut self.station.aliases,
+                        out: &mut aliases,
+                    })?;
+                    ctx.field = "";
+                    u1_aliases_to_records(self.station, aliases);
+                }
+                2 => self.station.external = Some(value(&mut map, ctx, "external")?),
+                _ => {
+                    ctx.field = "archived";
+                    map.next_value_seed(ArchivedSeed {
+                        ctx: &mut *ctx,
+                        out: &mut self.station.archived,
                     })?;
                     ctx.field = "";
                 }
-                _ => self.station.external = Some(value(&mut map, ctx, "external")?),
             }
+        }
+        Ok(())
+    }
+}
+
+/// A U1 alias row as an earlier #827 build wrote it: `[id, name?, line?]`.
+struct U1Alias {
+    id: StationId,
+    name: Option<String>,
+    line: Option<LineId>,
+}
+
+/// U1 alias rows as records (RS 8.2 step 1, U-P2-13a/b): each alias becomes
+/// a record with its name (the station's own when it has none: the line
+/// showed that) naming its line; of several naming one line the latest
+/// names it and the earlier ones are history (A3). No comment and no
+/// external id: U1 joined comments into the station and kept no external
+/// id on an alias.
+fn u1_aliases_to_records(station: &mut Station, aliases: Vec<U1Alias>) {
+    let mut named: BTreeSet<LineId> = BTreeSet::new();
+    let mut records: Vec<ArchivedStation> = Vec::with_capacity(aliases.len());
+    for alias in aliases.into_iter().rev() {
+        let lines = match alias.line {
+            Some(line) if named.insert(line) => vec![line],
+            _ => Vec::new(),
+        };
+        records.push(ArchivedStation {
+            id: alias.id,
+            name: alias.name.unwrap_or_else(|| station.name.clone()),
+            comment: None,
+            external: None,
+            into: None,
+            lines,
+        });
+    }
+    records.reverse();
+    station.archived.extend(records);
+}
+
+/// A station's `archived` array (RS 8.1): records `{id, name, comment?,
+/// external?, into?, lines?}`. Each record and each of its lines counts
+/// against the archived-station cap.
+struct ArchivedSeed<'c, 'l> {
+    ctx: &'c mut Ctx<'l>,
+    out: &'c mut Vec<ArchivedStation>,
+}
+
+impl<'de> DeserializeSeed<'de> for ArchivedSeed<'_, '_> {
+    type Value = ();
+
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_seq(self)
+    }
+}
+
+impl<'de> Visitor<'de> for ArchivedSeed<'_, '_> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("an array of archived stations {id, name, comment?, external?, into?, lines?}")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        // Each record counts once here; its lines count as they arrive
+        // (`RecordLinesSeed`), so a crafted `lines` array is refused before
+        // it is held.
+        while let Some(record) = seq.next_element_seed(ArchivedRecordSeed {
+            ctx: &mut *self.ctx,
+        })? {
+            self.ctx.count(Limit::Archived, 1)?;
+            self.out.push(record);
+        }
+        Ok(())
+    }
+}
+
+struct ArchivedRecordSeed<'c, 'l> {
+    ctx: &'c mut Ctx<'l>,
+}
+
+impl<'de> DeserializeSeed<'de> for ArchivedRecordSeed<'_, '_> {
+    type Value = ArchivedStation;
+
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<ArchivedStation, D::Error> {
+        d.deserialize_map(self)
+    }
+}
+
+impl<'de> Visitor<'de> for ArchivedRecordSeed<'_, '_> {
+    type Value = ArchivedStation;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("an archived station {id, name, comment?, external?, into?, lines?}")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<ArchivedStation, A::Error> {
+        // Range-checked by `validate` (A1); each line must pass through the
+        // station (A2) and name no other record of it (A3); `into` must name
+        // another record of the station that is not history, and owners
+        // must not cycle (A6).
+        const KEYS: [&str; 6] = ["id", "name", "comment", "external", "lines", "into"];
+        let ctx = self.ctx;
+        let mut mask = 0;
+        let mut others = OtherKeys::new();
+        let (mut id, mut name, mut comment, mut external, mut into, mut lines) =
+            (None, None, None, None, None, Vec::new());
+        while let Some(key) = map.next_key::<Key<'de>>()? {
+            let key = key.0;
+            let Some(index) = known(&KEYS, &key) else {
+                skip_unknown(&mut map, ctx, &mut others, &key)?;
+                continue;
+            };
+            seen(ctx, &mut mask, index, &key)?;
+            match index {
+                0 => id = Some(value::<StationId, _>(&mut map, ctx, "archived id")?),
+                1 => name = Some(value::<String, _>(&mut map, ctx, "archived name")?),
+                2 => comment = Some(value::<String, _>(&mut map, ctx, "archived comment")?),
+                3 => external = Some(value::<String, _>(&mut map, ctx, "archived external")?),
+                5 => into = Some(value::<StationId, _>(&mut map, ctx, "archived into")?),
+                _ => {
+                    ctx.field = "archived lines";
+                    map.next_value_seed(RecordLinesSeed {
+                        ctx: &mut *ctx,
+                        out: &mut lines,
+                    })?;
+                    ctx.field = "";
+                }
+            }
+        }
+        let id = id.ok_or_else(|| ctx.missing("archived id"))?;
+        let name = name.ok_or_else(|| ctx.missing("archived name"))?;
+        Ok(ArchivedStation {
+            id,
+            name,
+            comment,
+            external,
+            into,
+            lines,
+        })
+    }
+}
+
+/// A record's `lines`, each counted against the archived-station cap as it
+/// arrives.
+struct RecordLinesSeed<'c, 'l> {
+    ctx: &'c mut Ctx<'l>,
+    out: &'c mut Vec<LineId>,
+}
+
+impl<'de> DeserializeSeed<'de> for RecordLinesSeed<'_, '_> {
+    type Value = ();
+
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_seq(self)
+    }
+}
+
+impl<'de> Visitor<'de> for RecordLinesSeed<'_, '_> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("an array of line ids")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        while let Some(line) = seq.next_element::<LineId>()? {
+            self.ctx.count(Limit::Archived, 1)?;
+            self.out.push(line);
         }
         Ok(())
     }
@@ -388,7 +572,7 @@ impl<'de> Visitor<'de> for StationExtrasSeed<'_, '_> {
 
 struct AliasesSeed<'c, 'l> {
     ctx: &'c mut Ctx<'l>,
-    out: &'c mut Vec<StationAlias>,
+    out: &'c mut Vec<U1Alias>,
 }
 
 impl<'de> DeserializeSeed<'de> for AliasesSeed<'_, '_> {
@@ -407,10 +591,12 @@ impl<'de> Visitor<'de> for AliasesSeed<'_, '_> {
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        // As a record counts: once, plus once for the line it names.
         while let Some(alias) = seq.next_element_seed(AliasSeed {
             ctx: &mut *self.ctx,
         })? {
-            self.ctx.count(Limit::Aliases, 1)?;
+            self.ctx
+                .count(Limit::Archived, 1 + usize::from(alias.line.is_some()))?;
             self.out.push(alias);
         }
         Ok(())
@@ -422,23 +608,23 @@ struct AliasSeed<'c, 'l> {
 }
 
 impl<'de> DeserializeSeed<'de> for AliasSeed<'_, '_> {
-    type Value = StationAlias;
+    type Value = U1Alias;
 
-    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<StationAlias, D::Error> {
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<U1Alias, D::Error> {
         d.deserialize_seq(self)
     }
 }
 
 impl<'de> Visitor<'de> for AliasSeed<'_, '_> {
-    type Value = StationAlias;
+    type Value = U1Alias;
 
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("an alias [id, name?, line?]")
     }
 
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<StationAlias, A::Error> {
-        // Range-checked by `validate` (`AliasOutOfRange`); the line must pass
-        // through the station (`StaleAliasLine`).
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<U1Alias, A::Error> {
+        // Range-checked by `validate` (`ArchivedIdOutOfRange`); the line must
+        // pass through the station (`StaleArchivedLine`).
         let id: StationId = cell(&mut seq, self.ctx, "alias id")?;
         self.ctx.field = "alias name";
         // `[id]`, `[id, name]`, `[id, name, line]` or `[id, null, line]`.
@@ -455,7 +641,7 @@ impl<'de> Visitor<'de> for AliasSeed<'_, '_> {
             }
         };
         self.ctx.field = "";
-        Ok(StationAlias { id, name, line })
+        Ok(U1Alias { id, name, line })
     }
 }
 

@@ -444,6 +444,8 @@ fn reversing_a_merge_anchored_line_moves_nothing_through_the_full_execute() {
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(side_id, 0),
         station_b: StationRef::new(main_id, 1),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "merge failed: {:?}", merged.error);
     let before = abs_coord_map(&project(&state));

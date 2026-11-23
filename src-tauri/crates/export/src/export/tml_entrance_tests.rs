@@ -437,7 +437,7 @@ fn a_detached_piece_keeps_its_own_start_position() {
     s.datum((a, 0), gps(PLACEMENT));
     let mut project = s.build();
     let junction = station(&project, a, 2);
-    project.detach_line(junction, b).unwrap();
+    project.detach_line_auto(junction, b, None).unwrap();
     assert!(project.validate().is_empty());
     let b0 = station(&project, b, 0);
     assert_ne!(b0, junction, "fixture rot: the detach must happen");

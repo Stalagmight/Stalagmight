@@ -193,32 +193,39 @@ fn stats_count_stations_once_and_a_split_adds_a_junction_not_a_station() {
     assert_eq!(after.station_count, p.stations.len());
 }
 
-/// Review finding UX-4 and I-3: what a line knew its stations by follows
-/// them to the half they are on, and both halves show the split station by
-/// the name the line did. Main's station 3 is a junction Main knows by an
-/// alias (it was Branch's station merged into Main's), and the split station
-/// 2 is one Main knows by an alias too, while its own name is Main's station
-/// 4's. After Split Line Here at 2 station 3's hint names the second half,
-/// the split station's stays with the first half and the second half gets
-/// its own alias with the same name under a fresh id, and nothing is
-/// renamed. Injection: drop `share_alias_with_second_half` and the second
-/// half shows the split station by its own name, next to station 4's.
+/// RS 4.4: a record naming the split line at the cut station names the
+/// second half too (no minted copy), and a record of a station that moves to
+/// the second half names it instead. Main's stations 2 and 3 are junctions
+/// whose own station on Main a merge archived (records naming Main). After
+/// Split Line Here at 2, station 2's record names both halves and station
+/// 3's the second half; a Detach of either half brings the archived station
+/// back for both, since they were one station. Injection: drop
+/// `share_record_with_second_half` and the second half becomes native at
+/// station 2 (no record names it), so the Detach brings back Front only.
 #[test]
-fn a_split_moves_the_alias_hints_with_their_stations() {
-    use super::super::StationAlias;
+fn a_split_shares_the_cut_stations_record_and_moves_the_others() {
+    use super::super::ArchivedStation;
     let mut p = empty();
     let l = line(&mut p, "Main", run("m", 90.0, 10.0, 5));
-    let (k, m3, m4) = (st(&p, l, 2), st(&p, l, 3), st(&p, l, 4));
+    let (k, m3) = (st(&p, l, 2), st(&p, l, 3));
     line_from(&mut p, "Branch", k, run("b", 0.0, 5.0, 1));
-    let name4 = p.station(m4).unwrap().name.clone();
-    p.station_mut(k).unwrap().name.clone_from(&name4);
-    for (station, id, name) in [(k, 50, "old k"), (m3, 51, "old 3")] {
-        p.station_mut(station).unwrap().aliases.push(StationAlias {
-            id,
-            name: Some(name.to_string()),
-            line: Some(l),
-        });
-    }
+    line_from(&mut p, "Twig", m3, run("t", 0.0, 5.0, 1));
+    let record = |id: u32, name: &str, lines: Vec<crate::LineId>| ArchivedStation {
+        id,
+        name: name.to_string(),
+        comment: None,
+        external: None,
+        into: None,
+        lines,
+    };
+    p.station_mut(k)
+        .unwrap()
+        .archived
+        .push(record(50, "old k", vec![l]));
+    p.station_mut(m3)
+        .unwrap()
+        .archived
+        .push(record(51, "old 3", vec![l]));
     p.counters.next_station_id = 52;
     assert_valid(&p);
     let second = ok(p.split_line(
@@ -227,14 +234,23 @@ fn a_split_moves_the_alias_hints_with_their_stations() {
         &options("Front", "Back"),
     ));
     assert_valid(&p);
-    assert_eq!(p.station(m3).unwrap().aliases[0].line, Some(second));
-    let aliases = &p.station(k).unwrap().aliases;
-    assert_eq!(aliases.len(), 2);
-    assert_eq!((aliases[0].id, aliases[0].line), (50, Some(l)));
-    assert_eq!((aliases[1].id, aliases[1].line), (52, Some(second)));
-    assert_eq!(p.name_on(k, l), Some("old k"));
-    assert_eq!(p.name_on(k, second), Some("old k"));
-    assert_eq!(p.name_on(m3, second), Some("old 3"));
-    assert_eq!(p.station(k).unwrap().name, name4, "nothing renamed");
-    assert_eq!(p.station(m4).unwrap().name, name4, "nothing renamed");
+    assert_eq!(
+        p.station(m3).unwrap().archived,
+        [record(51, "old 3", vec![second])]
+    );
+    assert_eq!(
+        p.station(k).unwrap().archived,
+        [record(50, "old k", vec![l, second])]
+    );
+    assert_eq!(p.counters.next_station_id, 52, "nothing minted");
+    let detached = p.detach_line_auto(k, second, None).unwrap().value;
+    assert!(detached.restored);
+    assert_eq!(detached.new_station, 50);
+    assert_eq!(
+        detached.lines_off,
+        [l, second],
+        "the halves come off together"
+    );
+    assert_eq!(p.station(50).unwrap().name, "old k");
+    assert_valid(&p);
 }

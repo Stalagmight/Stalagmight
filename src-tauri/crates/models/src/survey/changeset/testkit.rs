@@ -13,8 +13,8 @@ use crate::{
 };
 
 use super::super::{
-    ClosureStrategy, Counters, LineMeta, Placement, Project, RangeDeleteMode, ShotPlace,
-    SplitOptions, StartAt, ZeroDatum,
+    ArchivedStation, ClosureEnd, ClosureStrategy, Counters, LineMeta, Placement, Project,
+    RangeDeleteMode, ShotPlace, SplitOptions, StartAt, ZeroDatum,
 };
 use super::{
     capture, decode_entry, encode_entry, redo, undo, Changeset, Direction, EntryLimits,
@@ -699,7 +699,28 @@ impl Walk {
                 let (Some(a), Some(b)) = (self.station(), self.station()) else {
                     return ("skip", false);
                 };
-                ("merge", self.project.merge_stations(a, b).is_ok())
+                // Either station kept (RS 4.1); the collisions answered by
+                // the preview's rule-L suggestions, or (sometimes) not at
+                // all, which refuses with nothing changed.
+                let keep = if self.rng.chance(0.5) { a } else { b };
+                let renames: Vec<(StationId, String)> = if self.rng.chance(0.8) {
+                    self.project
+                        .merge_preview(a, b, keep)
+                        .map(|preview| {
+                            preview
+                                .collisions
+                                .into_iter()
+                                .map(|c| (c.suggestion.station, c.suggestion.to))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                (
+                    "merge",
+                    self.project.merge_stations(a, b, keep, &renames).is_ok(),
+                )
             }
             19 => {
                 // A junction, when there is one.
@@ -717,7 +738,28 @@ impl Walk {
                 let Some(line) = self.rng.pick(&lines) else {
                     return ("skip", false);
                 };
-                ("detach", self.project.detach_line(station, line).is_ok())
+                // The remaining junction's record picked at random (RS 4.2
+                // case 2), the collisions answered as the dialog would.
+                let Ok(naming) = self.project.detach_naming(station, line, None) else {
+                    return ("detach", false);
+                };
+                let rest_keep = self.rng.pick(&naming.rest_choices);
+                let renames: Vec<(StationId, String)> = self
+                    .project
+                    .detach_naming(station, line, rest_keep)
+                    .map(|n| {
+                        n.collisions
+                            .into_iter()
+                            .map(|c| (c.station, c.to))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (
+                    "detach",
+                    self.project
+                        .detach_line(station, line, &renames, rest_keep)
+                        .is_ok(),
+                )
             }
             20 => {
                 let (Some(a), Some(b)) = (self.station(), self.station()) else {
@@ -728,7 +770,35 @@ impl Walk {
                 } else {
                     ClosureStrategy::Move
                 };
-                let r = self.project.create_closure(a, None, b, None, strategy);
+                // An allowed end kept, or "Keep both names" (RS 5.2); the
+                // collisions answered by the preview's rule-L suggestions,
+                // or (sometimes) not at all, which refuses with nothing
+                // changed.
+                let mut keeps: Vec<Option<StationId>> = vec![None];
+                keeps.extend(
+                    self.project
+                        .closure_keep_choices(a, b)
+                        .allowed
+                        .into_iter()
+                        .map(Some),
+                );
+                let keep = self.rng.pick(&keeps).flatten();
+                let renames: Vec<(StationId, String)> = if self.rng.chance(0.8) {
+                    self.project
+                        .closure_naming((a, None), (b, None), strategy, keep)
+                        .map(|n| {
+                            n.collisions
+                                .into_iter()
+                                .map(|c| (c.station, c.to))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                let r = self
+                    .project
+                    .create_closure(a, None, b, None, strategy, keep, &renames);
                 ("create closure", r.is_ok())
             }
             21 => {
@@ -736,7 +806,25 @@ impl Walk {
                 let Some(id) = self.rng.pick(&ids) else {
                     return ("skip", false);
                 };
-                ("remove closure", self.project.remove_closure(id).is_ok())
+                // What comes back answered as the Remove Closure dialog
+                // would (RS 5.3), or (sometimes) not at all.
+                let renames: Vec<(StationId, String)> = if self.rng.chance(0.8) {
+                    self.project
+                        .closure_removal(id)
+                        .map(|n| {
+                            n.collisions
+                                .into_iter()
+                                .map(|c| (c.station, c.to))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                (
+                    "remove closure",
+                    self.project.remove_closure(id, &renames).is_ok(),
+                )
             }
             22 => {
                 let Some(station) = self.station() else {
@@ -834,9 +922,7 @@ impl Walk {
             if !self.project.conflicts_with_name(id, &name).is_empty() {
                 return ("rename station", false);
             }
-            if let Some(s) = self.project.station_mut(id) {
-                s.name = name;
-            }
+            self.project.set_shown_name(id, name);
             ("rename station", true)
         } else {
             let comment = self.rng.chance(0.7).then(|| format!("comment {n}"));
@@ -1140,7 +1226,7 @@ pub fn tamper(p: &mut Project, changes: &Changeset, direction: Direction) -> Opt
     let edited = [
         s.name.as_ref().and_then(|c| c.0.ids().next()),
         s.comment.as_ref().and_then(|c| c.0.ids().next()),
-        s.aliases.as_ref().and_then(|c| c.0.ids().next()),
+        s.archived.as_ref().and_then(|c| c.0.ids().next()),
         s.external.as_ref().and_then(|c| c.0.ids().next()),
         removed.first().map(|r| r.0.id),
     ];
@@ -1149,11 +1235,19 @@ pub fn tamper(p: &mut Project, changes: &Changeset, direction: Direction) -> Opt
             st.name.push('!');
             st.comment = Some(format!("{:?}!", st.comment));
             st.external = Some(format!("{:?}!", st.external));
-            st.aliases.push(crate::survey::StationAlias {
+            st.archived.push(ArchivedStation {
                 id: u32::MAX,
-                name: None,
-                line: None,
+                name: "tampered".to_string(),
+                comment: Some("changed behind its back".to_string()),
+                external: None,
+                into: None,
+                lines: Vec::new(),
             });
+            if let Some(record) = st.archived.first_mut() {
+                record.name.push('!');
+                record.lines.push(u32::MAX);
+                record.into = Some(record.into.map_or(u32::MAX - 1, |o| o ^ 1));
+            }
             return Some("a station it records");
         }
     }
@@ -1170,7 +1264,24 @@ pub fn tamper(p: &mut Project, changes: &Changeset, direction: Direction) -> Opt
         });
         return Some("the placements");
     }
-    if changes.closures.is_some() {
+    if let Some(change) = &changes.closures {
+        // A closure the step replaces: its archive flipped (RS 10), which a
+        // whole-list comparison sees; else one closure more.
+        let first = change.h.first();
+        let source = first.map_or(0, |h| match direction {
+            Direction::Redo => h.1.len(),
+            Direction::Undo => h.2.len(),
+        });
+        if let Some(closure) = first
+            .filter(|_| source > 0)
+            .and_then(|h| p.closures.get_mut(h.0 as usize))
+        {
+            closure.archived = match closure.archived {
+                None => Some(ClosureEnd::A),
+                Some(_) => None,
+            };
+            return Some("a closure's archive");
+        }
         p.closures.push(crate::survey::LoopClosure {
             id: u64::MAX,
             a: 0,
@@ -1178,6 +1289,7 @@ pub fn tamper(p: &mut Project, changes: &Changeset, direction: Direction) -> Opt
             b: 1,
             b_via: None,
             strategy: ClosureStrategy::Batch,
+            archived: None,
         });
         return Some("the closures");
     }

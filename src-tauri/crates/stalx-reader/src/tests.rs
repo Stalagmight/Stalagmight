@@ -142,34 +142,53 @@ pub(super) fn name_at(survey: &Survey, at: StationId) -> String {
         .unwrap_or_default()
 }
 
-/// Station names are unique among the stations of every section, except a
-/// junction's name repeating a name on a section it joins (one that knows it
-/// by an alias: review findings D-migration-upgrade-8 and UX-3). The names a
-/// section's own stations (on that section alone) hold never repeat.
+/// On every section, positions that show a station of the section's own
+/// have different names (the app's invariant N8, which since RS-FX5 counts
+/// native slots only): a junction shows its one name on every section
+/// through it, a loop end a closure archives shows the name of the station
+/// `shown_as` maps it to, and only a station shown twice on one section (a
+/// closure with both ends on it) repeats a name there. The reader does not
+/// say which junction position is the dotted one (another section's
+/// station), so junction positions and loop ends are left out of the check.
 pub(super) fn assert_names_unique_per_section(survey: &Survey) {
-    let id_at = |at: StationId| {
+    let shown_at = |at: StationId| {
         let section = survey.sections.iter().find(|s| s.id == at.section_id)?;
-        section.station_ids.get(at.index as usize).copied()
+        let id = *section.station_ids.get(at.index as usize)?;
+        Some(survey.shown_as.get(&id).copied().unwrap_or(id))
     };
-    let sections_of = |id: u32| {
-        survey
-            .sections
-            .iter()
-            .filter(|s| s.station_ids.contains(&id))
-            .count()
+    let mut sections_of: std::collections::HashMap<u32, std::collections::BTreeSet<u32>> =
+        std::collections::HashMap::new();
+    for section in &survey.sections {
+        for &id in &section.station_ids {
+            sections_of.entry(id).or_default().insert(section.id);
+        }
+    }
+    let exempt = |at: StationId| {
+        let Some(section) = survey.sections.iter().find(|s| s.id == at.section_id) else {
+            return true;
+        };
+        let Some(&id) = section.station_ids.get(at.index as usize) else {
+            return true;
+        };
+        survey.shown_as.contains_key(&id) || sections_of.get(&id).is_some_and(|s| s.len() > 1)
     };
     for section in &survey.sections {
-        let mut names: Vec<&str> = survey
+        let mut seen: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+        for name in survey
             .station_names
             .iter()
-            .filter(|n| n.station.section_id == section.id)
-            .filter(|n| id_at(n.station).is_some_and(|id| sections_of(id) == 1))
-            .map(|n| n.name.as_str())
-            .collect();
-        let count = names.len();
-        names.sort_unstable();
-        names.dedup();
-        assert_eq!(names.len(), count, "section {}: {names:?}", section.id);
+            .filter(|n| n.station.section_id == section.id && !exempt(n.station))
+        {
+            let Some(shown) = shown_at(name.station) else {
+                continue;
+            };
+            let first = *seen.entry(name.name.as_str()).or_insert(shown);
+            assert_eq!(
+                first, shown,
+                "section {}: {:?} names two stations",
+                section.id, name.name
+            );
+        }
     }
 }
 
@@ -238,15 +257,22 @@ fn reads_every_part_of_a_current_file() {
     assert_eq!(survey.station_comments[0].text, "lead");
     // Every position has a name once the survey is read (an unnamed station
     // is seeded from its index, as the app does on open). The junction keeps
-    // Main's "2" and has that one name on both sections; Side knows it by its
-    // alias (Side's own start), so Side's own station 2 keeps "2" too and
-    // nothing is lettered (review findings D-migration-upgrade-8, UX-3).
+    // Main's "2" on both sections (RS 8.3: Main is longer, Side's own start
+    // is archived). The closure archives Side:2 (Main:4 is on the longer
+    // line), so that slot shows Main:4's "17" (RS 9: the shown name per
+    // slot, `shown_as` naming the kept end); its own "2" is shown nowhere
+    // and is never lettered.
     let name = |at: StationId| name_at(&survey, at);
     assert_eq!(
         [0, 1, 2, 3, 4].map(|i| name(id(main.id, i))),
         ["0", "1", "2", "3", "17"]
     );
-    assert_eq!([0, 1, 2].map(|i| name(id(side.id, i))), ["2", "1", "2"]);
+    assert_eq!([0, 1, 2].map(|i| name(id(side.id, i))), ["2", "1", "17"]);
+    assert_eq!(
+        survey.shown_as.get(&side.station_ids[2]),
+        Some(&main.station_ids[4]),
+        "the archived end maps to its kept end"
+    );
     assert_eq!(survey.station_names.len(), 8);
     assert_names_unique_per_section(&survey);
     assert_eq!(survey.unresolved_references, 0);
@@ -490,8 +516,8 @@ fn a_file_without_station_names_reads_with_seeded_names() {
     let survey = read_file(&path).unwrap();
 
     // One per position, seeded from the index; the junction has Main's on
-    // both sections, and Side (which knows it by its alias) keeps its own
-    // "2" (review findings D-migration-upgrade-8, UX-3).
+    // both sections, and Side:2, the closure's archived end, shows its kept
+    // end Main:4's seeded "4" (RS 8.3 and 9, as above).
     assert_eq!(survey.station_names.len(), 8);
     let (main, side) = (survey.sections[0].id, survey.sections[1].id);
     let name = |section_id, index| name_at(&survey, StationId { section_id, index });
@@ -499,7 +525,7 @@ fn a_file_without_station_names_reads_with_seeded_names() {
         [0, 1, 2, 3, 4].map(|i| name(main, i)),
         ["0", "1", "2", "3", "4"]
     );
-    assert_eq!([0, 1, 2].map(|i| name(side, i)), ["2", "1", "2"]);
+    assert_eq!([0, 1, 2].map(|i| name(side, i)), ["2", "1", "4"]);
     assert_names_unique_per_section(&survey);
     assert_eq!(survey.station_comments.len(), 1);
     assert_eq!(survey.schema_version, SUPPORTED_SCHEMA_VERSION);

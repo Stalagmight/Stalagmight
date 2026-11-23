@@ -6,7 +6,7 @@ import { normalizeAzimuth } from '../../utils/azimuth';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
-import { EntityBlob } from '../common/EntityBlob';
+import { StationBlob } from '../common/EntityBlob';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef, ShotData, ShotKind } from '../../types/project';
@@ -215,7 +215,7 @@ export default function DrawShotDialog() {
         <div className="p-3 bg-background rounded">
           <span className="text-text-secondary">From:</span>{' '}
           <span className="inline-flex items-center gap-1.5 align-middle font-medium">
-            <EntityBlob entity="station">{labels.station(fromStation, true)}</EntityBlob>
+            <StationBlob station={fromStation} withLine />
           </span>
         </div>
 

@@ -10,20 +10,32 @@
 //! the geometry repair, the SpeleoDB hardening), and the whole image
 //! renderer, which draws a model-neutral sketch (`image_sketch.rs`).
 //!
-//! What the station graph changes in the files (declared, plan 12.2):
+//! What the station graph changes in the files (declared, plan 12.2, and the
+//! kept and archived stations, RS 9 and 11):
 //! - **CSV / JSON:** `from` / `to` are station names and `from_id` / `to_id`
-//!   Station IDs, read through the chain, so a junction has ONE name and ONE
-//!   id on every line through it (a merged junction used to print each line's
-//!   own station).
-//! - **Ariane:** a row's `ID` is the Station ID of the station the row ends at
-//!   (a START's, the station it stands on), so ids are stable across exports;
+//!   Station IDs, read through the chain by the **shown identity**: a
+//!   junction has ONE name and ONE id on every line through it, its kept
+//!   station's (a merged junction used to print each line's own station),
+//!   and a loop end a closure archives is written under its kept end's name
+//!   and id (these files hold readings only, so a shared id is how their
+//!   readers tie a loop). A name may repeat on a line where one slot shows
+//!   another station (RS-FX5), so the id, not the name, is the key.
+//! - **Ariane:** a row's `ID` is the Station ID of the node the row ends at
+//!   (a START's, the node it stands on), so ids are stable across exports;
 //!   CLOSURE rows and the GPS-fix STARTs take ids above every station. A
 //!   junction is one node, so a line hangs off its parent's row for that
-//!   station without any alias, and a station comment is folded once.
+//!   station without any alias, and a station comment is folded once. A loop
+//!   end a closure archives keeps its own id as its node number and writes no
+//!   comment. Archived stations and closure archives do not survive a round
+//!   trip (Ariane has no names).
 //! - **Image:** one label and one comment per station, one star per datum
-//!   station; the Levels depth histogram counts each station once.
+//!   station; a loop end a closure archives is drawn but never labelled; the
+//!   Levels depth histogram counts each station once.
 //! - **Dive profile:** a route has no merge hops, so no zero-length point at a
-//!   junction.
+//!   junction; it names no station.
+//!
+//! Compass, Walls and survex are import-only (no exporter), so RS 9's rule
+//! for them (shown names) has no writer to apply to yet.
 //!
 //! Every exporter is deterministic: the same project exports to the same
 //! bytes (the JSON export's `exported_at` is an argument of [`write_json`]).

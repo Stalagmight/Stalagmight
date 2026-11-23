@@ -4,7 +4,7 @@
 
 use chrono::{TimeZone, Utc};
 
-use crate::models::survey::{ClosureStrategy, LineMeta, Project, StartAt, ZeroDatum};
+use crate::models::survey::{ClosureEnd, ClosureStrategy, LineMeta, Project, StartAt, ZeroDatum};
 use crate::models::{GpsCoordinates, LineId, ShotData, StationId};
 
 /// A v4-shaped uuid derived from `n` (so the SpeleoDB sidecar keeps it).
@@ -77,6 +77,51 @@ pub(crate) fn project(name: &str) -> Project {
             .single()
             .unwrap_or_default(),
     )
+}
+
+/// The user's example of RS-FX5 ("dotted slots don't collide"), built by
+/// [`dotted_twelve`].
+pub(crate) struct DottedTwelve {
+    pub(crate) project: Project,
+    pub(crate) main: LineId,
+    pub(crate) branch: LineId,
+    /// Main / 12, kept at Branch's start: Branch shows it with Main's dot.
+    pub(crate) junction: StationId,
+    /// Branch's own 13th station, which keeps its surveyed name "12".
+    pub(crate) own_12: StationId,
+}
+
+/// Main (stations 0 to 14) and Branch (stations 0 to 12, its own
+/// numbering); Branch's start is merged onto Main's 12, which is kept, so
+/// Branch shows "12" twice: its start (the junction, a foreign slot) and its
+/// own station 12. Nothing is lettered and the survey is valid.
+pub(crate) fn dotted_twelve() -> DottedTwelve {
+    let mut s = Survey::new("Dotted");
+    let main = s.named("Main", "#ff0000", vec![flat(10.0, 90.0); 14]);
+    let branch = s.named("Branch", "#00ff00", vec![flat(5.0, 0.0); 12]);
+    for i in 0..=14u32 {
+        s.rename((main, i), &i.to_string());
+    }
+    for i in 0..=12u32 {
+        s.rename((branch, i), &i.to_string());
+    }
+    s.merge((branch, 0), (main, 12));
+    let (junction, own_12) = (s.station(main, 12), s.station(branch, 12));
+    let project = s.build();
+    assert_eq!(
+        project.line(branch).and_then(|l| l.station(0)),
+        Some(junction)
+    );
+    assert_eq!(project.shown_name(junction), Some("12"));
+    assert_eq!(project.shown_name(own_12), Some("12"));
+    assert_ne!(junction, own_12);
+    DottedTwelve {
+        project,
+        main,
+        branch,
+        junction,
+        own_12,
+    }
 }
 
 /// The stations and lines of [`cave`].
@@ -277,7 +322,7 @@ impl Survey {
     /// piece).
     pub(crate) fn merge(&mut self, a: At, b: At) {
         let (a, b) = (self.station(a.0, a.1), self.station(b.0, b.1));
-        if let Err(e) = self.project.merge_stations(a, b) {
+        if let Err(e) = self.project.merge_keeping_stationary(a, b) {
             panic!("merge refused: {e}");
         }
     }
@@ -295,6 +340,16 @@ impl Survey {
         let (sa, sb) = (self.station(a.0, a.1), self.station(b.0, b.1));
         self.project
             .push_closure(sa, Some(a.0), sb, Some(b.0), strategy);
+    }
+
+    /// A loop closure between the slots `kept` and `archived` that archives
+    /// the station at `archived` (RS 5): that station shows the one at
+    /// `kept` while it stays a point of its own.
+    pub(crate) fn closure_keeping(&mut self, kept: At, archived: At, strategy: ClosureStrategy) {
+        self.closure(kept, archived, strategy);
+        if let Some(closure) = self.project.closures.last_mut() {
+            closure.archived = Some(ClosureEnd::B);
+        }
     }
 
     /// Set the comment of the station at `at`.

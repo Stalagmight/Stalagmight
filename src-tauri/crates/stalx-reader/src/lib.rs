@@ -8,7 +8,12 @@
 //! - a JSON `.stalx` (format version 2, `{"format":"stalx","version":...`;
 //!   whitespace between those tokens is tolerated) is decoded by the app's own
 //!   decoder, which checks the format, version, conventions and the survey's
-//!   invariants;
+//!   invariants. Its `archived-stations` feature (kept stations: a junction
+//!   shows one station on every line, the others archived in it, each under
+//!   the station it was archived with, and a loop closure may show one end
+//!   as the other) is known; a version 2 file
+//!   without it, which an earlier build of version 2 wrote, is upgraded as the
+//!   app upgrades it when it opens it (`docs/file-format.md` section 12);
 //! - an SQLite `.stalx` (the format before version 2) is opened by the frozen
 //!   copy of the 0.6.0 app's reader and load pipeline (integrity check, the
 //!   forward schema migrations, foreign-key check, the load's heals), then
@@ -38,7 +43,9 @@
 //! mid-run; every other step (the SQLite load's post-load normalisation, the
 //! conversion to the station-graph model, the JSON decode, optional station
 //! positions) is plain Rust, and the deadline is checked between them, so a
-//! step that has started runs to completion. How long such a step can run is
+//! step that has started runs to completion. The JSON decode also checks it
+//! between its own phases (the parse, the file's invariants, the steps of
+//! the upgrade of a file an earlier build of version 2 wrote). How long such a step can run is
 //! set by the app code it calls; the known super-linear one left is the
 //! 0.6.0 offset cascade in an SQLite file's load normalisation (#602). Station
 //! positions come from the station-graph solver, linear in the station count.
@@ -169,8 +176,9 @@ pub struct CountLimits {
     /// line - `sections` holds the lines). JSON: a line's `section` field,
     /// bounded by `sections`.
     pub cave_section_lines: usize,
-    /// JSON only: station aliases (ids merged into another station).
-    pub aliases: usize,
+    /// JSON only: archived stations (stations merged into another one and
+    /// not kept), each counted once plus once per line it names.
+    pub archived: usize,
     /// JSON only: legacy per-line hand moves.
     pub hand_moves: usize,
     /// JSON only: placements of datum-less pieces.
@@ -203,7 +211,7 @@ impl Default for CountLimits {
             cave_sections: 100_000,
             cave_section_lines: 100_000,
             // The app's own decoder caps for the JSON-only records.
-            aliases: json.aliases,
+            archived: json.archived,
             hand_moves: json.hand_moves,
             placements: json.placements,
             ignored_warnings: json.ignored_warnings,
@@ -240,7 +248,7 @@ count_limit_setters!(
     station_ids,
     cave_sections,
     cave_section_lines,
-    aliases,
+    archived,
     hand_moves,
     placements,
     ignored_warnings,
@@ -274,8 +282,8 @@ pub enum Limit {
     CaveSections,
     /// [`CountLimits::cave_section_lines`].
     CaveSectionLines,
-    /// [`CountLimits::aliases`].
-    Aliases,
+    /// [`CountLimits::archived`].
+    Archived,
     /// [`CountLimits::hand_moves`].
     HandMoves,
     /// [`CountLimits::placements`].
@@ -302,7 +310,7 @@ impl std::fmt::Display for Limit {
             Self::StationIds => "station ids",
             Self::CaveSections => "line groups (sections)",
             Self::CaveSectionLines => "line group memberships",
-            Self::Aliases => "station aliases",
+            Self::Archived => "archived stations",
             Self::HandMoves => "hand moves",
             Self::Placements => "placements",
             Self::IgnoredWarnings => "ignored warnings",

@@ -540,6 +540,8 @@ fn a_combine_keeps_the_kept_lines_section() {
     ok(state.execute(Command::MergeStations {
         station_a: StationRef::new(k, 2),
         station_b: StationRef::new(o, 0),
+        keep: None,
+        renames: None,
     }));
     let options = CombineLinesOptions {
         name: "Joined".to_string(),

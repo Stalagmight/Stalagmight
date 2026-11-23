@@ -81,6 +81,8 @@ fn surveyed() -> (AppState, LineId, LineId) {
     let r = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 3),
         station_b: StationRef::new(b, 0),
+        keep: None,
+        renames: None,
     });
     assert!(r.success, "{:?}", r.error);
     set_datum(&state, StationRef::new(a, 0), 20.1, None, None);

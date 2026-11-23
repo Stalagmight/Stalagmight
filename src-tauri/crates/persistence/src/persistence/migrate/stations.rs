@@ -1,16 +1,18 @@
 //! Station groups -> station records (plan 7.2.1).
 //!
-//! Each group of the merge plan is one station. Its **survivor** is the
-//! member the map labelled (the label-representative rule, [`Slots::rank`]):
-//! the station keeps that member's Station ID and the name 0.6.0 showed for
-//! it; every other member becomes an alias naming its line, with its id and
-//! the name 0.6.0 showed there, so every line keeps showing the names it
-//! showed (plan 5.3 per line, I-3). Members' distinct non-empty comments are
-//! joined in member order (survivor first, then by rank) with a blank line.
+//! Each group of the merge plan is one station. Its **owner** is the member
+//! the map labelled (the label-representative rule, [`Slots::rank`]): the
+//! station takes that member's Station ID, the name 0.6.0 showed for it and
+//! its own comment; every other member becomes a record (an archived
+//! station, RS 3) naming its line, with its id, the name 0.6.0 showed there
+//! and its own comment. So far every line shows what 0.6.0 showed on it;
+//! the assembly then keeps each junction's member on the longest line (rule
+//! K, `crate::persistence::kept::keep_longest`), so the owner only decides
+//! the ids. No comment is ever joined (plan 2026-11-23 RS 8.3).
 //!
 //! Ids are preserved wherever they are usable (below `MAX_STATION_ID` and not
 //! claimed by an earlier group); a station left without one is minted a fresh
-//! id above every preserved id and the legacy counter, and an alias left
+//! id above every preserved id and the legacy counter, and a record left
 //! without one is minted one after every station's.
 
 use std::collections::{BTreeMap, HashSet};
@@ -18,7 +20,7 @@ use std::collections::{BTreeMap, HashSet};
 use stalagmight_legacy::models::StationId as LegacyStationId;
 use stalagmight_legacy::LegacyProject;
 
-use crate::models::survey::{Station, StationAlias};
+use crate::models::survey::{ArchivedStation, Station};
 use crate::models::{StationId, MAX_STATION_ID};
 
 use super::merges::MergePlan;
@@ -30,17 +32,17 @@ pub(super) struct StationPlan {
     /// Per dense slot: its station.
     pub(super) of_slot: Vec<StationId>,
     pub(super) stations: BTreeMap<StationId, Station>,
-    /// Above every id and alias id in use, and the legacy counter.
+    /// Above every station and record id in use, and the legacy counter.
     pub(super) next_station_id: StationId,
 }
 
-/// One group's ids: the station's (`None`: minted), the member whose line
-/// shows the station's own name, and the other members with their alias id
+/// One group's ids: the station's (`None`: minted), the member whose
+/// identity the station takes, and the other members with their record id
 /// (`None`: minted).
 struct Claim {
     id: Option<StationId>,
     owner: usize,
-    aliases: Vec<(Option<StationId>, usize)>,
+    records: Vec<(Option<StationId>, usize)>,
 }
 
 /// Build one station per group of `merges`.
@@ -73,15 +75,15 @@ pub(super) fn plan(
     groups.sort_by_key(|group| group[0]);
 
     // Claim ids: the survivor's, else the first usable member id; the other
-    // members become aliases, with their usable id or (`None`) one minted
+    // members become records, with their usable id or (`None`) one minted
     // below. The owner is the member whose id the station takes (else the
-    // first member): its line shows the station's own name.
+    // first member): its identity is the station's.
     let usable = |id: LegacyStationId| id < MAX_STATION_ID;
     let mut claimed: HashSet<StationId> = HashSet::new();
     let mut chosen: Vec<Claim> = Vec::with_capacity(groups.len());
     for group in &groups {
         let mut owner: Option<(usize, StationId)> = None;
-        let mut aliases: Vec<(Option<StationId>, usize)> = Vec::new();
+        let mut records: Vec<(Option<StationId>, usize)> = Vec::new();
         for &member in group {
             let id = ids.by_slot.get(&member).copied();
             let id = match id {
@@ -99,17 +101,17 @@ pub(super) fn plan(
                 }
                 (Some(id), Some(_)) => {
                     claimed.insert(id);
-                    aliases.push((Some(id), member));
+                    records.push((Some(id), member));
                 }
-                (None, _) => aliases.push((None, member)),
+                (None, _) => records.push((None, member)),
             }
         }
         let owner_member = owner.map_or(group[0], |(member, _)| member);
-        aliases.retain(|&(_, member)| member != owner_member);
+        records.retain(|&(_, member)| member != owner_member);
         chosen.push(Claim {
             id: owner.map(|(_, id)| id),
             owner: owner_member,
-            aliases,
+            records,
         });
     }
 
@@ -127,6 +129,14 @@ pub(super) fn plan(
             .cloned()
             .unwrap_or_else(|| slots.slot(member).station_index.to_string())
     };
+    // A member's own comment; an empty one is none, as it always converted.
+    let own_comment = |member: usize| {
+        comments
+            .by_slot
+            .get(&member)
+            .filter(|text| !text.is_empty())
+            .cloned()
+    };
     let mut of_slot = vec![0; slots.len()];
     let mut stations = BTreeMap::new();
     for (group, claim) in groups.iter().zip(&chosen) {
@@ -140,18 +150,6 @@ pub(super) fn plan(
             next += 1;
             next - 1
         };
-        let mut joined: Vec<&str> = Vec::new();
-        for member in group {
-            if let Some(text) = comments.by_slot.get(member) {
-                if !text.is_empty() && !joined.contains(&text.as_str()) {
-                    joined.push(text);
-                }
-            }
-        }
-        if joined.len() > 1 {
-            report.comments_joined += 1;
-        }
-        let comment = (!joined.is_empty()).then(|| joined.join("\n\n"));
         for &member in group {
             of_slot[member] = id;
         }
@@ -160,39 +158,41 @@ pub(super) fn plan(
             Station {
                 id,
                 name: shown(claim.owner),
-                comment,
-                aliases: Vec::new(),
+                comment: own_comment(claim.owner),
                 external: None,
+                archived: Vec::new(),
             },
         );
     }
-    // Every other member's line keeps showing the name 0.6.0 showed there:
-    // an alias naming the line, under the member's id, or one minted after
-    // every station's (so stations keep the ids they had).
+    // Every other member is archived in the station: a record naming its
+    // line with its own name and comment, under the member's id, or one
+    // minted after every station's (so stations keep the ids they had).
     for claim in &chosen {
-        let mut aliases = Vec::with_capacity(claim.aliases.len());
-        for &(alias, member) in &claim.aliases {
-            let alias = if let Some(id) = alias {
+        let mut records = Vec::with_capacity(claim.records.len());
+        for &(record, member) in &claim.records {
+            let record = if let Some(id) = record {
                 id
             } else {
                 if next >= MAX_STATION_ID {
                     return Err(MigrateError::StationIdsExhausted);
                 }
-                report.alias_ids_minted += 1;
+                report.record_ids_minted += 1;
                 next += 1;
                 next - 1
             };
-            aliases.push(StationAlias {
-                id: alias,
-                name: Some(shown(member)),
-                // The member's line knew the junction by this alias (UX-4,
-                // D-migration-upgrade-8).
-                line: Some(slots.slot(member).line_id),
+            records.push(ArchivedStation {
+                id: record,
+                name: shown(member),
+                comment: own_comment(member),
+                external: None,
+                // The member's own line (UX-4, D-migration-upgrade-8).
+                into: None,
+                lines: vec![slots.slot(member).line_id],
             });
         }
-        report.aliases_created += aliases.len();
+        report.members_archived += records.len();
         if let Some(station) = stations.get_mut(&of_slot[claim.owner]) {
-            station.aliases = aliases;
+            station.archived = records;
         }
     }
     Ok(StationPlan {

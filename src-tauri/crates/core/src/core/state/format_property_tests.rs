@@ -161,6 +161,8 @@ pub(super) fn mutate(state: &AppState, rng: &mut Rng) -> CommandResult {
             Command::MergeStations {
                 station_a: a,
                 station_b: StationRef::new(l, i),
+                keep: None,
+                renames: None,
             }
         }
         7 => {
@@ -182,6 +184,8 @@ pub(super) fn mutate(state: &AppState, rng: &mut Rng) -> CommandResult {
             station_a: station(rng),
             station_b: station(rng),
             closure_strategy: *rng.pick(&[ClosureStrategy::Batch, ClosureStrategy::Move]),
+            keep: None,
+            renames: None,
         },
         9 => Command::CreateCaveSection {
             name: format!("Section {}", rng.range(0, 99)),

@@ -135,8 +135,13 @@ fn read_survey(path: &Path) -> Result<Project, String> {
         }
     })?;
     match stalx_v2::sniff(&bytes) {
+        // A file an earlier build of version 2 wrote reads as an open shows
+        // it (plan 2026-11-23 RS 8.2).
         Format::V2 => stalx_v2::decode(&bytes, &options)
-            .map(|decoded| decoded.project)
+            .map(|mut decoded| {
+                decoded.upgrade();
+                decoded.project
+            })
             .map_err(|e| e.to_string()),
         Format::Legacy => {
             drop(bytes);

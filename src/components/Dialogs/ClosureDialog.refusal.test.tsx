@@ -15,6 +15,7 @@ import '../../i18n';
 
 import ClosureDialog from './ClosureDialog';
 import { useUIStore } from '../../store/uiStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 
 const REFUSAL =
@@ -51,6 +52,8 @@ describe('ClosureDialog - refusal guard (#737)', () => {
   const createLoopClosure = vi.fn();
 
   beforeEach(() => {
+  // A local project: editing is not blocked (useEditingBlocked).
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
     createLoopClosure.mockReset();
     createLoopClosure.mockResolvedValue({ success: true, warnings: [], line_ids: [] });
     useProjectStore.setState({
@@ -88,8 +91,9 @@ describe('ClosureDialog - refusal guard (#737)', () => {
     render(<ClosureDialog />);
 
     const dialog = screen.getByTestId('closure-dialog');
-    expect(dialog).toHaveTextContent('Station A:Main Line / 4');
-    expect(dialog).toHaveTextContent('Station B:Main Line / 5');
+    // Full highlighting: each a line pill, its line as the muted context.
+    expect(dialog).toHaveTextContent('Station A:Main Line: 4');
+    expect(dialog).toHaveTextContent('Station B:Main Line: 5');
     expect(dialog.textContent).not.toMatch(/\d+:\d+|Line 0/);
   });
 

@@ -41,7 +41,7 @@ use crate::persistence::stalx_v2::{
     WriteError,
 };
 
-use super::conversion_notice::{ConversionNotice, ConversionNoticeView};
+use super::conversion_notice::{ConversionFile, ConversionNotice, ConversionNoticeView};
 use super::AppState;
 
 /// Coded-failure prefix of a save refused because the file on disk changed
@@ -133,6 +133,16 @@ pub(crate) struct FileState {
     /// the fingerprint makes it miss, and the save reads the file as before.
     pub(crate) saved_bytes: Option<(Fingerprint, Arc<[u8]>)>,
     pub(crate) origin: FileOrigin,
+    /// The file on disk is a version 2 file an earlier build of version 2
+    /// wrote (no `archived-stations` feature), and the project in memory is
+    /// its load-time upgrade (plan 2026-11-23 RS 8.2): it behaves as a 0.6.0
+    /// file does until a save writes the survey. The status bar says the file
+    /// is still the older one ([`AppState::file_is_legacy`]), the notice says
+    /// the next save writes it, and that save keeps the original in Recovery
+    /// (`legacy_upgrade`). Local-only rewrites still work (`origin` is
+    /// [`FileOrigin::V2`]) and copy `requires` and the body, so they leave
+    /// the file pending.
+    pub(crate) upgrade_pending: bool,
     /// The survey (or its ignores) changed since the last save.
     pub(crate) dirty: bool,
     /// Durable state changed in memory that only the next real save can
@@ -215,7 +225,7 @@ impl FileState {
         let mut state = Self {
             fingerprint,
             origin: FileOrigin::Legacy,
-            conversion: ConversionNotice::of_migration(report, &migrated.names_changed),
+            conversion: ConversionNotice::of_migration(report, &migrated.changes),
             legacy_parity: Some(migrated.legacy_parity),
             ..Self::default()
         };
@@ -582,14 +592,22 @@ impl AppState {
         Some(pending.remove(at).1)
     }
 
-    /// The conversion notice of a legacy open, taken once, as the banner
-    /// shows it: a project opened from a version 2 file (a closed 0.6.0
-    /// file a Recents rename or link strip upgraded) is already saved in the
-    /// new format.
+    /// The conversion notice of a legacy open or an earlier version 2 file's
+    /// upgrade, taken once, as the banner shows it: a project opened from a
+    /// version 2 file this build's rules wrote (a closed 0.6.0 file a Recents
+    /// rename or link strip upgraded) is already saved in the new format,
+    /// and one open read-only is never saved (data review finding data-4).
     pub fn take_conversion_notice(&self) -> Option<ConversionNoticeView> {
         self.with_file(|file| {
-            let saved = file.origin == FileOrigin::V2;
-            file.conversion.take().map(|n| n.view(saved))
+            let saved = file.origin == FileOrigin::V2 && !file.upgrade_pending;
+            let read_only = file.extras.read_only.is_some();
+            file.conversion.take().map(|n| {
+                let mut view = n.view(saved);
+                if read_only {
+                    view.file = ConversionFile::ReadOnly;
+                }
+                view
+            })
         })
     }
 
@@ -761,12 +779,14 @@ impl AppState {
         self.with_file(|file| file.extras.read_only.as_ref().map(ToString::to_string))
     }
 
-    /// Whether the file on disk is still the 0.6.0 (SQLite) file the open
-    /// project was migrated from: no save has upgraded it yet, so the status
-    /// bar must not say "Saved" (demo issue N-6). Any save that writes the
-    /// open project (to its own path or a Save As) makes it `false`.
+    /// Whether the file on disk is still the older file the open project was
+    /// converted from: the 0.6.0 (SQLite) file it was migrated from, or the
+    /// version 2 file an earlier build wrote that it was upgraded from (RS
+    /// 8.2). No save has written the open project yet, so the status bar must
+    /// not say "Saved" (demo issue N-6). Any save that writes the open
+    /// project (to its own path or a Save As) makes it `false`.
     pub fn file_is_legacy(&self) -> bool {
-        self.with_file(|file| file.origin == FileOrigin::Legacy)
+        self.with_file(|file| file.origin == FileOrigin::Legacy || file.upgrade_pending)
     }
 
     /// The path the open project saves to, if any.

@@ -39,11 +39,12 @@ pub struct ClosurePair {
 }
 
 /// What Detach Line from Station gives the detached line
-/// (`preview_detach_line`, review finding UX-4): the new station's name and
-/// Station ID, and whether they are the ones the line had before it was
-/// merged there (the junction's alias that names the line). With `kept`, the
-/// line keeps the junction instead and `name` and `station_id` are what the
-/// other lines, which all knew it by aliases, get back (I-1).
+/// (`preview_detach_line`, review finding UX-4; RS 4.2 and 7): the station
+/// the lines that come off get (its name, Station ID and comment), and
+/// whether it is one they had before a merge (a record of the junction
+/// coming back). With `kept`, the line keeps the junction instead and
+/// `name`, `station_id` and `comment` are what the other lines, which were
+/// all named by records, get back (I-1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct DetachLinePreview {
     pub name: String,
@@ -54,23 +55,55 @@ pub struct DetachLinePreview {
     /// order (demo finding V-1).
     #[serde(default)]
     pub lines: Vec<DetachLineResult>,
+    /// The comment of the station that comes back ("with its comment").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub comment: Option<String>,
+    /// The lines that come off with the detached one because one archived
+    /// station names them all (RS 4.2 case 1: they were one station).
+    #[serde(default)]
+    pub together: Vec<LineId>,
+    /// With `kept` and several records naming the other lines: the records
+    /// the remaining junction may show (`rest_keep`), and the default (rule
+    /// K over their own lines).
+    #[serde(default)]
+    pub rest_choices: Vec<crate::StationIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub rest_default: Option<u32>,
+    /// The identity the detached line showed at the junction before, when a
+    /// loop closure made it another station's (RS 4.2 case 3: it will show
+    /// the junction's own name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub shown_before: Option<crate::StationIdentity>,
+    /// The names the detach would show twice, each with its two answers.
+    /// An earlier letter given because of the junction stays.
+    #[serde(default)]
+    pub collisions: Vec<crate::NameCollisionWire>,
+    /// The slots away from the junction that show another station after
+    /// the detach (RS 4.2, M-P2-8): a loop end whose closure's kept end
+    /// comes off with the lines, or a station a promotion the detach makes
+    /// merges. In line order, then chain order.
+    #[serde(default)]
+    pub shown_elsewhere: Vec<crate::ShownElsewhereWire>,
+    /// The comments the detach hides (RS 12): each identity as it showed it,
+    /// with the comment. Undo brings them back.
+    #[serde(default)]
+    pub comments_hidden: Vec<crate::StationIdentity>,
 }
 
 /// One line's result in a [`DetachLinePreview`]: the name it shows its
 /// station by after the detach, that station's Station ID, whether the line
 /// comes off the junction or stays on it, and the other lines on that station.
-/// `alias_id` is the Station ID the line had there before a merge when it
-/// keeps it only as an alias: lines that come off together stay joined on one
-/// station, which has one Station ID.
+/// Lines that come off together stay joined on one station, which has one
+/// Station ID.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct DetachLineResult {
     pub line_id: LineId,
     pub name: String,
     pub station_id: u32,
     pub comes_off: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub alias_id: Option<u32>,
     pub joined_with: Vec<LineId>,
 }
 
@@ -101,6 +134,19 @@ pub struct DeleteShotImpact {
     /// If the user picks Split: the largest move of a station, metres.
     #[serde(default)]
     pub split_max_move_m: f64,
+    /// What the delete does to identities on its own (RS 4.3, U-P1-3): the
+    /// archived stations it brings back where a junction loses its own
+    /// lines (with the comment that moves or becomes hidden), and the
+    /// letters rule L gives. Absent when it does none of these.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub identities: Option<crate::IdentityNotice>,
+    /// The same, if the user picks Split instead (an interior delete whose
+    /// gap-close is offered): a promotion the split makes may hide a
+    /// comment. Absent when Split is not offered or does none of these.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub split_identities: Option<crate::IdentityNotice>,
 }
 
 /// Which structural case a contiguous shot-range deletion falls into. Computed
@@ -167,6 +213,19 @@ pub struct DeleteShotRangeImpact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub closures_removed_across_one_shot: Option<Vec<ClosurePair>>,
+    /// What the delete does to identities on its own (RS 4.3, U-P1-3): the
+    /// archived stations it brings back where a junction loses its own
+    /// lines (with the comment that moves or becomes hidden), and the
+    /// letters rule L gives. Absent when it does none of these.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub identities: Option<crate::IdentityNotice>,
+    /// The same, if the user picks Split instead (an interior delete whose
+    /// gap-close is offered): a promotion the split makes may hide a
+    /// comment. Absent when Split is not offered or does none of these.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub split_identities: Option<crate::IdentityNotice>,
 }
 
 /// Fixed part of the gap warning threshold, in metres (#741 decision 4).
@@ -266,6 +325,23 @@ pub struct MergePreview {
     /// finding V-2). A first, then B.
     #[serde(default)]
     pub junctions: Vec<MergeJunction>,
+    /// The two stations the merge may keep, A then B (RS 7: the "Keep"
+    /// radios, each with its pill and "shown as K through a loop closure").
+    #[serde(default)]
+    pub candidates: Vec<crate::KeepCandidate>,
+    /// The dialog's default keep (RS 4.1): the closure-forced end, else the
+    /// station holding a datum when exactly one does, else rule K.
+    #[serde(default)]
+    pub default_keep: crate::StationId,
+    /// The loop closure between the two whose kept end must be kept (RS 4.1
+    /// step 4): the dialog offers no choice and says why.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub keep_forced_by: Option<u64>,
+    /// What each choice does to names, one per keep the dialog offers (both
+    /// stations, or the forced one alone).
+    #[serde(default)]
+    pub keeps: Vec<crate::MergeKeepPreview>,
 }
 
 /// The depths [`MergePreview`] reports, metres (+down).

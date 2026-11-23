@@ -366,7 +366,7 @@ impl<'p> Resolver<'p> {
             self.project
                 .stations
                 .values()
-                .flat_map(|s| s.aliases.iter().map(move |alias| (alias.id, s.id)))
+                .flat_map(|s| s.archived.iter().map(move |record| (record.id, s.id)))
                 .collect()
         });
         aliases.get(&id).copied()

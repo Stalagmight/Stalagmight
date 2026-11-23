@@ -36,7 +36,9 @@ use super::{shape, Changeset};
 
 /// The history entry format this build writes and reads. Bump it with any
 /// change to the entry or changeset layout, or to the line hash.
-pub const HISTORY_FORMAT_VERSION: u32 = 1;
+///
+/// 2: archived station records replace aliases (RS 10).
+pub const HISTORY_FORMAT_VERSION: u32 = 2;
 
 /// One persisted undo or redo step.
 #[derive(Debug, Clone)]

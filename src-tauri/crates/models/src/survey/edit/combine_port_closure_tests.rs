@@ -306,18 +306,28 @@ fn a_closure_join_moves_the_side_without_the_adjustment_anchor() {
     }
     let (mut p, k, o) = two_line_loop(ClosureStrategy::Batch);
     let (k0, k1, o0) = (st(&p, k, 0), st(&p, k, 1), st(&p, o, 0));
+    let o1_own = p.station(k0).unwrap().archived[0].id;
     let before = p.raw_positions();
     ok(p.combine_lines(o, k, &opts(ends(LineEnd::Start, LineEnd::End))));
     let after = p.raw_positions();
+    // RS 4.4: K was k0's only native line (O's end there is O's own station,
+    // archived by the merge), so the tear keeps k0 on K and O's end takes
+    // its own station back; the gauge is a position, so it stays with O's
+    // end, and the tear closure shows O's end as k0 (nothing visible
+    // changes).
     near(
-        xy(&after, k0),
+        xy(&after, o1_own),
         xy(&before, k0),
         TOL,
-        "the gauge station (K's start) stays",
+        "the gauge (where K's start was) stays",
     );
     assert_eq!(p.placements.len(), 1);
-    assert_eq!(p.placements[0].station, k0, "the gauge keeps its station");
-    // K was prepended: its new start (detached from k0) moved west with it,
+    assert_eq!(
+        p.placements[0].station, o1_own,
+        "the gauge stays with O's end"
+    );
+    assert_eq!(p.shown(o1_own), k0, "O's end still shows K's start");
+    // K was prepended: its start (k0, torn off O's end) moved west with it,
     // and the joined station is O's start.
     near(
         xy(&after, o0),
@@ -325,10 +335,9 @@ fn a_closure_join_moves_the_side_without_the_adjustment_anchor() {
         TOL,
         "O's start (the joined station) stays",
     );
-    let new_start = st(&p, o, 0);
-    assert_ne!(new_start, k0);
+    assert_eq!(st(&p, o, 0), k0);
     near(
-        xy(&after, new_start),
+        xy(&after, k0),
         [xy(&before, k0)[0] - 0.4, xy(&before, k0)[1]],
         TOL,
         "K moved 0.4 m west",
@@ -1559,24 +1568,53 @@ fn check_combine(
             assert!(norm(m) < 2e-6, "{what}: {s} of the fixed side moved {m:?}");
         }
     }
-    // A torn junction's station stays (unless the fold retired it: the other
-    // line's join station, torn off the kept line).
+    // A torn junction's position stays (unless the fold retired it: the other
+    // line's join station, torn off the kept line), on the node its other
+    // lines are on: the junction's id, or (RS 4.4: the torn line was its
+    // only native line, so the torn line kept its station) the station those
+    // lines took back. Found by the slot on the line it stays shared with,
+    // else as the tear closure's end `a`.
+    let stays_at = |s: StationId| -> StationId {
+        let Some(t) = report
+            .torn_ties
+            .iter()
+            .find(|t| t.kind == TornTieKind::Junction && t.station == s)
+        else {
+            return s;
+        };
+        let third = ![kept, other].contains(&t.other_slot.line_id);
+        third
+            .then(|| after.station_at(t.other_slot))
+            .flatten()
+            .or_else(|| {
+                after
+                    .closures
+                    .iter()
+                    .find(|c| Some(c.id) == t.closure)
+                    .map(|c| c.a)
+            })
+            .unwrap_or(s)
+    };
     for t in &report.torn_ties {
-        if t.kind == TornTieKind::Junction && pa.xy(t.station).is_some() {
-            let m = moved(t.station, t.station);
+        let rest = stays_at(t.station);
+        if t.kind == TornTieKind::Junction && pa.xy(rest).is_some() {
+            let m = moved(t.station, rest);
             assert!(norm(m) < 1e-6, "{what}: torn {t:?} moved {m:?}");
         }
     }
     // The gauge rule: where the view solves the joined survey (no datum
     // deciding), the piece's placement station stays (legacy: the
-    // closure-adjusted view does not move).
+    // closure-adjusted view does not move); a tear that kept its station on
+    // the torn line left the gauge with the other lines (`stays_at`).
     let gauge = before
         .placements
         .iter()
         .find(|g| piece(g.station) == piece(a));
-    if let Some(g) = gauge.filter(|g| piece(a) == piece(b) && pa.xy(g.station).is_some()) {
-        if solved_at(after, Some(g.station)) && report.kept_moves_because.is_none() {
-            let m = moved(g.station, g.station);
+    if let Some(g) = gauge.filter(|g| piece(a) == piece(b) && pa.xy(stays_at(g.station)).is_some())
+    {
+        let at = stays_at(g.station);
+        if solved_at(after, Some(at)) && report.kept_moves_because.is_none() {
+            let m = moved(g.station, at);
             assert!(
                 norm(m) < 1e-6,
                 "{what}: the gauge {} moved {m:?}",

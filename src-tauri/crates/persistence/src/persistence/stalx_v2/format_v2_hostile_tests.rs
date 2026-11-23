@@ -192,31 +192,59 @@ fn a_finite_but_absurd_distance_is_refused() {
 
 /// An alias is `[id]`, `[id, name]` or `[id, name or null, line]` (review
 /// finding UX-4), and its line must pass through its station.
+/// Archived records (RS 8.1) are objects `{id, name, comment?, external?,
+/// lines?}`: a missing id or name refuses, an unknown key opens read-only, and
+/// a line that does not pass the station is a stale record line (A2). The
+/// U1 alias rows of an earlier build of version 2 read as records naming
+/// their lines, the form the load-time upgrade (RS 8.2) starts from.
 #[test]
-fn alias_rows_are_checked() {
+fn archived_rows_are_checked() {
     let (p, extras) = super::format_v2_doc_tests::example();
     let original = String::from_utf8(encode(&p, &extras, Mode::Normal).unwrap()).unwrap();
-    let alias = "\"aliases\":[[7,\"B0\",1]]";
-    assert!(original.contains(alias), "the example names Side");
+    let record =
+        "\"archived\":[{\"id\":7,\"name\":\"B0\",\"comment\":\"Side's tie-off\",\"lines\":[1]}]";
+    assert!(original.contains(record), "the example names Side");
     for (row, ok) in [
+        ("\"archived\":[{\"id\":7,\"name\":\"B0\"}]", true),
+        (
+            "\"archived\":[{\"id\":7,\"name\":\"B0\",\"comment\":\"x\",\"lines\":[1]}]",
+            true,
+        ),
+        ("\"archived\":[{\"id\":7,\"lines\":[1]}]", false),
+        ("\"archived\":[{\"name\":\"B0\",\"lines\":[1]}]", false),
+        (
+            "\"archived\":[{\"id\":7,\"name\":\"B0\",\"lines\":[\"1\"]}]",
+            false,
+        ),
+        ("\"archived\":[[7,\"B0\",1]]", false),
+        ("\"aliases\":[[7,\"B0\",1]]", true),
         ("\"aliases\":[[7,null,1]]", true),
-        ("\"aliases\":[[7]]", true),
         ("\"aliases\":[[7,null]]", false),
-        ("\"aliases\":[[7,\"B0\",1,2]]", false),
-        ("\"aliases\":[[7,\"B0\",\"1\"]]", false),
-        ("\"aliases\":[[7,\"B0\",1.5]]", false),
     ] {
-        let text = original.replacen(alias, row, 1);
+        let text = original.replacen(record, row, 1);
         let opened = open(&text);
         assert_eq!(opened.is_ok(), ok, "{row}: {:?}", opened.err());
     }
+    let unknown = original.replacen(
+        record,
+        "\"archived\":[{\"id\":7,\"name\":\"B0\",\"lines\":[1],\"later\":true}]",
+        1,
+    );
+    assert!(
+        open(&unknown).unwrap().read_only().is_some(),
+        "an unknown key is tier 1"
+    );
     // Line 2 ("Unconnected") does not pass station 2.
-    let text = original.replacen(alias, "\"aliases\":[[7,\"B0\",2]]", 1);
+    let text = original.replacen(
+        record,
+        "\"archived\":[{\"id\":7,\"name\":\"B0\",\"lines\":[2]}]",
+        1,
+    );
     assert_eq!(
         violations(&text),
-        vec![Violation::StaleAliasLine {
+        vec![Violation::StaleArchivedLine {
             station: 2,
-            alias: 7,
+            archived: 7,
             line: 2
         }]
     );

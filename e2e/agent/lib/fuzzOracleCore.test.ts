@@ -239,7 +239,7 @@ describe('checkProjectInvariants', () => {
         ],
       },
       // Line 1's end and line 2's start are one station (Station ID 11):
-      // with no alias both show its own name, and they list each other.
+      // both show its name (RS 4.1), and they list each other.
       stations: [
         { station_ref: { line_id: 1, station_index: 0 }, id: 10, name: '0', merged_with: [] },
         {
@@ -259,7 +259,8 @@ describe('checkProjectInvariants', () => {
         { station_ref: { line_id: 2, station_index: 1 }, id: 12, name: '1', merged_with: [] },
         { station_ref: { line_id: 2, station_index: 2 }, id: 13, name: '2', merged_with: [] },
       ],
-      stats: { line_count: 2, shot_count: 3, station_count: 5 },
+      // Five slots, four stations: the junction counts once.
+      stats: { line_count: 2, shot_count: 3, station_count: 4 },
       frozen_shots: [{ line_id: 2, shot_index: 1 }],
     };
   }
@@ -398,6 +399,12 @@ describe('checkProjectInvariants', () => {
         (state.stats as { line_count: number }).line_count = 7;
       }).some((v) => v.includes('stats.line_count 7 != 2 line(s)')),
     ).toBe(true);
+    // A junction is one station; counting its slots is drift.
+    expect(
+      violationsAfter((state) => {
+        (state.stats as { station_count: number }).station_count = 5;
+      }).some((v) => v.includes('stats.station_count 5 != 4 station(s)')),
+    ).toBe(true);
   });
 
   it('does NOT duplicate what Project::validate owns', () => {
@@ -415,9 +422,19 @@ describe('checkProjectInvariants', () => {
     expect(checkProjectInvariants(withIntegrityIssues)).toEqual([]);
   });
 
-  describe('the station graph on the wire (plan 9.2)', () => {
-    type Slot = { station_ref: { line_id: number; station_index: number }; id: number; name: string; comment?: string; merged_with: unknown[] };
+  describe('the station graph on the wire (plan 9.2, kept and archived stations)', () => {
+    type Slot = {
+      station_ref: { line_id: number; station_index: number };
+      id: number;
+      name: string;
+      comment?: string;
+      merged_with: unknown[];
+      archived?: unknown[];
+      shown?: Record<string, unknown>;
+    };
     const slots = (state: Record<string, unknown>) => state.stations as Slot[];
+    const closures = (state: Record<string, unknown>) =>
+      (state.project as { loop_closures: Array<Record<string, unknown>> }).loop_closures;
 
     it('fires when a line passes one Station ID twice', () => {
       expect(
@@ -427,11 +444,11 @@ describe('checkProjectInvariants', () => {
       ).toBe(true);
     });
 
-    it('fires when a line names two of its stations alike', () => {
+    it('fires when a line shows two stations alike (N8)', () => {
       expect(
         violationsAfter((state) => {
           slots(state)[4]!.name = '1';
-        }).some((v) => v.includes('line 2 has two stations named "1" (at 2/2)')),
+        }).some((v) => v.includes('line 2 shows two stations named "1" (Station IDs 12 and 13, at 2/2)')),
       ).toBe(true);
     });
 
@@ -439,39 +456,207 @@ describe('checkProjectInvariants', () => {
       expect(
         violationsAfter((state) => {
           slots(state)[2]!.comment = 'another';
-        }).some((v) => v.includes('Station ID 11 has a different comment or aliases at 2/0 than at 1/1')),
+        }).some((v) =>
+          v.includes('Station ID 11 has a different name, comment, records or shown station at 2/0 than at 1/1'),
+        ),
       ).toBe(true);
     });
 
-    it('fires when two lines show the station by different names with no alias saying so', () => {
+    // RS 4.1: a junction shows its kept station on every line; a per-line
+    // name (U1) is a violation now.
+    it('fires when two lines show one station by different names', () => {
       expect(
         violationsAfter((state) => {
           slots(state)[2]!.name = 'K';
-        }).some((v) => v.includes('Station ID 11 has a different name at 2/0 than at 1/1')),
+        }).some((v) =>
+          v.includes('Station ID 11 has a different name, comment, records or shown station at 2/0 than at 1/1'),
+        ),
       ).toBe(true);
     });
 
-    // I-3: a line merged onto a station keeps its own name for it; the alias
-    // naming that line says so on every slot, and pins that slot's name.
-    it("accepts a line showing a junction by its alias's name, and only that name", () => {
-      const merged = (state: Record<string, unknown>) => {
-        const alias = [{ id: 20, name: '0', line: 2 }];
-        (slots(state)[1] as Record<string, unknown>).aliases = alias;
-        (slots(state)[2] as Record<string, unknown>).aliases = alias;
-        slots(state)[2]!.name = '0';
-      };
+    /** Line 2's own station 0 (Station ID 20) archived in the junction:
+     *  2/0 is a foreign slot, with the dot in line 1's colour. */
+    const merged = (state: Record<string, unknown>) => {
+      const records = [{ id: 20, name: '0', lines: [2] }];
+      slots(state)[1]!.archived = records;
+      slots(state)[2]!.archived = records;
+      slots(state)[2]!.shown = { id: 11, home_line: 1, foreign: true, loop_end: false };
+    };
+
+    it('accepts a junction keeping its station with a record of the other line', () => {
       expect(violationsAfter(merged)).toEqual([]);
+    });
+
+    // RS-FX5: a foreign slot counts for no name uniqueness, so line 2 keeps
+    // its own J beside the junction's dotted J; two native slots still may not.
+    it('accepts a foreign slot and a native slot of one name on a line (N8 on native slots)', () => {
       expect(
         violationsAfter((state) => {
           merged(state);
-          slots(state)[2]!.name = 'J';
-        }).some((v) => v.includes('2/0 (Station ID 11) shows "J", but its line knows the station as "0"')),
+          slots(state)[3]!.name = 'J';
+        }),
+      ).toEqual([]);
+      expect(
+        violationsAfter((state) => {
+          merged(state);
+          slots(state)[3]!.name = 'J';
+          slots(state)[4]!.name = 'J';
+        }).filter((v) => v.includes('shows two stations named')),
+      ).toEqual(['line 2 shows two stations named "J" (Station IDs 12 and 13, at 2/2)']);
+    });
+
+    it('fires when a foreign slot carries no shown station, or a native slot carries one', () => {
+      expect(
+        violationsAfter((state) => {
+          merged(state);
+          delete slots(state)[2]!.shown;
+        }).some((v) => v.includes('2/0 (Station ID 11) is a foreign slot but carries no shown station')),
       ).toBe(true);
       expect(
         violationsAfter((state) => {
           merged(state);
-          (slots(state)[1] as Record<string, unknown>).aliases = [];
-        }).some((v) => v.includes('Station ID 11 has a different comment or aliases at 2/0 than at 1/1')),
+          slots(state)[1]!.shown = { id: 11, home_line: 1, foreign: true, loop_end: false };
+        }).some((v) => v.includes('1/1 (Station ID 11) carries shown')),
+      ).toBe(true);
+      expect(
+        violationsAfter((state) => {
+          merged(state);
+          slots(state)[2]!.shown = { id: 11, home_line: 2, foreign: true, loop_end: false };
+        }).some((v) => v.includes('with home line 1')),
+      ).toBe(true);
+    });
+
+    it('fires when a record breaks A1, A2, A3 or A4', () => {
+      const withRecords = (records: unknown[]) => (state: Record<string, unknown>) => {
+        merged(state);
+        slots(state)[1]!.archived = records;
+        slots(state)[2]!.archived = records;
+      };
+      expect(
+        violationsAfter(withRecords([{ id: 12, name: '0', lines: [2] }])).some((v) =>
+          v.includes('record 12 of Station ID 11 is also a live Station ID (A1)'),
+        ),
+      ).toBe(true);
+      expect(
+        violationsAfter(withRecords([{ id: 20, name: '0', lines: [3] }])).some((v) =>
+          v.includes('record 20 of Station ID 11 names line 3, which does not pass it (A2)'),
+        ),
+      ).toBe(true);
+      expect(
+        violationsAfter(
+          withRecords([
+            { id: 20, name: '0', lines: [2] },
+            { id: 21, name: 'x', lines: [2] },
+          ]),
+        ).some((v) => v.includes('Station ID 11 has two records naming line 2 (A3)')),
+      ).toBe(true);
+      expect(
+        violationsAfter(
+          withRecords([
+            { id: 20, name: '0', lines: [2] },
+            { id: 21, name: 'x', lines: [1] },
+          ]),
+        ).some((v) => v.includes('Station ID 11 has no native line (A4)')),
+      ).toBe(true);
+    });
+
+    it("fires when a record's owner breaks A6 (RS-FX4)", () => {
+      // Only lines 1 and 2 pass the junction, so a record 20 naming line 2
+      // can only be archived under a history record here (A5: it owns
+      // nothing), a missing one, or itself through another.
+      const withRecords = (records: unknown[]) => (state: Record<string, unknown>) => {
+        merged(state);
+        slots(state)[1]!.archived = records;
+        slots(state)[2]!.archived = records;
+      };
+      const inside = [
+        { id: 20, name: '0', into: 21, lines: [2] },
+        { id: 21, name: 'x', lines: [] },
+      ];
+      expect(
+        violationsAfter(withRecords(inside)).some((v) =>
+          v.includes('record 20 of Station ID 11 is archived under history record 21 (A6)'),
+        ),
+      ).toBe(true);
+      expect(
+        violationsAfter(withRecords([{ id: 20, name: '0', into: 99, lines: [2] }])).some((v) =>
+          v.includes('record 20 of Station ID 11 is archived under 99, no other record of it (A6)'),
+        ),
+      ).toBe(true);
+      expect(
+        violationsAfter(
+          withRecords([
+            { id: 20, name: '0', into: 21, lines: [2] },
+            { id: 21, name: 'x', into: 20, lines: [] },
+          ]),
+        ).some((v) => v.includes('record 20 of Station ID 11 is archived under itself through other records (A6)')),
+      ).toBe(true);
+      expect(
+        violationsAfter(
+          withRecords([
+            { id: 21, name: 'x', lines: [] },
+            { id: 22, name: 'y', into: 21, lines: [] },
+            { id: 20, name: '0', lines: [2] },
+          ]),
+        ).filter((v) => v.includes('(A6)')),
+      ).toEqual(['record 22 of Station ID 11 is archived under history record 21 (A6)']);
+    });
+
+    /** Closure 1 archives its end b (2/2, Station ID 13), kept 1/0 (10): 2/2
+     *  shows 10's name with the dot in line 1's colour and the loop mark. */
+    const archived = (state: Record<string, unknown>) => {
+      closures(state)[0]!.archived = {
+        end: 'b',
+        station: { id: 13, name: '2' },
+        shown_as: { id: 10, name: '0', home_line: 1 },
+      };
+      slots(state)[4]!.name = '0';
+      slots(state)[4]!.shown = { id: 10, home_line: 1, foreign: true, loop_end: true, loop_closure: 1 };
+    };
+
+    it('accepts a loop end showing the kept end with the loop mark', () => {
+      expect(violationsAfter(archived)).toEqual([]);
+    });
+
+    it('fires when a loop end shows its own station or another name', () => {
+      expect(
+        violationsAfter((state) => {
+          archived(state);
+          delete slots(state)[4]!.shown;
+        }).some((v) => v.includes('2/2 (Station ID 13) shows Station ID 13, but its loop closures make it 10')),
+      ).toBe(true);
+      expect(
+        violationsAfter((state) => {
+          archived(state);
+          slots(state)[4]!.name = '9';
+        }).some((v) => v.includes('2/2 (Station ID 13) shows "9", but Station ID 10 (which it shows) is "0"')),
+      ).toBe(true);
+    });
+
+    it('fires when two loop closures archive one station (C1) or archives cycle (C2)', () => {
+      expect(
+        violationsAfter((state) => {
+          archived(state);
+          closures(state).push({
+            id: 2,
+            station_a: { line_id: 2, station_index: 1 },
+            station_b: { line_id: 2, station_index: 2 },
+            archived: { end: 'b', station: { id: 13, name: '2' }, shown_as: { id: 12, name: '1' } },
+          });
+          (state.project as { next_closure_id: number }).next_closure_id = 3;
+        }).some((v) => v.includes('Station ID 13 is archived by two loop closures (C1)')),
+      ).toBe(true);
+      expect(
+        violationsAfter((state) => {
+          archived(state);
+          closures(state).push({
+            id: 2,
+            station_a: { line_id: 1, station_index: 0 },
+            station_b: { line_id: 2, station_index: 2 },
+            archived: { end: 'a', station: { id: 10, name: '0' }, shown_as: { id: 13, name: '2' } },
+          });
+          (state.project as { next_closure_id: number }).next_closure_id = 3;
+        }).some((v) => v.includes('cycle (C2)')),
       ).toBe(true);
     });
 

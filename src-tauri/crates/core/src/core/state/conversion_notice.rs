@@ -1,26 +1,33 @@
-//! The conversion notice: what opening a 0.6.0 (SQLite) file changed that a
-//! line shows (plan 7.2.10, C4, UR2; review findings UX-1, UX-3), and the
-//! banner's view of it (demo issue I-5).
+//! The conversion notice: what opening an older file changed that a line
+//! shows, and the banner's view of it (demo issue I-5). Two routes raise it:
+//! a 0.6.0 (SQLite) file converted to version 2 (plan 7.2.10, C4, UR2;
+//! review findings UX-1, UX-3), and a version 2 file an earlier build wrote,
+//! upgraded to kept and archived stations (plan 2026-11-23 RS 8.2).
 //!
-//! The banner is one short lead ("Converted from the old file format."),
-//! then only what applies, each a short clause with its count
-//! ([`ConversionNoticeView::changes`]), then ONE sentence on saving that is
-//! true for the file's state ([`ConversionFile`]). The lead and that sentence
-//! are the frontend's: it knows when a later save converts the file
+//! The banner is one short lead, the frontend's, chosen by
+//! [`ConversionNoticeView::source`] ("Converted from the old file format.",
+//! "Upgraded from an earlier version 2 file."), then only what applies, each a
+//! short clause with its count ([`ConversionNoticeView::changes`]), then, when
+//! the file now shows a station under another station's name or hides a
+//! comment, the frontend's sentence that Detach Line from Station or Remove
+//! Closure brings each back ([`ConversionNoticeView::brings_back`]), then ONE
+//! sentence on saving that is true for the file's state ([`ConversionFile`]).
+//! The frontend knows when a later save converts the file
 //! (`CommandResult::legacy_converted`), so the banner never promises a save
-//! that already happened. A long list of renamed stations goes behind a
-//! Details disclosure ([`ConversionNoticeView::details`]).
+//! that already happened. A long list goes behind a Details disclosure
+//! ([`ConversionNoticeView::details`]), grouped by line.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::core::command::MAX_FILE_NAME_LEN;
 use crate::models::sanitize_display_text;
-use crate::persistence::migrate::{MigrationReport, NameChange, Verification};
+use crate::persistence::migrate::{IdentityChanges, MigrationReport, NameChange, Verification};
+use crate::persistence::stalx_v2::UpgradeReport;
 
-/// What a converted 0.6.0 file's notice says about saving, and where the
-/// original is (the banner's last sentence). Also what a save that converted
-/// the open project reports (`CommandResult::legacy_converted`: `saved` or
+/// What a converted file's notice says about saving, and where the original
+/// is (the banner's last sentence). Also what a save that converted the open
+/// project reports (`CommandResult::legacy_converted`: `saved` or
 /// `saved_as_new_file`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -33,44 +40,72 @@ pub enum ConversionFile {
     /// backups folder: this session's save, or a Recents rename or a SpeleoDB
     /// link strip of the closed file before this open.
     Saved,
-    /// A Save As wrote the new format to another file; the 0.6.0 file is
+    /// A Save As wrote the new format to another file; the older file is
     /// left as it was.
     SavedAsNewFile,
     /// A SpeleoDB revision converted on download: this computer's copy is
     /// already converted, and the original revision is unchanged on SpeleoDB
     /// (Revision history).
     Downloaded,
+    /// A file open read-only (made with a newer Stalagmight) is shown
+    /// converted, but never saved: the file itself stays as it is, local or
+    /// downloaded.
+    ReadOnly,
+}
+
+/// Which older file the notice is about (the banner's lead).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../bindings/")]
+pub enum ConversionSource {
+    /// A 0.6.0 (SQLite) file, converted to version 2 (plan 7.2).
+    #[default]
+    OldFormat,
+    /// A version 2 file an earlier build wrote, upgraded to kept and archived
+    /// stations (plan 2026-11-23 RS 8.2). Named explicitly: serde's
+    /// `snake_case` puts no underscore before a digit (`earlier_version2`)
+    /// while ts-rs's does, and the frontend reads the TS spelling (RS-FX6).
+    #[serde(rename = "earlier_version_2")]
+    EarlierVersion2,
 }
 
 /// The conversion notice as the banner shows it (`take_conversion_notice`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub struct ConversionNoticeView {
+    /// Which older file was converted: the banner's lead.
+    pub source: ConversionSource,
     /// What the conversion changed that a line shows, one short clause each,
     /// worded with its count ("1 station moved by 0.40 m", "3 stations moved
-    /// by up to 2.50 m", "Side / 2 is now shown as 2a", "a merged
-    /// station's two comments were joined"), in this order: moves, depth
-    /// changes, stations not placed, names, joined comments. Never empty.
+    /// by up to 2.50 m", "Side / 0 is now shown as Main / 12", "Side / 2 is
+    /// now shown as 2a", "the comment of Side / 0 is hidden"), in this order:
+    /// moves, depth changes, stations not placed, then what lines show
+    /// differently, by line. Never empty.
     pub changes: Vec<String>,
-    /// Every renamed station ("Side / 2 is now shown as 2a") when
-    /// there are more than `changes` spells out (it then says how many), for
-    /// a Details disclosure; empty otherwise.
+    /// Every station shown differently, every hidden comment and every loop
+    /// closure that keeps both names, grouped by line, when there are more
+    /// than `changes` spells out (it then counts them), for a Details
+    /// disclosure; empty otherwise.
     pub details: Vec<String>,
+    /// Whether the banner says that Detach Line from Station or Remove
+    /// Closure brings back each station now shown under another station's
+    /// name and each hidden comment.
+    pub brings_back: bool,
     /// Whether the new format is on disk yet, and where the original is.
     pub file: ConversionFile,
 }
 
-/// The notice an upgrade shows when the migration changed what the user
-/// sees (plan 7.2.10, G4, C4): stations moved in plan (a torn legacy merge
-/// collapsed, or an unexplained raw difference), stations whose depth changed
-/// (a snap's derived alignment changed a depth tie, or an unexplained one),
-/// stations the conversion could not place, or a name a line showed (review
-/// findings D-migration-upgrade-8, UX-3 and UX-1; since I-3 every line keeps
-/// the names 0.6.0 showed on it, a merged station's included, so only a name
-/// a line showed twice is lettered). Computed View differences never raise it
-/// (C4).
+/// The notice an upgrade shows when it changed what the user sees (plan
+/// 7.2.10, G4, C4; RS 8.2 and 8.3): stations moved in plan (a torn legacy
+/// merge collapsed, or an unexplained raw difference), stations whose depth
+/// changed (a snap's derived alignment changed a depth tie, or an
+/// unexplained one), stations the conversion could not place, or what a line
+/// shows (a junction's kept station, a loop closure's kept end, a letter, a
+/// hidden comment, a closure left showing both names). Computed View
+/// differences never raise it (C4).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ConversionNotice {
+    pub(crate) source: ConversionSource,
     pub(crate) slots_moved: usize,
     pub(crate) max_displacement_m: f64,
     /// Slots whose depth changed beyond the 1e-9 m tolerance, and by how much
@@ -80,34 +115,33 @@ pub(crate) struct ConversionNotice {
     /// Slots with no finite migrated position.
     pub(crate) unplaced: usize,
     pub(crate) unexplained: usize,
-    /// The slots whose name changed, in slot order (survey content: shown,
-    /// never logged).
-    pub(crate) names_changed: Vec<NameChange>,
-    /// Merged stations whose members' different comments were joined into
-    /// one (each line now shows both).
-    pub(crate) comments_joined: usize,
+    /// What lines show differently (survey content: shown, never logged).
+    pub(crate) changes: IdentityChanges,
     /// Where the unconverted original is, which the notice tells the user.
     pub(crate) original: ConversionOriginal,
 }
 
-/// Where the original of a converted legacy file is kept.
+/// Where the original of a converted file is kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum ConversionOriginal {
-    /// A local file: converted in memory, written as version 2 by its first
-    /// save, which moves the original into the backups folder (Recent
-    /// Projects: Restore an earlier copy).
+    /// A local file: converted in memory, written by its first save, which
+    /// keeps the original in the backups folder (Recent Projects: Restore an
+    /// earlier copy).
     #[default]
     LocalFile,
     /// A SpeleoDB revision downloaded into the cache: the cache copy is
-    /// already version 2 when it opens, and no local backup is made; the
+    /// already converted when it opens, and no local backup is made; the
     /// original is the revision itself, unchanged on the server (Revision
     /// history).
     SpeleoDbRevision,
 }
 
-/// How many renamed stations the banner lists in its sentence; more go behind
-/// Details, the sentence saying how many.
+/// How many entries of what lines show differently the banner lists in its
+/// sentence; more are counted there and listed behind Details.
 pub(crate) const NAMES_INLINE: usize = 3;
+
+/// The clause of a notice whose only difference is an unexplained one.
+const SOMETHING_CHANGED: &str = "some stations are placed differently than in the old version";
 
 /// `1 {one}` or `{n} {many}`.
 fn count(n: usize, one: &str, many: &str) -> String {
@@ -127,46 +161,156 @@ fn by(n: usize, metres: f64) -> String {
     }
 }
 
-/// "Side / 2 is now shown as 2a": the line as the converted project
-/// names it, the name 0.6.0 showed there, the name it shows now. File text,
-/// bounded and stripped of bidi controls like every receipt string.
+/// File text, bounded and stripped of bidi controls like every receipt
+/// string.
+fn text(s: &str) -> String {
+    sanitize_display_text(s, MAX_FILE_NAME_LEN)
+}
+
+/// "Side / 0 is now shown as Main / 12" (the slot shows another station, the
+/// line it belongs to named first), "Side / 2 is now shown as 2a" (a letter):
+/// the line as the converted project names it, the name the file showed
+/// there, the name it shows now.
 fn rename_clause(change: &NameChange) -> String {
-    let text = |s: &str| sanitize_display_text(s, MAX_FILE_NAME_LEN);
+    let to = match (&change.kept_line, change.lettered) {
+        (Some(line), false) => format!("{} / {}", text(line), text(&change.to)),
+        _ => text(&change.to),
+    };
     format!(
-        "{} / {} is now shown as {}",
+        "{} / {} is now shown as {to}",
         text(&change.line),
-        text(&change.from),
-        text(&change.to)
+        text(&change.from)
     )
 }
 
+/// `A`, `A and B`, `A, B and C`.
+fn and_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [init @ .., last] => format!("{} and {last}", init.join(", ")),
+    }
+}
+
+/// One station whose comment is hidden, with every line it showed it on
+/// (RS-FX6: one station on two lines hides one comment, said once).
+struct HiddenByIdentity<'a> {
+    station: &'a str,
+    lines: Vec<&'a str>,
+}
+
+/// The hidden comments of `changes` by identity, in order of first
+/// appearance (line order, then chain order).
+fn hidden_by_identity(changes: &IdentityChanges) -> Vec<HiddenByIdentity<'_>> {
+    let mut out: Vec<(crate::models::StationId, HiddenByIdentity<'_>)> = Vec::new();
+    for c in &changes.comments_hidden {
+        match out.iter_mut().find(|(id, _)| *id == c.identity) {
+            Some((_, entry)) => {
+                if !entry.lines.contains(&c.line.as_str()) {
+                    entry.lines.push(&c.line);
+                }
+            }
+            None => out.push((
+                c.identity,
+                HiddenByIdentity {
+                    station: &c.station,
+                    lines: vec![&c.line],
+                },
+            )),
+        }
+    }
+    out.into_iter().map(|(_, entry)| entry).collect()
+}
+
+/// "the comment of Side / 0 is hidden", or for a station shown on several
+/// lines "the comment of M4 on Main and Annex is hidden".
+fn hidden_clause(hidden: &HiddenByIdentity<'_>) -> String {
+    match hidden.lines.as_slice() {
+        [line] => format!(
+            "the comment of {} / {} is hidden",
+            text(line),
+            text(hidden.station)
+        ),
+        lines => format!(
+            "the comment of {} on {} is hidden",
+            text(hidden.station),
+            and_list(&lines.iter().map(|l| text(l)).collect::<Vec<_>>())
+        ),
+    }
+}
+
+/// Every entry of `changes` worded, grouped by line (its names, then the
+/// hidden comments first seen on it), then the closures that keep both
+/// names.
+fn identity_entries(changes: &IdentityChanges) -> Vec<String> {
+    let mut out = Vec::new();
+    let hidden = hidden_by_identity(changes);
+    for line in &changes.lines {
+        out.extend(
+            changes
+                .names
+                .iter()
+                .filter(|c| &c.line == line)
+                .map(rename_clause),
+        );
+        out.extend(
+            hidden
+                .iter()
+                .filter(|h| h.lines.first() == Some(&line.as_str()))
+                .map(hidden_clause),
+        );
+    }
+    out.extend(changes.closures_keep_both.iter().map(|c| {
+        format!(
+            "the loop closure between {} and {} keeps both names",
+            text(&c.a),
+            text(&c.b)
+        )
+    }));
+    out
+}
+
 impl ConversionNotice {
-    /// [`Self::of`] plus what else a line shows differently: the names the
-    /// conversion changed and the comments it joined. A notice also when
-    /// nothing moved but something visible changed (review finding UX-1).
+    /// [`Self::of`] plus what a 0.6.0 file's lines show differently (RS 8.3).
+    /// A notice also when nothing moved but something visible changed
+    /// (review finding UX-1, U-P1-2).
     pub(crate) fn of_migration(
         report: &MigrationReport,
-        names_changed: &[NameChange],
+        changes: &IdentityChanges,
     ) -> Option<Self> {
-        let names_changed = names_changed.to_vec();
-        let comments_joined = report.comments_joined;
         match Self::of(&report.verification) {
             Some(notice) => Some(Self {
-                names_changed,
-                comments_joined,
+                changes: changes.clone(),
                 ..notice
             }),
-            None => (!names_changed.is_empty() || comments_joined > 0).then_some(Self {
-                slots_moved: 0,
-                max_displacement_m: 0.0,
-                depth_changed: 0,
-                max_depth_change_m: 0.0,
-                unplaced: 0,
-                unexplained: 0,
-                names_changed,
-                comments_joined,
-                original: ConversionOriginal::LocalFile,
+            None => (!changes.is_empty()).then(|| Self {
+                changes: changes.clone(),
+                ..Self::nothing(ConversionSource::OldFormat)
             }),
+        }
+    }
+
+    /// The notice of an earlier version 2 file's upgrade (RS 8.2): what its
+    /// lines show differently, if anything. Nothing moves.
+    pub(crate) fn of_upgrade(report: &UpgradeReport) -> Option<Self> {
+        (!report.changes.is_empty()).then(|| Self {
+            changes: report.changes.clone(),
+            ..Self::nothing(ConversionSource::EarlierVersion2)
+        })
+    }
+
+    /// A notice with nothing to say yet.
+    fn nothing(source: ConversionSource) -> Self {
+        Self {
+            source,
+            slots_moved: 0,
+            max_displacement_m: 0.0,
+            depth_changed: 0,
+            max_depth_change_m: 0.0,
+            unplaced: 0,
+            unexplained: 0,
+            changes: IdentityChanges::default(),
+            original: ConversionOriginal::LocalFile,
         }
     }
 
@@ -188,9 +332,7 @@ impl ConversionNotice {
             max_depth_change_m: depth.max_displacement_m,
             unplaced: verification.unplaced(),
             unexplained: verification.mismatches.len(),
-            names_changed: Vec::new(),
-            comments_joined: 0,
-            original: ConversionOriginal::LocalFile,
+            ..Self::nothing(ConversionSource::OldFormat)
         };
         (notice.slots_moved > 0
             || notice.depth_changed > 0
@@ -199,60 +341,105 @@ impl ConversionNotice {
             .then_some(notice)
     }
 
-    /// The banner's view. `saved`: the project file is already in the new
-    /// format (a closed file's Recents rename or link strip upgraded it
-    /// before this open); ignored for a downloaded revision.
-    pub(crate) fn view(&self, saved: bool) -> ConversionNoticeView {
-        let mut changes = Vec::new();
+    /// What a source an Add .stalx or a Merge Projects read was converted
+    /// with, counted and named nowhere (RS 8.2, 8.3): the copy renumbers its
+    /// lines and Station IDs, so the banner's "Side / 0" would not match
+    /// what the user then sees. The banner's order; never empty.
+    pub(crate) fn counts(&self) -> Vec<String> {
+        let mut out = self.geometry_clauses();
+        out.extend(self.identity_counts());
+        if out.is_empty() {
+            out.push(SOMETHING_CHANGED.to_owned());
+        }
+        out
+    }
+
+    /// The moves, depth changes and stations not placed, one clause each.
+    fn geometry_clauses(&self) -> Vec<String> {
+        let mut out = Vec::new();
         if self.slots_moved > 0 {
-            changes.push(format!(
+            out.push(format!(
                 "{} moved {}",
                 count(self.slots_moved, "station", "stations"),
                 by(self.slots_moved, self.max_displacement_m)
             ));
         }
         if self.depth_changed > 0 {
-            changes.push(format!(
+            out.push(format!(
                 "{} changed depth {}",
                 count(self.depth_changed, "station", "stations"),
                 by(self.depth_changed, self.max_depth_change_m)
             ));
         }
         if self.unplaced > 0 {
-            changes.push(format!(
+            out.push(format!(
                 "{} could not be placed",
                 count(self.unplaced, "station", "stations")
             ));
         }
-        let renamed: Vec<String> = self.names_changed.iter().map(rename_clause).collect();
-        let details = if renamed.len() > NAMES_INLINE {
-            changes.push(format!(
-                "{} now shown under another name",
-                count(renamed.len(), "station is", "stations are")
-            ));
-            renamed
+        out
+    }
+
+    /// What lines show differently, counted by kind.
+    fn identity_counts(&self) -> Vec<String> {
+        let identity = &self.changes;
+        [
+            (
+                identity.shown_as_other(),
+                "station is now shown under another station's name",
+                "stations are now shown under another station's name",
+            ),
+            (
+                identity.lettered(),
+                "station now has a letter suffix",
+                "stations now have a letter suffix",
+            ),
+            (
+                hidden_by_identity(identity).len(),
+                "station's comment is now hidden",
+                "stations' comments are now hidden",
+            ),
+            (
+                identity.closures_keep_both.len(),
+                "loop closure keeps both names",
+                "loop closures keep both names",
+            ),
+        ]
+        .into_iter()
+        .filter(|(n, _, _)| *n > 0)
+        .map(|(n, one, many)| count(n, one, many))
+        .collect()
+    }
+
+    /// The banner's view. `saved`: the project file is already in the new
+    /// format (a closed file's Recents rename or link strip upgraded it
+    /// before this open); ignored for a downloaded revision.
+    pub(crate) fn view(&self, saved: bool) -> ConversionNoticeView {
+        let mut changes = self.geometry_clauses();
+        let entries = identity_entries(&self.changes);
+        let details = if entries.len() > NAMES_INLINE {
+            changes.extend(self.identity_counts());
+            entries
         } else {
-            changes.extend(renamed);
+            changes.extend(entries);
             Vec::new()
         };
-        match self.comments_joined {
-            0 => {}
-            1 => changes.push("a merged station's two comments were joined".to_owned()),
-            n => changes.push(format!("the comments of {n} merged stations were joined")),
-        }
         if changes.is_empty() {
-            // `of` and `of_migration` raise no notice without one of the
-            // counts above; never "0 stations moved" all the same.
-            changes.push("some stations are placed differently than in the old version".to_owned());
+            // `of`, `of_migration` and `of_upgrade` raise no notice without
+            // one of the counts above; never "0 stations moved" all the same.
+            changes.push(SOMETHING_CHANGED.to_owned());
         }
+        let identity = &self.changes;
         let file = match (self.original, saved) {
             (ConversionOriginal::SpeleoDbRevision, _) => ConversionFile::Downloaded,
             (ConversionOriginal::LocalFile, false) => ConversionFile::NotYetSaved,
             (ConversionOriginal::LocalFile, true) => ConversionFile::Saved,
         };
         ConversionNoticeView {
+            source: self.source,
             changes,
             details,
+            brings_back: identity.shown_as_other() > 0 || !identity.comments_hidden.is_empty(),
             file,
         }
     }

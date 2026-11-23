@@ -31,7 +31,7 @@ import { metersToMapCoords } from '../../../../utils/coordinates';
 import { lngLatToMercator } from '../mercatorCoords';
 import { packCssColor, type Rgba8 } from './colorPack';
 import { buildStationLookup, computeStationAllReference, projectStationsRel } from './tessellate';
-import { mergedStationLabels } from './labelMergeGroups';
+import { junctionSlots, mergedStationLabels } from './labelMergeGroups';
 import { LABEL_KIND, LABEL_FLAG, type LabelKind } from './labelShaders';
 import { shapeLabel, type ShapedLabel, type ShapeCache } from './labelLayout';
 import type { GlyphAtlas } from './glyphAtlas';
@@ -377,10 +377,17 @@ export function buildLabelDescriptors(
       const top = lineMaxIndex.get(sid);
       if (top === undefined || idx > top) lineMaxIndex.set(sid, idx);
     }
-    // IDs mode draws the Station ID, never the station's position in its line.
+    // IDs mode draws the Station ID the slot shows (RS 6: a foreign slot
+    // shows its kept station's), never the station's position in its line. A
+    // loop end (a station a loop closure shows as its other end) is never
+    // labelled, by name, Station ID or comment: its kept end's label says it
+    // (RS 6, M-P2-10), and its point is still drawn and selectable.
+    const shownSlots = data.stationShown;
+    const loopEnd = (g: number): boolean => shownSlots?.get(g)?.loop_end === true;
     const labelText = (g: number): string | null => {
+      if (loopEnd(g)) return null;
       if (namesMode) return formatStationNameLabel(data.stationNames.get(g));
-      const stationId = data.stationIds[g];
+      const stationId = shownSlots?.get(g)?.id ?? data.stationIds[g];
       return stationId === undefined ? null : formatStationLabel(stationId);
     };
     // A junction is one station: ONE label per Station ID, drawn for its
@@ -431,7 +438,8 @@ export function buildLabelDescriptors(
         stationIndex,
         ...(group !== undefined ? { stationGroup: group } : {}),
       });
-      const stationComment = wantStationComment && stationInView ? data.stationComments.get(g) : undefined;
+      const stationComment =
+        wantStationComment && stationInView && !loopEnd(g) ? data.stationComments.get(g) : undefined;
       if (stationComment !== undefined) {
         descriptors.push({
           kind: LABEL_KIND.STATION_COMMENT,
@@ -487,34 +495,60 @@ export function buildLabelDescriptors(
   }
 
   // ─── Line names ─────────────────────────────────────────────
+  // A line name anchors on one of its line's OWN stations: not a junction
+  // slot (where the junction's station label is: a branch starting on a kept
+  // station would otherwise take that label's spot at every zoom, since both
+  // labels are offset in em from one point, RS-FX8 N1) and not a loop end
+  // (which sits on, or beside, its kept end's label).
+  const shared = wants(LABEL_KIND.LINE_NAME) ? junctionSlots(data) : null;
+  const sharedPoint = (g: number): boolean =>
+    shared?.has(g) === true || data.stationShown?.get(g)?.loop_end === true;
   if (wants(LABEL_KIND.LINE_NAME)) for (const line of data.lines) {
     const inner = lookup.get(line.id);
     if (!inner || inner.size === 0) continue;
-    // Prefer the first NON-reference station (so the name doesn't float when
-    // reference shots are hidden); fall back to the first station overall.
+    // Prefer a NON-reference station (so the name doesn't float when
+    // reference shots are hidden), then an own station (above), then the
+    // lowest station index; fall back to the first station overall.
     let anchorGlobal: number | undefined;
     let anchorStationIdx = Infinity;
-    let foundNonRef = false;
+    let anchorNonRef = false;
+    let anchorOwn = false;
     // Union of the kinds touching this line's stations, for the case where
     // NONE of them has a Normal shot: the line name then hides on the same
     // per-kind rule its stations do, not on a both-off rule (#27).
     let lineKindFlags = 0;
     for (const [stIdx, gIdx] of inner.entries()) {
       lineKindFlags |= stationKindFlags(gIdx);
-      const hasNonRef = allRef[gIdx] === 0;
-      if (foundNonRef && !hasNonRef) continue;
-      if (hasNonRef && !foundNonRef) {
-        foundNonRef = true;
-        anchorStationIdx = Infinity; // restart the min search among non-ref stations
-      }
-      if (stIdx < anchorStationIdx) {
-        anchorStationIdx = stIdx;
+      const nonRef = allRef[gIdx] === 0;
+      const own = !sharedPoint(gIdx);
+      const better =
+        anchorGlobal === undefined ||
+        (nonRef !== anchorNonRef
+          ? nonRef
+          : own !== anchorOwn
+            ? own
+            : stIdx < anchorStationIdx);
+      if (better) {
         anchorGlobal = gIdx;
+        anchorStationIdx = stIdx;
+        anchorNonRef = nonRef;
+        anchorOwn = own;
       }
     }
     if (anchorGlobal === undefined) continue;
-    const secX = stationRel[anchorGlobal * 2]!;
-    const secY = stationRel[anchorGlobal * 2 + 1]!;
+    const foundNonRef = anchorNonRef;
+    let secX = stationRel[anchorGlobal * 2]!;
+    let secY = stationRel[anchorGlobal * 2 + 1]!;
+    if (!anchorOwn) {
+      // Every station of the line is shared (a one-shot tie between two
+      // lines): the middle of the shot next to the anchor, so the name is
+      // not on either end's label.
+      const next = inner.get(anchorStationIdx + 1) ?? inner.get(anchorStationIdx - 1);
+      if (next !== undefined) {
+        secX = (secX + stationRel[next * 2]!) / 2;
+        secY = (secY + stationRel[next * 2 + 1]!) / 2;
+      }
+    }
     if (!inView(secX, secY)) continue;
     descriptors.push({
       kind: LABEL_KIND.LINE_NAME,

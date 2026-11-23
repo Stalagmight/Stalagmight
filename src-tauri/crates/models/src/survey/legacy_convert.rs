@@ -231,6 +231,7 @@ pub(super) fn convert(old: &Old) -> Converted {
             b: station(b),
             b_via: Some(b.line_id),
             strategy,
+            archived: None,
         });
         max_closure_id = max_closure_id.max(c.id);
     }

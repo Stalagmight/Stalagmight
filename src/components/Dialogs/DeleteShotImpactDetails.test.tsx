@@ -48,7 +48,8 @@ describe('DeleteShotImpactDetails - closures across one shot (#737)', () => {
     expect(block).toHaveTextContent(
       'Close Gap & Delete removes these loop closures (they would span a single shot)'
     );
-    expect(block).toHaveTextContent('#3: Main Line / A1 <-> Main Line / A5');
+    // Full highlighting: line pills, the line as the context.
+    expect(block).toHaveTextContent(/#3: Main Line: A1( Station ID \d+)? <-> Main Line: A5/);
     expect(block.textContent).not.toMatch(/\d+:\d+ /);
     // Not mixed up with the closures removed because a station goes.
     expect(screen.queryByText('Removed closures')).toBeNull();
@@ -101,5 +102,46 @@ describe('DeleteShotImpactDetails - the station graph (plan 5.4)', () => {
     // Nothing is re-wired on the station graph: no replacement rows exist.
     expect(screen.queryByText(/Replacement/)).toBeNull();
     expect(screen.queryByText(/could not be/)).toBeNull();
+  });
+});
+
+/**
+ * Package RS-FX1 (farm 7a5ed348b262, 56ce8638669d): what the delete does to
+ * station names and comments on its own (RS 4.3, 12), and, when Split is
+ * offered too, what Split would do, in the notice's words before the user
+ * confirms. Injection: dropping either block fails its assertion.
+ */
+describe('DeleteShotImpactDetails - station names and comments (RS-FX1)', () => {
+  it('says what the delete and the Split choice do to names and comments', () => {
+    render(
+      <DeleteShotImpactDetails
+        impact={{
+          ...none,
+          identities: {
+            lettered: [],
+            restored: [],
+            unarchived: [],
+            hidden: [{ id: 5, name: 'A5', home_line: 0, comment: 'Sump' }],
+          },
+          split_identities: {
+            lettered: [],
+            restored: [],
+            unarchived: [],
+            hidden: [{ id: 1, name: 'A1', home_line: 0, comment: 'Low air' }],
+          },
+        }}
+      />
+    );
+    expect(screen.getByTestId('impact-identities')).toHaveTextContent(
+      'Main Line / A5\'s comment ("Sump") is hidden: Undo brings it back.'
+    );
+    expect(screen.getByTestId('impact-split-identities')).toHaveTextContent(
+      'If you choose Split Line instead' + 'Main Line / A1\'s comment ("Low air") is hidden: Undo brings it back.'
+    );
+  });
+
+  it('says nothing when the delete changes no name or comment', () => {
+    render(<DeleteShotImpactDetails impact={none} />);
+    expect(screen.queryByTestId('impact-identities')).toBeNull();
   });
 });

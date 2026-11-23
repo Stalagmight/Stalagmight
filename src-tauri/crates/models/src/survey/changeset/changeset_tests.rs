@@ -354,13 +354,21 @@ fn closures_datums_and_placements_are_list_hunks() {
     let (mut before, line) = survey(8);
     let chain = before.line_stations(line).unwrap().to_vec();
     before
-        .create_closure(chain[1], None, chain[6], None, ClosureStrategy::Batch)
+        .create_closure(
+            chain[1],
+            None,
+            chain[6],
+            None,
+            ClosureStrategy::Batch,
+            None,
+            &[],
+        )
         .unwrap();
     let mut after = before.clone();
     after
         .set_datum(chain[0], Some(line), gps(20.5, -87.0), None)
         .unwrap();
-    after.remove_closure(after.closures[0].id).unwrap();
+    after.remove_closure(after.closures[0].id, &[]).unwrap();
     let changes = capture(&before, &after);
     let digest = changes.digest();
     assert_eq!(digest.datums.added.len(), 1);
@@ -390,7 +398,7 @@ fn a_junction_merge_and_detach_round_trip() {
         before.line_stations(line).unwrap()[3],
     );
     let mut merged = before.clone();
-    merged.merge_stations(a, b).unwrap();
+    merged.merge_keeping_stationary(a, b).unwrap();
     let changes = capture(&before, &merged);
     assert_eq!(
         changes.digest().stations_deleted.len(),
@@ -400,7 +408,7 @@ fn a_junction_merge_and_detach_round_trip() {
     round_trip(&before, &merged, &changes);
     let mut detached = merged.clone();
     let junction = detached.station_at(StationRef::new(other, 0)).unwrap();
-    detached.detach_line(junction, other).unwrap();
+    detached.detach_line_auto(junction, other, None).unwrap();
     let changes = capture(&merged, &detached);
     assert_eq!(
         changes.digest().stations_created.len(),

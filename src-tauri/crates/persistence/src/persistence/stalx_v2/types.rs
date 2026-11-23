@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 
@@ -12,6 +13,7 @@ use crate::models::UndoMode;
 use crate::persistence::undo_limits::MAX_PERSISTED_HISTORY_ROWS;
 
 use super::canon::canonical;
+use super::upgrade::UpgradeReport;
 use super::{DEFAULT_GENERATOR, PUSH_BYTE_CAP};
 
 /// A JSON value in canonical text: no insignificant whitespace, strings
@@ -214,8 +216,9 @@ pub struct Extras {
     /// Who wrote the body, e.g. `Stalagmight 0.6.0`. The app sets its own
     /// version before every save; empty writes [`DEFAULT_GENERATOR`].
     pub generator: String,
-    /// The file's `requires` list. A save refuses names this build does not
-    /// know (the body would lose what they mean).
+    /// The file's `requires` list, but for [`super::ARCHIVED_STATIONS`],
+    /// which every file this build writes lists (RS 8.1). A save refuses
+    /// names this build does not know (the body would lose what they mean).
     pub requires: Vec<String>,
     pub speleodb: Option<SpeleoDbLink>,
     pub local: LocalState,
@@ -286,8 +289,9 @@ pub enum Mode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CountLimits {
     pub stations: usize,
-    /// Aliases over all stations.
-    pub aliases: usize,
+    /// Archived stations over all stations, each counted once plus once per
+    /// line it names (an earlier build's U1 alias rows count the same).
+    pub archived: usize,
     pub lines: usize,
     pub shots: usize,
     /// Hand moves over all lines.
@@ -314,7 +318,7 @@ impl Default for CountLimits {
     fn default() -> Self {
         Self {
             stations: 2_100_000,
-            aliases: 2_100_000,
+            archived: 2_100_000,
             lines: 100_000,
             shots: 2_000_000,
             hand_moves: 2_100_000,
@@ -336,7 +340,7 @@ impl Default for CountLimits {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Limit {
     Stations,
-    Aliases,
+    Archived,
     Lines,
     Shots,
     HandMoves,
@@ -354,7 +358,7 @@ impl Limit {
     pub(super) fn cap(self, limits: &CountLimits) -> usize {
         match self {
             Self::Stations => limits.stations,
-            Self::Aliases => limits.aliases,
+            Self::Archived => limits.archived,
             Self::Lines => limits.lines,
             Self::Shots => limits.shots,
             Self::HandMoves => limits.hand_moves,
@@ -371,7 +375,7 @@ impl Limit {
 
     pub(super) const ALL: [Limit; 13] = [
         Self::Stations,
-        Self::Aliases,
+        Self::Archived,
         Self::Lines,
         Self::Shots,
         Self::HandMoves,
@@ -390,7 +394,7 @@ impl fmt::Display for Limit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Stations => "stations",
-            Self::Aliases => "station aliases",
+            Self::Archived => "archived stations",
             Self::Lines => "lines",
             Self::Shots => "shots",
             Self::HandMoves => "hand moves",
@@ -428,6 +432,14 @@ pub struct DecodeOptions {
     /// Inputs larger than this are refused before parsing.
     pub max_file_bytes: u64,
     pub limits: CountLimits,
+    /// When set, the decode stops with [`super::DecodeError::DeadlinePassed`]
+    /// once this instant has passed, checked between its phases (the parse,
+    /// the file's own invariants, the steps of an earlier file's upgrade,
+    /// the final check) and inside the upgrade's long steps (per line or
+    /// junction, RS-FX9), so only the parse and the checks run to
+    /// completion once started: for a reader with a time budget
+    /// (stalx-reader). The app sets none.
+    pub deadline: Option<Instant>,
 }
 
 impl Default for DecodeOptions {
@@ -435,6 +447,18 @@ impl Default for DecodeOptions {
         Self {
             max_file_bytes: MAX_V2_FILE_BYTES,
             limits: CountLimits::default(),
+            deadline: None,
+        }
+    }
+}
+
+impl DecodeOptions {
+    /// [`super::DecodeError::DeadlinePassed`] once [`Self::deadline`] has
+    /// passed.
+    pub(super) fn in_time(&self) -> Result<(), super::DecodeError> {
+        match self.deadline {
+            Some(deadline) if Instant::now() >= deadline => Err(super::DecodeError::DeadlinePassed),
+            _ => Ok(()),
         }
     }
 }
@@ -457,15 +481,52 @@ pub enum DecodeNote {
 /// A decoded file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Decoded {
-    /// The survey, exactly as the file holds it (load never mutates).
+    /// The survey, exactly as the file holds it (load never mutates). In a
+    /// file an earlier build of version 2 wrote, U1 alias rows are records
+    /// naming their lines (see [`Self::earlier`]).
     pub project: Project,
     pub extras: Extras,
     pub notes: Vec<DecodeNote>,
+    /// Set when an earlier build of version 2 wrote the file (its `requires`
+    /// does not list [`super::ARCHIVED_STATIONS`]): the load-time upgrade
+    /// (plan 2026-11-23 RS 8.2), computed and checked by the decode, not yet
+    /// applied. Every site that hands the project to the app applies it with
+    /// [`Self::upgrade`].
+    pub earlier: Option<Earlier>,
+}
+
+/// The upgraded survey of a file an earlier build of version 2 wrote, with
+/// what the upgrade did ([`Decoded::earlier`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Earlier {
+    pub(super) project: Project,
+    pub(super) report: UpgradeReport,
+}
+
+impl Earlier {
+    /// What the upgrade does.
+    pub fn report(&self) -> &UpgradeReport {
+        &self.report
+    }
 }
 
 impl Decoded {
     /// Why the project must open read-only, if it must.
     pub fn read_only(&self) -> Option<&ReadOnly> {
         self.extras.read_only.as_ref()
+    }
+
+    /// Apply the load-time upgrade of a file an earlier build of version 2
+    /// wrote (RS 8.2): [`Self::project`] becomes the upgraded survey, and
+    /// what the upgrade did is returned (an empty report: the file reads
+    /// the same under both rules). `None` for a file this build's rules
+    /// wrote, or once applied. The history and the extras are left as they
+    /// are: the caller decides what to keep.
+    pub fn upgrade(&mut self) -> Option<UpgradeReport> {
+        let earlier = self.earlier.take()?;
+        let mut project = earlier.project;
+        project.file_path = self.project.file_path.take();
+        self.project = project;
+        Some(earlier.report)
     }
 }

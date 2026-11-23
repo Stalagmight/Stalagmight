@@ -155,21 +155,10 @@ pub(super) fn create_free_line(
 }
 
 /// A shot as the user reads it after the edit: `Line: from -> to`, each
-/// station by the name that line shows it by (I-3).
+/// station by the name that line shows it by (I-3), a dotted slot or a loop
+/// end qualified ([`Project::shot_text`], RS-FX5).
 fn shot_label(project: &Project, line: LineId, index: usize) -> String {
-    let name = |i: usize| {
-        project
-            .line(line)
-            .and_then(|l| l.station(i))
-            .and_then(|s| project.name_on(s, line))
-            .map_or_else(|| i.to_string(), str::to_string)
-    };
-    format!(
-        "{}: {} \u{2192} {}",
-        project.line_label_of(line),
-        name(index),
-        name(index + 1)
-    )
+    project.shot_text(line, index)
 }
 
 /// Every shot of `line` checked against the project's thresholds, labelled
@@ -292,6 +281,7 @@ pub(super) fn apply(
             );
             Ok(Applied {
                 warnings: swept_closure_warnings(&labels, &deleted.report.sweep.removed),
+                identities: project.identity_notice(&deleted.report.identities),
                 ..Applied::default()
             })
         }

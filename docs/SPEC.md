@@ -332,7 +332,7 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 | **Shot** | A single survey measurement between two stations. Contains azimuth, length, depth, and optionally LRUD. |
 | **Station** | A point in the cave where a shot measurement is taken. Tied to cave line at physical markers. An entity with a project-unique Station ID; a shot runs from one station to the next. |
 | **Line** | A group of consecutive shots collected during a single survey session; a continuous run of stations joined by shots (a chain: its start station, then the station each shot ends at). Has metadata (name, colour, direction, quality, azimuth reference); who surveyed it and when is recorded per shot. Called a Section before the rename: an old SQLite `.stalx` stores lines in its `sections` table (see [Persisted names](saving.md#persisted-names)). |
-| **Junction** | A station on two or more lines - what merging two stations makes. It is one station: one Station ID, one comment, one position, shown once per line it is on, each line showing it by the name that line knows it by (a line merged onto it keeps its own name for it). |
+| **Junction** | A station on two or more lines - what merging two stations makes. It is one station: one Station ID, one comment, one position, shown once per line it is on, every line showing the station the merge kept. The other stations are archived in it with their own name and comment, and Detach Line from Station brings each back (kept and archived stations, plan 2026-11-23). |
 | **Section** | A named, coloured grouping of lines - a region of the cave such as "Upper level" (#327). Each line belongs to at most one Section; a line in none is ungrouped. Section names are unique in a project. Not to be confused with the old name of a Line: in code a Section is `Section` / `SectionId` / `Project::sections`, serialized as `cave_section_id` on the wire and in the `sections` member of the version 2 file. |
 | **Placement** | Where a piece of the survey that holds no zero datum sits: one of its stations at a local (x, y) position. |
 | **Sections panel** | The left-dock tab that lists the project's lines, grouped under their Sections (ungrouped lines listed separately). It keeps its name. |
@@ -358,7 +358,9 @@ is a junction. The file stores observations and user decisions only; every
 position, misclosure, alignment and datum role is derived. The model is
 `models::survey` ([survey-model.md](survey-model.md)); its file is the `.stalx`
 version 2 ([file-format.md](file-format.md)); the design and every deviation
-from it is [the station-graph plan](plans/2026-11-20_station-graph-model.md).
+from it is [the station-graph plan](plans/2026-11-20_station-graph-model.md),
+and which station a junction or a loop closure shows is [the kept-stations
+plan](plans/2026-11-23_kept-stations.md) ("RS").
 
 ### 4.1 Entity Hierarchy
 
@@ -371,10 +373,10 @@ Project (Cave System)
 │   └── modified_at: DateTime
 ├── Stations{}   (by StationId, ascending)
 │   ├── id: StationId (u32, project-unique, never reused: the Station ID, shown)
-│   ├── name: String (shown by every line it is on that no alias names; a line shows each of its stations by a name unique on it)
+│   ├── name: String (shown on every line through it, unless a loop closure archives it; unique among each line's own stations, 4.2)
 │   ├── comment: Option<String>
-│   ├── aliases: [{ id, name, line }] (the stations merged into this one; line = the line that knew it by that alias and still shows it by that name)
-│   └── external: Option<String> (an imported identity, attribute only)
+│   ├── external: Option<String> (an imported identity, attribute only)
+│   └── archived: [{ id, name, comment, external, into, lines }] (the stations merges archived here, shown nowhere; lines = the lines whose own station it was; into = the archived station it is inside, unset: directly in this one)
 ├── Lines[]   (display order = list order)
 │   ├── id: u32 (internal, immutable, never shown)
 │   ├── name: Option<String> (every line the app makes has one, unique in the project; seeded `Line N`)
@@ -406,7 +408,8 @@ Project (Cave System)
 ├── LoopClosures[]   (list order kept)
 │   ├── id: ClosureId (u64, never reused)
 │   ├── a, b: StationId, with a_via / b_via: Option<LineId>
-│   └── strategy: Batch | LeastSquaresWeighted | Move | Tie (legacy) | deferred legacy strategies
+│   ├── strategy: Batch | LeastSquaresWeighted | Move | Tie (legacy) | deferred legacy strategies
+│   └── archived: Option<a | b> (the loop end: that end shows the other, kept end; unset: both keep their names)
 ├── Sections[]   (named groupings of lines, panel order)
 │   ├── id: SectionId (u32)
 │   ├── name: String (project-unique, never empty)
@@ -424,8 +427,11 @@ L" - is the address the IPC, the frontend and the data table use; it is derived
 from the chain and resolved to a `StationId` at the command boundary. The
 frontend's per-slot `Station` (coordinates, `id`, `name`, `comment`,
 `is_zero_datum`, `gps_coordinates`, `merged_with` = the other slots of the same
-station, `closures_with` = direct and transitive closure relationships) is
-derived for every slot; a junction's slots share its id, name and comment.
+station, `closures_with` = direct and transitive closure relationships,
+`archived` = the station's archived stations, `shown` = on a foreign slot or a
+loop end only, the Station ID it shows, its home line and the loop mark) is
+derived for every slot; a junction's slots share its id, its shown name and
+comment, and its archived stations.
 
 What the file holds besides the survey: the SpeleoDB link (`speleodb`), the
 per-machine state (`local`: display toggles such as `hiddenSections`, the
@@ -439,10 +445,12 @@ a line; the shots form a **forest** (no cycle without an explicit loop closure:
 what was the merge-forest rule is now structural); every connected piece has
 exactly one anchor (its first datum, else exactly one `Placement`); a closure
 joins two different stations, and two pieces only when both are placed by a
-datum; station names unique on every line; counters above every id; numbers
-finite. An edit that would break one is rolled back and refused; a save refuses
-to write an invalid model; a file that breaks one is refused with the repair
-offer.
+datum; on every line, the line's own stations have different names (N8, 4.2);
+archived stations and closure archives keep the kept-stations invariants (A1 to
+A6, C1, C2: [survey-model.md](survey-model.md)); counters above every id,
+archived ids included; numbers finite. An edit that would break one is rolled
+back and refused; a save refuses to write an invalid model; a file that breaks
+one is refused with the repair offer.
 
 #### Sections (groupings of lines, #327)
 
@@ -498,54 +506,111 @@ line_id:station_index`) are internal and are never shown.
 | Thing | Identity the user sees | Unique within | Example |
 |-------|------------------------|---------------|---------|
 | Line | name | the project | `Main Line` |
-| Station | name | every line it is on | `17`, `4a`, `A3` |
+| Station | name | the stations each line shows as its own | `17`, `4a`, `A3` |
 | Station | Station ID (integer) | the project | `512` |
 | Station, with its line | `line / name` | the project | `Main Line / 17` |
 | Shot | `from → to` | its line | `4 → 5`, with its line `Main Line: 4 → 5` |
 
 A station IS its Station ID: the id is the entity's key, so it stays with the
 physical station through every insert, delete, reverse, split and combine with
-no bookkeeping. A **junction** (a station on two or more lines, what a merge
-made) has ONE id and ONE comment on all its lines, and each line shows it by
-the name that line knows it by: a merge keeps the surviving station's id and
-records the retired station's id and name as an alias naming the line it was
-on (5.1 of the plan), and that line keeps showing the retired name. Shot UUIDs are unique across the whole project: an import,
-merge or Add that brings an id the project already holds renames the
-newcomer's copy to a derived id (see
-[ariane-export.md](ariane-export.md#shot-uuids)).
+no bookkeeping. A station shows ONE identity on every line through it: its
+Station ID, name, comment and external id. A **junction** (a station on two or
+more lines, what a merge made) shows its **kept** station on every line: a
+merge keeps one of its two stations (Merge Stations asks which) and
+**archives** the other in the junction, whole. An archived station keeps its
+own Station ID, name, comment and external id and the lines whose own station
+it was; it is shown nowhere, and its name counts toward no uniqueness. A
+station archived while it was a junction itself keeps the stations archived in
+it inside it, so each archived station is directly in the junction or inside
+another archived station. One that names no line any more is **history**: it
+only reserves its Station ID, and nothing brings it back. A **loop closure**
+may archive one of its ends the same way: that **loop end** shows the closure's
+kept end (name, Station ID, comment) on every line through it, while it stays a
+point of its own (position, datums, selection); Remove Closure shows its own
+station again. Shot UUIDs are unique across the whole project: an import, merge
+or Add that brings an id the project already holds renames the newcomer's copy
+to a derived id (see [ariane-export.md](ariane-export.md#shot-uuids)).
 
-**Uniqueness and normalization.** Every line has a non-empty name, unique in the
-project; every station has a Station ID, and a line shows each of its stations
-by a name no other station of that line shows (invariant 8). The name a line
-shows a station by is the name of the alias naming that line, when one does,
-else the station's own name. So no edit changes a name a line shows unless
-asked to, as 0.6.0 kept each line's own name for its merge member: a merge
-gives every line that showed the retired station by its own name an alias with
-it (a fresh Station ID for all but the first such line), Split Line Here gives
-the second half a copy of the alias the line knew the split station by,
-Combine Lines plans its prefixes on the names each line shows, and the
-conversion of a 0.6.0 file keeps the name 0.6.0 showed on every slot (each
-merge member an alias naming its line). A rename addresses a slot: through a
-line that knows the station by an alias it renames that alias (that line
-only), else the station's own name (every line without an alias of its own),
-and it is refused when one of those lines shows another station by the new
-name. Imports and the edits that create stations keep names unique with the
-letter-suffix rule below. Detaching a line that an alias names gives the line
-its own station back, with the alias's Station ID and name; detaching the line
-that shows the junction by its own name, when every other line knows it by an
-alias, keeps the junction (id, name, comment) on that line and gives the other
-lines their own station back. Likewise a delete (shot, range or line) that
-leaves a station only on lines that know it by aliases gives it back the
-Station ID and name the first of those aliases records, its comment, datums,
-closure ends, placement and hand moves following (Undo restores it exactly).
-The conversion notice lists a slot whose name the conversion changed
-("Side / 0 is now shown as ..."; more than three are counted and listed behind
-Details), which only happens to a name a 0.6.0 line showed twice (the later
-one is lettered); an unnamed line is seeded
-`Line 1`, `Line 2`, ... (smallest free number, in line order); a repeated line
-name gets ` (2)`, ` (3)`, ... on the later line. Station IDs come from
-`next_station_id` and are never reused within a timeline (an undo leaves the
-counter standing).
+**Native and foreign slots.** A line through a station that no archived station
+of it names is a **native line** of the station, and a slot there whose station
+no closure archives is a **native slot**: the line shows its own station. On a
+**foreign slot** (an archived station names the line: the line's own station
+was not kept) the line shows the kept station with a dot in the colour of that
+station's **home line**, its first native line in line order; a loop end shows
+the kept end with a loop mark. Plain text names them `Side / 12 (Main)` and
+`Main / 12 (loop end on Side)`. Split Line Here keeps the split station native
+on both halves, or, when an archived station names the line there, that
+station names the second half too.
+
+**Uniqueness and normalization.** Every line has a non-empty name, unique in
+the project; every station has a Station ID. On each line, the native slots
+show different stations by different names (invariant N8). Foreign slots and
+loop ends count toward no uniqueness: with Main / 12 kept at Branch's start,
+Branch shows the dotted `12` there and keeps its own station `12` further along
+(CSV and JSON exports tell them apart by Station ID). **Rule K** picks the
+station kept where no one chooses, and is the dialogs' default (after Merge's
+preference for the one station holding a datum): the one on the longest line
+(its length as line details measure it), ties to the lowest Station ID.
+**Rule L** settles a name an operation makes two native slots of a line show
+for two stations: the station shown on fewer lines (foreign slots and loop ends
+counted) takes the letter suffix below (`5` -> `5a`), free on every line it is
+native on; on a tie, the one new on the line by its own name, then the higher
+Station ID. A station shown on more lines is never lettered for one on fewer,
+and chain order never decides. Merge Stations, Detach Line from Station and
+Remove Closure list each collision their operation makes (a merge rarely: the
+lines that show its kept station anew show it through foreign slots; creating a
+loop closure never) with two answers, lettering one station or the other, and
+refuse one left unanswered; every path without a dialog letters by rule L and
+names each letter in its notice (an import in its receipt). The answers follow
+the station-name rules. An answer may rename only a station of one of the
+operation's own collisions: a rename naming any other station is refused and
+changes nothing, so an operation that makes no collision (creating a loop
+closure among them) takes no rename. A letter the operation offers is taken
+exactly as offered (a station named ` 5` is offered ` 5a`, free on its lines);
+any other name is trimmed, and refused when it is empty or holds a control or
+invisible formatting character, as Edit Station refuses it. A rename addresses
+the identity the slot shows, so every line showing it shows the new name
+(through a foreign slot or a loop end that is the kept station, and the data
+table or Edit Station first says whose station it is); it is refused when a
+native slot of a line the renamed station is native on shows another station by
+the new name. Imports and the edits that create stations keep names unique with
+the letter-suffix rule below; Combine Lines plans its prefixes on the names the
+lines show natively.
+
+**Detach and restore.** Detach Line from Station on a line an archived station
+names gives back, whole, the archived station directly in the junction that is,
+or holds, the one naming the line: its Station ID, name, comment and external
+id, on every line it or a station inside it names (they come off together), the
+stations inside it staying inside it. Detaching the junction's only native
+line, when every other line is named by an archived station, keeps the junction
+(Station ID, name, comment) on that line and gives the other lines one station
+back, the archived station the dialog picks (by default rule K over the lines
+it and the stations inside it name), with the other archived stations inside
+it. Detaching a native
+line beside another native line (Split Line Here, a line started there, an
+import join) gives it a new station with the junction's own name and no
+comment. Likewise an edit (a delete of a shot, range or line) that leaves a
+station with no native line gives it the identity of the archived station
+directly in it that names the lines left, itself or through a station inside it
+(rule K among several), its datums, closure ends, placement and hand moves
+following; the old identity becomes history, and its comment and external id
+move to the restored station when that one has none (the delete's confirm names
+a comment this hides; Undo restores it exactly).
+
+**Conversion.** Converting a 0.6.0 file, and opening a version 2 file an earlier
+build wrote (its `requires` lacks `archived-stations`), keep at each junction
+the station on its longest line (rule K) and archive the others; each loop
+closure archives the end rule K does not keep when no other closure archives
+that end and no chain of closure archives would loop, else none; rule L settles
+a name two native slots now show. The conversion notice lists, by line, each
+slot now shown as another station ("Side / 0 is now shown as Main / 12"), each
+letter, each hidden comment and each loop closure that keeps both names (more
+than three are counted and listed behind Details), and says Detach Line from
+Station or Remove Closure brings each back. An unnamed line is seeded `Line 1`,
+`Line 2`, ... (smallest free number, in line order); a repeated line name gets
+` (2)`, ` (3)`, ... on the later line. Station IDs come from `next_station_id`
+and are never reused within a timeline, an archived station's included (an
+undo leaves the counter standing).
 
 **Naming a new station.** An edit that creates a station names it:
 
@@ -579,9 +644,10 @@ against the junction's other lines too.
 **Combine Lines.** The joined line must keep its names unique, and it renames
 stations only when it has to. The two lines are prefixed when
 
-- a name of the other line (its join station aside - the joined station keeps
-  the kept line's name and Station ID, and the other join station's become its
-  aliases) is also a name of the kept line: a real **collision**; or
+- a name the other line shows natively (its join station aside - the joined
+  station is the kept line's, 7.11) is also a name the kept line shows
+  natively: a real **collision** (a dotted junction or a loop end neither
+  causes nor takes a prefix); or
 - the kept line has two or more **letter families** (it is the product of an
   earlier lettered combine; a letter family is the names starting with one
   ASCII capital directly followed by a digit, `A0`, `A3`, `B12a`) and the other
@@ -622,10 +688,10 @@ B1..B3 (2 renamed), Side Sump -> Sump-a". It names the joined station by its
 name after the combine.
 
 **User edits.** Renaming a station (`SetStationName`, undoable) trims the
-name and refuses an empty one or one that another station of ANY line through
-the station holds ("Line X already has a station named Y", naming the line
-where it is taken; the frontend checks the same rule before sending,
-`stationRenameProblem`).
+name and refuses an empty one or one that a native slot of any line the
+renamed station is native on shows for another station (4.2; "Line X already
+has a station named Y", naming the line where it is taken; the frontend checks
+the same rule before sending, `stationRenameProblem`).
 Renaming a station to the name it already has (after trimming) succeeds as a
 no-op: no undo entry, no unsaved-changes flag. Renaming a line (Edit Line) or
 creating one from the UI refuses an empty name or one another line holds ("A
@@ -649,15 +715,15 @@ exclusive. A junction is one station, so it draws exactly ONE label (the
 labels group slots by Station ID), on its representative slot: one that is not
 its line's first station if there is one, then one that is not its line's
 last, ties broken by the line's order in the project and then by station
-index; with names on, the label is the name that slot's line shows. A branch
-that starts on the middle of the main line therefore shows the main line's
-name for the junction there (`Junction`). The image export also counts the two
-ends of an aligned loop closure as one point. The label keeps the
+index; with names on, the label is the junction's shown name, the same on
+every line. A loop end draws no label (name, Station ID or comment), on the map
+or in the image export, though its point is drawn. The image export also counts
+the two ends of an aligned loop closure as one point. The label keeps the
 first-in-line rule (it always shows when any slot starts its line) and hides
 with the shots only when every slot's marker would.
 
 The undo history names lines, stations and shots by name (`Update shot Main
-Line: 4 → 5`, `Merge stations Main Line / 0 and Side / 1`, `Delete line "Main
+Line: 4 → 5`, `Merge Side / 1 into Main Line / 0 (keeps 0)`, `Delete line "Main
 Line"`), worded when the edit was recorded, with the names before it (see
 [undo-redo.md](undo-redo.md#name-resolution)).
 
@@ -777,28 +843,40 @@ These are derived from the model, never stored, and recomputed after every edit
 
 Declared behaviour changes of the switch from the 0.6.0 model (plan 12.2 and
 its Deviations sections), visible to users. The complete list, each change
-with its reason, is the plan's "Status (final)" section:
+with its reason, is the plan's "Status (final)" section, and for junctions
+and loop ends section 11 of the kept-stations plan:
 
-- **Junctions share one Station ID and comment; each line keeps its own
-  name.** Merging two stations makes one: the surviving station keeps its id;
-  the retired one's id and name become an alias naming its line, which keeps
-  showing that name, and distinct comments are joined. A migrated file's merged
-  stations are joined the same way, so every line still shows the names 0.6.0
-  showed. Renaming a junction through one line renames the name that line
-  shows, checked on every line that shows it.
+- **A junction shows one station, the kept one, on every line.** Merging two
+  stations makes one; the Merge dialog asks which is kept. The other is
+  archived with its own name, Station ID and comment (no comment is joined),
+  and Detach Line from Station brings it back; the lines that showed it show
+  the kept station with the kept station's home-line dot, and may keep a
+  station of their own by the same name (4.2). A migrated file keeps at each
+  junction the station on its longest line, and the conversion notice lists
+  what each line shows differently. Renaming a junction renames it on every
+  line.
+- **A loop closure can show its two ends as one station.** Create Loop Closure
+  asks which end both show, or keeps both names; the other end (a loop end)
+  stays a point of its own with no label, and Remove Closure brings its name
+  back. A migrated loop closure or `Tie` archives the end rule K does not keep,
+  when it may.
 - **Split Line Here makes a junction.** The halves share the split station, so
   an edit to one half moves the other, Move Segment on the second half is
   refused when the first holds a datum, and merging the halves' far ends goes to
   the closure dialog. There is no comment or datum side to choose.
 - **Unmerge detaches one line.** "Detach Line from Station" gives the chosen
-  line a new station (the name it showed the junction by; no comment) where
-  the junction was, or its own station back when it was merged there; on a hub of three or more lines it detaches that line only (0.6.0
-  removed every direct merge pair of the member). Datums and closure ends that
-  came from that line (`via`) go with it.
+  line its own station back where the junction was: the one a merge archived
+  there (with every line that was one station with it), or a new station with
+  the junction's name and no comment; when every other line shows the junction
+  through archived stations, the chosen line keeps it and they get one back. On
+  a hub of three or more lines it detaches that line only (0.6.0 removed every
+  direct merge pair of the member). Datums and closure ends that came from that
+  line (`via`) go with it.
 - **A delete leaves a junction on its other lines** with its comment and
   datums; nothing is re-anchored and no replacement merge is invented. When
-  the lines left all knew it by another name, it takes back the Station ID and
-  name the first of them knew it by.
+  the lines left all show it through an archived station, that station comes
+  back there (rule K among several), keeping a comment that would otherwise
+  vanish.
 - **Set Zero Datum on a junction slot** edits the station's datum when it has
   one; a station can hold two datums only after merging two placed pieces or
   from a migration.
@@ -820,9 +898,10 @@ with its reason, is the plan's "Status (final)" section:
   export draws one comment and one star per station.
 - **The file is JSON.** An old SQLite file opens as before and is upgraded on
   its first save, its original kept (Recent Projects: right-click the project, Restore an earlier copy); its undo history is not kept.
-  A file whose conversion moved stations, changed a depth, could not place
-  a station, showed a station under another name or joined comments shows a
-  one-time conversion notice (a closed file upgraded by a Recents rename or a
+  A file whose conversion moved stations, changed a depth, could not place a
+  station, or changed what a line shows (another station, a letter, a hidden
+  comment, a loop closure keeping both names) shows a one-time conversion
+  notice (a closed file upgraded by a Recents rename or a
   link strip shows it at its next open), whose last sentence says whether the
   new format is on disk yet; the converting save turns it to "Saved in the new
   format", or, with the notice dismissed, says so in a toast. A display toggle
@@ -1095,9 +1174,19 @@ the test ids) but are never shown:
 - Shot: its two station names, `4 → 5`; with line context `Main Line: 4 → 5`
   (aria-labels and selection announcements always carry the line).
 - Line: its name (`Unnamed line` only for a line that somehow has none).
-- At the default `full` syntactic-highlighting level a link renders as a pill:
-  entity symbol, the label, then (for a station or shot on another line) the
-  line name dimmed after a divider.
+- At the default `full` syntactic-highlighting level a link renders as a line
+  pill (`LinePill.tsx`), coloured by the line it belongs to (a line its own, a
+  station or shot the line of its context): a dot in the line's colour, then
+  (for a station or shot on another line) the line name, smaller and muted,
+  with a colon, then the label at the surrounding text size, and for a station
+  its Station ID as a muted superscript (`Main Line: 17` with a raised `42`). The aria-label
+  and the selection announcement carry the ID too (`Select station Main Line
+  / 17, Station ID 42`). The fill, border, hover, dot and dot ring come from
+  `src/theme/pillColors.ts`, which holds main text at 7:1 and the muted parts
+  at 4.5:1 for any line colour on every theme. The Station detail's "Also on"
+  rows name the other line only, without the ID. The data table's gutter and
+  line picker, and the dialogs that name stations or lines, use the same pill
+  (`EntityBlob`). Below `full`, links are plain underlined text.
 
 **Shot Detail - Connected Line:**
 ```
@@ -1138,36 +1227,43 @@ the test ids) but are never shown:
 └────────────────────────────────────────────────────┘
 ```
 
-**A junction** (a station on several lines) is one station: its Station ID
-and comment are the same from every slot, and each slot shows the name its
-line knows it by. The details say each fact once (demo finding N-3), the
-slot's own line too (V-8): Name is the name on the slot's line alone, the
-Line row under it names that line (a link to it), and "Connected" does not
-repeat it. "Also on" lists the other lines through it, one row
-each, the same for every junction however it was made (a merge, Split Line
-Here, a line started there, an import; I-9): the line by name (a link to its
-slot; never the station's own name again), then the name that line shows the
-station by when it is not the Name row's, and the Station ID that line had
-there before a merge when it has one (the alias naming the line, which Detach
-gives back): `North Passage 0 (Station ID 9)`. Each row has a button that
-detaches that line (tooltip "Detach <line> from this station"; the history
-row reads `Detach line "<line>" from <staying line> / <name>`). "Also known as" lists
-the Station IDs and names merged into the station (its aliases: a merge's
-retired station, or a 0.6.0 merge group's other members) that no "Also on"
-row shows: `<name> on <line> (Station ID <id>)` while a line still shows it
-by that name, the slot's own line's as `Station ID <id> on <line>` (the Name
-row says its name), else `<name> (Station ID <id>)`, so a surveyor can still
-find a former name and Station ID from the field notes; hidden when none is
-left. The Data table's Conn picker and Edit Station head their list of the
-other lines "Also on" too, Adjust Position says "Joined to N other lines",
-and the combine menu says "Joined here" for two lines sharing a station.
-"Connected" also lists every shot that meets the station on the other lines
+**A junction** (a station on several lines) is one station: its Station ID,
+name and comment are the same from every slot, the station the merge kept
+(kept and archived stations, plan 2026-11-23). The details show the identity
+the slot shows (RS 6) and say each fact once (demo finding N-3), the slot's
+own line too (V-8): the Line row names the slot's line (a link to it), and
+"Connected" does not repeat it. On a line whose own station a merge archived
+(a foreign slot) a line under the Name says whose station it is: "12 belongs
+to Main Line"; its pills carry a small dot in that line's colour. "Also on"
+lists the other lines through it, one row each, the same for every junction
+however it was made (a merge, Split Line Here, a line started there, an
+import; I-9): the line by name (a link to its slot), never a name of its own.
+Each row has a button that detaches that line (tooltip "Detach <line> from
+this station"); when the detach would bring a station back, take other lines
+with it or repeat a name, the button opens Detach Line from Station on that
+line instead. "Archived here" lists the stations merges archived in it, each
+with its name, Station ID and the line whose own station it was (`0 (Station
+ID 9), Side's own station`) or, for one no line names any more, "kept for its
+Station ID", and its comment; a station archived inside another (a junction a
+later merge archived whole) is listed under it, as Detach brings the two back
+together; hidden when none. A loop closure end that
+shows its closure's kept end opens with "Loop closure end, shown as Main /
+3" and its own station, hidden until the closure is removed; its position,
+depth and datum are its own. A rename or comment edit through a foreign slot
+or a loop end (Edit Station, the data table) first says whose station it
+changes and offers Detach Line from Station or Remove Closure instead. The
+Data table's Conn picker and Edit Station head their list of the other lines
+"Also on" too, Adjust Position says "Joined to N other lines", and the
+combine menu says "Joined here" for two lines sharing a station. "Connected"
+also lists every shot that meets the station on the other lines
 (`StationOtherLineShots.tsx`), so a junction of three lines shows three or
 more shots, not just a previous and a next. A junction's zero datum is found
 from any of its slots, here and in Edit Station.
 
 **Loop Closures Section:**
-- Placed after "Also on" and "Also known as", before "Connected" section
+- Placed after "Also on" and "Archived here", before "Connected" section
+- A closure that hides one end says so: "Side / 17, the loop end, is shown as Main / 3. Removing the closure brings it back."
+- The remove button opens Remove Closure when the closure hides a station or a name would repeat
 - Collapsible with default expanded state
 - Hidden when station has no `closures_with` entries
 - Closures grouped by `closure_id`; direct closures listed first, then transitive
@@ -1809,11 +1905,16 @@ Shown when merging two **unconnected** stations (different line groups).
 ```
 ┌─ Merge Stations ─────────────────────────────────────────────────┐
 │                                                                  │
-│  Station A:                                    Upstream / 0      │
-│  Station B:                                    Far Room / 2      │
+│  Keep (the station kept is shown on every line):                 │
+│  (o) Far Room / 2 (Station ID 31)                                │
+│  ( ) Upstream / 0 (Station ID 40)                                │
+│                                                                  │
+│  Upstream will show Far Room / 2.                                │
+│  Upstream / 0 is archived.                                       │
+│  Detach Line from Station brings Upstream / 0 back.              │
 │                                                                  │
 │  Far Room / 2 is already where Far Room and Main Line meet.      │
-│  Upstream moves 24 m to join Far Room / 2.                       │
+│  Upstream moves 24 m onto Far Room / 2's position.               │
 │  Depths 4.0 m (Upstream), 12.5 m (Far Room), 12.5 m (Main Line)  │
 │  become 9.7 m: the joined station takes the mean of its depth    │
 │  readings.                                                       │
@@ -1827,7 +1928,7 @@ The dialog says what the merge does before it does it, from the merge check
 piece that moves (named, up to three, then counted: "Upstream and Upstream
 Side move 24 m", "A, B, C and 2 more move"; demo finding N-13), how far (not said below 1 cm, nor after a snap-to-merge drag,
 which already moved it; when both pieces are placed by their own GPS the datum
-notice says it instead), and the station it joins; that a picked station is
+notice says it instead), and onto whose position; that a picked station is
 already a junction, and of which lines (`MergePreview.junctions`, the picked
 slot's line first; demo finding V-2); and, when the two stations' depths
 differ by more than 0.5 m (`JUNCTION_DEPTH_SPREAD_M`), every depth reading the
@@ -1837,6 +1938,18 @@ line, the other lines at A, B's line, the other lines at B), and that mean (as
 depths alone do not add up to it: "Depths 4.0 m and 12.5 m become 9.7 m" read
 12.5 m twice, once on each line through the junction. Every merge-tool pick
 that can merge opens this dialog, so no merge happens without it.
+
+The **Keep** radios choose the kept station (4.2), one per station, each its
+pill (line, own name, Station ID; a station a loop closure shows as another
+adds "shown as K through a loop closure"). Preselected is the station holding
+a zero datum or GPS fix when only one does, else rule K's; when a loop closure
+between the two already shows them as one, its kept end is kept and the dialog
+says why. Under them, from the preview of each keep (`MergeKeepPreview`): the
+lines that will show the kept station, that the other "is archived" ("with its
+comment" when it has one), that Detach Line from Station brings it back, the
+stations archived inside it that stay inside it, each name a line will show
+twice (its own station and the dotted junction), every other comment the merge
+hides, and a row per collision with its two answers.
 
 If the two stations are already connected (same line group), MergeStations is rejected and the frontend should show the Closure Dialog instead.
 
@@ -1986,64 +2099,66 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 **Merging unconnected stations** (different line groups):
 1. User activates Merge Tool (M)
 2. Selects two stations from different, unconnected line groups
-3. MergeDialog appears showing station details and distance
+3. MergeDialog appears with the Keep choice, what moves and how far
 4. Confirm → the two stations become ONE station, a junction of their lines:
    the piece that moves (the free one onto the placed one; between two free
-   pieces the first pick's) lands on the other. The surviving station keeps
-   its Station ID; the other's id and name become its alias, and every moved
-   line keeps showing the names it showed (nothing is renamed); distinct
-   comments are joined
+   pieces the first pick's) lands on the other. The station chosen under
+   **Keep** is shown on every line through it; the other is archived in it
+   with its own Station ID, name and comment (nothing is joined), and the
+   lines whose own station it was show the kept station with the kept
+   station's home-line dot. Which station is kept moves nothing
 5. Picking another slot of the same station clears the pick, as clicking the
    same slot does: they are already one station
 
 **Detaching a line** (the inverse; "Detach Line from Station..." in the station
-menu, or a line's button in Station details): the chosen line gets a new
-station where the junction was (the name it showed the junction by; no
-comment, no aliases), so nothing moves; a line that was merged there gets its
-own Station ID and name back. When every other line knew the junction by
-another name (each was merged there), the chosen line keeps the junction (its
-Station ID, name and comment) and the other lines get their own station back
-instead; the dialog says which. The datums and closure ends that came from that
-line (their `via`) move to the new station with it; the orphan-closure sweep
-then promotes a closure left as the only connection of the detached piece. On a
-hub of three or more lines only the chosen line leaves; when the chosen line
-keeps the junction, the other lines come off together and stay joined on ONE
-station (the identity of the first of their aliases), so a line among them
-that had its own Station ID keeps it only as an alias (detaching it from there
-afterwards gives it back). The dialog asks "Choose what comes off" and says,
-under the choice, what every line ends up with there, name and Station ID,
-from the backend's per-line preview (`DetachLinePreview.lines`, the detach run
-on a copy; demo finding V-1): "Far Room: 0, Station ID 19 (comes off with
-Upstream)", "Upstream: 0, Station ID 19 (comes off with Far Room, sharing its
-station; its own Station ID 22 stays only as an alias, and detaching Upstream
-afterwards gives it back)", "Main Line: 8, Station ID 8 (stays)". The row of a
-line that keeps the junction reads as what comes off ("Far Room and Upstream,
-together (Main Line keeps this station)"), so the history row, which names the
-lines that come off, names what the user picked. The dialog preselects the
-line clicked when it is not the junction's owner (a line an alias names, which
-comes off alone with its own Station ID and name back); otherwise the first
-such other line, which is the likely intent (demo findings I-7, V-1); with
-none, the line clicked. When the chosen line gets its station back and the others keep the
-junction, the station's comment stays with them; a merge or the 0.6.0 upgrade
-may have joined the detached line's own comment into it, which no alias
-keeps, so the dialog then says the comment stays and to copy that part over
-(demo finding I-7).
+menu, or a line's button in Station details) follows the three cases of 4.2,
+and nothing moves: a line whose own station a merge archived gets that station
+back, or, when a later merge archived it inside another junction, that junction
+(its Station ID, name and comment), together with every line it or a station
+archived inside it names (they were one station before the merge; the dialog
+names them), the stations inside it staying inside it (detach one of their
+lines again to take it off on its own); a native line whose other lines all
+show the junction through archived stations keeps the junction (its Station ID,
+name and comment), and the other lines come off together on ONE station, the
+archived station a picker chooses ("The lines that come off show:", default
+rule K), with the other archived stations inside it; any other line gets a new
+station with the junction's own name and no comment. The datums and closure
+ends that came from the lines that come off (their `via`) move with them; the
+orphan-closure sweep then promotes a closure left as the only connection of the
+detached piece. On a hub of three or more lines the dialog asks "Choose what
+comes off" and says, under the choice, what every line ends up with there, name
+and Station ID, from the backend's per-line preview (`DetachLinePreview.lines`,
+the detach run on a copy; demo finding V-1): "Far Room: 0, Station ID 19 (comes
+off with Upstream)", "Upstream: 0, Station ID 19 (comes off with Far Room)",
+"Main Line: 8, Station ID 8 (stays)", and that Upstream's own station (Station
+ID 22) stays archived inside the one they get back, for a second Detach of
+Upstream to bring back. The row of a line that keeps the junction reads as what
+comes off ("Far Room and Upstream, together (Main Line keeps this station)"),
+so the history row, which names the lines that come off, names what the user
+picked. The dialog preselects the line clicked when it comes off alone with its
+own station back (an archived station names it); otherwise the first such other
+line, which is the likely intent (demo findings I-7, V-1); with none, the line
+clicked. It shows the comment that comes back ("With its comment: ..."), a row
+per collision of the returning station's name with a native station of its
+lines, with two answers ("Rename the station that comes back (Side / 0, Station
+ID 15) to 0a", "Rename the 0 that is on Side now (Station ID 29) to 0a"), and,
+when a line already shows the name with a letter, that a letter given earlier
+because of the junction stays.
 
 When the choice does not change the result there is no choice (demo finding
 N-2): on a junction of two lines where one keeps the station when detached
 and the other gets back exactly the station it had, both choices leave the
 same two stations, so the dialog asks for both lines' previews first, then
 says in one sentence what happens ("North Passage comes off: it gets back 0
-(Station ID 9); Main Line keeps station 3."), with the comment notice when the
-station has one, and Detach / Cancel. Detach then detaches the line that
+(Station ID 9); Main Line keeps station 3."), with the comment it gets back
+when it has one, and Detach / Cancel. Detach then detaches the line that
 comes off, whichever slot the dialog was opened on. Everywhere else the list
 of lines stays. The history row always names the line that comes off, never
 the one that keeps the station, and the station as `Line / name` on a line
-that stays on it (demo finding V-6: `station 0` was the detached line's name
-for it, and another line may show its own station 0): a detach of the keeping
-line (the other lines come off with the station they had) reads `Detach line
-"North Passage" from Main Line / 3`, and on a hub `Detach lines "B" and "C"
-from Main / 4`.
+that stays on it (demo finding V-6: another line may show its own station 0):
+a detach of the keeping line (the other lines come off with the station they
+had) reads `Detach line "North Passage" from Main Line / 3`, and on a hub
+`Detach lines "B" and "C" from Main / 4`.
 
 **Creating a loop closure** (already connected stations):
 1. User activates Merge Tool (M)
@@ -2056,8 +2171,13 @@ from Main / 4`.
    - If the two stations are the two ends of one shot (directly or through
      junctions and other closures), the dialog says why and Create is disabled:
      the closure would squeeze that shot to zero length (#737)
-4. User selects error distribution method
-5. Confirm → Loop closure created, shown as dashed line on map
+4. User selects error distribution method, and under "Both ends show:" which
+   end both ends show, or "Keep both names": by default rule K's end, or, when
+   that is not allowed (the other end is already another closure's loop end,
+   or the kept end already shows it), "Keep both names", with a note saying why
+5. Confirm → Loop closure created, shown as dashed line on map; the end not
+   kept becomes a loop end (4.2), which Remove Closure brings back, with a
+   row per name it would then repeat on its lines
 6. Closure stations show `closures_with` references (direct + transitive, derived)
 7. Detail Panel shows "Loop Closures" section for involved stations
 
@@ -2087,8 +2207,8 @@ from Main / 4`.
 4. Map updates in real-time
 5. Auto-saved
 
-A comment of several lines (a merge joins two stations' comments with a
-blank line) shows its lines separated by " / " in its one-line cell
+A comment of several lines (typed so, imported, or the two comments Combine
+Lines' "Both" joins) shows its lines separated by " / " in its one-line cell
 ("T-junction, line arrow points out / Silt bank, low visibility"); hovering
 the cell shows it whole, and the comment editor, the Station details and a
 copy keep its line breaks (demo finding N-9).
@@ -2144,13 +2264,15 @@ copy keep its line breaks (demo finding N-9).
    delete. One Undo restores the shots and the closure (#737)
 5. A delete removes one station from the line (station 0 for the first shot,
    else the shot's end station). If that station is a junction it stays for the
-   other lines, with its comment and datums, and the line simply leaves it;
-   if the lines left all knew it by another name (each was merged there), it
-   goes back to the Station ID and name the first of them knew it by, its
-   comment, datums, closures and placement following, as Detach gives a line
-   its own station back (the demo's I-1); a station on no other line is deleted with its comment, datums and hand
-   moves, and its closures are dropped. Then the orphan-closure sweep runs: a
-   closure left as the only connection of two pieces becomes a junction
+   other lines, with its comment and datums, and the line simply leaves it; if
+   the lines left all show it through archived stations (each was merged
+   there), the archived station they name comes back as it (rule K among
+   several, 4.2), its datums, closures and placement following, as Detach gives
+   a line its own station back (the demo's I-1); the junction's comment moves
+   to the restored station when that has none, and the confirm names a comment
+   this hides; a station on no other line is deleted with its comment, datums
+   and hand moves, and its closures are dropped. Then the orphan-closure sweep
+   runs: a closure left as the only connection of two pieces becomes a junction
    ([closures.md](closures.md#when-a-closure-becomes-a-merge-promotion))
 
 **Deleting a Station:** Not supported. Selecting a station and pressing Delete
@@ -2315,10 +2437,16 @@ picks a junction first, then co-located ends, then a closure. The kept line (the
 lower id by default; the dialog can swap) keeps its id, shot numbers, direction
 and position; the other line is reversed first when the two meet end to end
 or start to start. Every per-shot field travels, and every station reference
-follows its station; the joined station keeps the kept line's name and
-Station ID, the other join station's become its aliases, and it keeps one
-comment (the dialog asks when they differ). Every other station keeps the name
-its line showed it by.
+follows its station; the joined station is the kept line's join station
+(its Station ID, name and comment, shown on every line through it). The other
+join station is archived in it for the lines it was the own station of besides
+the absorbed line, which show the joined station from then on (Detach Line
+from Station brings it back with its comment, and the dialog says so); when it
+was the own station of no other line it only keeps its Station ID reserved,
+and the dialog asks which comment the joined station keeps when the two
+differ. When a loop closure between the two join stations already shows them
+as the other line's, that one is kept, and the dialog says why. Every other
+station keeps the name its line showed it by.
 
 Whatever stands in the way changes instead of blocking, and the dialog lists
 it, for the line it shows as kept, before the user confirms:

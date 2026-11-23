@@ -293,7 +293,7 @@ fn bulk_source_text(name: &str, lines: usize) -> String {
     let settings = r#"{"validation":{"warn_shot_length_min":0.3,"warn_shot_length_max":50.0,"warn_depth_change_per_shot_max":10.0,"warn_azimuth_deviation_max":30.0,"azimuth_diff_threshold":20.0,"pitch_diff_threshold":10.0,"inclination_depth_diff_threshold":15.0}}"#;
     format!(
         concat!(
-            "{{\"format\":\"stalx\",\"version\":2,\"solver\":1,\"requires\":[],\n",
+            "{{\"format\":\"stalx\",\"version\":2,\"solver\":1,\"requires\":[\"archived-stations\"],\n",
             "\"conventions\":{{\"length\":\"m\",\"angles\":\"deg\",\"azimuth\":\"cw-from-north\",",
             "\"inclination\":\"+down\",\"depth\":\"+down\",\"local\":\"enu-m\",\"gps\":\"wgs84-deg\",",
             "\"temperature\":\"degC\"}},\n",

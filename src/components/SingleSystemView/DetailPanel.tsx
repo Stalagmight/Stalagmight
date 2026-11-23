@@ -14,8 +14,9 @@ import { ProjectStatsActions } from './ProjectStatsActions';
 import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, LinkOffIcon } from '../common/icons';
 import { DetailLink } from '../common/DetailLink';
 import { EntityBlob } from '../common/EntityBlob';
+import { shotEndMarks } from '../common/shotEndMarks';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
-import type { Station, Shot, Line, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
+import type { Station, Shot, Line, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure, StationRef } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
 import { warningMessageBody } from '../../utils/stationIdentity';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
@@ -32,9 +33,11 @@ import { CreditDetail, MultiShotDetail, lineCredits, useSelectedShots } from './
 import { CenterLocateIcon, DetailRow, StatCard } from './DetailPanelParts';
 import { LineSectionDetailRow } from './LineSectionDetailRow';
 import { StationDatumDetail } from './StationDatumDetail';
-import { StationAliases } from './StationAliases';
-import { StationOtherLines, aliasesShownByOtherLines } from './StationOtherLines';
+import { StationRecords } from './StationRecords';
+import { StationOtherLines } from './StationOtherLines';
 import { StationNameRows } from './StationNames';
+import { useIdentityLabel } from '../Dialogs/keptStationParts';
+import { removeClosureAsking } from '../../utils/keptStationActions';
 import { StationOtherLineShots } from './StationOtherLineShots';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
 
@@ -546,7 +549,6 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                   // that shot becomes a pill and the rest follows it.
                   const body = warningMessageBody(labels, warning);
                   if (!showPills || body === warning.message) return warning.message;
-                  const shot = labels.shotAt(warning.lineId, warning.shotIndex);
                   return (
                     <>
                       {/* The shot pill navigates to Details (select + switch tab),
@@ -565,7 +567,14 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                         })}
                         data-testid={warningOpenShotTestId(warning)}
                       >
-                        <EntityBlob entity="shot">{shot}</EntityBlob>
+                        <EntityBlob
+                          entity="shot"
+                          lineId={warning.lineId}
+                          shotEnds={shotEndMarks(labels, warning.lineId, warning.shotIndex)}
+                          plain={labels.shotAt(warning.lineId, warning.shotIndex)}
+                        >
+                          {labels.shotPillAt(warning.lineId, warning.shotIndex)}
+                        </EntityBlob>
                       </button>
                       {' '}
                       {body}
@@ -580,7 +589,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
               )}
             </div>
             {showPills && (
-              <div className="mt-1 flex items-center gap-1.5 flex-wrap clear-both">
+              <div className="mt-1 flex items-center gap-1.5 flex-wrap clear-both text-sm">
                 <DetailLink
                   type="line"
                   target={{ lineId: warning.lineId }}
@@ -697,7 +706,6 @@ function StationDetail({ station }: { station: Station }) {
   };
 
   const lineName = labels.lineName(lineId);
-  const stationId = labels.stationId(station.station_ref);
 
   const centerButton = (
     <button
@@ -717,10 +725,7 @@ function StationDetail({ station }: { station: Station }) {
     <div className="h-full bg-panel overflow-auto" data-testid="station-detail">
       <Panel bare title={t('detailPanel.station.title')} headerActions={centerButton}>
         <div className="space-y-3">
-          <StationNameRows station={station} labels={labels} />
-          {stationId !== null && (
-            <DetailRow label={t('identity.stationId')} value={String(stationId)} testId="station-detail-id" />
-          )}
+          <StationNameRows station={station} labels={labels} closures={project?.loop_closures} />
           {/* The station's line, named once (demo finding V-8): this row is
               its link, so neither the Name row nor Connected repeats it. */}
           <DetailRow
@@ -738,6 +743,13 @@ function StationDetail({ station }: { station: Station }) {
             }
             testId="station-detail-line"
           />
+          {/* A loop end's Name and Station ID are the station it is shown
+              as; X, Y and Depth are its own point's (RS-FX6, P3-14). */}
+          {labels.shown(station.station_ref)?.loop_end && (
+            <p className="text-xs text-text-secondary" data-testid="station-detail-loop-end-position">
+              {t('detailPanel.station.loopEndPosition')}
+            </p>
+          )}
           <DetailRow label={t('detailPanel.labels.x')} value={`${formatFixed(displayStation.coordinates.x, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
           <DetailRow label={t('detailPanel.labels.y')} value={`${formatFixed(displayStation.coordinates.y, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
           <DetailRow label={t('detailPanel.labels.depth')} value={`${formatFixed(displayStation.coordinates.z, undefined, precision.depth)} ${t('common.units.meters')}`} />
@@ -767,16 +779,11 @@ function StationDetail({ station }: { station: Station }) {
 
           <StationOtherLines station={station} />
 
-          <StationAliases
-            aliases={station.aliases}
-            lineName={labels.lineName}
-            shown={aliasesShownByOtherLines(station)}
-            ownLine={lineId}
-            ownName={labels.stationName(station.station_ref)}
-          />
+          <StationRecords records={station.archived} lineName={labels.lineName} />
 
           {station.closures_with && station.closures_with.length > 0 && (
             <ClosuresSection
+              anchor={station.station_ref}
               closures={station.closures_with}
               loopClosures={project?.loop_closures ?? []}
               stations={stations}
@@ -1005,6 +1012,7 @@ function ShotDetail({ line, shot, stations }: { line: Line; shot: Shot; stations
                   target={{ lineId: line.id, position: startStationPosition }}
                   displayText={labels.station({ line_id: line.id, station_index: startStationIndex })}
                   fullText={labels.station({ line_id: line.id, station_index: startStationIndex }, true)}
+                  pillLabel={labels.stationPill({ line_id: line.id, station_index: startStationIndex })}
                   onSelect={handleSelectStartStation}
                   isMissing={!startStationExists}
                   onAnnounce={announceSelection}
@@ -1019,6 +1027,7 @@ function ShotDetail({ line, shot, stations }: { line: Line; shot: Shot; stations
                   target={{ lineId: line.id, position: endStationPosition }}
                   displayText={labels.station({ line_id: line.id, station_index: endStationIndex })}
                   fullText={labels.station({ line_id: line.id, station_index: endStationIndex }, true)}
+                  pillLabel={labels.stationPill({ line_id: line.id, station_index: endStationIndex })}
                   onSelect={handleSelectEndStation}
                   isMissing={!endStationExists}
                   onAnnounce={announceSelection}
@@ -1244,6 +1253,7 @@ function LineDetail({ line, stations, totalProjectLength }: LineDetailProps) {
                       target={{ lineId: line.id, position: firstStationPosition }}
                       displayText={labels.station({ line_id: line.id, station_index: firstStationIndex })}
                       fullText={labels.station({ line_id: line.id, station_index: firstStationIndex }, true)}
+                      pillLabel={labels.stationPill({ line_id: line.id, station_index: firstStationIndex })}
                       onSelect={handleSelectFirstStation}
                       isMissing={!firstStationExists}
                       onAnnounce={announceSelection}
@@ -1261,6 +1271,7 @@ function LineDetail({ line, stations, totalProjectLength }: LineDetailProps) {
                         target={{ lineId: line.id, position: firstStationPosition }}
                         displayText={labels.station({ line_id: line.id, station_index: firstStationIndex })}
                       fullText={labels.station({ line_id: line.id, station_index: firstStationIndex }, true)}
+                        pillLabel={labels.stationPill({ line_id: line.id, station_index: firstStationIndex })}
                         onSelect={handleSelectFirstStation}
                         isMissing={!firstStationExists}
                         onAnnounce={announceSelection}
@@ -1275,6 +1286,7 @@ function LineDetail({ line, stations, totalProjectLength }: LineDetailProps) {
                         target={{ lineId: line.id, position: lastStationPosition }}
                         displayText={labels.station({ line_id: line.id, station_index: lastStationIndex })}
                         fullText={labels.station({ line_id: line.id, station_index: lastStationIndex }, true)}
+                        pillLabel={labels.stationPill({ line_id: line.id, station_index: lastStationIndex })}
                         onSelect={handleSelectLastStation}
                         isMissing={!lastStationExists}
                         onAnnounce={announceSelection}
@@ -1390,7 +1402,13 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
               <StatCard label={t('detailPanel.projectStats.penetration')} value={`${formatFixed(stats.penetration_distance, undefined, precision.length)} ${t('common.units.meters')}`} />
               <StatCard label={t('detailPanel.projectStats.sections')} value={formatNumber(stats.line_count)} />
               <StatCard label={t('detailPanel.projectStats.shots')} value={formatNumber(stats.shot_count)} />
-              <StatCard label={t('detailPanel.projectStats.stations')} value={formatNumber(stats.station_count)} />
+              {/* A loop closure's hidden end is still a station point (RS 6). */}
+              <StatCard
+                label={t('detailPanel.projectStats.stations')}
+                value={formatNumber(stats.station_count)}
+                hint={t('detailPanel.projectStats.stationsHint')}
+                testId="project-stats-stations"
+              />
               {stats.loop_count > 0 && (
                 <StatCard label={t('detailPanel.projectStats.loops')} value={formatNumber(stats.loop_count)} />
               )}
@@ -1455,6 +1473,8 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
 }
 
 interface ClosuresSectionProps {
+  /** The station the details show: Remove Closure names each closure by its other end. */
+  anchor: StationRef;
   closures: ClosureRef[];
   loopClosures: LoopClosure[];
   stations: Station[];
@@ -1465,6 +1485,7 @@ interface ClosuresSectionProps {
 }
 
 function ClosuresSection({
+  anchor,
   closures,
   loopClosures,
   stations,
@@ -1475,7 +1496,7 @@ function ClosuresSection({
 }: ClosuresSectionProps) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
-  const removeLoopClosure = useProjectStore((s) => s.removeLoopClosure);
+  const identityLabel = useIdentityLabel();
   const editingBlocked = useEditingBlocked();
   const precision = useDecimalPrecision();
   const [expanded, setExpanded] = useState(true);
@@ -1532,7 +1553,9 @@ function ClosuresSection({
     trackContextMenuAction('remove-closure', 'detail-panel');
     setRemovingClosureId(closureId);
     try {
-      await removeLoopClosure(closureId);
+      // Asks first when its hidden end comes back or a name would repeat
+      // (RS 7); otherwise removes it at once.
+      await removeClosureAsking(closureId, anchor);
     } finally {
       setRemovingClosureId(null);
     }
@@ -1577,7 +1600,7 @@ function ClosuresSection({
                               type="station"
                               target={{ lineId: ref.station_ref.line_id, position: ref.station_ref.station_index }}
                               displayText={labels.station(ref.station_ref, true)}
-                              pillLabel={labels.station(ref.station_ref)}
+                              pillLabel={labels.stationPill(ref.station_ref)}
                               pillContext={labels.lineName(ref.station_ref.line_id)}
                               onSelect={() => onSelectStation(ref.station_ref)}
                               isMissing={!stationExists(ref.station_ref)}
@@ -1599,7 +1622,7 @@ function ClosuresSection({
                               type="station"
                               target={{ lineId: ref.station_ref.line_id, position: ref.station_ref.station_index }}
                               displayText={labels.station(ref.station_ref, true)}
-                              pillLabel={labels.station(ref.station_ref)}
+                              pillLabel={labels.stationPill(ref.station_ref)}
                               pillContext={labels.lineName(ref.station_ref.line_id)}
                               onSelect={() => onSelectStation(ref.station_ref)}
                               isMissing={!stationExists(ref.station_ref)}
@@ -1614,7 +1637,7 @@ function ClosuresSection({
                                   type="station"
                                   target={{ lineId: ref.via_station.line_id, position: ref.via_station.station_index }}
                                   displayText={labels.station(ref.via_station!, true)}
-                              pillLabel={labels.station(ref.via_station!)}
+                              pillLabel={labels.stationPill(ref.via_station!)}
                               pillContext={labels.lineName(ref.via_station.line_id)}
                                   onSelect={() => onSelectStation(ref.via_station!)}
                                   isMissing={!stationExists(ref.via_station)}
@@ -1655,6 +1678,14 @@ function ClosuresSection({
                 ) : (
                   <div className="text-xs text-text-secondary" data-testid={`closure-metrics-${closureId}`}>
                     {t('detailPanel.closures.unavailable')}
+                  </div>
+                )}
+                {closure?.archived && (
+                  <div className="text-xs text-text-secondary" data-testid={`closure-archive-${closureIdLabel}`}>
+                    {t('detailPanel.closures.archives', {
+                      hidden: identityLabel(closure.archived.station),
+                      shown: identityLabel(closure.archived.shown_as),
+                    })}
                   </div>
                 )}
               </div>

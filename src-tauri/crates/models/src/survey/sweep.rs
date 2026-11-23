@@ -16,6 +16,23 @@
 //!   promotion would double-anchor, so the closure is kept (invariant 7
 //!   allows it there).
 //!
+//! A promotion is a merge (RS 5.4): geometry first, exactly as above, then
+//! the identity. It keeps the closure's kept end when the closure archives
+//! one (the other end becomes the merge record, RS 4.1 step 4); else the
+//! kept end of another closure between the two that archives one; else the
+//! survivor, unless the survivor's name would repeat on the retired end's
+//! lines and the retired end's would not. When the identity kept is the
+//! retired end's, the merged node is re-identified (RS 4.1 step 3, its
+//! pre-edit id told to the anchor algorithm), so the layout is the same
+//! either way. When the end not kept is a loop end another closure
+//! archives, that closure's archive is dropped, so the kept station is
+//! shown on every line through the merged node (RS 1.3; otherwise the node
+//! would stay archived and show that closure's kept end, and the kept
+//! station would be shown nowhere). After the last promotion the closure
+//! archives are normalised (C1, C2, RS 5.4: two merged loop ends may make
+//! a chain cycle), and then the names the promotions made repeat are
+//! lettered by rule L, on what each identity is shown on once that settled.
+//!
 //! A promotion only joins pieces that were apart, so a closure the pass kept
 //! as a loop can never become one station later in the pass, and one pass
 //! settles everything (today's argument). Each promotion runs the anchor
@@ -25,8 +42,7 @@
 
 use crate::StationId;
 
-use super::ops_merge::CommentRule;
-use super::{ClosureEnd, ClosureId, EditContext, LoopClosure, Project};
+use super::{ClosureEnd, ClosureId, EditContext, LetteredStation, LoopClosure, Project};
 
 /// What the sweep did, as warning data for the command's result.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -40,6 +56,12 @@ pub struct SweepReport {
     pub promoted: Vec<Promotion>,
     /// Sole-bridge closures kept because both pieces are placed.
     pub kept_between_placed: Vec<ClosureId>,
+    /// The names the promotions made repeat, lettered by rule L (RS 5.3: a
+    /// path without a dialog).
+    pub lettered: Vec<LetteredStation>,
+    /// Closures whose archive the promotions dropped (each [`Promotion`]'s
+    /// `unarchived`, then the normalisation after them), in that order.
+    pub unarchived: Vec<ClosureId>,
 }
 
 impl SweepReport {
@@ -56,10 +78,18 @@ pub struct Promotion {
     pub closure: LoopClosure,
     /// Where it sat in the closure list when the sweep began.
     pub position: usize,
-    /// The station that stayed (the stationary piece's end).
+    /// The station whose piece stayed (geometry, plan 4.2).
     pub survivor: StationId,
-    /// The moving piece's end, now an alias of the survivor.
+    /// The station whose piece moved onto it (geometry).
     pub retired: StationId,
+    /// The station kept (RS 5.4): the identity the merged node shows, and
+    /// the merged node's id after the promotion (`survivor` or `retired`).
+    pub kept: StationId,
+    /// The other one, archived in the merged node (a record).
+    pub archived: StationId,
+    /// The closure that archived `archived` as a loop end, whose archive the
+    /// promotion dropped so `kept` is shown on every line (RS 1.3).
+    pub unarchived: Option<ClosureId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +120,9 @@ impl Project {
     ) -> SweepReport {
         let mut report = SweepReport::default();
         let original = self.closures.clone();
+        // The state before the first promotion, for rule L's "new on the
+        // line" (cloned only when a promotion happens).
+        let mut before_promotions: Option<Project> = None;
         let mut fates = vec![Fate::Keep; self.closures.len()];
         let named = |c: &LoopClosure| moving.iter().any(|(id, _)| *id == c.id);
         let (first, rest): (Vec<usize>, Vec<usize>) =
@@ -124,22 +157,46 @@ impl Project {
                 (true, _, false) | (false, true, _) => (closure.a, closure.b),
                 _ => (closure.b, closure.a),
             };
+            let keep = self.promotion_keep(&closure, survivor, retired);
             let before = self.anchor_snapshot();
-            if self
-                .merge_ids(survivor, retired, CommentRule::Join)
-                .is_err()
-            {
+            let pre = before_promotions.is_none().then(|| self.clone());
+            let survivor_native = self.native_lines(survivor);
+            let other = if keep == retired { survivor } else { retired };
+            let held = self.closures.clone();
+            let unarchived = self.unarchive_for_keep(keep, other);
+            if self.merge_ids(survivor, retired).is_err() {
+                self.closures = held;
                 continue;
             }
-            let ctx = EditContext::merge(survivor, retired).with_renamed(retired, survivor);
+            if pre.is_some() {
+                before_promotions = pre;
+            }
+            report.unarchived.extend(unarchived);
+            let mut ctx = EditContext::merge(survivor, retired).with_renamed(retired, survivor);
+            if keep == retired {
+                // Geometry first, then the identity (RS 4.1 step 3).
+                self.reidentify_merged(survivor, retired, survivor_native);
+                ctx = ctx.with_reidentified(&[(survivor, retired)]);
+            }
             self.settle_anchors(&before, &ctx);
             *fate = Fate::Promoted;
+            let archived = if keep == retired { survivor } else { retired };
             report.promoted.push(Promotion {
                 closure: original[position],
                 position,
                 survivor,
                 retired,
+                kept: keep,
+                archived,
+                unarchived,
             });
+        }
+        if let Some(before) = &before_promotions {
+            // Rule L judges what each identity is shown on, which a chain
+            // cycle the merges made would misstate (every node of a cycle
+            // shows itself until the normalisation breaks it).
+            report.unarchived.extend(self.normalise_closure_archives());
+            report.lettered = self.letter_collisions(before);
         }
         if fates.iter().any(|fate| *fate != Fate::Keep) {
             let closures = std::mem::take(&mut self.closures);
@@ -155,5 +212,45 @@ impl Project {
             }
         }
         report
+    }
+
+    /// Which end a promotion of `closure` keeps (module docs): the closure's
+    /// kept end, else the kept end of another closure between the two that
+    /// archives one, else `survivor` unless its name would repeat on
+    /// `retired`'s lines and `retired`'s would not repeat on `survivor`'s.
+    fn promotion_keep(
+        &self,
+        closure: &LoopClosure,
+        survivor: StationId,
+        retired: StationId,
+    ) -> StationId {
+        if let Some((_, kept)) = closure.archive() {
+            return kept;
+        }
+        if let Some((_, kept)) = self.forced_merge_keep(survivor, retired) {
+            return kept;
+        }
+        if self.name_repeats_on(survivor, retired) && !self.name_repeats_on(retired, survivor) {
+            retired
+        } else {
+            survivor
+        }
+    }
+
+    /// Whether the name `kept` shows is shown by another identity (not the
+    /// one `other` shows) on a line through `other`: what keeping `kept` in
+    /// a merge of the two would show twice there.
+    fn name_repeats_on(&self, kept: StationId, other: StationId) -> bool {
+        let (identity, gone) = (self.shown(kept), self.shown(other));
+        let Some(name) = self.shown_name(kept) else {
+            return false;
+        };
+        let topology = self.topology();
+        topology.lines_of(other).into_iter().any(|line| {
+            topology.chain(line).unwrap_or(&[]).iter().any(|&node| {
+                let shown = self.shown(node);
+                shown != identity && shown != gone && self.shown_name(node) == Some(name)
+            })
+        })
     }
 }

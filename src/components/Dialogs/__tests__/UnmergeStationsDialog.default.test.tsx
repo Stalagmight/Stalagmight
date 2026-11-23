@@ -11,16 +11,14 @@
  *   owner is no longer preselected either; a line that comes off alone with
  *   its own station back is the likely intent (on a two-line junction there
  *   is no choice at all, N-2: `UnmergeStationsDialog.same.test.tsx`);
- * - a merge (or the 0.6.0 upgrade) joins the two stations' comments and the
- *   alias does not keep the merged line's part, so for a line that gets its
- *   station back while the others keep the junction the dialog says the
- *   comment stays with the other lines; a line that keeps it keeps the
- *   comment, so nothing is said.
+ * - under RS a merge never joins comments: the archived station keeps its
+ *   own (RS 4.1), so a line that gets its station back gets its comment
+ *   back too, and the dialog says what comes back; the junction's comment
+ *   stays with it and is not mentioned.
  * Injection: preselecting `slots[0]` always (dropping `defaultDetachSlot`)
  * fails the first case; keeping a clicked owner that keeps the junction (the
- * I-7 rule) fails the V-1 case; dropping the comment sentence fails the
- * comment case; dropping `!naming.kept` from its condition fails the kept
- * case.
+ * I-7 rule) fails the V-1 case; dropping the comes-back comment fails the
+ * comment case.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -42,10 +40,10 @@ const NORTH = 1;
 const SPLIT_B = 2;
 const slot = (line_id: number, station_index: number) => ({ line_id, station_index });
 
-const RESTORES: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: false, lines: [] };
-const MINTS: DetachLinePreview = { name: '3', station_id: 30, restored: false, kept: false, lines: [] };
+const RESTORES: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: false, lines: [], together: [], rest_choices: [], collisions: [], shown_elsewhere: [], comments_hidden: [] };
+const MINTS: DetachLinePreview = { name: '3', station_id: 30, restored: false, kept: false, lines: [], together: [], rest_choices: [], collisions: [], shown_elsewhere: [], comments_hidden: [] };
 // The owner keeps the junction; North Passage gets back 0 (Station ID 9).
-const KEEPS: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: true, lines: [] };
+const KEEPS: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: true, lines: [], together: [], rest_choices: [], collisions: [], shown_elsewhere: [], comments_hidden: [] };
 
 function project(comment: string) {
   useProjectStore.setState({
@@ -84,7 +82,7 @@ const HUB_OTHERS = [slot(NORTH, 0), slot(SPLIT_B, 0)];
 const KEEPS_HUB = new Map<number, DetachLinePreview>([
   [MAIN, KEEPS],
   [NORTH, RESTORES],
-  [SPLIT_B, { name: '0b', station_id: 12, restored: true, kept: false, lines: [] }],
+  [SPLIT_B, { name: '0b', station_id: 12, restored: true, kept: false, lines: [], together: [], rest_choices: [], collisions: [], shown_elsewhere: [], comments_hidden: [] }],
 ]);
 
 beforeEach(() => {
@@ -158,18 +156,20 @@ describe('Detach dialog default (I-7)', () => {
   });
 });
 
-describe('Detach dialog and the joined comment (I-7)', () => {
-  it('says the comment stays when the line gets its own station back', async () => {
-    openOn(slot(MAIN, 3), ...HUB_OTHERS);
-    expect(await screen.findByTestId('unmerge-stations-comment')).toHaveTextContent(
-      "The station's comment stays with the other lines. If part of it was North Passage's own, copy it over after detaching.",
+describe('Detach dialog and the comment that comes back (RS 4.2)', () => {
+  it("says the comment of the station that comes back, and only for the line that gets it", async () => {
+    invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) =>
+      args.lineId === NORTH ? { ...RESTORES, comment: 'Silt bank' } : MINTS,
     );
-    // The owner line keeps the comment: nothing to say for it.
+    openOn(slot(MAIN, 3), ...HUB_OTHERS);
+    expect(await screen.findByTestId('unmerge-stations-comes-back')).toHaveTextContent('It gets back 0 (Station ID 9).');
+    expect(screen.getByTestId('unmerge-stations-comes-back-comment')).toHaveTextContent('With its comment: "Silt bank"');
+    // The owner gets a new station: nothing comes back.
     fireEvent.click(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
-    await waitFor(() => expect(screen.queryByTestId('unmerge-stations-comment')).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId('unmerge-stations-comes-back')).toBeNull());
   });
 
-  it('says nothing when the clicked owner keeps the junction and its comment', async () => {
+  it('says the clicked owner keeps the junction and its comment', async () => {
     invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) => KEEPS_HUB.get(args.lineId));
     openOn(slot(MAIN, 3), ...HUB_OTHERS);
     await screen.findByTestId('unmerge-stations-naming');
@@ -177,14 +177,14 @@ describe('Detach dialog and the joined comment (I-7)', () => {
     expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
       'Main Line keeps this station and its comment.',
     );
-    expect(screen.queryByTestId('unmerge-stations-comment')).toBeNull();
+    expect(screen.queryByTestId('unmerge-stations-comes-back-comment')).toBeNull();
   });
 
-  it('says nothing about a comment the station does not have', async () => {
+  it('says nothing about a comment the station that comes back does not have', async () => {
     project('');
     openOn(slot(MAIN, 3), ...HUB_OTHERS);
     await screen.findByTestId('unmerge-stations-naming');
-    expect(screen.queryByTestId('unmerge-stations-comment')).toBeNull();
+    expect(screen.queryByTestId('unmerge-stations-comes-back-comment')).toBeNull();
   });
 });
 

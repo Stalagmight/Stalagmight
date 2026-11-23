@@ -40,8 +40,9 @@ pub struct StaleAttachments {
     pub closure_vias: Vec<(ClosureId, ClosureEnd)>,
     /// Hand moves dropped, by `(line, station)`.
     pub hand_moves: Vec<(LineId, StationId)>,
-    /// Alias line hints cleared, by `(station, alias id)`.
-    pub alias_lines: Vec<(StationId, StationId)>,
+    /// Archived record lines cleared (A2), by `(station, record id, line)`.
+    /// A record left with no line is history (A5).
+    pub archived_lines: Vec<(StationId, StationId, LineId)>,
 }
 
 /// Why a construction call was refused. Nothing was changed.
@@ -51,7 +52,8 @@ pub enum BuildError {
     UnknownStation(StationId),
     /// The line does not exist.
     UnknownLine(LineId),
-    /// A station with this id already exists, or the id is an alias.
+    /// A station with this id already exists, or the id is an archived
+    /// record's.
     StationIdTaken(StationId),
     /// The id is at or above [`MAX_STATION_ID`].
     StationIdOutOfRange(StationId),
@@ -170,12 +172,12 @@ impl Project {
         if id >= MAX_STATION_ID {
             return Err(BuildError::StationIdOutOfRange(id));
         }
-        if self.stations.contains_key(&id) || self.is_alias_id(id) {
+        if self.stations.contains_key(&id) || self.is_archived_id(id) {
             return Err(BuildError::StationIdTaken(id));
         }
         self.observe_station_id(id);
-        for alias in &station.aliases {
-            self.observe_station_id(alias.id);
+        for record in &station.archived {
+            self.observe_station_id(record.id);
         }
         self.stations.insert(id, station);
         Ok(())
@@ -187,13 +189,6 @@ impl Project {
         if self.counters.next_station_id < next {
             self.counters.next_station_id = next;
         }
-    }
-
-    /// Whether `id` is a retired id kept as some station's alias.
-    pub fn is_alias_id(&self, id: StationId) -> bool {
-        self.stations
-            .values()
-            .any(|station| station.aliases.iter().any(|alias| alias.id == id))
     }
 
     /// Hand out a fresh closure id.
@@ -220,8 +215,8 @@ impl Project {
         self.stations.get(&id)
     }
 
-    /// Station `id`, mutably (names, comments, aliases; no cache depends on
-    /// them).
+    /// Station `id`, mutably (names, comments, archived records; no cache
+    /// depends on them).
     pub fn station_mut(&mut self, id: StationId) -> Option<&mut Station> {
         self.stations.get_mut(&id)
     }
@@ -444,10 +439,12 @@ impl Project {
     }
 
     /// Clear what an edit left pointing at a line that no longer passes the
-    /// station: datum and closure-end `via` hints (they become unset) and hand
-    /// moves (dropped). Invariant 2 refuses both, so a command that removes a
-    /// station from a line (delete shot or range, delete line, split, combine)
-    /// runs this in its epilogue, before [`Self::validate`].
+    /// station: datum and closure-end `via` hints (they become unset), hand
+    /// moves (dropped) and archived records' lines (A2; a record left with
+    /// no line is history, A5, and the records under it move up to its
+    /// owner, A6). Invariant 2 refuses them, so a command that
+    /// removes a station from a line (delete shot or range, delete line,
+    /// split, combine) runs this in its epilogue, before [`Self::validate`].
     pub fn drop_stale_attachments(&mut self) -> StaleAttachments {
         let topology = self.topology_arc();
         let holds = |station: StationId, line: LineId| topology.slot_on(station, line).is_some();
@@ -476,12 +473,19 @@ impl Project {
             }
         }
         for (&station, s) in &mut self.stations {
-            for alias in &mut s.aliases {
-                if alias.line.is_some_and(|line| !holds(station, line)) {
-                    alias.line = None;
-                    dropped.alias_lines.push((station, alias.id));
-                }
+            for record in &mut s.archived {
+                record.lines.retain(|&line| {
+                    let stays = holds(station, line);
+                    if !stays {
+                        dropped.archived_lines.push((station, record.id, line));
+                    }
+                    stays
+                });
             }
+            // A record left with no line (here, or by the edit itself) is
+            // history and owns nothing (A5, A6): the records under it move
+            // up (RS-FX4).
+            s.settle_record_owners();
         }
         if !dropped.hand_moves.is_empty() {
             let stale = dropped.hand_moves.clone();
@@ -493,7 +497,8 @@ impl Project {
         dropped
     }
 
-    /// Append a closure with a fresh id (no refusal checks) and return the id.
+    /// Append a closure with a fresh id that archives nothing (no refusal
+    /// checks) and return the id.
     pub fn push_closure(
         &mut self,
         a: StationId,
@@ -510,6 +515,7 @@ impl Project {
             b,
             b_via,
             strategy,
+            archived: None,
         });
         id
     }

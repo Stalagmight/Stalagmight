@@ -14,6 +14,8 @@ import {
   type LineMetadata,
 } from '../../types/survey-data';
 import { formatFixed, formatNumber } from '../../i18n/format';
+import { panelDotOf } from '../../theme/pillColors';
+import { useUIStore } from '../../store/uiStore';
 import { IconButton } from '../common/Button';
 import { ChevronDownIcon, ChevronRightIcon, ExternalLinkIcon, EyeIcon, EyeOffIcon } from '../common/icons';
 import { useLongPress } from '../../hooks';
@@ -200,7 +202,10 @@ function useRowRef(
  *  input over it that only opens the system picker. Disabled, the input lets
  *  clicks through to the span, which says why instead of selecting the row,
  *  and `disabled:opacity-0` keeps it hidden against the global
- *  `input:disabled { opacity: 0.5 }`. */
+ *  `input:disabled { opacity: 0.5 }`. A colour too close to the panel (a
+ *  near-white line on a light theme, a near-black one on a dark theme) gets
+ *  the pills' ring, drawn as a border so the hover ring stays free (RS-FX6,
+ *  P3-17). */
 function ColorDot({
   color,
   inputRef,
@@ -224,12 +229,14 @@ function ColorDot({
   dotTestId: string;
   inputTestId: string;
 }) {
+  const theme = useUIStore((s) => s.resolvedTheme);
+  const { ring } = panelDotOf(color, theme);
   return (
     <span
       className={`relative w-3 h-3 rounded-full flex-shrink-0 ${
         editable ? 'hover:ring-2 hover:ring-text-secondary hover:ring-offset-1 hover:ring-offset-panel' : ''
       }`}
-      style={{ backgroundColor: color }}
+      style={{ backgroundColor: color, ...(ring ? { border: `1px solid ${ring}` } : {}) }}
       title={editable ? undefined : blockedText}
       onMouseDown={editable ? undefined : onControlMouseDown}
       onDoubleClick={editable ? undefined : onControlDoubleClick}

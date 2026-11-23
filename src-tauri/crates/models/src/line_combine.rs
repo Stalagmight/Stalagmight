@@ -273,6 +273,14 @@ pub struct CombinePlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub station_renames: Option<CombineStationRenames>,
+    /// The join station not kept, when it stays archived for lines of its
+    /// own besides the absorbed one (it was also on a third line): those
+    /// lines show the kept join station from now on, its comment stays
+    /// with it (hidden until Detach Line from Station brings it back), and
+    /// the comment choice does not apply. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub join_archived: Option<crate::ArchivedStationWire>,
 }
 
 /// Why a combine renames stations (`station_naming::plan_combine_prefixes`).

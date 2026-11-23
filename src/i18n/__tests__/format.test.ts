@@ -61,6 +61,17 @@ describe('formatFixed', () => {
     expect(formatFixed(5, 'en', 3)).toBe('5.000');
   });
 
+  // RS-FX6, P3-19: Station details showed "Y: -0.00 m" for a station a hair
+  // south of the origin. A value that rounds to zero has no sign; one that
+  // rounds away from it keeps its own. Injection: format `value` as is.
+  it('writes a value that rounds to zero without a sign', () => {
+    expect(formatFixed(-0.0004, 'en', 2)).toBe('0.00');
+    expect(formatFixed(-0, 'en', 1)).toBe('0.0');
+    expect(formatFixed(-0.04, 'en', 1)).toBe('0.0');
+    expect(formatFixed(-0.06, 'en', 1)).toBe('-0.1');
+    expect(formatFixed(-12.3, 'en', 1)).toBe('-12.3');
+  });
+
   it('clamps precision to minimum 0', () => {
     expect(formatFixed(12.5, 'en', -1)).toBe('13');
   });

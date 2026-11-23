@@ -145,16 +145,19 @@ pub fn name_with_free_letter_from(
     from: &mut u64,
     taken: &dyn Fn(&str) -> bool,
 ) -> String {
+    first_free(from, |index| letter_candidate(base, index), taken)
+}
+
+/// The candidate [`name_with_free_letter`] tries at suffix number `index`:
+/// `base` with the `index`-th letter suffix (`5`, 0 -> `5a`; `Junction`, 1
+/// -> `Junction-b`). For a search that keeps its own cursors.
+pub fn letter_candidate(base: &str, index: u64) -> String {
     let separator = if base.bytes().any(|b| b.is_ascii_digit()) {
         ""
     } else {
         "-"
     };
-    first_free(
-        from,
-        |index| format!("{base}{separator}{}", letter_suffix(index)),
-        taken,
-    )
+    format!("{base}{separator}{}", letter_suffix(index))
 }
 
 /// The first `candidate(n)`, `n >= *from`, that is not taken, leaving `*from`
@@ -429,6 +432,25 @@ pub fn name_characters_refusal(what: &str, name: &str) -> Option<String> {
             u32::from(c)
         )
     })
+}
+
+/// A station name as the user gives it, trimmed, or why no station may take
+/// it: an empty name, or one holding a character [`is_forbidden_name_char`]
+/// rejects, in 0.6.0's words. The one rule every user-given station name
+/// passes: Set Station Name and the renames a Merge, Detach or loop closure
+/// dialog sends with its command (RS-FX9), except a rename that is exactly
+/// a letter the command's own collisions offer (the backend's answer, taken
+/// verbatim, RS-FX10). Whether the name is free on the station's lines is
+/// the caller's check.
+pub fn user_station_name(name: &str) -> Result<&str, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("A station name cannot be empty".to_string());
+    }
+    match name_characters_refusal("station", name) {
+        Some(refusal) => Err(refusal),
+        None => Ok(name),
+    }
 }
 
 /// Make the names of one line unique, in station order: the first holder of a

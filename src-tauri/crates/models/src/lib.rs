@@ -18,10 +18,17 @@ pub mod dive_plan;
 pub mod gas;
 pub mod geo;
 pub mod id_stride;
+pub mod identity;
 pub mod import_receipt;
 pub mod line;
 pub mod line_combine;
 pub mod line_split;
+#[cfg(any(test, feature = "test-support"))]
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "test support: a failed assert is how a complexity check fails"
+)]
+pub mod linear_time;
 pub mod newer_schema;
 pub mod placement_suggest;
 pub mod previews;
@@ -52,6 +59,7 @@ pub use gas::{
 };
 pub use geo::*;
 pub use id_stride::*;
+pub use identity::*;
 pub use import_receipt::*;
 pub use line::*;
 pub use line_combine::*;

@@ -473,7 +473,11 @@ pub(super) fn apply_extended(
             let Some(station_ref) = refs.station(*station, targets) else {
                 return refs.skip(&label);
             };
-            state.execute(Command::UnmergeStations { station_ref })
+            state.execute(Command::UnmergeStations {
+                station_ref,
+                renames: None,
+                rest_keep: None,
+            })
         }
         ExtOp::MoveComment {
             source,
@@ -1092,7 +1096,13 @@ pub(super) fn expose_closure_shapes(fuzzer: &mut Fuzzer) {
             return;
         };
         fuzzer.step_apply(
-            &Op::CreateClosure { a, b, strategy },
+            &Op::CreateClosure {
+                a,
+                b,
+                strategy,
+                keep: super::KeepT::Absent,
+                answers: super::AnswersT::Absent,
+            },
             &mut Refs::identity(),
             &targets,
         );
@@ -1150,6 +1160,8 @@ pub(super) fn expose_orphan_closure(fuzzer: &mut Fuzzer) {
         a: ends[0],
         b: ends[2],
         strategy: ClosureStrategy::Batch,
+        keep: super::KeepT::Absent,
+        answers: super::AnswersT::Absent,
     };
     fuzzer.step_apply(
         &closure,
@@ -1255,6 +1267,8 @@ fn a_merge_of_two_placed_pieces_survives_a_reopen() {
             .execute(Command::MergeStations {
                 station_a: StationRef::new(ids[0], 2),
                 station_b: StationRef::new(ids[1], 0),
+                keep: None,
+                renames: None,
             })
             .success
     );
@@ -1290,6 +1304,8 @@ fn an_add_after_a_merge_of_two_placed_pieces_undoes_exactly() {
             .execute(Command::MergeStations {
                 station_a: StationRef::new(ids[0], 2),
                 station_b: StationRef::new(ids[1], 0),
+                keep: None,
+                renames: None,
             })
             .success
     );
@@ -1386,7 +1402,7 @@ fn the_legacy_origin_is_a_migrated_survey_with_the_old_shapes() {
         aliases += project
             .stations
             .values()
-            .map(|s| s.aliases.len())
+            .map(|s| s.archived.len())
             .sum::<usize>();
     }
     assert!(ties > 0, "no seed migrated a Tie");

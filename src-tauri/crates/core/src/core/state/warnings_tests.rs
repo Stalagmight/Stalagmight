@@ -146,7 +146,7 @@ fn issue_loop() -> (Project, LineId, LineId) {
         vec![shot(0.0, 10.0), shot(90.0, 20.5), shot(180.0, 10.0)],
     );
     let (b3, a2) = (st(&p, b, 3), st(&p, a, 2));
-    p.create_closure(b3, None, a2, None, ClosureStrategy::Batch)
+    p.create_closure(b3, None, a2, None, ClosureStrategy::Batch, None, &[])
         .unwrap();
     (p, a, b)
 }
@@ -503,7 +503,11 @@ fn a_file_opened_read_only_refuses_an_ignore() {
     let (p, _) = checked_line();
     let path = write(dir.path(), "newer.stalx", &p, &Extras::default());
     let text = std::fs::read_to_string(&path).unwrap();
-    let patched = text.replacen("\"requires\":[]", "\"requires\":[\"x-from-the-future\"]", 1);
+    let patched = text.replacen(
+        "\"requires\":[\"archived-stations\"]",
+        "\"requires\":[\"archived-stations\",\"x-from-the-future\"]",
+        1,
+    );
     assert_ne!(patched, text);
     std::fs::write(&path, patched.as_bytes()).unwrap();
     let state = open_file(&path);
@@ -759,7 +763,7 @@ fn removing_the_closure_clears_the_warning() {
     assert_eq!(of_code(&warnings(state), CLOSURE_ACROSS_ONE_SHOT).len(), 1);
     state
         .with_project_mut(|p| {
-            p.remove_closure(id)
+            p.remove_closure(id, &[])
                 .map(|_| ())
                 .map_err(|e| format!("{e:?}"))
         })
@@ -913,6 +917,8 @@ fn every_command_fails_without_an_open_project() {
         Command::MergeStations {
             station_a: StationRef::new(0, 0),
             station_b: StationRef::new(1, 0),
+            keep: None,
+            renames: None,
         },
         Command::SetZeroDatum {
             station_ref: StationRef::new(0, 0),

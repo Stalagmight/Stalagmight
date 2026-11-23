@@ -23,7 +23,7 @@ use std::collections::BTreeSet;
 use crate::MIN_SPLIT_CHILD_LENGTH_M;
 use crate::{LineId, SplitAt, StationId};
 
-use super::super::{EditContext, Line, LoopClosure, Project, StationAlias};
+use super::super::{EditContext, Line, LoopClosure, Project};
 use super::{EditError, Edited, Epilogue, Promotion};
 
 /// The choices of the Split Line Here dialog: today's `SplitLineOptions`
@@ -111,10 +111,12 @@ impl Project {
         };
         if let Cut::Station(k) = cut {
             if k == 0 || k >= l.shots.len() {
-                let name = l
-                    .station(k)
-                    .and_then(|s| self.stations.get(&s))
-                    .map_or_else(|| k.to_string(), |s| s.name.clone());
+                // The name the line shows there, as plain text (a dotted
+                // slot or a loop end qualified, RS-FX5).
+                let name = u32::try_from(k).map_or_else(
+                    |_| k.to_string(),
+                    |i| self.slot_name_text(crate::StationRef::new(line, i)),
+                );
                 return Err(EditError::refused(format!(
                     "Station {name} is the first or last station of {}; split at a station in \
                      the middle",
@@ -233,34 +235,22 @@ impl Project {
         self.lines_mut().push(second);
         self.repoint_vias(line, new_id, &second_stations);
         let arrived: BTreeSet<StationId> = chain[k + 1..].iter().copied().collect();
-        self.repoint_alias_lines(line, new_id, &arrived);
-        self.share_alias_with_second_half(line, new_id, shared)?;
+        self.repoint_record_lines(line, new_id, &arrived);
+        self.share_record_with_second_half(line, new_id, shared);
         Ok(new_id)
     }
 
-    /// The split station is on both halves, and each half shows it by the
-    /// name the line did (plan 5.3 per line). When the line knew it by an
-    /// alias, the first half keeps that alias and the second half gets one
-    /// of its own with the same name, under a fresh id (as a merge gives an
-    /// extra line that knew its retired station by name).
-    fn share_alias_with_second_half(
-        &mut self,
-        from: LineId,
-        to: LineId,
-        shared: StationId,
-    ) -> Result<(), EditError> {
-        let Some(alias) = self.line_alias(shared, from).cloned() else {
-            return Ok(());
-        };
-        let id = self.mint_station_id()?;
+    /// The split station is on both halves (RS 4.4): when a record of it
+    /// names the split line (the line's own station there was archived by a
+    /// merge), the same record names the second half too, so both halves
+    /// show it as they did and a Detach of either brings it back for both. No
+    /// id is minted.
+    fn share_record_with_second_half(&mut self, from: LineId, to: LineId, shared: StationId) {
         if let Some(s) = self.stations.get_mut(&shared) {
-            s.aliases.push(StationAlias {
-                id,
-                name: alias.name,
-                line: Some(to),
-            });
+            if let Some(record) = s.archived.iter_mut().find(|r| r.lines.contains(&from)) {
+                record.lines.push(to);
+            }
         }
-        Ok(())
     }
 }
 

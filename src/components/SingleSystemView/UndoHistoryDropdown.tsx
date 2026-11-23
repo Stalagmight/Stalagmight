@@ -149,13 +149,10 @@ function formatTimestamp(timestamp: string | null, t: (key: string) => string): 
   return formatDate(date, undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
-/** Truncate description to ~40 chars with ellipsis */
-function truncateDescription(description: string, maxLength = 40): string {
-  if (description.length <= maxLength) {
-    return description;
-  }
-  return description.slice(0, maxLength - 1) + '\u2026';
-}
+/** A history row's description wraps to at most this many lines (RS-FX6,
+ *  P3-16): a one-line cut at 40 characters hid the end of "Merge Side / 0
+ *  into Main / 12 (keeps 12)", the part that says which station was kept. */
+export const HISTORY_ROW_CLASS = 'text-sm text-text-primary whitespace-normal break-words line-clamp-3';
 
 interface DetailPreviewPopupProps {
   previewData: PreviewData | null;
@@ -1102,10 +1099,11 @@ export default function UndoHistoryDropdown({
                     {/* Description and timestamp */}
                     <div className="flex-1 min-w-0">
                       <div
-                        className="text-sm text-text-primary truncate"
+                        className={HISTORY_ROW_CLASS}
                         title={item.description}
+                        data-testid={`${testId}-description-${item.index}`}
                       >
-                        {truncateDescription(item.description)}
+                        {item.description}
                       </div>
                       <div className="text-xs text-text-secondary">
                         {formatTimestamp(item.timestamp, t)}

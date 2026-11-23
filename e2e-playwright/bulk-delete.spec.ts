@@ -168,8 +168,11 @@ test.describe('Bulk delete dialog', () => {
     await expect(block).toContainText(
       'Close Gap & Delete removes these loop closures (they would span a single shot)'
     );
-    // The stations the closure was created with, by name, not the renumbered ones.
-    await expect(block).toContainText('#7: Main Line / 1 <-> Main Line / 4');
+    // The stations the closure was created with, by name, not the renumbered
+    // ones: each end is a station pill (its line as context, then the name;
+    // its Station ID follows as a superscript, rs/P-pills).
+    const pair = block.getByRole('listitem').filter({ hasText: '#7:' });
+    await expect(pair).toContainText(/#7: Main Line: 1\b.*<-> Main Line: 4\b/);
   });
 
   test('prefix range offers only a single delete action (no split names)', async ({ page }) => {

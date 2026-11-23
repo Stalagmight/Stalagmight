@@ -3,7 +3,7 @@
 //! counting each station once, hidden lines, determinism, byte equality with
 //! the legacy renderer where the models agree.
 
-use super::super::test_helpers::{cave, gps_at, meta, project, run, Cave};
+use super::super::test_helpers::{cave, dotted_twelve, gps_at, meta, project, run, Cave};
 use super::{export_image, export_value_histogram, generate_svg_string};
 use crate::export::color_scale::ExportValueKind;
 use crate::export::{ColorMode, ExportImageOptions, ImageFormat};
@@ -57,14 +57,15 @@ fn a_junction_is_labelled_once() {
     assert_eq!(names.iter().filter(|n| *n == "Hub").count(), 1, "{names:?}");
 }
 
-/// In names mode a junction is labelled by the name its representative
-/// slot's line shows (I-3), as the map labels it: Main passes the junction
-/// mid-line (so its slot represents the point) and knows it by an alias,
-/// "M1", while the station's own name, "S0", is the one Side shows.
-/// Injection: labelling every slot by the station's own name fails it.
+/// In names mode a junction is labelled by its shown (kept) name on every
+/// line (RS 4.1), as the map labels it: Main passes the junction mid-line
+/// (so its slot represents the point) and its own station there, "M1", is
+/// archived (a record naming Main), shown nowhere; the kept "S0" is what
+/// both lines show. Injection: labelling a slot by its line's record name
+/// fails it.
 #[test]
-fn a_junction_is_labelled_by_the_name_its_representative_line_shows() {
-    use crate::models::survey::StationAlias;
+fn a_junction_is_labelled_by_its_kept_name() {
+    use crate::models::survey::ArchivedStation;
     let mut p = project("Alias");
     let main = p
         .add_line(
@@ -83,18 +84,98 @@ fn a_junction_is_labelled_by_the_name_its_representative_line_shows() {
     let alias = p.mint_station_id().unwrap();
     let station = p.stations.get_mut(&j).unwrap();
     station.name = "S0".to_string();
-    station.aliases.push(StationAlias {
+    station.archived.push(ArchivedStation {
         id: alias,
-        name: Some("M1".to_string()),
-        line: Some(main),
+        name: "M1".to_string(),
+        comment: None,
+        external: None,
+        into: None,
+        lines: vec![main],
     });
-    assert_eq!(p.name_on(j, main), Some("M1"));
+    assert_eq!(p.shown_name(j), Some("S0"));
     let names = texts(
         &generate_svg_string(&p, &labelled(false)).unwrap(),
         "station-names",
     );
-    assert!(names.contains(&"M1".to_string()), "{names:?}");
-    assert!(!names.contains(&"S0".to_string()), "{names:?}");
+    assert!(names.contains(&"S0".to_string()), "{names:?}");
+    assert!(!names.contains(&"M1".to_string()), "{names:?}");
+}
+
+/// A loop end a closure archives is never labelled (RS 6), in either label
+/// mode, in the measured and the computed geometry, whether the closure is
+/// aligned (a snap whose ends are one point) or not (a soft closure, which
+/// only the computed geometry closes): its own name "S2", its Station ID
+/// and its comment are drawn nowhere, and the kept end "M3" labels itself
+/// once. Injection: label the archived slot like any other, and "S2" (or
+/// "M3" twice, or its id) shows.
+#[test]
+fn a_closure_archived_end_is_never_labelled() {
+    use super::super::test_helpers::{flat, Survey};
+    use crate::models::config::ClosureAdjustmentConfig;
+    use crate::models::survey::ClosureStrategy;
+    for aligned in [false, true] {
+        let mut s = Survey::new("Loop");
+        let main = s.named("Main", "#336699", vec![flat(10.0, 90.0); 3]);
+        let side_shots = if aligned {
+            vec![flat(10.0, 0.0), flat(30.0, 90.0), flat(10.0, 180.0)]
+        } else {
+            vec![flat(10.0, 0.0), flat(10.0, 90.0), flat(10.0, 90.0)]
+        };
+        let side = s.branch(meta("Side", "#aa5500"), (main, 0), side_shots);
+        let end = if aligned { 3 } else { 2 };
+        s.rename((main, 3), "M3");
+        s.rename((side, end), "S2");
+        s.comment((main, 3), "main comment");
+        s.comment((side, end), "side comment");
+        // A snap is aligned while its ends coincide; a soft one never is.
+        let strategy = if aligned {
+            ClosureStrategy::Move
+        } else {
+            ClosureStrategy::Batch
+        };
+        s.closure_keeping((main, 3), (side, end), strategy);
+        let p = s.build();
+        let kept = p.line(main).unwrap().station(3).unwrap();
+        let archived = p.line(side).unwrap().station(end as usize).unwrap();
+        assert_eq!(p.shown(archived), kept);
+        let raw = p.raw_positions();
+        assert_eq!(p.closure_alignment(&raw), vec![aligned]);
+        let adjusted = p.adjusted_positions(&ClosureAdjustmentConfig::default());
+        for computed in [false, true] {
+            let svg = |options: &ExportImageOptions| {
+                if computed {
+                    super::generate_svg_string_with_positions(&p, options, &adjusted, &raw).unwrap()
+                } else {
+                    generate_svg_string(&p, options).unwrap()
+                }
+            };
+            let case = format!("aligned={aligned} computed={computed}");
+            let names = svg(&labelled(false));
+            let shown = texts(&names, "station-names");
+            assert_eq!(
+                shown.iter().filter(|n| *n == "M3").count(),
+                1,
+                "{case}: {shown:?}"
+            );
+            assert!(!shown.contains(&"S2".to_string()), "{case}: {shown:?}");
+            // Comments alone: a label at the same point would crowd one out.
+            let comments = texts(
+                &svg(&ExportImageOptions {
+                    show_station_comments: true,
+                    ..ExportImageOptions::default()
+                }),
+                "station-comments",
+            );
+            assert_eq!(comments, vec!["main comment".to_string()], "{case}");
+            let ids = texts(&svg(&labelled(true)), "station-labels");
+            assert_eq!(
+                ids.iter().filter(|t| **t == kept.to_string()).count(),
+                1,
+                "{case}: {ids:?}"
+            );
+            assert!(!ids.contains(&archived.to_string()), "{case}: {ids:?}");
+        }
+    }
 }
 
 /// A station comment is drawn once, at a junction too; a datum station gets
@@ -239,3 +320,30 @@ const LEGACY_SIMPLE_IDS_SVG: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
 </g>
 </svg>
 "##;
+
+/// RS-FX5, the user's example ([`dotted_twelve`]): Branch shows Main's 12 at
+/// its start (dotted) and its own 12 further on. The image labels each
+/// station once by its shown name, so "12" is drawn twice, once at the
+/// junction (Main's 12, one label for both lines) and once at Branch's own
+/// station: two points, two labels, nothing joined. In Station ID mode the
+/// two labels are the two Station IDs.
+#[test]
+fn a_lines_own_12_is_labelled_beside_the_dotted_junction() {
+    let fixture = dotted_twelve();
+    let names = texts(
+        &generate_svg_string(&fixture.project, &labelled(false)).unwrap(),
+        "station-names",
+    );
+    assert_eq!(names.iter().filter(|n| *n == "12").count(), 2, "{names:?}");
+    let ids = texts(
+        &generate_svg_string(&fixture.project, &labelled(true)).unwrap(),
+        "station-labels",
+    );
+    for station in [fixture.junction, fixture.own_12] {
+        assert_eq!(
+            ids.iter().filter(|t| **t == station.to_string()).count(),
+            1,
+            "{ids:?}"
+        );
+    }
+}

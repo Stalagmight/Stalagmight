@@ -117,7 +117,7 @@ fn stations(s: &StationChanges) -> Result<(), String> {
     }
     col("name", s.name.as_ref())?;
     col("comment", s.comment.as_ref())?;
-    col("aliases", s.aliases.as_ref())?;
+    col("archived", s.archived.as_ref())?;
     col("external", s.external.as_ref())?;
     Ok(())
 }

@@ -52,6 +52,11 @@ vi.mock('../../../store/projectStore', () => ({
   ),
 }));
 
+vi.mock('../../../hooks/useEditingBlocked', () => ({
+  useEditingBlocked: () => false,
+  isEditingBlockedNow: () => false,
+}));
+
 vi.mock('../DialogWrapper', () => ({
   DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
@@ -66,6 +71,9 @@ const preview = (extra: Partial<MergePreview> = {}): MergePreview => ({
   shift_m: 24.31,
   joins: B,
   junctions: [],
+  candidates: [],
+  default_keep: 0,
+  keeps: [],
   ...extra,
 });
 /** Two stations' depths and the readings their mean takes, A's line first. */
@@ -87,7 +95,7 @@ describe('MergeDialog says what the merge does (I-4)', () => {
   it('names the piece that moves, how far, and the station it joins', () => {
     dialogData = { ...dialogData, mergePreview: preview() };
     render(<MergeDialog />);
-    expect(screen.getByTestId('merge-preview-move')).toHaveTextContent('Upstream moves 24 m to join Second entrance / B4.');
+    expect(screen.getByTestId('merge-preview-move')).toHaveTextContent("Upstream moves 24 m onto Second entrance / B4's position.");
     expect(screen.queryByTestId('merge-preview-depths')).not.toBeInTheDocument();
     expect(screen.queryByTestId(/^merge-preview-junction/)).not.toBeInTheDocument();
   });
@@ -135,7 +143,7 @@ describe('MergeDialog says what the merge does (I-4)', () => {
     dialogData = { ...dialogData, mergePreview: preview({ moving_line_ids: [1, 3], shift_m: 4.26 }) };
     render(<MergeDialog />);
     expect(screen.getByTestId('merge-preview-move')).toHaveTextContent(
-      'Upstream and Side passage move 4.3 m to join Second entrance / B4.'
+      "Upstream and Side passage move 4.3 m onto Second entrance / B4's position."
     );
   });
 

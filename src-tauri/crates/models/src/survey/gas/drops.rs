@@ -41,12 +41,17 @@ pub(super) fn place_stage_drops(route_gas: &[f64], thresholds: &[f64]) -> Vec<us
         .collect()
 }
 
-/// The stations a strategy's un-overridden drops land on, for the pin-to-default no-op check.
-pub(super) fn default_drop_stations(view: &BudgetView, thresholds: &[f64]) -> Vec<usize> {
+/// The route indices a strategy's un-overridden drops land on (none without a target).
+pub(super) fn default_drop_indices(view: &BudgetView, thresholds: &[f64]) -> Vec<usize> {
     if view.target.is_none() {
         return Vec::new();
     }
     place_stage_drops(&view.route_gas, thresholds)
+}
+
+/// The stations a strategy's un-overridden drops land on, for the pin-to-default no-op check.
+pub(super) fn default_drop_stations(view: &BudgetView, indices: &[usize]) -> Vec<usize> {
+    indices
         .iter()
         .filter_map(|&j| view.route.get(j).copied())
         .collect()

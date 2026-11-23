@@ -94,6 +94,14 @@ pub struct DeleteRangePreview {
     /// Closures the gap-close would remove because it leaves them across one
     /// shot (#737); `None` when no gap-close is offered.
     pub closures_removed_across_one_shot: Option<Vec<LoopClosure>>,
+    /// What the delete does to identities (RS 4.3, U-P1-3): every archived
+    /// identity it restores (with the comment that moves or becomes hidden),
+    /// and the letters rule L gives (the wire's `identities`).
+    pub identities: super::super::IdentityReport,
+    /// For an interior range where the gap-close is offered (the preview's
+    /// own run): what choosing Split instead would weld and do to
+    /// identities. `None` otherwise (a split-only range's run is the split).
+    pub split_weld: Option<SplitWeld>,
 }
 
 /// A normalized range.
@@ -135,6 +143,9 @@ pub struct SplitWeld {
     pub promoted: Vec<Promotion>,
     /// The largest raw (measured) horizontal move of any station, metres.
     pub max_move_m: f64,
+    /// What the split does to identities (RS 4.3, 12): its restores, letters
+    /// and the comments its promotions hide, for the dialog's Split choice.
+    pub identities: super::super::IdentityReport,
 }
 
 impl Project {
@@ -148,6 +159,16 @@ impl Project {
         }
         let shot = shots[index].id;
         let range = self.range_of(line, shot, shot).ok()?;
+        self.split_range_weld(line, range)
+    }
+
+    /// What Delete + Split of the interior `range` of `line` would weld and
+    /// do to identities ([`SplitWeld`]), from the split run on a copy; `None`
+    /// for a split the edit refuses.
+    fn split_range_weld(&self, line: LineId, range: Range) -> Option<SplitWeld> {
+        if range.kind != RangeDeleteKind::Interior {
+            return None;
+        }
         let before = self.raw_positions();
         let mut copy = self.clone();
         let edited = copy
@@ -164,6 +185,7 @@ impl Project {
         Some(SplitWeld {
             promoted: edited.report.sweep.promoted,
             max_move_m,
+            identities: edited.report.identities,
         })
     }
 
@@ -392,7 +414,7 @@ impl Project {
         second.assign_session_shot_ids();
         self.lines_mut().push(second);
         self.repoint_vias(line, new_id, &tail_stations);
-        self.repoint_alias_lines(line, new_id, &tail_stations);
+        self.repoint_record_lines(line, new_id, &tail_stations);
 
         let mut gone = self.delete_stations_off_lines(&off);
         let left = self.leave_junctions(line, &off, layout.as_ref());
@@ -444,11 +466,11 @@ impl Project {
         }
     }
 
-    /// The alias line hints of `arrived` (stations that left `from` for
-    /// `to`) that named `from` now name `to`: the new line knows them by the
-    /// same aliases (UX-4; invariant 8 exempts them there as it did on
-    /// `from`). A station that was already on `to` is not in `arrived`.
-    pub(super) fn repoint_alias_lines(
+    /// The archived records of `arrived` (stations that left `from` for
+    /// `to`) that named `from` now name `to` (RS 4.4, like `via` hints): the
+    /// new line's own station there is the same archived one. A station that
+    /// was already on `to` is not in `arrived`.
+    pub(super) fn repoint_record_lines(
         &mut self,
         from: LineId,
         to: LineId,
@@ -456,9 +478,11 @@ impl Project {
     ) {
         for station in arrived {
             if let Some(s) = self.stations.get_mut(station) {
-                for alias in &mut s.aliases {
-                    if alias.line == Some(from) {
-                        alias.line = Some(to);
+                for record in &mut s.archived {
+                    for line in &mut record.lines {
+                        if *line == from {
+                            *line = to;
+                        }
                     }
                 }
             }
@@ -522,15 +546,19 @@ impl Project {
         } else {
             Some(copy.run_edit(self, |p| p.gap_close(line, range))?)
         };
+        let mut identities = super::super::IdentityReport::default();
         let (removed_closures, promoted_closures, swept_closures, across) = match edited {
-            // Named in the state before the delete (I-1: a station the delete
-            // gave back its alias identity by its old id).
-            Some(edited) => (
-                edited.value.closures_removed,
-                edited.report.pre_edit_promotions(),
-                edited.report.pre_edit_swept(),
-                edited.report.pre_edit_across_one_shot(),
-            ),
+            // Named in the state before the delete (RS 4.3: a station the
+            // delete gave back an archived identity by its old id).
+            Some(edited) => {
+                identities = edited.report.identities.clone();
+                (
+                    edited.value.closures_removed,
+                    edited.report.pre_edit_promotions(),
+                    edited.report.pre_edit_swept(),
+                    edited.report.pre_edit_across_one_shot(),
+                )
+            }
             None => (
                 self.closures
                     .iter()
@@ -557,6 +585,12 @@ impl Project {
             shift_blocked,
             shift_blocked_reasons: reasons,
             closures_removed_across_one_shot: gap_close_offered.then_some(across),
+            identities,
+            split_weld: if split_only {
+                None
+            } else {
+                self.split_range_weld(line, range)
+            },
         })
     }
 }

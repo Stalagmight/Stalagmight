@@ -979,6 +979,8 @@ impl Script {
             Command::MergeStations {
                 station_a: a,
                 station_b: b,
+                keep: None,
+                renames: None,
             },
         )
     }
@@ -1137,6 +1139,8 @@ fn junction_merges(s: &mut Script) {
         Command::MergeStations {
             station_a: north_end,
             station_b: south_end,
+            keep: None,
+            renames: None,
         },
     );
     // Two shots the validator flags: compass readings 35 degrees apart, and
@@ -1203,6 +1207,8 @@ fn loop_batch_closure(s: &mut Script) {
             station_a: north_end,
             station_b: east_1,
             closure_strategy: ClosureStrategy::Batch,
+            keep: None,
+            renames: None,
         },
     );
     let edited = s.shot(north, 2);
@@ -1223,6 +1229,8 @@ fn loop_batch_closure(s: &mut Script) {
             station_a: north_end,
             station_b: east_1,
             closure_strategy: ClosureStrategy::Batch,
+            keep: None,
+            renames: None,
         },
     );
     let last = s.last_shot(north);
@@ -1237,6 +1245,7 @@ fn loop_batch_closure(s: &mut Script) {
         "remove-closure",
         Command::RemoveLoopClosure {
             closure_id: closure,
+            renames: None,
         },
     );
     s.undo("undo");
@@ -1276,6 +1285,8 @@ fn snap_move_closure(s: &mut Script) {
                     station_a: north_end,
                     station_b: east_1,
                     closure_strategy: ClosureStrategy::Move,
+                    keep: None,
+                    renames: None,
                 },
             ],
             label: None,
@@ -1311,6 +1322,8 @@ fn snap_move_closure(s: &mut Script) {
                 Command::MergeStations {
                     station_a: free_0,
                     station_b: east_end,
+                    keep: None,
+                    renames: None,
                 },
             ],
             label: None,
@@ -1416,6 +1429,8 @@ fn free_piece_move_segment(s: &mut Script) {
                 Command::MergeStations {
                     station_a: one_0,
                     station_b: anchored_end,
+                    keep: None,
+                    renames: None,
                 },
             ],
             label: None,
@@ -1477,6 +1492,8 @@ fn reverse_line(s: &mut Script) {
             station_a: side_end,
             station_b: forward_end,
             closure_strategy: ClosureStrategy::Batch,
+            keep: None,
+            renames: None,
         },
     );
     s.exec(
@@ -1563,6 +1580,8 @@ fn split_line_here(s: &mut Script) {
             station_a: parallel_end,
             station_b: main_4,
             closure_strategy: ClosureStrategy::Batch,
+            keep: None,
+            renames: None,
         },
     );
     let options = split_options("Main A", "Main B");
@@ -1704,6 +1723,8 @@ fn combine_across_closure(s: &mut Script) {
             station_a: upper_end,
             station_b: lower_end,
             closure_strategy: ClosureStrategy::Batch,
+            keep: None,
+            renames: None,
         },
     );
     s.preview(
@@ -1820,6 +1841,8 @@ fn delete_shot_range(s: &mut Script) {
             station_a: loop_end,
             station_b: line_5,
             closure_strategy: ClosureStrategy::Batch,
+            keep: None,
+            renames: None,
         },
     );
     let (from, to) = (s.shot(line, 2), s.shot(line, 3));
@@ -1880,6 +1903,8 @@ fn unmerge(s: &mut Script) {
         Command::UnmergeStationPair {
             station_a: pair_end,
             station_b: partner_0,
+            renames: None,
+            rest_keep: None,
         },
     );
     s.merge("merge-pair-again", partner_0, pair_end);
@@ -1887,6 +1912,8 @@ fn unmerge(s: &mut Script) {
         "unmerge-whole-two-member-station",
         Command::UnmergeStations {
             station_ref: partner_0,
+            renames: None,
+            rest_keep: None,
         },
     );
     let hub_line = s.create_line("Hub Line", run(3, 180.0, 8.0, 3.0, 1.0));
@@ -1901,17 +1928,27 @@ fn unmerge(s: &mut Script) {
         Command::UnmergeStationPair {
             station_a: hub,
             station_b: one_0,
+            renames: None,
+            rest_keep: None,
         },
     );
     s.merge("merge-spoke-one-again", one_0, hub);
     s.exec(
         "unmerge-hub-spoke-station",
-        Command::UnmergeStations { station_ref: two_0 },
+        Command::UnmergeStations {
+            station_ref: two_0,
+            renames: None,
+            rest_keep: None,
+        },
     );
     s.merge("merge-spoke-two-again", two_0, hub);
     s.exec(
         "unmerge-hub-centre",
-        Command::UnmergeStations { station_ref: hub },
+        Command::UnmergeStations {
+            station_ref: hub,
+            renames: None,
+            rest_keep: None,
+        },
     );
     s.undo("undo");
     s.redo("redo");
@@ -2009,6 +2046,8 @@ fn add_stalx(s: &mut Script) {
             other.execute(Command::MergeStations {
                 station_a: StationRef::new(two, 0),
                 station_b: StationRef::new(one, 3),
+                keep: None,
+                renames: None,
             }),
             "merge",
         );
@@ -2033,6 +2072,8 @@ fn add_stalx(s: &mut Script) {
                 station_a: StationRef::new(two, 2),
                 station_b: StationRef::new(one, 1),
                 closure_strategy: ClosureStrategy::Batch,
+                keep: None,
+                renames: None,
             }),
             "closure",
         );

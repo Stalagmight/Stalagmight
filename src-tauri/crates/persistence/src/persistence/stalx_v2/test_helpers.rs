@@ -14,7 +14,7 @@ use std::sync::Arc;
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 
 use crate::models::survey::{
-    ClosureStrategy, LineMeta, Project, StartAt, StationAlias, ZeroDatum, MAX_COORDINATE_M,
+    ArchivedStation, ClosureStrategy, LineMeta, Project, StartAt, ZeroDatum, MAX_COORDINATE_M,
     MAX_MEASUREMENT_M,
 };
 use crate::models::{
@@ -103,6 +103,10 @@ pub(super) struct Shape {
     /// Awkward numbers, odd text, every optional field.
     pub(super) rich: bool,
 }
+
+/// The `requires` member every file this build writes (RS 8.1), as text: a
+/// test adds a feature by replacing it with a longer list.
+pub(super) const REQUIRES: &str = "\"requires\":[\"archived-stations\"]";
 
 pub(super) const SMALL: Shape = Shape {
     lines: 6,
@@ -291,18 +295,28 @@ pub(super) fn generate(seed: u64, shape: Shape) -> (Project, Extras) {
         for _ in 0..rng.below(3) {
             let host = *rng.pick(&ids);
             let alias = p.mint_station_id().unwrap();
-            let name = rng.chance(0.5).then(|| format!("old{alias}"));
-            // Half of them name a line through the host (the line that knew
-            // it by the alias), with or without a name.
-            let line = if rng.chance(0.5) {
-                p.topology().lines_of(host).first().copied()
+            let name = format!("old{alias}");
+            let comment = rng.chance(0.5).then(|| format!("note {alias}"));
+            // Half of them name the first line through a junction host (the
+            // line whose own station it was), keeping a native line there
+            // (A3, A4); the others are history.
+            let lines = p.topology().lines_of(host);
+            let named = p.stations[&host]
+                .archived
+                .iter()
+                .any(|r| !r.lines.is_empty());
+            let lines = if rng.chance(0.5) && lines.len() > 1 && !named {
+                vec![lines[0]]
             } else {
-                None
+                Vec::new()
             };
-            p.station_mut(host).unwrap().aliases.push(StationAlias {
+            p.station_mut(host).unwrap().archived.push(ArchivedStation {
                 id: alias,
                 name,
-                line,
+                comment,
+                external: None,
+                into: None,
+                lines,
             });
         }
         // An empty credit object (`{}`) is a value of its own; `from_data`

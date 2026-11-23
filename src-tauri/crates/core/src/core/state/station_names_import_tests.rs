@@ -142,12 +142,14 @@ fn a_name_past_the_last_station_is_dropped_either_way() {
     }
 }
 
-/// A comment the file gives the station a line is placed on is joined to the
-/// junction's own (the merge rule), never silently replacing it; the
-/// junction keeps its name and its id, and the file's own name for it is kept
-/// as an alias on the branch under a retired id (I-import-export-4).
+/// A line placed onto a station keeps that station (RS 4.1): the junction
+/// keeps its name, its id and its own comment, and the file's own station
+/// there (its name "Z9" and its comment) is archived in the junction as a
+/// record naming the branch, under a fresh Station ID. Comments are never
+/// joined. The receipt says so in a note (not a warning), and a detach gives
+/// the branch the file's station back, comment included.
 #[test]
-fn a_placement_onto_a_station_joins_the_files_comment_and_keeps_the_name() {
+fn a_placement_onto_a_station_archives_the_files_station_and_its_comment() {
     let state = import(config(false, &[], &[(1, "first visit")]));
     let project = state.get_project_state().unwrap();
     let main = project.lines()[0].id;
@@ -172,37 +174,47 @@ fn a_placement_onto_a_station_joins_the_files_comment_and_keeps_the_name() {
     assert_eq!(station.name, "1", "the junction keeps its name");
     assert_eq!(
         station.comment.as_deref(),
-        Some("first visit\n\nsecond visit")
+        Some("first visit"),
+        "and its own comment: comments are never joined"
     );
     let branch = &project.lines()[1];
     assert_eq!(branch.start, junction, "the branch starts ON the station");
     let branch_names: Vec<String> = branch
         .stations()
-        .map(|s| project.name_on(s, branch.id).unwrap().to_string())
+        .map(|s| project.shown_name(s).unwrap().to_string())
         .collect();
-    // The file's name for the junction is not the junction's: the branch shows
-    // the junction by it (plan 5.3 per line, I-3), and its own stations take
-    // the seed rule around that, so the branch reads as the file did.
-    assert_eq!(branch_names, named(&["Z9", "1", "2", "3"]));
-    assert_eq!(project.name_on(junction, main), Some("1"));
-    let aliases = &project.station(junction).unwrap().aliases;
-    assert_eq!(aliases.len(), 1);
-    assert_eq!(aliases[0].name.as_deref(), Some("Z9"), "the file's name");
-    assert_eq!(
-        aliases[0].line,
-        Some(branch.id),
-        "known by it on the branch"
-    );
+    // The branch shows the kept junction "1" with main's dot (the file's
+    // station is archived, so the slot is foreign), and its own "1" keeps
+    // its name beside it (RS-FX5).
+    assert_eq!(branch_names, named(&["1", "1", "2", "3"]));
+    let archived = &project.station(junction).unwrap().archived;
+    assert_eq!(archived.len(), 1);
+    assert_eq!(archived[0].name, "Z9", "the file's name");
+    assert_eq!(archived[0].comment.as_deref(), Some("second visit"));
+    assert_eq!(archived[0].lines, vec![branch.id], "the branch's own");
     assert!(
-        project.station(aliases[0].id).is_none()
-            && aliases[0].id < project.counters.next_station_id,
+        project.station(archived[0].id).is_none()
+            && archived[0].id < project.counters.next_station_id,
         "a retired id, never a live one"
     );
     assert!(project.validate().is_empty());
-    // "1a" is a seed, not a name the file gave: nothing to report.
+    let receipt = result.import_receipt.unwrap();
+    // Nothing was lettered: nothing to warn about.
+    assert_eq!(receipt.warnings, Vec::<String>::new());
     assert_eq!(
-        result.import_receipt.unwrap().warnings,
-        Vec::<String>::new()
+        receipt.info,
+        vec![
+            "Line \"B01\" joins station \"A01 / 1\" and shows it there; the file's own \
+             station \"Z9\" there, with its comment, is archived: Detach Line from Station \
+             brings it back"
+                .to_string()
+        ]
+    );
+    let naming = project.detach_naming(junction, branch.id, None).unwrap();
+    assert_eq!(
+        (naming.id, naming.name.as_str(), naming.comment.as_deref()),
+        (archived[0].id, "Z9", Some("second visit")),
+        "a detach gives the branch the file's station back"
     );
 }
 
@@ -250,7 +262,9 @@ fn imported_external_ids_land_on_their_stations_mirrored_and_undo_with_the_impor
 }
 
 /// A line placed onto a station of an earlier line of the batch: the
-/// junction keeps the id its own line gave it.
+/// junction keeps the id its own line gave it (`FromImporting` keeps the
+/// target line's station, RS 4.1), and the file's other id for it is its
+/// archived station's, under the junction's name (the file gives none).
 #[test]
 fn a_joined_station_keeps_the_external_id_it_already_has() {
     let mut first = config(false, &[], &[]);
@@ -287,6 +301,18 @@ fn a_joined_station_keeps_the_external_id_it_already_has() {
         "the junction keeps A4"
     );
     assert_eq!(ext(b.station(1).unwrap()), Some("B2".to_string()));
+    let records = &project.station(b.start).unwrap().archived;
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(
+        (
+            records[0].name.as_str(),
+            records[0].external.as_deref(),
+            records[0].comment.as_deref(),
+            records[0].lines.clone()
+        ),
+        ("3", Some("B1"), None, vec![b.id])
+    );
+    assert!(project.validate().is_empty());
 }
 
 // ----- a file's own names at a junction (I-import-export-4) -------------------
@@ -328,16 +354,15 @@ fn line_names(project: &Project, position: usize) -> Vec<String> {
         .collect()
 }
 
-/// The file names the joined station "0": that name is kept as an alias of
-/// the junction on the branch (under a retired id, as Merge Stations keeps
-/// the station it retires), so the branch knows the junction by "0" and its
-/// own station "12" keeps the file's name although the junction is "12"
-/// (invariant 8's alias exemption, as after a merge or a 0.6.0 conversion):
-/// nothing is renamed and the receipt has nothing to report. Detaching the
-/// branch gives it back the file's "0". Undo takes the alias away with the
-/// import; a save and reopen keeps it.
+/// The file names the joined station "0": that station is archived in the
+/// junction (a record naming the branch, under a retired id, RS 4.1), the
+/// branch shows the kept junction "12" with main's dot, and its own station
+/// "12" keeps its surveyed name beside it (RS-FX5, the user's example: a
+/// foreign slot counts for no uniqueness), so the receipt warns of nothing.
+/// Detaching the branch gives it back the file's "0". Undo takes the record
+/// away with the import; a save and reopen keeps it.
 #[test]
-fn a_join_keeps_the_files_name_as_an_alias_and_renames_nothing() {
+fn a_join_archives_the_files_station_and_keeps_its_own_name() {
     let (state, result) = main_and_branch_onto_12();
     let project = state.get_project_state().unwrap();
     let junction = project.lines()[0].station(12).unwrap();
@@ -351,21 +376,18 @@ fn a_join_keeps_the_files_name_as_an_alias_and_renames_nothing() {
         "12",
         "main keeps its name"
     );
-    let aliases = project.station(junction).unwrap().aliases.clone();
+    assert!(project.is_foreign_slot(crate::models::StationRef::new(branch, 0)));
+    let aliases = project.station(junction).unwrap().archived.clone();
     assert_eq!(aliases.len(), 1);
-    assert_eq!(
-        aliases[0].name.as_deref(),
-        Some("0"),
-        "the file's name is kept"
-    );
-    assert_eq!(aliases[0].line, Some(branch), "on the branch");
+    assert_eq!(aliases[0].name, "0", "the file's name is kept");
+    assert_eq!(aliases[0].lines, vec![branch], "on the branch");
     assert!(project.station(aliases[0].id).is_none());
     assert!(project.validate().is_empty());
     assert_eq!(
         result.import_receipt.unwrap().warnings,
         Vec::<String>::new()
     );
-    let naming = project.detach_naming(junction, branch).unwrap();
+    let naming = project.detach_naming(junction, branch, None).unwrap();
     assert_eq!(
         (naming.id, naming.name.as_str()),
         (aliases[0].id, "0"),
@@ -383,21 +405,23 @@ fn a_join_keeps_the_files_name_as_an_alias_and_renames_nothing() {
     let opened = reopened.execute(Command::OpenProject { path });
     assert!(opened.success, "{:?}", opened.error);
     let project = reopened.get_project_state().unwrap();
-    assert_eq!(project.station(junction).unwrap().aliases, aliases);
+    assert_eq!(project.station(junction).unwrap().archived, aliases);
 
-    // One undo takes the branch and the alias away.
+    // One undo takes the branch and the record away.
     assert!(state.undo().success);
     let project = state.get_project_state().unwrap();
     assert_eq!(project.lines().len(), 1);
-    assert!(project.station(junction).unwrap().aliases.is_empty());
+    assert!(project.station(junction).unwrap().archived.is_empty());
     assert!(state.redo().success);
     let project = state.get_project_state().unwrap();
-    assert_eq!(project.station(junction).unwrap().aliases, aliases);
+    assert_eq!(project.station(junction).unwrap().archived, aliases);
 }
 
-/// Where the branch keeps no alias (the file gives the joined station no
-/// name of its own), the junction's name is the branch's too, so the
-/// branch's own station "12" takes a letter and the receipt says so.
+/// Where the branch keeps no record (the file gives the joined station no
+/// name, comment or external id of its own), the junction's slot on the
+/// branch is native: the junction's name is the branch's own too, so the
+/// branch's own station "12" repeats it there and takes a letter, and the
+/// receipt says so (N8 on native slots, RS-FX5).
 #[test]
 fn a_join_without_a_file_name_for_the_junction_letters_and_reports_a_clash() {
     let mut main = config(false, &[], &[]);
@@ -425,7 +449,7 @@ fn a_join_without_a_file_name_for_the_junction_letters_and_reports_a_clash() {
     assert!(result.success, "{:?}", result.error);
     let project = state.get_project_state().unwrap();
     let junction = project.lines()[0].station(12).unwrap();
-    assert!(project.station(junction).unwrap().aliases.is_empty());
+    assert!(project.station(junction).unwrap().archived.is_empty());
     let mut expected: Vec<String> = (0..=14).map(|i| i.to_string()).collect();
     expected[0] = "12".to_string();
     expected[12] = "12a".to_string();
@@ -444,10 +468,10 @@ fn a_join_without_a_file_name_for_the_junction_letters_and_reports_a_clash() {
 /// import created the branch with a name per slot and merged the branch's
 /// slot 0 into main's slot 12, so the branch kept "0" and "12" and main kept
 /// "12". The station graph has one name per station; opening that 0.6.0 file
-/// (the migration) and importing (the funnel) both keep the file's "0" as an
-/// alias of the junction on the branch, so the branch knows the junction by
-/// it and keeps its own "12" (invariant 8's alias exemption): the two give
-/// the same names, and neither renames main's "12".
+/// (the migration) and importing (the funnel) both archive the file's "0" in
+/// the junction (a record naming the branch), the branch shows the kept
+/// "12" with main's dot, and its own "12" keeps its name (RS-FX5): the two
+/// give the same names, and neither renames main's "12".
 #[test]
 fn a_join_keeps_what_the_equivalent_0_6_0_survey_keeps() {
     use super::legacy_fixture_kit::{
@@ -506,15 +530,15 @@ fn a_join_keeps_what_the_equivalent_0_6_0_survey_keeps() {
     let alias_names = |p: &Project, s| -> Vec<String> {
         p.station(s)
             .unwrap()
-            .aliases
+            .archived
             .iter()
-            .filter_map(|a| a.name.clone())
+            .map(|r| r.name.clone())
             .collect()
     };
     assert_eq!(alias_names(&migrated, junction), named(&["0"]));
     assert_eq!(
-        migrated.station(junction).unwrap().aliases[0].line,
-        Some(migrated.lines()[1].id)
+        migrated.station(junction).unwrap().archived[0].lines,
+        vec![migrated.lines()[1].id]
     );
     let migrated_branch = line_names(&migrated, 1);
 
@@ -525,8 +549,8 @@ fn a_join_keeps_what_the_equivalent_0_6_0_survey_keeps() {
     assert_eq!(alias_names(&imported, junction), named(&["0"]));
     assert_eq!(imported.station(junction).unwrap().name, "12");
     assert_eq!(
-        imported.station(junction).unwrap().aliases[0].line,
-        Some(imported.lines()[1].id)
+        imported.station(junction).unwrap().archived[0].lines,
+        vec![imported.lines()[1].id]
     );
     let imported_branch = line_names(&imported, 1);
     assert_eq!(imported_branch, migrated_branch);

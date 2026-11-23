@@ -551,7 +551,7 @@ fn parse_hidden_sections(stored: Option<&String>) -> Vec<SectionId> {
 /// The `weight()` method on this enum is provided for convenience/reference.
 /// The authoritative weights used for progress calculation are in ProgressEmitter's
 /// phase_weights vec, which allows different weight distributions per flow type.
-#[derive(Clone, Copy, Debug, Serialize, PartialEq, TS)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
 pub enum LoadingPhase {

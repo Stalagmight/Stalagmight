@@ -26,6 +26,7 @@ vi.mock('../../../utils/ipc', async (importOriginal) => ({
 import '../../../i18n';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
+import { useSpeleoStore } from '../../../store/speleoStore';
 import UnmergeStationsDialog, { sameDetachResult } from '../UnmergeStationsDialog';
 import type { DetachLinePreview } from '../../../types/ipc.generated';
 
@@ -34,8 +35,8 @@ const NORTH = 1;
 const slot = (line_id: number, station_index: number) => ({ line_id, station_index });
 
 // Main Line keeps 3; North Passage gets back 0 (Station ID 9), whichever is chosen.
-const KEEPS: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: true, lines: [] };
-const RESTORES: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: false, lines: [] };
+const KEEPS: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: true, lines: [], together: [], rest_choices: [], collisions: [], shown_elsewhere: [], comments_hidden: [] };
+const RESTORES: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: false, lines: [], together: [], rest_choices: [], collisions: [], shown_elsewhere: [], comments_hidden: [] };
 
 const unmergeStations = vi.fn();
 const unmergeStationPair = vi.fn();
@@ -69,6 +70,8 @@ function openOn(clicked: ReturnType<typeof slot>, other: ReturnType<typeof slot>
 const SENTENCE = 'North Passage comes off: it gets back 0 (Station ID 9); Main Line keeps station 3.';
 
 beforeEach(() => {
+  // A local project: editing is not blocked (useEditingBlocked).
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
   vi.clearAllMocks();
   unmergeStations.mockResolvedValue({ success: true });
   unmergeStationPair.mockResolvedValue({ success: true });
@@ -89,8 +92,8 @@ describe('a detach whose result does not depend on the choice (N-2)', () => {
     expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
       'North Passage keeps its shots, and a datum or loop closure set on it goes with it. Undo puts it back.',
     );
-    // No comment on the station: nothing to say about it.
-    expect(screen.queryByTestId('unmerge-stations-comment')).toBeNull();
+    // No comment comes back: nothing to say about one.
+    expect(screen.queryByTestId('unmerge-stations-comes-back-comment')).toBeNull();
   });
 
   it('detaches the line that comes off, never the keeper the user clicked', async () => {
@@ -98,8 +101,10 @@ describe('a detach whose result does not depend on the choice (N-2)', () => {
     await screen.findByTestId('unmerge-stations-naming');
     fireEvent.click(screen.getByTestId('unmerge-stations-confirm'));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
-    // The pair form detaches the partner's line: North Passage.
-    expect(unmergeStationPair).toHaveBeenCalledWith(slot(MAIN, 3), slot(NORTH, 0));
+    // The pair form detaches the partner's line: North Passage. The preview
+    // named no collision, so the answers are an empty list (RS 4.2): a
+    // collision it did not show refuses rather than letters.
+    expect(unmergeStationPair).toHaveBeenCalledWith(slot(MAIN, 3), slot(NORTH, 0), { renames: [] });
     expect(unmergeStations).not.toHaveBeenCalled();
   });
 
@@ -109,16 +114,23 @@ describe('a detach whose result does not depend on the choice (N-2)', () => {
     expect(screen.queryByTestId(`unmerge-station-option-${NORTH}-0`)).toBeNull();
     fireEvent.click(screen.getByTestId('unmerge-stations-confirm'));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
-    expect(unmergeStations).toHaveBeenCalledWith(slot(NORTH, 0));
+    expect(unmergeStations).toHaveBeenCalledWith(slot(NORTH, 0), { renames: [] });
     expect(unmergeStationPair).not.toHaveBeenCalled();
   });
 
-  it('says the comment stays with the line that keeps the station', async () => {
-    project('T-junction, line arrow points out\n\nSilt bank, low visibility');
-    openOn(slot(MAIN, 3), slot(NORTH, 0));
-    expect(await screen.findByTestId('unmerge-stations-comment')).toHaveTextContent(
-      "The station's comment stays with Main Line. If part of it was North Passage's own, copy it over after detaching.",
+  // RS 4.2: the station that comes back has its own comment (a merge never
+  // joins comments), so the dialog says it, and says nothing of the
+  // junction's own comment, which stays where it is.
+  it("says the comment that comes back with the line's own station", async () => {
+    invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) =>
+      args.lineId === MAIN ? KEEPS : { ...RESTORES, comment: 'Silt bank, low visibility' },
     );
+    project('T-junction, line arrow points out');
+    openOn(slot(MAIN, 3), slot(NORTH, 0));
+    expect(await screen.findByTestId('unmerge-stations-comes-back-comment')).toHaveTextContent(
+      'With its comment: "Silt bank, low visibility"',
+    );
+    expect(screen.queryByText(/T-junction/)).toBeNull();
   });
 
   it('shows no choice while the previews are out, and Detach waits for them', async () => {
@@ -176,12 +188,47 @@ describe('sameDetachResult', () => {
     expect(sameDetachResult([a, b], new Map())).toBeNull();
     expect(sameDetachResult([a, b], new Map([[MAIN, KEEPS]]))).toBeNull();
     // A new station for the other line: the keeper does not keep it then.
-    const mints: DetachLinePreview = { name: '3', station_id: 30, restored: false, kept: false, lines: [] };
+    const mints: DetachLinePreview = { name: '3', station_id: 30, restored: false, kept: false, lines: [], together: [], rest_choices: [], collisions: [], shown_elsewhere: [], comments_hidden: [] };
     expect(sameDetachResult([a, b], new Map([[MAIN, mints], [NORTH, RESTORES]]))).toBeNull();
     // A hub: the other lines would come off together, so the choice matters.
     const c = slot(2, 0);
     expect(sameDetachResult([a, b, c], new Map([...both, [2, RESTORES]]))).toBeNull();
     // Two slots of one line are not two lines.
     expect(sameDetachResult([a, slot(MAIN, 5)], both)).toBeNull();
+  });
+});
+
+/**
+ * RS-FX6, P2-2 (shots 14-16 of the RS capture): the one-sentence lead said
+ * "it gets back 0a" whatever answer the user chose, while choosing the other
+ * station's letter gives the station back as 0. The sentence follows the
+ * answer. Injection: print `preview.name` in `SameResultBody` again.
+ */
+describe('the one-sentence lead follows the chosen answer (RS-FX6)', () => {
+  it('says 0a for the letter and 0 when the other station takes it', async () => {
+    const collision = {
+      line_id: NORTH,
+      name: '0',
+      letter: { station: { id: 9, name: '0', home_line: NORTH }, to: '0a' },
+      alternative: { station: { id: 29, name: '0', home_line: NORTH }, to: '0a' },
+    };
+    invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) =>
+      args.lineId === MAIN
+        ? { ...KEEPS, name: '0a', collisions: [collision] }
+        : { ...RESTORES, name: '0a', collisions: [collision] },
+    );
+    openOn(slot(MAIN, 3), slot(NORTH, 0));
+    expect(await screen.findByTestId('unmerge-stations-naming')).toHaveTextContent(
+      'North Passage comes off: it gets back 0a (Station ID 9); Main Line keeps station 3.',
+    );
+    fireEvent.click(screen.getByTestId('unmerge-stations-collision-0-alternative'));
+    expect(screen.getByTestId('unmerge-stations-naming')).toHaveTextContent(
+      'North Passage comes off: it gets back 0 (Station ID 9); Main Line keeps station 3.',
+    );
+    fireEvent.click(screen.getByTestId('unmerge-stations-confirm'));
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+    expect(unmergeStationPair).toHaveBeenCalledWith(slot(MAIN, 3), slot(NORTH, 0), {
+      renames: [{ station_id: 29, name: '0a' }],
+    });
   });
 });

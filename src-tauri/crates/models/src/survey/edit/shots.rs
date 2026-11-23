@@ -132,6 +132,10 @@ pub struct DeleteShotPreview {
     pub shift_blocked_reasons: Vec<String>,
     /// What choosing Split instead would weld (interior shots only).
     pub split_weld: Option<super::SplitWeld>,
+    /// What the delete does to identities (RS 4.3, U-P1-3): every archived
+    /// identity it restores (with the comment that moves or becomes hidden),
+    /// and the letters rule L gives (the wire's `identities`).
+    pub identities: super::super::IdentityReport,
 }
 
 /// What a split at distance made.
@@ -357,13 +361,13 @@ impl Project {
         let name_of = |p: &Project, i: usize| -> String {
             chain
                 .get(i)
-                .and_then(|&s| p.name_on(s, line))
+                .and_then(|&s| p.shown_name(s))
                 .map_or_else(|| i.to_string(), str::to_string)
         };
         let taken: BTreeSet<String> = chain
             .iter()
             .filter(|s| **s != station)
-            .filter_map(|&s| self.name_on(s, line).map(str::to_string))
+            .filter_map(|&s| self.shown_name(s).map(str::to_string))
             .collect();
         let names = || taken.iter().map(String::as_str);
         let last = chain.len() - 1;
@@ -459,20 +463,10 @@ impl Project {
         })
     }
 
-    /// A shot named the way the user reads it: `Line: from -> to`.
+    /// A shot named the way the user reads it: `Line: from -> to`
+    /// ([`Project::shot_text`]).
     pub(super) fn shot_label_at(&self, line: LineId, index: usize) -> String {
-        let name = |i: usize| {
-            self.line(line)
-                .and_then(|l| l.station(i))
-                .and_then(|s| self.name_on(s, line))
-                .map_or_else(|| i.to_string(), str::to_string)
-        };
-        format!(
-            "{}: {} \u{2192} {}",
-            self.line_label_of(line),
-            name(index),
-            name(index + 1)
-        )
+        self.shot_text(line, index)
     }
 
     // ----- delete -----------------------------------------------------------
@@ -672,13 +666,14 @@ impl Project {
             removed_comment: edited.value.comment_removed,
             removed_closures: edited.value.closures_removed,
             // Named in the state before the delete (a station the delete
-            // gave back its alias identity, I-1, by its old id).
+            // gave back an archived identity, RS 4.3, by its old id).
             promoted_closures: edited.report.pre_edit_promotions(),
             swept_closures: edited.report.pre_edit_swept(),
             removed_across_one_shot: edited.report.pre_edit_across_one_shot(),
             shift_blocked: !reasons.is_empty(),
             shift_blocked_reasons: reasons,
             split_weld: self.split_delete_weld(line, index),
+            identities: edited.report.identities,
         })
     }
 

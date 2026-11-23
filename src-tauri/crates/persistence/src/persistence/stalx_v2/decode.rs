@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 use crate::models::survey::{
-    Counters, Line, LoopClosure, Placement, Project, ProjectSettings, Station, ZeroDatum,
+    Counters, Line, LoopClosure, Placement, Project, ProjectSettings, Station, Violation, ZeroDatum,
 };
 use crate::models::Section;
 
@@ -26,9 +26,10 @@ use super::salvage::{self, SalvageReport};
 use super::scan::{json_error, members, ScanError, MAX_SMALL_MEMBERS};
 use super::summary::SUMMARY_KEYS;
 use super::types::{
-    DecodeNote, DecodeOptions, Decoded, Extras, IgnoredWarning, Limit, RawJson, ReadOnly,
+    DecodeNote, DecodeOptions, Decoded, Earlier, Extras, IgnoredWarning, Limit, RawJson, ReadOnly,
 };
-use super::{KNOWN_FEATURES, SOLVER, SQLITE_MAGIC, VERSION};
+use super::upgrade;
+use super::{ARCHIVED_STATIONS, KNOWN_FEATURES, SOLVER, SQLITE_MAGIC, VERSION};
 
 /// Decode a version 2 file.
 ///
@@ -38,30 +39,67 @@ use super::{KNOWN_FEATURES, SOLVER, SQLITE_MAGIC, VERSION};
 /// Stalagmight"), never [`DecodeError::Invalid`]: the feature may be what
 /// relaxes the rule, so the file is not damaged, only beyond this build
 /// (review finding C-file-format-2).
+///
+/// A file an earlier build of version 2 wrote (its `requires` does not list
+/// [`ARCHIVED_STATIONS`]) is checked as it opens: the load-time upgrade (plan
+/// 2026-11-23 RS 8.2, [`super::upgrade`]) runs on a copy, after the file's
+/// own invariants but the ones the upgrade settles have passed, and that
+/// copy must validate. The project returned is the file's as written; the
+/// copy waits in [`Decoded::earlier`] for [`Decoded::upgrade`].
 pub fn decode(bytes: &[u8], options: &DecodeOptions) -> Result<Decoded, DecodeError> {
     let doc = parse(bytes, options)?;
+    let is_earlier = doc.earlier;
     let (project, extras, notes) = doc.assemble(None)?;
-    let violations = project.validate();
+    options.in_time()?;
+    let earlier = if is_earlier {
+        let damaged: Vec<_> = project
+            .validate()
+            .into_iter()
+            .filter(|v| !upgrade::settles(v))
+            .collect();
+        if !damaged.is_empty() {
+            return Err(refusal(&extras, damaged));
+        }
+        options.in_time()?;
+        let mut upgraded = project.clone();
+        let report = upgrade::run(&mut upgraded, &|| options.in_time())?;
+        Some(Earlier {
+            project: upgraded,
+            report,
+        })
+    } else {
+        None
+    };
+    options.in_time()?;
+    let violations = earlier.as_ref().map_or(&project, |e| &e.project).validate();
     if !violations.is_empty() {
-        let features = extras
-            .read_only
-            .as_ref()
-            .map(|r| r.unknown_features.clone())
-            .unwrap_or_default();
-        return Err(if features.is_empty() {
-            DecodeError::Invalid { violations }
-        } else {
-            DecodeError::NewerFeatures {
-                features,
-                violations,
-            }
-        });
+        return Err(refusal(&extras, violations));
     }
     Ok(Decoded {
         project,
         extras,
         notes,
+        earlier,
     })
+}
+
+/// The refusal of a file whose model breaks `violations`: "damaged", or
+/// "made with a newer Stalagmight" when it requires features this build
+/// does not know (they may be what relaxes the rule).
+fn refusal(extras: &Extras, violations: Vec<Violation>) -> DecodeError {
+    let features = extras
+        .read_only
+        .as_ref()
+        .map(|r| r.unknown_features.clone())
+        .unwrap_or_default();
+    if features.is_empty() {
+        DecodeError::Invalid { violations }
+    } else {
+        DecodeError::NewerFeatures {
+            features,
+            violations,
+        }
+    }
 }
 
 /// Best-effort repair of a file that parses but breaks the model invariants
@@ -202,6 +240,11 @@ pub(super) struct RawDoc {
     pub(super) line_hashes: Vec<String>,
     pub(super) extras: Extras,
     pub(super) notes: Vec<DecodeNote>,
+    /// An earlier build of version 2 wrote the file: its `requires` does not
+    /// list [`ARCHIVED_STATIONS`], which every file this build writes does
+    /// (RS 8.1). The feature itself is not kept in [`Extras::requires`]: the
+    /// encoder always writes it.
+    pub(super) earlier: bool,
 }
 
 /// Parse every member (nothing assembled, nothing validated yet).
@@ -459,6 +502,8 @@ pub(super) fn parse(bytes: &[u8], options: &DecodeOptions) -> Result<RawDoc, Dec
         field: "project".to_string(),
     })?;
 
+    let earlier = !extras.requires.iter().any(|f| f == ARCHIVED_STATIONS);
+    extras.requires.retain(|f| f != ARCHIVED_STATIONS);
     let unknown_features: Vec<String> = extras
         .requires
         .iter()
@@ -486,6 +531,7 @@ pub(super) fn parse(bytes: &[u8], options: &DecodeOptions) -> Result<RawDoc, Dec
         line_hashes,
         extras,
         notes,
+        earlier,
     })
 }
 
@@ -511,6 +557,7 @@ impl RawDoc {
             line_hashes,
             mut extras,
             mut notes,
+            earlier: _,
         } = self;
         let mut project = Project::new_at(meta.name, meta.location, meta.created);
         project.modified_at = meta.modified;
@@ -560,7 +607,7 @@ fn counters_of(project: &Project, raw: &RawCounters) -> Counters {
     let next_station = project
         .stations
         .values()
-        .flat_map(|s| std::iter::once(s.id).chain(s.aliases.iter().map(|a| a.id)))
+        .flat_map(|s| std::iter::once(s.id).chain(s.archived.iter().map(|r| r.id)))
         .max()
         .map_or(defaults.next_station_id, |m| m.saturating_add(1));
     let next_closure = project

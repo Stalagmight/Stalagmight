@@ -735,17 +735,25 @@ fn gated_commands(line: LineId, first: ShotId) -> Vec<(&'static str, Command)> {
             Command::MergeStations {
                 station_a: at(0),
                 station_b: at(2),
+                keep: None,
+                renames: None,
             },
         ),
         (
             "execute:UnmergeStations",
-            Command::UnmergeStations { station_ref: at(0) },
+            Command::UnmergeStations {
+                station_ref: at(0),
+                renames: None,
+                rest_keep: None,
+            },
         ),
         (
             "execute:UnmergeStationPair",
             Command::UnmergeStationPair {
                 station_a: at(0),
                 station_b: at(1),
+                renames: None,
+                rest_keep: None,
             },
         ),
         (
@@ -754,11 +762,16 @@ fn gated_commands(line: LineId, first: ShotId) -> Vec<(&'static str, Command)> {
                 station_a: at(0),
                 station_b: at(2),
                 closure_strategy: crate::models::ClosureStrategy::Batch,
+                keep: None,
+                renames: None,
             },
         ),
         (
             "execute:RemoveLoopClosure",
-            Command::RemoveLoopClosure { closure_id: 7 },
+            Command::RemoveLoopClosure {
+                closure_id: 7,
+                renames: None,
+            },
         ),
         (
             "execute:SetZeroDatum",
@@ -1462,14 +1475,19 @@ fn a_read_only_refusal_names_the_command_without_positional_ids() {
     let merge = refusal(Command::MergeStations {
         station_a: StationRef::new(line, 0),
         station_b: StationRef::new(line, 2),
+        keep: None,
+        renames: None,
     });
     assert!(
         merge.contains(&format!(
-            "Merge stations {name} / 0 and {name} / 2 is disabled"
+            "Merge {name} / 0 into {name} / 2 (keeps 2) is disabled"
         )),
         "{merge}"
     );
-    let closure = refusal(Command::RemoveLoopClosure { closure_id: 7 });
+    let closure = refusal(Command::RemoveLoopClosure {
+        closure_id: 7,
+        renames: None,
+    });
     assert!(
         closure.contains("Remove loop closure is disabled"),
         "{closure}"
@@ -1666,6 +1684,8 @@ fn a_command_that_changes_nothing_keeps_the_redo_branch_and_its_redo_is_exact() 
         &state,
         Command::UnmergeStations {
             station_ref: StationRef::new(ids[0], 0),
+            renames: None,
+            rest_keep: None,
         },
     );
     assert_eq!(state.get_undo_stack().len(), depth, "no entry");
@@ -1820,6 +1840,8 @@ fn finding_26_a_shot_edit_does_not_translate_a_group_whose_first_datum_was_remov
         Command::MergeStations {
             station_a: StationRef::new(a, 2),
             station_b: StationRef::new(b, 0),
+            keep: None,
+            renames: None,
         },
     );
     let datum = |at: StationRef, lat: f64, lon: f64| {
@@ -1931,6 +1953,8 @@ fn jump_history() -> (AppState, Vec<super::topology_kit::Snapshot>) {
         Command::MergeStations {
             station_a: StationRef::new(a, 2),
             station_b: StationRef::new(b, 0),
+            keep: None,
+            renames: None,
         },
         Command::MoveStation {
             station_ref: StationRef::new(a, 1),

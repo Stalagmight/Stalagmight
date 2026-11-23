@@ -34,8 +34,9 @@ export interface StationColumnContext {
    *  station picker at the pointer. */
   onConnectionsCellClick: (station: Station, pos: { x: number; y: number }) => void;
   /** Names for the rename check and the connections tooltip. A rename to a
-   *  name another station holds on any line through the station is refused
-   *  inline before it reaches the backend (`stationNameTakenOn`, plan 5.3). */
+   *  name a native slot of another station shows, on a line the renamed
+   *  station is native on, is refused inline before it reaches the backend
+   *  (`stationNameTakenOn`, plan 5.3, RS-FX5). */
   labels?: Pick<IdentityLabels, 'station' | 'stationName' | 'stationId' | 'lineName' | 'stationNameTakenOn'>;
 }
 
@@ -52,6 +53,37 @@ export function stationRenameToSend(value: unknown, station: Pick<Station, 'name
 
 const fixed = (precision: number) => (value: unknown): string =>
   typeof value === 'number' && Number.isFinite(value) ? formatFixed(value, undefined, precision) : '';
+
+/**
+ * The muted words after a dotted row's name in the Name column (RS-FX6,
+ * P2-5): a line may show one name twice (RS-FX5), its own station and the
+ * junction showing another line's station, and the Name column read "12"
+ * twice. A foreign slot reads "(Main)", its home line, as plain text names
+ * it ("12 (Main)"); a loop end "(loop end)". Null for a native row, or
+ * without labels.
+ */
+export function nameQualifier(
+  station: Pick<Station, 'station_ref' | 'shown'>,
+  labels: Pick<IdentityLabels, 'lineName'> | undefined,
+  t: TFunction,
+): string | null {
+  const shown = station.shown;
+  if (!shown || !labels) return null;
+  if (shown.loop_end) return t('dataTable.stationColumns.loopEndQualifier');
+  if (shown.foreign && shown.home_line !== undefined && shown.home_line !== station.station_ref.line_id) {
+    return t('dataTable.stationColumns.homeQualifier', { line: labels.lineName(shown.home_line) });
+  }
+  return null;
+}
+
+/**
+ * The Name column's default width, CSS px (RS-FX8, N3): wide enough for a
+ * three-digit name and its "(loop end)" qualifier at the grid's 12 px text
+ * (about 6.5 px a character, plus the cell's 16 px padding); at 72 px "8
+ * (loop end)" was cut to "8 (loop...". A longer qualifier (a long home line
+ * name) truncates on its own, never the name; the tooltip has it whole.
+ */
+export const NAME_COLUMN_WIDTH = 112;
 
 export function buildStationColumns(ctx: StationColumnContext): GridColumn<Station>[] {
   const { t, precision, geometryReadOnly } = ctx;
@@ -88,13 +120,39 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
   return [
     {
       // The editable copy of the gutter's name pill (set_station_name: trimmed,
-      // never empty, unique on every line through the station). Hidden by default
+      // never empty, unique among the native slots of every line the shown
+      // station is native on, RS-FX5). Hidden by default
       // (STATION_DEFAULT_HIDDEN / the backend panels default).
       key: 'name',
       header: t('dataTable.stationColumns.name'),
-      width: 72,
+      width: NAME_COLUMN_WIDTH,
       kind: 'text',
       getValue: (r) => displayStationName(r.name),
+      // A dotted row says whose station it shows (P2-5); the edit, the copy
+      // and the sort read the bare name.
+      render: (r) => {
+        const name = displayStationName(r.name);
+        const qualifier = nameQualifier(r, ctx.labels, t);
+        if (qualifier === null) {
+          return (
+            <span className="sg-cell-text" title={name || undefined}>
+              {name}
+            </span>
+          );
+        }
+        // The name never truncates; the qualifier does, at its end.
+        return (
+          <span className="flex min-w-0 items-baseline" title={`${name} ${qualifier}`}>
+            <span className="shrink-0 whitespace-pre">{`${name} `}</span>
+            <span
+              className="truncate text-text-secondary"
+              data-testid={`station-name-qualifier-${r.station_ref.line_id}-${r.station_ref.station_index}`}
+            >
+              {qualifier}
+            </span>
+          </span>
+        );
+      },
       editable: !geometryReadOnly,
       // An empty name is not a name: skip the write rather than send it.
       parse: (raw) => (raw.trim() === '' ? undefined : raw.trim()),
@@ -108,12 +166,13 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
       },
     },
     {
-      // The project-unique Station ID (read-only).
+      // The Station ID the slot shows (read-only, RS 6): a foreign slot or a
+      // loop end shows its kept station's.
       key: '_stationId',
       header: t('dataTable.stationColumns.stationId'),
       width: 84,
       align: 'right',
-      getValue: (r) => r.id,
+      getValue: (r) => r.shown?.id ?? r.id,
     },
     coordCol('_x', t('dataTable.stationColumns.x'), precision.coordinates),
     coordCol('_y', t('dataTable.stationColumns.y'), precision.coordinates),

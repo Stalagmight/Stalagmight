@@ -23,7 +23,9 @@
 //! # Five oracles
 //!
 //! Every comparison runs: the stored survey (the canonical v2 text, every
-//! number at 12 significant digits as the 0.6.0 engine compared it, uuids
+//! number at 12 significant digits as the 0.6.0 engine compared it, a
+//! placement's coordinates at 12 significant digits of the survey's extent,
+//! since each route computes them by its own walks of the piece, uuids
 //! masked only where both routes mint shots), the model's own integrity
 //! verdict (`validate`), the Computed View (every slot within 1e-6 m), and
 //! the ID ALLOCATORS (the station, closure and Section counters, the derived
@@ -165,6 +167,39 @@
 //! 3063 with closures: a partner tied by a closure carries the whole solve
 //! 0.8 m).
 //!
+//! # Under kept and archived stations (RS)
+//!
+//! The paragraphs above were written under U1, where every line kept its
+//! own name for a junction and a merge joined the two comments. Under RS
+//! (plan 2026-11-23) a merge keeps one identity whole and archives the
+//! other with its comment (RS 4.1), a promotion keeps the closure's kept
+//! end or its survivor (RS 5.4), a delete that leaves a node no native line
+//! gives back the record naming its lines by rule K, the comment moving
+//! with the node when the record has none (RS 4.3), and rule L's letters
+//! stay. So the singles' intermediate promotions leave these traces too,
+//! each asserted rather than skipped:
+//!
+//! - the junction's comment is the identity it ends with, never a join
+//!   ([`kept_comment`]): the partner end's, or, when the promotion kept the
+//!   edited end and the partner had none, the edited end's;
+//! - a junction promoted both ways keeps each route's own survivor, so the
+//!   two show different stations; each is asserted to be its promotion's
+//!   kept station, with the same two ids, or, on the singles' side, the
+//!   record a later single delete gave back (RS 4.3) with that kept station
+//!   inside it (seed 580002296);
+//! - a promotion may keep its retired end (RS 5.4's name test), so the
+//!   merged node at the survivor's position carries the retired end's id: a
+//!   piece the range cut loose and placed there was measured as the
+//!   survivor (seeds 580002106, 580004294);
+//! - the singles' junction shows one identity on every line through it,
+//!   where the atomic route may show another of the same junction's
+//!   identities: allowed only when each holds the other, and the singles'
+//!   one was kept by a single delete's promotion or given back by its
+//!   restore (both reported);
+//! - a station lettered by rule L in one route only (from the singles'
+//!   first promotion on, or by a range that promoted) is compared under the
+//!   atomic route's name ([`relettered`]).
+//!
 //! # Data
 //!
 //! Everything is generated in code. No fixture is read, copied or derived
@@ -188,8 +223,9 @@ use crate::core::Command;
 use crate::models::survey::changeset::testkit::Rng;
 use crate::models::survey::{ClosureId, LoopClosure, Project, Promotion, Station};
 use crate::models::{
-    ClosureStrategy, CombineLinesOptions, CombinePick, Coordinates, GpsCoordinates, LineId, Person,
-    ShotData, ShotId, ShotUpdates, SplitAt, SplitLineOptions, StationId, StationRef, SurveyCredit,
+    ClosureStrategy, CombineLinesOptions, CombinePick, Coordinates, GpsCoordinates,
+    LetteredStationWire, LineId, Person, ShotData, ShotId, ShotUpdates, SplitAt, SplitLineOptions,
+    StationId, StationRef, SurveyCredit,
 };
 use crate::persistence::stalx_v2::{self, Extras, Mode};
 
@@ -515,6 +551,18 @@ struct Documented {
     /// The closures both routes promoted, in opposite directions (module
     /// docs).
     mirrored: Vec<Mirrored>,
+    /// The rule-L letters (RS 2) the single deletes that promoted a closure
+    /// on the way gave, and the letters the range gave when it promoted one
+    /// (module docs, "RS"): a letter given because of a junction stays, so
+    /// a name one route lettered and the other did not is compared under
+    /// the atomic route's letters.
+    singles_letters: Vec<LetteredStationWire>,
+    atomic_letters: Vec<LetteredStationWire>,
+    /// The stations a single delete's promotion kept, or a single delete
+    /// gave back an archived identity (RS 5.4, 4.3): the identities the
+    /// singles' junctions may show where the atomic route shows another of
+    /// the same junction's identities (module docs, "RS").
+    singles_shown: BTreeSet<StationId>,
 }
 
 /// A closure the range's own sweep promoted between two partner pieces it
@@ -546,6 +594,11 @@ struct Mirrored {
     /// For the closures the singles' sweep promoted on the way: what their
     /// merges must have left (module docs).
     absorbed: Option<Absorbed>,
+    /// For a closure both routes promoted: the station each promotion kept
+    /// (RS 5.4), the atomic route's then the singles'. In opposite
+    /// directions each keeps its own survivor (the closure archived
+    /// nothing), so the two junctions may show different stations.
+    kept: Option<(StationId, StationId)>,
 }
 
 /// What the singles' merges on the way leave on one junction (module docs).
@@ -775,13 +828,15 @@ fn range_promotion(
 }
 
 /// The mirrored promotion of the closure the range promoted as `promotion`
-/// (named as in `pre`): both routes' junctions, found by slot.
+/// (named as in `pre`) and the singles as `single`: both routes' junctions,
+/// found by slot, and the station each kept.
 fn mirrored_promotion(
     pre: &Project,
     atomic: &Project,
     singles: &Project,
     edited: LineId,
     promotion: &Promotion,
+    single: &Promotion,
 ) -> Option<Mirrored> {
     let slot = junction_slot(pre, &promotion.closure, edited)?;
     let singles_id = station_at_slot(singles, slot)?;
@@ -790,19 +845,51 @@ fn mirrored_promotion(
         singles_id,
         atomic_at: junction_slots(atomic, singles, singles_id)?,
         absorbed: None,
+        kept: Some((promotion.kept, single.kept)),
     })
 }
 
-/// What a merge leaves of the survivor's and the retired station's comments
-/// (plan 5.1, restated): both, the survivor's first, a blank line apart; one
-/// text once; an empty comment counts as none.
-fn joined_comment(survivor: Option<String>, retired: Option<String>) -> Option<String> {
-    let keep = survivor.filter(|c| !c.is_empty());
-    let gone = retired.filter(|c| !c.is_empty());
-    match (keep, gone) {
-        (Some(k), Some(g)) if k == g => Some(k),
-        (Some(k), Some(g)) => Some(format!("{k}\n\n{g}")),
-        (k, g) => k.or(g),
+/// The comment a junction ends with after a promotion merged a partner
+/// station with one of the edited line's and a later delete took the edited
+/// line's end off it (RS 4.1 step 2: a merge keeps one identity whole and
+/// joins no comment). Kept, the partner keeps its own; when the promotion
+/// kept the edited end, the delete restores the partner's record (RS 4.3)
+/// and the edited end's comment moves with the node if the partner had
+/// none. An empty comment counts as none.
+fn kept_comment(
+    partner: Option<String>,
+    edited: Option<String>,
+    edited_kept: bool,
+) -> Option<String> {
+    let partner = partner.filter(|c| !c.is_empty());
+    if edited_kept && partner.is_none() {
+        edited.filter(|c| !c.is_empty())
+    } else {
+        partner
+    }
+}
+
+/// `p` with the names the two routes lettered differently put the atomic
+/// route's way: a station the singles lettered that the atomic route shows
+/// by the name before the letter gets that name back, and a station the
+/// atomic route lettered that the singles show by the name before gets the
+/// letter (module docs, "RS").
+fn relettered(p: &mut Project, atomic: &Project, doc: &Documented) {
+    for letter in &doc.singles_letters {
+        let shown = atomic.stations.get(&letter.station_id).map(|s| &s.name);
+        if let Some(station) = p.stations.get_mut(&letter.station_id) {
+            if station.name == letter.to && shown == Some(&letter.from) {
+                station.name.clone_from(&letter.from);
+            }
+        }
+    }
+    for letter in &doc.atomic_letters {
+        let shown = atomic.stations.get(&letter.station_id).map(|s| &s.name);
+        if let Some(station) = p.stations.get_mut(&letter.station_id) {
+            if station.name == letter.from && shown == Some(&letter.to) {
+                station.name.clone_from(&letter.to);
+            }
+        }
     }
 }
 
@@ -811,14 +898,14 @@ fn joined_comment(survivor: Option<String>, retired: Option<String>) -> Option<S
 /// has, and its other end a station the atomic route kept (module docs):
 /// the junction in both routes, found by that other end's slot on a line
 /// other than the edited one, and what the singles' merge must have left on
-/// it. `range_promoted` says the range's own sweep promoted the closure the
-/// same way.
+/// it. `range_kept` is the station the range's own sweep kept when it
+/// promoted the closure the same way.
 fn absorbed_promotion(
     single: &SinglePromotion,
     atomic: &Project,
     singles: &Project,
     edited: LineId,
-    range_promoted: bool,
+    range_kept: Option<StationId>,
 ) -> Option<Mirrored> {
     let before = &single.before;
     let promotion = &single.promotion;
@@ -855,14 +942,21 @@ fn absorbed_promotion(
         .iter()
         .position(|s| *s == partner_end)?;
     let comment_of = |s: StationId| before.stations.get(&s).and_then(|st| st.comment.clone());
-    let comment = joined_comment(
-        comment_of(promotion.survivor),
-        comment_of(promotion.retired),
+    // RS: no comment is joined; the junction ends with the partner end's
+    // identity, and its comment unless the partner had none and the
+    // promotion kept the edited end ([`kept_comment`]).
+    let comment = kept_comment(
+        comment_of(partner_end),
+        comment_of(edited_end),
+        promotion.kept == edited_end,
     );
-    let atomic_comment = if range_promoted {
-        comment.clone()
-    } else {
-        comment_of(partner_end)
+    let atomic_comment = match range_kept {
+        Some(kept) => kept_comment(
+            comment_of(partner_end),
+            comment_of(edited_end),
+            kept == edited_end,
+        ),
+        None => comment_of(partner_end),
     };
     let singles_id = station_at_slot(singles, (line, index))?;
     Some(Mirrored {
@@ -877,6 +971,7 @@ fn absorbed_promotion(
             atomic_comments: BTreeMap::from([((line, index), atomic_comment)]),
             carried: false,
         }),
+        kept: None,
     })
 }
 
@@ -947,12 +1042,15 @@ fn carried_promotion(
         atomic_at,
         absorbed: Some(Absorbed {
             edited_ends,
-            comment: joined_comment(comment_of(survivor), comment_of(retired)),
+            // RS: the promotion keeps one end whole (RS 5.4); both are
+            // partner stations, so nothing restores the other.
+            comment: comment_of(single.promotion.kept).filter(|c| !c.is_empty()),
             step: single.step,
             slots,
             atomic_comments,
             carried: true,
         }),
+        kept: None,
     })
 }
 
@@ -987,14 +1085,14 @@ fn one_per_junction(records: Vec<Mirrored>) -> Vec<Mirrored> {
     out
 }
 
-/// The station of `p` that is `id` or carries it as an alias.
+/// The station of `p` that is `id` or carries it as an archived record.
 fn known_as(p: &Project, id: StationId) -> Option<StationId> {
     if p.stations.contains_key(&id) {
         return Some(id);
     }
     p.stations
         .values()
-        .find(|s| s.aliases.iter().any(|alias| alias.id == id))
+        .find(|s| s.archived.iter().any(|record| record.id == id))
         .map(|s| s.id)
 }
 
@@ -1144,7 +1242,12 @@ fn dragged_problems(
 /// What the user sees of a mirrored junction must not depend on the route:
 /// every line through it shows it by the same name, it holds the same
 /// comment, and it keeps the same ids (one as its own, the rest as aliases).
-fn mirrored_junction_problems(atomic: &Project, singles: &Project, m: &Mirrored) -> Vec<String> {
+fn mirrored_junction_problems(
+    atomic: &Project,
+    singles: &Project,
+    m: &Mirrored,
+    singles_shown: &BTreeSet<StationId>,
+) -> Vec<String> {
     let Some(s) = singles.stations.get(&m.singles_id) else {
         return vec![format!(
             "closure {} promoted both ways, but the singles have no junction {}",
@@ -1153,9 +1256,61 @@ fn mirrored_junction_problems(atomic: &Project, singles: &Project, m: &Mirrored)
     };
     let mut problems = Vec::new();
     let slot_lines: BTreeSet<LineId> = m.atomic_at.iter().map(|((line, _), _)| *line).collect();
+    // RS 5.4: promoted in opposite directions, each route keeps its own
+    // survivor (the closure archived nothing), so each junction shows the
+    // station its own promotion kept, with that station's comment, and
+    // both keep the same two ids (one as the node, one as its record).
+    // A later single delete may take the singles' kept station off its last
+    // native line, and the junction then shows the record rule K gives back
+    // (RS 4.3), with the kept station inside it (seed 580002296): the
+    // restore is reported, as the bullet on the shown identity below says.
+    let ids = |station: &Station| -> BTreeSet<StationId> {
+        std::iter::once(station.id)
+            .chain(station.archived.iter().map(|record| record.id))
+            .collect()
+    };
+    let kept_apart = m.kept.filter(|(a, s)| a != s);
+    if let Some((kept_a, kept_s)) = kept_apart {
+        for (_, a) in &m.atomic_at {
+            if a.id != kept_a {
+                problems.push(format!(
+                    "the atomic route's junction of closure {} is {}, where its promotion kept \
+                     {kept_a}",
+                    m.closure, a.id
+                ));
+            }
+        }
+        let restored_later = ids(s).contains(&kept_s) && singles_shown.contains(&s.id);
+        if s.id != kept_s && !restored_later {
+            problems.push(format!(
+                "the singles' junction of closure {} is {}, where their promotion kept {kept_s} \
+                 and no later single delete gave {} back with {kept_s} inside it",
+                m.closure, s.id, s.id
+            ));
+        }
+    }
+    let atomic_ids: BTreeSet<StationId> = m.atomic_at.iter().flat_map(|(_, a)| ids(a)).collect();
+    let edited_ends = m
+        .absorbed
+        .as_ref()
+        .map_or_else(BTreeSet::new, |ab| ab.edited_ends.clone());
+    // RS: the singles' junction shows one identity on every line through it
+    // (RS 4.1), the one their promotion kept or a later single delete gave
+    // back (RS 4.3, rule K over the records the merge flattened into it);
+    // the atomic route may show another identity of the same junction there.
+    // Explained when the two are each other's: the atomic station is one of
+    // the singles' junction's identities, and the singles' is one the
+    // atomic route keeps there (or an edited end), shown by a promotion or a
+    // restore the single deletes reported.
+    let explained = |a: &Station| {
+        a.id != s.id
+            && ids(s).contains(&a.id)
+            && (atomic_ids.contains(&s.id) || edited_ends.contains(&s.id))
+            && singles_shown.contains(&s.id)
+    };
     for ((line, index), a) in &m.atomic_at {
-        let (shown_a, shown_s) = (atomic.name_on(a.id, *line), singles.name_on(s.id, *line));
-        if shown_a != shown_s {
+        let (shown_a, shown_s) = (atomic.shown_name(a.id), singles.shown_name(s.id));
+        if shown_a != shown_s && kept_apart.is_none() && !explained(a) {
             problems.push(format!(
                 "line {line} shows the junction of closure {} at slot {line}:{index} as \
                  {shown_a:?} after the range and {shown_s:?} after the singles",
@@ -1172,12 +1327,6 @@ fn mirrored_junction_problems(atomic: &Project, singles: &Project, m: &Mirrored)
             }
         }
     }
-    let ids = |station: &Station| -> BTreeSet<StationId> {
-        std::iter::once(station.id)
-            .chain(station.aliases.iter().map(|alias| alias.id))
-            .collect()
-    };
-    let atomic_ids: BTreeSet<StationId> = m.atomic_at.iter().flat_map(|(_, a)| ids(a)).collect();
     let atomic_stations: BTreeSet<StationId> = m.atomic_at.iter().map(|(_, a)| a.id).collect();
     let Some(absorbed) = &m.absorbed else {
         let a = &m.atomic_at[0].1;
@@ -1188,7 +1337,7 @@ fn mirrored_junction_problems(atomic: &Project, singles: &Project, m: &Mirrored)
                 m.closure
             ));
         }
-        if a.comment != s.comment {
+        if a.comment != s.comment && kept_apart.is_none() {
             problems.push(format!(
                 "the junction of closure {} (promoted both ways) holds the comment {:?} after \
                  the range and {:?} after the singles",
@@ -1308,7 +1457,8 @@ impl Documented {
         atomic: &Project,
         observed: &Observed,
     ) -> Result<serde_json::Value, String> {
-        if self.absorbed.is_empty() && self.mirrored.is_empty() {
+        let lettered = !self.singles_letters.is_empty() || !self.atomic_letters.is_empty();
+        if self.absorbed.is_empty() && self.mirrored.is_empty() && !lettered {
             return Ok(self.without_partner_placements(observed));
         }
         let mut project = adopt_atomic_junctions(
@@ -1316,6 +1466,7 @@ impl Documented {
             self.mirrored.iter().chain(&self.absorbed),
         );
         anchor_split_pieces(&mut project, atomic);
+        relettered(&mut project, atomic, self);
         let stored = try_stored_of(&project, observed.mask)?;
         Ok(self.strip_partner_placements(&project, stored))
     }
@@ -1364,6 +1515,75 @@ enum Allocators {
     Unchecked,
 }
 
+/// How far apart two routes may leave a placement coordinate: twelve
+/// significant digits (the stored survey's comparison) of the survey's
+/// extent, the largest raw coordinate of either side, not of the
+/// coordinate's own value.
+///
+/// A placement is a computed position: `settle_placements` walks the piece
+/// from its still point to the placement station, a chain of sums whose
+/// terms are as large as the survey, and every edit walks it again. Two
+/// routes that walk it a different number of times (one range delete, n
+/// single deletes) leave it a few ulps of those terms apart, and on a
+/// placement near the origin that is its own twelfth significant digit
+/// (farm seed 580006372, package RS-FX7).
+fn placement_tolerance(left: &Project, right: &Project) -> f64 {
+    let extent = [left, right]
+        .into_iter()
+        .flat_map(|p| p.raw_positions().slots(p))
+        .map(|slot| slot.x.abs().max(slot.y.abs()))
+        .fold(0.0_f64, f64::max);
+    1e-11 * extent
+}
+
+/// Each placement of the right route's stored survey that names the
+/// station the left one names at the same place in the list, with
+/// coordinates within [`placement_tolerance`] of the left's, takes the
+/// left's stored coordinates: what the strict comparison still sees is a
+/// placement on another station, in another order, or one that moved.
+/// The coordinates are judged on the projects' own values, before the
+/// stored survey's rounding.
+fn settle_placement_rounding(
+    left: &Project,
+    right: &Project,
+    l: &serde_json::Value,
+    r: &mut serde_json::Value,
+) {
+    let (Some(serde_json::Value::Array(ls)), Some(serde_json::Value::Array(rs))) =
+        (l.get("placements"), r.get_mut("placements"))
+    else {
+        return;
+    };
+    if ls.len() != rs.len() {
+        return;
+    }
+    let tolerance = placement_tolerance(left, right);
+    let raw = |p: &Project, station: u64| {
+        p.placements
+            .iter()
+            .find(|pl| u64::from(pl.station) == station)
+            .map(|pl| [pl.x, pl.y])
+    };
+    for (a, b) in ls.iter().zip(rs.iter_mut()) {
+        let station = a.get("station").and_then(serde_json::Value::as_u64);
+        let Some(station) =
+            station.filter(|&s| b.get("station").and_then(serde_json::Value::as_u64) == Some(s))
+        else {
+            continue;
+        };
+        let (Some(was), Some(is)) = (raw(left, station), raw(right, station)) else {
+            continue;
+        };
+        if (was[0] - is[0]).abs() <= tolerance && (was[1] - is[1]).abs() <= tolerance {
+            for key in ["x", "y"] {
+                if let (Some(value), Some(slot)) = (a.get(key), b.get_mut(key)) {
+                    *slot = value.clone();
+                }
+            }
+        }
+    }
+}
+
 /// Every way two observed states differ, as readable lines.
 fn differences(
     left: &Observed,
@@ -1388,6 +1608,7 @@ fn differences(
         }
         None => (left.stored.clone(), right.stored.clone()),
     };
+    settle_placement_rounding(&left.project, &right.project, &l, &mut r);
     if allocators != Allocators::Equal {
         // The stored counters are allocators: compared by the rule below.
         for stored in [&mut l, &mut r] {
@@ -1727,6 +1948,8 @@ fn build_project(state: &AppState, rng: &mut Rng, closures: bool) {
                 state.execute(Command::MergeStations {
                     station_a: StationRef::new(id, 0),
                     station_b: StationRef::new(parent, at),
+                    keep: None,
+                    renames: None,
                 });
             }
         }
@@ -1762,6 +1985,8 @@ fn build_project(state: &AppState, rng: &mut Rng, closures: bool) {
                 station_a: a,
                 station_b: b,
                 closure_strategy: strategy,
+                keep: None,
+                renames: None,
             });
         }
     }
@@ -1856,6 +2081,8 @@ fn prelude_command(state: &AppState, rng: &mut Rng) {
             state.execute(Command::MergeStations {
                 station_a: a,
                 station_b: b,
+                keep: None,
+                renames: None,
             });
         }
     }
@@ -1895,6 +2122,8 @@ struct Pair {
 }
 
 const DOOMED_ANCHOR_SHAPE: &str = "doomed-anchor-range";
+/// A merge the two twins made keeping different stations.
+const EITHER_KEEP_SHAPE: &str = "either-keep";
 /// The doomed-anchor shape where the piece cut loose is the edited line's
 /// own head.
 const CUT_LOOSE_HEAD_SHAPE: &str = "cut-loose-head";
@@ -1982,6 +2211,14 @@ const PAIRS: &[Pair] = &[
         run: pair_move_out_and_back_is_identity,
     },
     Pair {
+        id: "merge-keeping-either-station",
+        promise: "ops_merge.rs merge_stations - geometry and identity are independent (RS 4.1 \
+                  step 3, M-P1-1): keeping either station moves the same piece the same way, \
+                  the raw layout bit for bit and the Computed View within its tolerance \
+                  (M-P2-9), with the same allocators, and both unwind to the start",
+        run: pair_merge_keeping_either_station,
+    },
+    Pair {
         id: "create-line-with-shots-is-create-then-append",
         promise: "CreateLine { shots } and CreateLine { shots: [] } + one CreateShot append per \
                   shot build the same line",
@@ -2016,6 +2253,20 @@ fn pair_range_shift_vs_singles(twins: &Twins, rng: &mut Rng) -> Option<Compariso
     if !ranged.success {
         return None;
     }
+    let letters = |result: &crate::core::CommandResult| -> Vec<LetteredStationWire> {
+        result
+            .identities
+            .as_ref()
+            .map(|notice| notice.lettered.clone())
+            .unwrap_or_default()
+    };
+    let atomic_letters = if atomic_promotions.is_empty() {
+        Vec::new()
+    } else {
+        letters(&ranged)
+    };
+    let mut singles_letters: Vec<LetteredStationWire> = Vec::new();
+    let mut singles_shown: BTreeSet<StationId> = BTreeSet::new();
     // The edited line's first station: every single delete's still point
     // (plan 4.1 (a)) unless its piece holds a datum.
     let head = pre.line(line_id)?.start;
@@ -2038,6 +2289,19 @@ fn pair_range_shift_vs_singles(twins: &Twins, rng: &mut Rng) -> Option<Compariso
             // check on each shot, the loop guard): no state to compare.
             return None;
         }
+        // A letter the singles give from their first promotion on: the
+        // promotion's own, or a later restore's (RS 4.3) of an identity the
+        // promotion's merge brought into the junction.
+        if !step.is_empty() || !promoted.is_empty() {
+            singles_letters.extend(letters(&single));
+        }
+        singles_shown.extend(step.iter().map(|promotion| promotion.kept));
+        singles_shown.extend(
+            single
+                .identities
+                .iter()
+                .flat_map(|notice| notice.restored.iter().map(|r| r.station.id)),
+        );
         let after_step = twins.right.get_project_state()?;
         if !piece_holds_datum(&after_step, head) {
             let (was, is) = (
@@ -2077,7 +2341,7 @@ fn pair_range_shift_vs_singles(twins: &Twins, rng: &mut Rng) -> Option<Compariso
     }
     let mut cut_loose = Vec::new();
     let documented = partners.map(|partners| {
-        let (lines, problems) = pieces_cut_loose(&pre, &twins.left, line_id);
+        let (lines, problems) = pieces_cut_loose(&pre, &twins.left, line_id, &atomic_promotions);
         cut_loose = problems;
         let edited_head = lines.contains(&line_id);
         let atomic = twins.left.get_project_state();
@@ -2122,10 +2386,17 @@ fn pair_range_shift_vs_singles(twins: &Twins, rng: &mut Rng) -> Option<Compariso
                     .find(|a| a.closure.id == single.promotion.closure.id);
                 match range {
                     Some(range) if moves_a(range) != moves_a(&single.promotion) => {
-                        mirrored.extend(mirrored_promotion(&pre, atomic, singles, line_id, range));
+                        mirrored.extend(mirrored_promotion(
+                            &pre,
+                            atomic,
+                            singles,
+                            line_id,
+                            range,
+                            &single.promotion,
+                        ));
                     }
                     _ => absorbed.extend(
-                        absorbed_promotion(single, atomic, singles, line_id, range.is_some())
+                        absorbed_promotion(single, atomic, singles, line_id, range.map(|r| r.kept))
                             .or_else(|| carried_promotion(single, &pre, atomic, singles, line_id)),
                     ),
                 }
@@ -2142,6 +2413,9 @@ fn pair_range_shift_vs_singles(twins: &Twins, rng: &mut Rng) -> Option<Compariso
                 dragged,
                 range_promotions,
                 mirrored,
+                singles_letters: singles_letters.clone(),
+                atomic_letters: atomic_letters.clone(),
+                singles_shown: singles_shown.clone(),
             },
             edited_head,
         )
@@ -2244,11 +2518,15 @@ fn doomed_anchor_partners(
 /// stays (seed 3019); and a piece the sweep then promoted a closure onto is
 /// one piece with the moving piece it took in, whose stations, the edited
 /// line's first among them, moved onto it while the placement station
-/// stayed (seeds 168, 219, 3136).
+/// stayed (seeds 168, 219, 3136). When that promotion (one of the range's
+/// `promotions`, named as in `pre`) kept its retired end, the placement
+/// station carries the retired end's id at the survivor's position, so it
+/// is measured as the survivor (RS 5.4; seeds 580002106, 580004294).
 fn pieces_cut_loose(
     pre: &Project,
     now: &AppState,
     edited: LineId,
+    promotions: &[Promotion],
 ) -> (BTreeSet<LineId>, Vec<String>) {
     let Some(p) = now.get_project_state() else {
         return (BTreeSet::new(), Vec::new());
@@ -2257,6 +2535,16 @@ fn pieces_cut_loose(
     let raw_before = pre.raw_positions();
     let raw_now = p.raw_positions();
     let topology = p.topology();
+    // Under RS a promotion may keep its retired end (RS 5.4, the name
+    // test): the merged node, at the survivor's position, carries the
+    // retired end's id, so a station of that id was measured as the
+    // survivor (named as in `pre`, as the preview names them).
+    let measured_as = |station: StationId| {
+        promotions
+            .iter()
+            .find(|promotion| promotion.kept == station && promotion.retired == station)
+            .map_or(station, |promotion| promotion.survivor)
+    };
     let mut lines = BTreeSet::new();
     let mut problems = Vec::new();
     for placement in p.placements.iter().filter(|pl| !had.contains(&pl.station)) {
@@ -2293,7 +2581,7 @@ fn pieces_cut_loose(
             continue;
         };
         let moved = |station: StationId| -> Option<f64> {
-            let (was, is) = (raw_before.xy(station)?, raw_now.xy(station)?);
+            let (was, is) = (raw_before.xy(measured_as(station))?, raw_now.xy(station)?);
             Some((is[0] - was[0]).hypot(is[1] - was[1]))
         };
         let (by_placement, by_still) = (moved(placement.station), moved(still));
@@ -2336,7 +2624,12 @@ fn documented_divergence_problems(
     let mut problems = Vec::new();
     if let Some(singles_project) = twins.right.get_project_state() {
         for m in documented.mirrored.iter().chain(&documented.absorbed) {
-            problems.extend(mirrored_junction_problems(&p, &singles_project, m));
+            problems.extend(mirrored_junction_problems(
+                &p,
+                &singles_project,
+                m,
+                &documented.singles_shown,
+            ));
         }
         if let Some(dragged) = &documented.dragged {
             problems.extend(dragged_problems(pre, &p, &singles_project, dragged));
@@ -2548,6 +2841,132 @@ fn pair_reverse_twice_is_identity(twins: &Twins, rng: &mut Rng) -> Option<Compar
         }
     }
     let mut found = twins.compare(Mask::Strict);
+    found.absorb(
+        twins
+            .unwind_and_compare(Mask::Strict)
+            .prefixed("AFTER UNWIND: "),
+    );
+    Some(found)
+}
+
+/// Merge Stations keeping the first picked station on the left twin and
+/// the second on the right (both letter by rule L): the stored surveys
+/// differ by which identity the junction shows (by design), so the routes
+/// are compared on what must not depend on the keep (module docs, "RS"):
+/// the raw layout of every slot bit for bit, the Computed View within
+/// [`POSITION_TOLERANCE_M`], the integrity verdict and the allocators; then
+/// both unwind to the start.
+fn pair_merge_keeping_either_station(twins: &Twins, rng: &mut Rng) -> Option<Comparison> {
+    // A free line of its own, the same on both twins: the piece that merges
+    // (the base survey is often one piece).
+    let count = 1 + rng.below(4);
+    let shots: Vec<ShotData> = (0..count).map(|_| random_shot(rng)).collect();
+    let line = create_line_command(format!("keep-{}", rng.below(1000)), COLORS[1], shots);
+    for twin in [&twins.left, &twins.right] {
+        if !twin.execute(line.clone()).success {
+            return None;
+        }
+    }
+    let targets = read_targets(&twins.left);
+    let (free, _) = targets.lines.last()?;
+    let free = *free;
+    let mine: Vec<StationRef> = targets
+        .slots
+        .iter()
+        .copied()
+        .filter(|s| s.line_id == free)
+        .collect();
+    let others: Vec<StationRef> = targets
+        .slots
+        .iter()
+        .copied()
+        .filter(|s| s.line_id != free)
+        .collect();
+    let (a, b) = (*pick(rng, &mine)?, *pick(rng, &others)?);
+    let (a, b) = if rng.chance(0.5) { (a, b) } else { (b, a) };
+    let p = twins.left.get_project_state()?;
+    let (keep_a, keep_b) = (p.station_at(a)?, p.station_at(b)?);
+    let merge = |keep: StationId| Command::MergeStations {
+        station_a: a,
+        station_b: b,
+        keep: Some(keep),
+        renames: None,
+    };
+    let left = twins.left.execute(merge(keep_a));
+    let right = twins.right.execute(merge(keep_b));
+    let mut found = Comparison::default();
+    match (left.success, right.success) {
+        (false, false) => return None,
+        (true, true) => {}
+        _ => {
+            found.problems.push(format!(
+                "keeping {keep_a} {} the merge of {a} and {b}, keeping {keep_b} {} it ({:?} / \
+                 {:?})",
+                if left.success { "made" } else { "refused" },
+                if right.success { "made" } else { "refused" },
+                left.error,
+                right.error
+            ));
+            return Some(found);
+        }
+    }
+    let (raw_l, raw_r) = (raw_of(&twins.left), raw_of(&twins.right));
+    let raw: Vec<String> = raw_l
+        .keys()
+        .chain(raw_r.keys())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|key| {
+            let (x, y) = (raw_l.get(key), raw_r.get(key));
+            let same = matches!((x, y), (Some(x), Some(y))
+                if x.iter().zip(y).all(|(u, v)| u.to_bits() == v.to_bits()));
+            (!same).then(|| format!("slot {key}: {x:?} keeping {keep_a}, {y:?} keeping {keep_b}"))
+        })
+        .take(12)
+        .collect();
+    if !raw.is_empty() {
+        found.problems.push(format!(
+            "the raw layout depends on the keep (M-P1-1):\n    {}",
+            raw.join("\n    ")
+        ));
+    }
+    let (l, r) = (
+        observe(&twins.left, Mask::Strict),
+        observe(&twins.right, Mask::Strict),
+    );
+    let computed: Vec<String> = l
+        .adjusted
+        .iter()
+        .filter_map(|(key, x)| {
+            let y = r.adjusted.get(key);
+            let near =
+                y.is_some_and(|y| (0..3).all(|i| (x[i] - y[i]).abs() <= POSITION_TOLERANCE_M));
+            (!near).then(|| format!("slot {key}: {x:?} keeping {keep_a}, {y:?} keeping {keep_b}"))
+        })
+        .take(12)
+        .collect();
+    if !computed.is_empty() || l.adjusted.len() != r.adjusted.len() {
+        found.problems.push(format!(
+            "the Computed View depends on the keep beyond {POSITION_TOLERANCE_M} m \
+             (M-P2-9):\n    {}",
+            computed.join("\n    ")
+        ));
+    }
+    if !l.verdict.is_empty() || !r.verdict.is_empty() {
+        found.problems.push(format!(
+            "an accepted merge left an invalid survey: {:?} / {:?}",
+            l.verdict, r.verdict
+        ));
+    }
+    if l.allocators != r.allocators {
+        found.problems.push(format!(
+            "the allocators depend on the keep: {:?} vs {:?}",
+            l.allocators, r.allocators
+        ));
+    }
+    if keep_a != keep_b {
+        *found.shapes.entry(EITHER_KEEP_SHAPE).or_insert(0) += 1;
+    }
     found.absorb(
         twins
             .unwind_and_compare(Mask::Strict)
@@ -3307,7 +3726,8 @@ fn a_closure_the_single_deletes_promote_on_the_way_leaves_only_its_traces() {
 /// and the singles' survey is compared as it is (farm seed 17523769, where
 /// the one-station adoption showed line 2 two stations named "2" and the
 /// encoder's refusal was a panic). Here the adoption gives a station the
-/// name its neighbour on the same line shows.
+/// name its neighbour on the same line shows natively (a dotted neighbour,
+/// a foreign slot or a loop end, counts for no uniqueness, RS-FX5).
 #[test]
 fn an_adopted_survey_the_encoder_refuses_is_a_reported_divergence() {
     let _config = crate::test_helpers::isolated_config();
@@ -3320,13 +3740,17 @@ fn an_adopted_survey_the_encoder_refuses_is_a_reported_divergence() {
         .iter()
         .find_map(|l| {
             let chain: Vec<StationId> = l.stations().collect();
-            let taken = p.name_on(*chain.get(2)?, l.id)?.to_string();
-            Some((l.id, chain[1], taken))
+            let (first, second) = (*chain.get(1)?, *chain.get(2)?);
+            if !p.is_native_slot_of(second, l.id) || p.is_closure_archived(first) {
+                return None;
+            }
+            let taken = p.stations.get(&second)?.name.clone();
+            Some((l.id, first, taken))
         })
-        .expect("a line of three stations");
+        .expect("a line of three stations, the third native");
     let mut record = p.stations.get(&station).cloned().expect("the station");
     record.name = taken;
-    record.aliases.clear();
+    record.archived.clear();
     let documented = Documented {
         partners: BTreeSet::new(),
         allowed: BTreeSet::new(),
@@ -3340,7 +3764,11 @@ fn an_adopted_survey_the_encoder_refuses_is_a_reported_divergence() {
             singles_id: station,
             atomic_at: vec![((line, 1), record)],
             absorbed: None,
+            kept: None,
         }],
+        singles_letters: Vec::new(),
+        atomic_letters: Vec::new(),
+        singles_shown: BTreeSet::new(),
     };
     let found = differences(&left, &right, Some(&documented), Allocators::Equal);
     assert!(
@@ -3536,6 +3964,118 @@ fn a_move_out_and_back_lands_within_its_rounding() {
         "{} divergence(s):\n\n{}",
         problems.len(),
         problems.join("\n\n")
+    );
+}
+
+/// Farm seed 580006372 of range-shift-is-n-single-deletes (sg-rs-metamorphic-
+/// closures, finding d14345c9943b's signature; package RS-FX7): a range of
+/// two shots that removes no junction, no closure, no promotion. Each route
+/// walks the piece from the edited line's start to its placement station,
+/// the range once and the singles twice, and the placement landed near the
+/// origin, so the walk's rounding (1.8e-15 m, an ulp of the 20 m sums it
+/// adds) was its twelfth significant digit: `-1.74799425406e-4` against
+/// `...404`. Placements are compared at twelve significant digits of the
+/// survey's extent ([`placement_tolerance`]). Injection: compare the stored
+/// placements strictly again (skip `settle_placement_rounding`).
+#[test]
+fn a_placement_two_routes_walk_differently_agrees_within_the_surveys_digits() {
+    let _config = crate::test_helpers::isolated_config();
+    let (built, problems) =
+        pinned_seed_problems("range-shift-is-n-single-deletes", &[(580_006_372, true)]);
+    assert!(
+        built >= 4,
+        "the pinned seed built only {built} range pair(s)"
+    );
+    assert!(
+        problems.is_empty(),
+        "{} divergence(s):\n\n{}",
+        problems.len(),
+        problems.join("\n\n")
+    );
+}
+
+/// Farm seeds of range-shift-is-n-single-deletes under RS (sg-rs-metamorphic-
+/// closures, finding d14345c9943b's signature; package RS-FX7), two oracle
+/// gaps. 580002106 and 580004294: the range's own sweep promotes a closure
+/// that keeps its retired end (RS 5.4's name test), so the merged node at
+/// the survivor's position carries the retired end's id; the piece cut
+/// loose and placed there names it, and its placement station was measured
+/// as the survivor, not where the retired end was. 580002296: the singles
+/// promote the closure the other way, keeping 4, and the next single delete
+/// takes 4 off its last native line, so rule K gives back 10 (RS 4.3) with
+/// 4 still inside the junction; the atomic route's junction shows 18, its
+/// own promotion's survivor. Injections: measure the placement station by
+/// its own id (no `measured_as`) fails the first two; require the singles'
+/// junction to be their promotion's kept station alone fails the third.
+#[test]
+fn a_promotion_that_keeps_its_retired_end_or_a_later_restore_is_followed() {
+    let _config = crate::test_helpers::isolated_config();
+    let (built, problems) = pinned_seed_problems(
+        "range-shift-is-n-single-deletes",
+        &[
+            (580_002_106, true),
+            (580_002_296, true),
+            (580_004_294, true),
+        ],
+    );
+    assert!(
+        built >= 10,
+        "the pinned seeds built only {built} range pair(s)"
+    );
+    assert!(
+        problems.is_empty(),
+        "{} divergence(s):\n\n{}",
+        problems.len(),
+        problems.join("\n\n")
+    );
+}
+
+/// [`placement_tolerance`] is not vacuous: the farm seed's two placements,
+/// apart in their twelfth significant digit, agree; a placement two
+/// tolerances off is reported, and so would the first pair be without the
+/// tolerance.
+#[test]
+fn a_placement_past_the_surveys_digits_is_reported() {
+    let _config = crate::test_helpers::isolated_config();
+    let twins = Twins::build(580_006_372, true, GATE_PRELUDE).expect("twins");
+    let start = observe(&twins.left, Mask::Strict);
+    assert!(
+        !start.project.placements.is_empty(),
+        "the seed has a placement"
+    );
+    let at = |y: f64| {
+        let mut project = start.project.clone();
+        project.placements[0].y = y;
+        Observed {
+            stored: stored_of(&project, Mask::Strict),
+            mask: Mask::Strict,
+            verdict: start.verdict.clone(),
+            adjusted: start.adjusted.clone(),
+            allocators: start.allocators.clone(),
+            project,
+        }
+    };
+    let range = -1.747_994_254_057_694_3e-4;
+    let left = at(range);
+    let walked = at(-1.747_994_254_039_930_7e-4);
+    assert_ne!(
+        json_differences(&left.stored, &walked.stored),
+        Vec::<String>::new(),
+        "twelve significant digits of the value tell them apart"
+    );
+    let found = differences(&left, &walked, None, Allocators::Equal);
+    assert!(found.problems.is_empty(), "{:?}", found.problems);
+    let tolerance = placement_tolerance(&left.project, &walked.project);
+    assert!(tolerance > 0.0 && tolerance < 1e-8, "{tolerance}");
+    let moved = at(range + 2.0 * tolerance);
+    let found = differences(&left, &moved, None, Allocators::Equal);
+    assert!(
+        found
+            .problems
+            .iter()
+            .any(|problem| problem.contains(".placements[0].y")),
+        "{:?}",
+        found.problems
     );
 }
 

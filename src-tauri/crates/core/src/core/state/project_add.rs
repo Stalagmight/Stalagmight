@@ -26,6 +26,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use super::commands::Record;
+use super::conversion_notice::{ConversionNotice, ConversionSource};
 use super::project_io::same_file;
 use super::project_source::SourceProject;
 use super::AppState;
@@ -177,6 +178,20 @@ fn carried_ignores(source: &SourceProject, summary: &AppendSummary) -> Vec<Ignor
     carried
 }
 
+/// The note a converted source gets (RS 8.2, 8.3): which older file it was
+/// and what the conversion changed, counted (the copy renumbers lines and
+/// Station IDs, so no station is named). The source file is left as it was.
+pub(super) fn converted_source_note(label: &str, notice: &ConversionNotice) -> String {
+    let older = match notice.source {
+        ConversionSource::OldFormat => "is in the old file format",
+        ConversionSource::EarlierVersion2 => "was written by an earlier version",
+    };
+    format!(
+        "'{label}' {older} and was converted as it was read (the file itself is unchanged): {}",
+        notice.counts().join(", ")
+    )
+}
+
 fn add_receipt(label: &str, source: &SourceProject, report: &AddReport) -> ImportReceipt {
     let mut warnings = Vec::new();
     if let Some(why) = report.duplicate {
@@ -198,6 +213,12 @@ fn add_receipt(label: &str, source: &SourceProject, report: &AddReport) -> Impor
     if source.project.lines().is_empty() {
         warnings.push(format!("'{label}' holds no survey lines"));
     }
+    let info = source
+        .converted
+        .as_ref()
+        .map(|notice| converted_source_note(label, notice))
+        .into_iter()
+        .collect();
     let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
     let mut receipt = ImportReceipt {
         source_format: "Stalagmight".to_string(),
@@ -209,7 +230,7 @@ fn add_receipt(label: &str, source: &SourceProject, report: &AddReport) -> Impor
         closures_created: count(report.summary.closure_map.len()),
         unit_conversion: None,
         warnings,
-        info: Vec::new(),
+        info,
         zero_datum_created: None,
         line_problems: None,
     };

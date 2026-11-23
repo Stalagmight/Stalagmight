@@ -82,17 +82,23 @@ fn an_entry_is_canonical_compact_json_and_a_fixpoint() {
 #[test]
 fn an_entry_of_another_version_or_an_unknown_member_is_refused() {
     let (text, _, _) = samples().into_iter().nth(5).unwrap();
-    let other = text.replacen("{\"v\":1,", "{\"v\":2,", 1);
+    let other = text.replacen("{\"v\":2,", "{\"v\":3,", 1);
     assert_eq!(
         decode_entry(&other, &EntryLimits::default()).unwrap_err(),
-        EntryError::Version(2)
+        EntryError::Version(3)
     );
-    let extra = text.replacen("{\"v\":1,", "{\"v\":1,\"cmd\":{},", 1);
+    // A version 1 entry (U1 alias rows) is an earlier version's.
+    let older = text.replacen("{\"v\":2,", "{\"v\":1,", 1);
+    assert_eq!(
+        decode_entry(&older, &EntryLimits::default()).unwrap_err(),
+        EntryError::Version(1)
+    );
+    let extra = text.replacen("{\"v\":2,", "{\"v\":2,\"cmd\":{},", 1);
     assert!(matches!(
         decode_entry(&extra, &EntryLimits::default()),
         Err(EntryError::Syntax(_))
     ));
-    let no_version = text.replacen("{\"v\":1,", "{", 1);
+    let no_version = text.replacen("{\"v\":2,", "{", 1);
     assert!(decode_entry(&no_version, &EntryLimits::default()).is_err());
     let bad_time = text.replacen("2026-11-20T12:59:00", "yesterday-ish", 1);
     assert!(matches!(
@@ -152,10 +158,10 @@ fn garbage_and_oversized_entries_are_refused() {
         "null",
         "[]",
         "{}",
-        "{\"v\":1}",
-        "\u{feff}{\"v\":1,\"t\":\"x\",\"k\":\"k\",\"label\":\"l\",\"ops\":{}}",
+        "{\"v\":2}",
+        "\u{feff}{\"v\":2,\"t\":\"x\",\"k\":\"k\",\"label\":\"l\",\"ops\":{}}",
         "{\"v\":1e400}",
-        "{\"v\":1,\"t\":\"2026-01-01T00:00:00Z\",\"k\":\"k\",\"label\":\"l\",\"ops\":{\"datums\":{\"n\":[0,1],\"h\":[[0,[],[{\"station\":1}]]]}}}",
+        "{\"v\":2,\"t\":\"2026-01-01T00:00:00Z\",\"k\":\"k\",\"label\":\"l\",\"ops\":{\"datums\":{\"n\":[0,1],\"h\":[[0,[],[{\"station\":1}]]]}}}",
     ] {
         assert!(decode_entry(garbage, &limits).is_err(), "{garbage:?} decoded");
     }
@@ -172,14 +178,14 @@ fn garbage_and_oversized_entries_are_refused() {
     }
     let deep = format!("{}{}", "[".repeat(100_000), "]".repeat(100_000));
     let wrapped = format!(
-        "{{\"v\":1,\"t\":\"2026-01-01T00:00:00Z\",\"k\":\"k\",\"label\":\"l\",\"ops\":{deep}}}"
+        "{{\"v\":2,\"t\":\"2026-01-01T00:00:00Z\",\"k\":\"k\",\"label\":\"l\",\"ops\":{deep}}}"
     );
     assert!(
         decode_entry(&wrapped, &limits).is_err(),
         "a depth bomb decoded"
     );
     let long_label = format!(
-        "{{\"v\":1,\"t\":\"2026-01-01T00:00:00Z\",\"k\":\"k\",\"label\":\"{}\",\"ops\":{{}}}}",
+        "{{\"v\":2,\"t\":\"2026-01-01T00:00:00Z\",\"k\":\"k\",\"label\":\"{}\",\"ops\":{{}}}}",
         "x".repeat(5_000)
     );
     assert_eq!(
@@ -190,7 +196,7 @@ fn garbage_and_oversized_entries_are_refused() {
 
 /// An entry around `ops` (a changeset's JSON).
 fn wrap(ops: &str) -> String {
-    format!("{{\"v\":1,\"t\":\"2026-01-01T00:00:00Z\",\"k\":\"k\",\"label\":\"l\",\"ops\":{ops}}}")
+    format!("{{\"v\":2,\"t\":\"2026-01-01T00:00:00Z\",\"k\":\"k\",\"label\":\"l\",\"ops\":{ops}}}")
 }
 
 fn shape_error(ops: &str) -> String {
@@ -360,37 +366,44 @@ fn a_non_finite_number_is_refused_on_write() {
     assert_eq!(encode_entry(&entry(cs)).unwrap_err(), EntryError::NonFinite);
 }
 
-/// A station image's alias carries the line that knew the station by it
-/// (review finding UX-4): `[id]`, `[id, name]`, `[id, name, line]` or
-/// `[id, null, line]`; a null name with no line, or a fourth element, is
-/// refused.
+/// A station image carries every field of its archived records (RS 10):
+/// `{id, name, comment?, external?, into?, lines?}`, empty ones left out; an
+/// unknown key, a missing name or the U1 alias arrays are refused (the
+/// history format version guards older entries).
 #[test]
-fn an_alias_row_carries_its_line() {
-    use super::super::{Station, StationAlias};
+fn an_archived_record_row_carries_every_field() {
+    use super::super::{ArchivedStation, Station};
     use super::stations::StationRow;
     let mut station = Station::new(3, "3");
-    for (id, name, line) in [
-        (7, None, None),
-        (8, Some("0"), None),
-        (9, Some("1"), Some(2)),
-        (10, None, Some(4)),
-    ] {
-        station.aliases.push(StationAlias {
-            id,
-            name: name.map(str::to_string),
-            line,
-        });
-    }
+    station.archived = vec![
+        ArchivedStation {
+            id: 7,
+            name: "0".to_string(),
+            comment: None,
+            external: None,
+            into: Some(9),
+            lines: Vec::new(),
+        },
+        ArchivedStation {
+            id: 9,
+            name: "1".to_string(),
+            comment: Some("tie-off".to_string()),
+            external: Some("A9".to_string()),
+            into: None,
+            lines: vec![2, 4],
+        },
+    ];
     let text = serde_json::to_string(&StationRow(station.clone())).unwrap();
     assert_eq!(
         text,
-        r#"[3,"3",{"aliases":[[7],[8,"0"],[9,"1",2],[10,null,4]]}]"#
+        r#"[3,"3",{"archived":[{"id":7,"name":"0","into":9},{"id":9,"name":"1","comment":"tie-off","external":"A9","lines":[2,4]}]}]"#
     );
     let back: StationRow = serde_json::from_str(&text).unwrap();
     assert_eq!(back.0, station);
     for bad in [
-        r#"[3,"3",{"aliases":[[7,null]]}]"#,
-        r#"[3,"3",{"aliases":[[7,"0",2,5]]}]"#,
+        r#"[3,"3",{"archived":[{"id":7}]}]"#,
+        r#"[3,"3",{"archived":[{"id":7,"name":"0","line":2}]}]"#,
+        r#"[3,"3",{"aliases":[[7,"0",2]]}]"#,
     ] {
         assert!(serde_json::from_str::<StationRow>(bad).is_err(), "{bad}");
     }

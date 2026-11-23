@@ -26,13 +26,18 @@ fn detaching_a_line_whose_member_held_a_closure_promotes_it_and_the_line_follows
     let l3 = branch(&mut p, l1_end, run(0.0, 2, 10.0));
     let l2 = branch(&mut p, s, run(0.0, 2, 10.0));
     let x = at(&p, l3, 2);
-    let c = ok(p.create_closure(s, Some(l2), x, Some(l3), ClosureStrategy::Batch))
+    let c = ok(p.create_closure(s, Some(l2), x, Some(l3), ClosureStrategy::Batch, None, &[]))
         .value
         .closure;
     let before = xy_all(&p);
     let l2_rest: Vec<_> = p.line_stations(l2).unwrap()[1..].to_vec();
 
-    let out = ok(p.unmerge_station_pair(StationRef::new(l1, 1), StationRef::new(l2, 0)));
+    let out = ok(p.unmerge_station_pair(
+        StationRef::new(l1, 1),
+        StationRef::new(l2, 0),
+        crate::survey::NameAnswers::RuleL,
+        None,
+    ));
     assert_valid(&p);
     let fresh = out.value.new_station;
     assert_eq!(out.value.moved_closure_ends.len(), 1);
@@ -68,7 +73,7 @@ fn a_placement_datum_and_a_fix_merged_then_detached_put_the_fixs_piece_on_its_gp
     let before = xy_all(&p);
     let b_rest: Vec<_> = p.line_stations(b).unwrap()[1..].to_vec();
 
-    let out = ok(p.detach_line(junction, b));
+    let out = ok(p.detach_line_auto(junction, b, None));
     assert_valid(&p);
     assert_eq!(out.value.moved_datums, vec![set.index]);
     assert_eq!(

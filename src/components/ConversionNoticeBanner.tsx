@@ -8,6 +8,13 @@ const SAVE_SENTENCE = {
   saved: 'banners.conversion.saved',
   saved_as_new_file: 'banners.conversion.savedAsNewFile',
   downloaded: 'banners.conversion.downloaded',
+  read_only: 'banners.conversion.readOnly',
+} as const;
+
+/** The banner's lead, by which older file was converted (`ConversionSource`). */
+const LEAD = {
+  old_format: 'banners.conversion.lead',
+  earlier_version_2: 'banners.conversion.upgradedLead',
 } as const;
 
 /** `changes` joined into one sentence, its first letter capitalised. */
@@ -17,13 +24,18 @@ function changesSentence(changes: readonly string[]): string {
 }
 
 /**
- * The conversion notice (plan 7.2.10, demo issue I-5): an old-format (SQLite)
- * file whose conversion changed something a line shows. One short lead, then
- * only what applies (the backend words each change with its count), then ONE
- * sentence on saving that is true for the file now: before the converting
- * save it says the next save writes the new format; after it (the store
- * follows `CommandResult.legacy_converted`) it says it was saved. A long list
- * of renamed stations sits behind Details. Stays until dismissed.
+ * The conversion notice (plan 7.2.10, demo issue I-5; kept stations, plan
+ * 2026-11-23 RS 8.2 and 8.3): an old-format (SQLite) file, or a version 2
+ * file an earlier build wrote, whose conversion changed something a line
+ * shows. One short lead for the kind of file, then only what applies (the
+ * backend words each change with its count), then, when a station is now
+ * shown under another station's name or a comment is hidden, that Detach
+ * Line from Station or Remove Closure brings each back, then ONE sentence on
+ * saving that is true for the file now: before the converting save it says
+ * the next save writes the new format; after it (the store follows
+ * `CommandResult.legacy_converted`) it says it was saved; a file open
+ * read-only is never saved, so it says the file stays as it is. A long list sits
+ * behind Details, grouped by line. Stays until dismissed.
  */
 export function ConversionNoticeBanner({
   notice,
@@ -42,10 +54,19 @@ export function ConversionNoticeBanner({
       data-testid="conversion-notice-banner"
     >
       <div className="flex-1 min-w-0">
-        <span className="text-warning font-medium">{t('banners.conversion.lead')}</span>{' '}
+        <span className="text-warning font-medium" data-testid="conversion-notice-lead">
+          {t(LEAD[notice.source])}
+        </span>{' '}
         <span className="text-text-secondary" data-testid="conversion-notice-text">
           {changesSentence(notice.changes)}
         </span>{' '}
+        {notice.brings_back && (
+          <>
+            <span className="text-text-secondary" data-testid="conversion-notice-brings-back">
+              {t('banners.conversion.bringsBack')}
+            </span>{' '}
+          </>
+        )}
         <span className="text-text-secondary" data-testid="conversion-notice-save">
           {t(SAVE_SENTENCE[notice.file])}
         </span>

@@ -19,15 +19,26 @@
 //!   station it was reached at: its shots after that station forward, the
 //!   ones before it reversed (`"<line> (reversed)"`, or `"(pre-zero-datum)"`
 //!   on an entrance), exactly 0.6.0's blocks and row order.
-//! - **Ids.** A row's `ID` is the Station ID of the station it ends at and its
-//!   `FromID` that of the station it starts from, so a line hangs off its
-//!   parent's row for the junction with no alias and no placeholder pass, and
-//!   ids are stable across exports. A START's id is its station's. CLOSURE
-//!   rows and the GPS-fix STARTs are numbered above every station.
-//! - **Closures** become CLOSURE rows between their two stations (`Tie`s
+//! - **Ids.** A row's `ID` is the Station ID of the node (the station graph's
+//!   vertex) it ends at and its `FromID` that of the node it starts from, so
+//!   a line hangs off its parent's row for the junction with no alias and no
+//!   placeholder pass, and ids are stable across exports. A START's id is its
+//!   node's. CLOSURE rows and the GPS-fix STARTs are numbered above every
+//!   station. Ariane keys geometry by these ids and writes no station names,
+//!   so the shown identity (RS 5.1) is not used here: a loop end a closure
+//!   archives keeps its own Station ID as its Ariane node number (two points
+//!   cannot share one node), although the app shows it nowhere (RS 9).
+//! - **Closures** become CLOSURE rows between their two nodes (`Tie`s
 //!   included: a migrated cycle-closing merge is a loop like any other).
 //! - **Station comments** fold into the one row that ends at the station (a
-//!   START drops it, as before; the export notes say so, demo issue N-14).
+//!   START drops it, as before; the export notes say so, demo issue N-14). A
+//!   junction has one comment, its kept station's; a loop end a closure
+//!   archives writes none (its comment is hidden, the kept end's is written
+//!   at the kept end).
+//! - **Round trip** (declared, RS 9): Ariane has neither names nor archives,
+//!   so a file read back has no archived stations and no closure archives,
+//!   and its ids follow the nodes, which change where an upgrade or a merge
+//!   kept the moving station.
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::Path;
@@ -449,10 +460,15 @@ fn shot_row(shot: &Shot, line: &str, color: &str, from: StationId, to: StationId
 /// station, and ZWSP-mark every shot comment (`comment_split`), as 0.6.0's
 /// fold did. A station whose node is a START keeps no comment in the file, as
 /// in 0.6.0; how many were left out is returned, for the export note 0.6.0
-/// never gave (demo issue N-14).
+/// never gave (demo issue N-14). A loop end a closure archives is skipped:
+/// its comment is hidden (RS 9), and its kept end's is written there.
 fn fold_station_comments(project: &Project, rows: &mut [ExportShot]) -> usize {
+    let shown = project.shown_index();
     let mut by_row: HashMap<i64, &str> = HashMap::new();
     for station in project.stations.values() {
+        if shown.is_archived(station.id) {
+            continue;
+        }
         let Some(text) = station.comment.as_deref().filter(|t| !t.is_empty()) else {
             continue;
         };

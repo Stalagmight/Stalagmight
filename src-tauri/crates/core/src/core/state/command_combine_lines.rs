@@ -33,15 +33,17 @@ fn station_text(project: &Project, at: StationRef) -> String {
     project
         .topology()
         .station_at(at)
-        .and_then(|id| project.name_on(id, at.line_id))
+        .and_then(|id| project.shown_name(id))
         .map_or_else(
             || format!("a station of {line}"),
             |name| {
-                let name = name.trim();
-                if name.is_empty() {
+                if name.trim().is_empty() {
                     format!("{line} / {}", at.station_index)
                 } else {
-                    format!("{line} / {name}")
+                    // A dotted slot or a loop end qualified (RS-FX5).
+                    project
+                        .slot_text(at)
+                        .unwrap_or_else(|| format!("{line} / {}", name.trim()))
                 }
             },
         )
@@ -243,16 +245,17 @@ impl AppState {
                         .unwrap_or_default(),
                 );
                 record.preview = combine_rows(before, project, kept, other);
-                Ok(warnings)
+                Ok((warnings, project.identity_notice(&edited.report.identities)))
             },
         );
         match result {
-            Ok(warnings) => {
+            Ok((warnings, identities)) => {
                 tracing::info!(kept, other, "Combine lines completed");
                 CommandResult::success()
                     .with_line_id(kept)
                     .with_line_ids(vec![kept])
                     .with_warnings(warnings)
+                    .with_identities(identities)
             }
             Err(failure) => failure,
         }

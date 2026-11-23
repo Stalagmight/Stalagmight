@@ -609,6 +609,8 @@ fn merge_start_onto_end(state: &AppState, main: LineId, main_end: u32, side: Lin
     ok(state.execute(Command::MergeStations {
         station_a: StationRef::new(side, 0),
         station_b: StationRef::new(main, main_end),
+        keep: None,
+        renames: None,
     }));
 }
 

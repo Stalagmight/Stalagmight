@@ -12,9 +12,10 @@
  * the station they had here before the merge: 0 (Station ID 19)", but they
  * come off together on ONE station, so Upstream ended on 19 with its own 22
  * as an alias only. The dialog now lists what every line ends up with, from
- * the preview's per-line results, and says when a line keeps its own Station
- * ID only as an alias. Injection: word the hub from the chosen line's single
- * `name` / `station_id` again and the per-line test fails.
+ * the preview's per-line results (under RS no line keeps an alias of its
+ * own: lines that come off together show one station). Injection: word the
+ * hub from the chosen line's single `name` / `station_id` again and the
+ * per-line test fails.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -39,8 +40,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) =>
     args.lineId === SIDE
-      ? { name: '0', station_id: 7, restored: true, kept: false, lines: [] }
-      : { name: '0', station_id: 7, restored: true, kept: true, lines: [] },
+      ? { name: '0', station_id: 7, restored: true, kept: false, lines: [], together: [], rest_choices: [], collisions: [] }
+      : { name: '0', station_id: 7, restored: true, kept: true, lines: [], together: [], rest_choices: [], collisions: [] },
   );
   useProjectStore.setState({
     project: {
@@ -80,10 +81,10 @@ function hub() {
   } as never);
   invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) =>
     args.lineId === SIDE
-      ? { name: '0', station_id: 7, restored: true, kept: false, lines: [] }
+      ? { name: '0', station_id: 7, restored: true, kept: false, lines: [], together: [], rest_choices: [], collisions: [] }
       : args.lineId === BRANCH
-        ? { name: '0b', station_id: 12, restored: true, kept: false, lines: [] }
-        : { name: '0', station_id: 7, restored: true, kept: true, lines: [] },
+        ? { name: '0b', station_id: 12, restored: true, kept: false, lines: [], together: [], rest_choices: [], collisions: [] }
+        : { name: '0', station_id: 7, restored: true, kept: true, lines: [], together: [], rest_choices: [], collisions: [] },
   );
 }
 
@@ -108,8 +109,10 @@ describe('Detach dialog naming', () => {
     const naming = await screen.findByTestId('unmerge-stations-naming');
     expect(naming).toHaveTextContent('Side comes off and gets back the station it had here before the merge.');
     expect(screen.getByTestId('unmerge-stations-explain')).toHaveTextContent(
-      'The line you detach keeps its shots and gets its own station here, with no comment.',
+      'The line you detach keeps its shots and gets its own station here.',
     );
+    // RS 4.2: what comes back, by name and Station ID.
+    expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('It gets back 0 (Station ID 7).');
   });
 
   it('follows the chosen line: the junction stays on its own line and the merged lines get their station back', async () => {
@@ -130,7 +133,7 @@ describe('Detach dialog naming', () => {
   });
 
   it('says a line gets a new station named as it showed the junction when another line keeps it', async () => {
-    invokeIpc.mockImplementation(async () => ({ name: '3a', station_id: 19, restored: false, kept: false, lines: [] }));
+    invokeIpc.mockImplementation(async () => ({ name: '3a', station_id: 19, restored: false, kept: false, lines: [], together: [], rest_choices: [], collisions: [] }));
     render(<UnmergeStationsDialog />);
     await screen.findByTestId('unmerge-stations-naming');
     fireEvent.click(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
@@ -139,7 +142,7 @@ describe('Detach dialog naming', () => {
     );
   });
 
-  it('lists what every line of a hub ends up with, and an ID kept only as an alias (V-1)', async () => {
+  it('lists what every line of a hub ends up with (V-1)', async () => {
     // The demo: Main 3a (Station ID 3) with Side (its 0 was Station ID 7) and
     // Branch (its 0b was Station ID 12) merged onto it.
     hub();
@@ -147,20 +150,20 @@ describe('Detach dialog naming', () => {
       [MAIN]: [
         { line_id: MAIN, name: '3a', station_id: 3, comes_off: false, joined_with: [] },
         { line_id: SIDE, name: '0', station_id: 7, comes_off: true, joined_with: [BRANCH] },
-        { line_id: BRANCH, name: '0b', station_id: 7, comes_off: true, alias_id: 12, joined_with: [SIDE] },
+        { line_id: BRANCH, name: '0b', station_id: 7, comes_off: true, joined_with: [SIDE] },
       ],
       [BRANCH]: [
         { line_id: MAIN, name: '3a', station_id: 3, comes_off: false, joined_with: [SIDE] },
-        { line_id: SIDE, name: '0', station_id: 3, comes_off: false, alias_id: 7, joined_with: [MAIN] },
+        { line_id: SIDE, name: '0', station_id: 3, comes_off: false, joined_with: [MAIN] },
         { line_id: BRANCH, name: '0b', station_id: 12, comes_off: true, joined_with: [] },
       ],
     };
     invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) =>
       args.lineId === MAIN
-        ? { name: '0', station_id: 7, restored: true, kept: true, lines: results[MAIN] }
+        ? { name: '0', station_id: 7, restored: true, kept: true, lines: results[MAIN], together: [], rest_choices: [], collisions: [] }
         : args.lineId === BRANCH
-          ? { name: '0b', station_id: 12, restored: true, kept: false, lines: results[BRANCH] }
-          : { name: '0', station_id: 7, restored: true, kept: false, lines: [] },
+          ? { name: '0b', station_id: 12, restored: true, kept: false, lines: results[BRANCH], together: [], rest_choices: [], collisions: [] }
+          : { name: '0', station_id: 7, restored: true, kept: false, lines: [], together: [], rest_choices: [], collisions: [] },
     );
     render(<UnmergeStationsDialog />);
     await screen.findByTestId('unmerge-stations-naming');
@@ -169,7 +172,7 @@ describe('Detach dialog naming', () => {
     const items = screen.getAllByRole('listitem').map((li) => li.textContent);
     expect(items).toEqual([
       'Side: 0, Station ID 7 (comes off with Branch)',
-      'Branch: 0b, Station ID 7 (comes off with Side, sharing its station; its own Station ID 12 stays only as an alias, and detaching Branch afterwards gives it back)',
+      'Branch: 0b, Station ID 7 (comes off with Side)',
       'Main: 3a, Station ID 3 (stays)',
     ]);
     // Branch alone: it gets its own station back, the others stay.
@@ -178,7 +181,7 @@ describe('Detach dialog naming', () => {
       expect(screen.getAllByRole('listitem').map((li) => li.textContent)).toEqual([
         'Branch: 0b, Station ID 12 (comes off)',
         'Main: 3a, Station ID 3 (stays)',
-        'Side: 0, Station ID 3 (stays; the Station ID it had here before the merge, 7, is kept as an alias)',
+        'Side: 0, Station ID 3 (stays)',
       ]),
     );
   });

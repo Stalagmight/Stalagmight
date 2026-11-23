@@ -436,12 +436,16 @@ impl AppState {
         // file must never land beside that file's SQLite sidecars, which an old
         // build would roll into it (review finding D-migration-upgrade-10), and
         // the 0.6.0 file it replaces is kept in Recovery like any upgraded one.
-        let upgrade = !detached && to_open_file && file.origin == FileOrigin::Legacy;
-        // A Save As elsewhere of a project opened from a 0.6.0 file writes its
-        // first version 2 file too, leaving the 0.6.0 file as it was.
-        let converted = match (detached, file.origin) {
-            (false, FileOrigin::Legacy) if to_open_file => Some(ConversionFile::Saved),
-            (false, FileOrigin::Legacy) => Some(ConversionFile::SavedAsNewFile),
+        // The first write over a version 2 file an earlier build wrote keeps
+        // that original in Recovery the same way (plan 2026-11-23 RS 8.2).
+        let older = file.origin == FileOrigin::Legacy || file.upgrade_pending;
+        let upgrade = !detached && to_open_file && older;
+        // A Save As elsewhere of a project opened from an older file writes its
+        // first file in this build's format too, leaving the older file as it
+        // was.
+        let converted = match (detached, older) {
+            (false, true) if to_open_file => Some(ConversionFile::Saved),
+            (false, true) => Some(ConversionFile::SavedAsNewFile),
             _ => None,
         };
         let over_legacy = !to_open_file && holds_legacy_file(&target);
@@ -497,6 +501,7 @@ impl AppState {
         file.saved_bytes = Some((fingerprint.clone(), std::sync::Arc::from(bytes)));
         file.fingerprint = Some(fingerprint);
         file.origin = FileOrigin::V2;
+        file.upgrade_pending = false;
         file.dirty = false;
         file.local_pending = false;
         file.local_pending_asks = false;

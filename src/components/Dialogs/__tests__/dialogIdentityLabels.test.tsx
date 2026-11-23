@@ -86,7 +86,7 @@ describe('dialog identity labels', () => {
   it('Draw Shot names the station it starts from', () => {
     open({ fromStation: { line_id: MAIN, station_index: 2 }, appendMode: true });
     render(<DrawShotDialog />);
-    expect(screen.getAllByText(/Main Line \/ M2/).length).toBeGreaterThan(0);
+    expect(document.body.textContent).toContain('Main Line: M2');
     expect(document.body.textContent).toContain('Add Shot After Station M2');
     expectNoHandles();
   });
@@ -104,7 +104,7 @@ describe('dialog identity labels', () => {
       closures: [{ closureId: 4n, stationRef: { line_id: SIDE, station_index: 2 } }],
     });
     render(<RemoveClosureDialog />);
-    expect(screen.getByText('Side / S2')).toBeInTheDocument();
+    expect(document.body.textContent).toContain('Side: S2');
     expectNoHandles();
   });
 
