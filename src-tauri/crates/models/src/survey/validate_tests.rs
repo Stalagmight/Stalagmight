@@ -979,7 +979,7 @@ fn records_follow_a2_to_a4_and_their_names_count_nowhere() {
     );
     // And L1's end may take the name s1 shows on L1's foreign slot.
     let mut dotted = p.clone();
-    dotted.stations.get_mut(&l1_end).unwrap().name = name.clone();
+    dotted.stations.get_mut(&l1_end).unwrap().name = name;
     assert_eq!(dotted.validate(), Vec::new());
     // A3: a second record naming L1.
     let mut twice = p.clone();

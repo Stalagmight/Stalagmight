@@ -84,13 +84,15 @@ fn split_label(project: &Project, line_name: &str, first: LineId, second: LineId
         .line(second)
         .and_then(|l| project.shown_name(l.start))
         .filter(|name| !name.trim().is_empty())
-        .map(|_| {
-            project
-                .slot_name_text(crate::models::StationRef::new(second, 0))
-                .trim()
-                .to_string()
-        })
-        .unwrap_or_else(|| project.line(first).map_or(0, |l| l.shots.len()).to_string());
+        .map_or_else(
+            || project.line(first).map_or(0, |l| l.shots.len()).to_string(),
+            |_| {
+                project
+                    .slot_name_text(crate::models::StationRef::new(second, 0))
+                    .trim()
+                    .to_string()
+            },
+        );
     super::labels::split_line_label(line_name, &at)
 }
 
