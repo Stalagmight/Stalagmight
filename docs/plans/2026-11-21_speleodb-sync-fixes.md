@@ -907,7 +907,9 @@ each reproduced first by a test that fails on e9df1b642 (named with each item).
     not exit cleanly, and that Resume editing edits it here too. A lock this run
     claims (taken here, kept by a close) is resumed as before, and Resume editing
     and the held-lock prompt's Continue editing take the plain verb, so resuming a
-    crashed session's lock costs one click after the notice.
+    crashed session's lock costs one click after the notice. Continue editing loads
+    the project without the automatic acquire (its explicit Start Editing is the
+    resume), so the notice never lands over the session it resumes.
   - *Rejected:* a new `StartEditingResult` variant (the existing `locked_by` with
     the account's own email says the same, and every exhaustive match would have had
     to change); refusing the plain verb too (a crashed session's lock must stay
