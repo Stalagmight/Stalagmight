@@ -107,6 +107,7 @@ fn class(e: &DecodeError) -> &'static str {
         DecodeError::DuplicateStation { .. } => "duplicate-station",
         DecodeError::Invalid { .. } => "invalid",
         DecodeError::NewerFeatures { .. } => "newer-features",
+        DecodeError::DeadlinePassed => "deadline",
     }
 }
 

@@ -269,7 +269,8 @@ pub(super) fn run(bytes: &[u8]) -> (Option<Project>, SalvageReport) {
             violations.retain(|v| !super::upgrade::settles(v));
             if violations.is_empty() {
                 earlier = false;
-                report.upgrade = Some(super::upgrade::run(&mut project));
+                // Salvage has no deadline, so the upgrade runs to its end.
+                report.upgrade = super::upgrade::run(&mut project, &|| Ok(())).ok();
                 continue;
             }
         }

@@ -490,3 +490,30 @@ fn an_earlier_file_with_many_swapped_junctions_upgrades_in_linear_time() {
     );
     assert!(elapsed < Duration::from_secs(20), "{elapsed:?}");
 }
+
+/// Data review finding data-2, last part: stalx-reader's deadline stopped
+/// nothing inside `decode`, which runs an earlier file's upgrade, so it was
+/// checked only before and after. A deadline in the options is now checked
+/// between decode's phases; one already passed stops a decode of either
+/// kind of file, after its parse, and none or a later one changes nothing.
+/// Injection: on 333e24ac5 `DecodeOptions` has no deadline.
+#[test]
+fn a_decode_deadline_stops_between_phases() {
+    let bytes = encode(&one_line(100), &Extras::default(), Mode::Normal).unwrap();
+    let earlier = rewritten(text_of(&bytes), true, |_| "x".to_string());
+    for text in [text_of(&bytes), earlier.as_str()] {
+        let passed = DecodeOptions {
+            deadline: Some(Instant::now()),
+            ..DecodeOptions::default()
+        };
+        assert_eq!(
+            decode(text.as_bytes(), &passed).map(|_| ()),
+            Err(DecodeError::DeadlinePassed)
+        );
+        let later = DecodeOptions {
+            deadline: Some(Instant::now() + Duration::from_secs(3600)),
+            ..DecodeOptions::default()
+        };
+        assert!(decode(text.as_bytes(), &later).is_ok());
+    }
+}

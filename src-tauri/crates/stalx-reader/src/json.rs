@@ -23,11 +23,14 @@ pub(crate) fn read(
     remaining(expires)?;
     // The copy is already capped at `max_file_bytes`.
     let bytes = std::fs::read(copy)?;
+    // The deadline reaches into the decode: an earlier file's upgrade runs
+    // there, between whose steps it is checked.
     let mut decoded = decode(
         &bytes,
         &DecodeOptions {
             max_file_bytes: options.max_file_bytes,
             limits: decoder_limits(options.count_limits),
+            deadline: Some(expires),
         },
     )
     .map_err(decode_error)?;
@@ -151,5 +154,6 @@ pub(crate) fn decode_error(e: DecodeError) -> ReadError {
         | DecodeError::DuplicateStation { .. }
         | DecodeError::Invalid { .. } => ReadError::invalid(InvalidKind::Corrupt, detail),
         DecodeError::NewerFeatures { .. } => ReadError::invalid(InvalidKind::NewerFeatures, detail),
+        DecodeError::DeadlinePassed => ReadError::invalid(InvalidKind::Deadline, "deadline passed"),
     }
 }

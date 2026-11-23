@@ -50,6 +50,7 @@ pub fn decode(bytes: &[u8], options: &DecodeOptions) -> Result<Decoded, DecodeEr
     let doc = parse(bytes, options)?;
     let is_earlier = doc.earlier;
     let (project, extras, notes) = doc.assemble(None)?;
+    options.in_time()?;
     let earlier = if is_earlier {
         let damaged: Vec<_> = project
             .validate()
@@ -59,8 +60,9 @@ pub fn decode(bytes: &[u8], options: &DecodeOptions) -> Result<Decoded, DecodeEr
         if !damaged.is_empty() {
             return Err(refusal(&extras, damaged));
         }
+        options.in_time()?;
         let mut upgraded = project.clone();
-        let report = upgrade::run(&mut upgraded);
+        let report = upgrade::run(&mut upgraded, &|| options.in_time())?;
         Some(Earlier {
             project: upgraded,
             report,
@@ -68,6 +70,7 @@ pub fn decode(bytes: &[u8], options: &DecodeOptions) -> Result<Decoded, DecodeEr
     } else {
         None
     };
+    options.in_time()?;
     let violations = earlier.as_ref().map_or(&project, |e| &e.project).validate();
     if !violations.is_empty() {
         return Err(refusal(&extras, violations));
