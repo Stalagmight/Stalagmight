@@ -1013,7 +1013,13 @@ Editing inherited it.
   boundary having to remember it.
 - Take the SpeleoDB version (Take remote) releases nothing and leaves the claim as it
   was: an edit session carries over its reload (the claim is still bound) and goes
-  on editing the server version, and a read-only one stays read-only. The lock is
+  on editing the server version, and a read-only one stays read-only. The session
+  goes on only while SpeleoDB still records this account's lock, read once right
+  before the reload (Reload Project's fast-forward does the same): when another
+  session of the account has handed it back, or someone else holds it, the reload
+  opens read-only and the "Editing stopped" notice says why (`editing_stopped`). A
+  holder read that gets no reply keeps the session; every upload reads the holder
+  again before it sends. The lock is
   the account's, and another session of the same account may be editing under it;
   releasing it here used to leave that session editing with no lock on the server
   (demo item 2). The frontend reconciles the view in place without acquiring and
