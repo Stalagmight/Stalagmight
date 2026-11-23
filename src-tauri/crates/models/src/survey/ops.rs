@@ -25,7 +25,7 @@
 //! command layer's (C) business, which keeps every model operation a pure,
 //! deterministic function of its input.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fmt;
 
 use crate::station_naming::user_station_name;
@@ -289,19 +289,15 @@ impl Project {
         let before = self.anchor_snapshot();
         let result = op(self).and_then(|(value, ctx)| {
             // The stations a rename may address are those the op's own
-            // collisions name, worked out as its preview lists them: the
-            // epilogue run with rule L on a copy of the state right after
-            // the mutation (only when there are renames to check).
+            // collisions name, each with the letters they offer it, worked
+            // out as its preview lists them: the epilogue run with rule L on
+            // a copy of the state right after the mutation, and the other
+            // answer of each collision (only when there are renames).
             let own_collisions = answers.apply(self, |p| {
                 let mut probe = p.clone();
                 probe
                     .epilogue(sweep, &before, ctx.clone(), &backup, &[])
-                    .map(|e| {
-                        e.lettered
-                            .iter()
-                            .flat_map(|l| [l.station, l.other])
-                            .collect()
-                    })
+                    .map(|e| probe.offered_letters(&e.lettered))
                     .unwrap_or_default()
             })?;
             let done = self.epilogue(sweep, &before, ctx, &backup, &own_collisions)?;
@@ -382,31 +378,45 @@ impl Project {
     /// it names) and return the collisions still standing, by line and name:
     /// what a command that carries renames runs right after its mutation,
     /// before the epilogue ([`Self::refuse_unanswered`] judges them once the
-    /// sweep ran). Each name is a user's ([`user_station_name`]: trimmed,
-    /// refused when empty or holding a control or invisible formatting
-    /// character, as Set Station Name refuses it), and each rename must
-    /// address a station the op's own collisions name (`asked`, called only
-    /// when there are renames: the stations of its preview's collisions,
-    /// both answers of each); anything else refuses
-    /// ([`OpError::InvalidRename`], [`OpError::RenameNotAsked`]).
+    /// sweep ran). Each rename must address a station the op's own
+    /// collisions name (`asked`, called only when there are renames: the
+    /// stations of its preview's collisions, both answers of each, with the
+    /// letters they offer each station). A name that is exactly a letter
+    /// offered for its station is taken verbatim: it is the backend's own
+    /// answer, free on the station's lines, and its base may be an imported
+    /// name with padding (`" 5"` letters to `" 5a"`, which trimmed could
+    /// clash with a `5a` of the line; RS-FX10). Any other name is a user's
+    /// ([`user_station_name`]: trimmed, refused when empty or holding a
+    /// control or invisible formatting character, as Set Station Name
+    /// refuses it). Anything else refuses ([`OpError::InvalidRename`], then
+    /// [`OpError::RenameNotAsked`]).
     pub(super) fn apply_renames(
         &mut self,
         renames: &[(StationId, String)],
-        asked: impl FnOnce(&Project) -> HashSet<StationId>,
+        asked: impl FnOnce(&Project) -> HashMap<StationId, Vec<String>>,
     ) -> Result<Vec<(LineId, String)>, OpError> {
+        let asked = if renames.is_empty() {
+            HashMap::new()
+        } else {
+            asked(self)
+        };
         let mut checked: Vec<(StationId, &str)> = Vec::with_capacity(renames.len());
         for (id, name) in renames {
-            let name = user_station_name(name).map_err(|reason| OpError::InvalidRename {
-                station: *id,
-                reason,
-            })?;
+            let offered = asked
+                .get(id)
+                .is_some_and(|letters| letters.iter().any(|letter| letter == name));
+            let name = if offered {
+                name.as_str()
+            } else {
+                user_station_name(name).map_err(|reason| OpError::InvalidRename {
+                    station: *id,
+                    reason,
+                })?
+            };
             checked.push((*id, name));
         }
-        if !checked.is_empty() {
-            let asked = asked(self);
-            if let Some(&(id, _)) = checked.iter().find(|(id, _)| !asked.contains(id)) {
-                return Err(OpError::RenameNotAsked(id));
-            }
+        if let Some(&(id, _)) = checked.iter().find(|(id, _)| !asked.contains_key(id)) {
+            return Err(OpError::RenameNotAsked(id));
         }
         for (id, name) in checked {
             let station = self

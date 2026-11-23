@@ -514,7 +514,14 @@ Remove Closure list each collision their operation makes (a merge rarely: the
 lines that show its kept station anew show it through foreign slots; creating a
 loop closure never) with two answers, lettering one station or the other, and
 refuse one left unanswered; every path without a dialog letters by rule L and
-names each letter in its notice (an import in its receipt). A rename addresses
+names each letter in its notice (an import in its receipt). The answers follow
+the station-name rules. An answer may rename only a station of one of the
+operation's own collisions: a rename naming any other station is refused and
+changes nothing, so an operation that makes no collision (creating a loop
+closure among them) takes no rename. A letter the operation offers is taken
+exactly as offered (a station named ` 5` is offered ` 5a`, free on its lines);
+any other name is trimmed, and refused when it is empty or holds a control or
+invisible formatting character, as Edit Station refuses it. A rename addresses
 the identity the slot shows, so every line showing it shows the new name
 (through a foreign slot or a loop end that is the kept station, and the data
 table or Edit Station first says whose station it is); it is refused when a

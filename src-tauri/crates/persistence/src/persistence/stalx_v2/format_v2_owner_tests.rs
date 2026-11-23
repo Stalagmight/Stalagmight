@@ -6,7 +6,7 @@
 //! are all put under their station's own identity. Fully synthetic data.
 
 use std::fmt::Write as _;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use chrono::{TimeZone, Utc};
 
@@ -198,23 +198,50 @@ fn a_crafted_owner_is_refused_and_salvaged() {
     }
 }
 
-/// A crafted station holding 200,000 records chained by their owners, the
-/// last one's owner the first (a cycle through all of them), is refused,
-/// and salvaged, in about the time a read takes (about a second here):
-/// every owner is resolved once, and salvage clears them in one walk.
+/// A crafted station holding records chained by their owners, the last
+/// one's owner the first (a cycle through all of them), is refused, and
+/// salvaged, in linear time: every owner is resolved once, and salvage
+/// clears them in one walk. 4x the records (25,000 then 100,000) take about
+/// 4x the time ([`crate::models::linear_time`], RS-FX10). Injection:
+/// walking each record's chain with no memo (quadratic on the cycle) fails
+/// it.
 #[test]
 fn a_long_owner_cycle_is_refused_without_hanging() {
-    const N: u32 = 200_000;
+    crate::models::linear_time::assert_linear(
+        "an owner cycle, refused and salvaged",
+        25_000,
+        |n| owner_cycle(n as u32),
+        |text| {
+            let started = Instant::now();
+            let refused = decode(text.as_bytes(), &DecodeOptions::default());
+            let (project, _) = decode_salvage(text.as_bytes());
+            let elapsed = started.elapsed();
+            let violations = match refused {
+                Err(DecodeError::Invalid { violations }) => violations,
+                other => panic!("expected an invariant refusal, got {other:?}"),
+            };
+            assert!(violations
+                .iter()
+                .any(|v| matches!(v, Violation::ArchivedOwnerCycle { station: 0, .. })));
+            assert!(project.is_some_and(|p| p.validate().is_empty()));
+            elapsed
+        },
+    );
+}
+
+/// A version 2 file whose station 0 holds `n` records, each owned by the
+/// next and the last by the first.
+fn owner_cycle(n: u32) -> String {
     let mut records = String::new();
-    for i in 0..N {
+    for i in 0..n {
         let id = 10 + i;
-        let into = 10 + (i + 1) % N;
+        let into = 10 + (i + 1) % n;
         if i > 0 {
             records.push(',');
         }
         write!(records, "{{\"id\":{id},\"name\":\"r{i}\",\"into\":{into}}}").unwrap();
     }
-    let text = format!(
+    format!(
         "{{\"format\":\"stalx\",\"version\":2,\"solver\":1,{REQUIRES},\n\
          \"conventions\":{{\"length\":\"m\",\"angles\":\"deg\",\"azimuth\":\"cw-from-north\",\
          \"inclination\":\"+down\",\"depth\":\"+down\",\"local\":\"enu-m\",\"gps\":\"wgs84-deg\",\
@@ -226,20 +253,8 @@ fn a_long_owner_cycle_is_refused_without_hanging() {
          \"lines\":[\n{{\"id\":0,\"color\":\"#000\",\"start\":0}},\n\
          [\"u0\",1,1.0,0.0,0.0,0.0,0.0]\n],\n\
          \"placements\":[{{\"station\":0,\"x\":0.0,\"y\":0.0}}],\n\"end\":true}}\n",
-        10 + N
-    );
-    let started = Instant::now();
-    let violations = match decode(text.as_bytes(), &DecodeOptions::default()) {
-        Err(DecodeError::Invalid { violations }) => violations,
-        other => panic!("expected an invariant refusal, got {other:?}"),
-    };
-    assert!(violations
-        .iter()
-        .any(|v| matches!(v, Violation::ArchivedOwnerCycle { station: 0, .. })));
-    let (project, _) = decode_salvage(text.as_bytes());
-    assert!(project.is_some_and(|p| p.validate().is_empty()));
-    let elapsed = started.elapsed();
-    assert!(elapsed < Duration::from_secs(20), "took {elapsed:?}");
+        10 + n
+    )
 }
 
 /// An earlier version 2 file (no `archived-stations`) never had owners: its

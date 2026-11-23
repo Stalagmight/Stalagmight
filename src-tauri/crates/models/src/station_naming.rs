@@ -438,8 +438,10 @@ pub fn name_characters_refusal(what: &str, name: &str) -> Option<String> {
 /// it: an empty name, or one holding a character [`is_forbidden_name_char`]
 /// rejects, in 0.6.0's words. The one rule every user-given station name
 /// passes: Set Station Name and the renames a Merge, Detach or loop closure
-/// dialog sends with its command (RS-FX9). Whether the name is free on the
-/// station's lines is the caller's check.
+/// dialog sends with its command (RS-FX9), except a rename that is exactly
+/// a letter the command's own collisions offer (the backend's answer, taken
+/// verbatim, RS-FX10). Whether the name is free on the station's lines is
+/// the caller's check.
 pub fn user_station_name(name: &str) -> Result<&str, String> {
     let name = name.trim();
     if name.is_empty() {

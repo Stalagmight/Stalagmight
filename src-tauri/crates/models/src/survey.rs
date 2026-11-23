@@ -224,6 +224,12 @@ mod dotted_names_tests;
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
+mod index_equivalence_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
 mod kept_report_tests;
 #[cfg(test)]
 #[expect(

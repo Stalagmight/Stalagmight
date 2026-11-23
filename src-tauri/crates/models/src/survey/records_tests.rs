@@ -265,8 +265,11 @@ fn append_shifts_record_owners() {
 
 /// A6 on a model: an owner that is no record of the node, the record
 /// itself, a history record or a cycle is reported, each by name; a cycle
-/// through 100,000 records is reported in about the time validate takes
-/// anyway.
+/// through all of a station's records is reported in linear time: 4x the
+/// records (25,000 then 100,000) take about 4x the time
+/// ([`crate::linear_time`], RS-FX10). Injection: walking each record's
+/// chain to its end with no memo, a quadratic walk of the cycle, took 16x
+/// the time at 4x the records here.
 #[test]
 fn validate_reports_every_owner_fault() {
     use super::Violation;
@@ -312,28 +315,32 @@ fn validate_reports_every_owner_fault() {
         })
     );
 
-    let mut long = p.clone();
-    let first = long.counters.next_station_id;
-    let n = 100_000;
-    let s = long.station_mut(y).unwrap();
-    for i in 0..n {
-        let mut rec = s.archived[1].clone();
-        rec.id = first + i;
-        rec.lines.clear();
-        rec.into = Some(first + (i + 1) % n);
-        s.archived.push(rec);
-    }
-    long.counters.next_station_id = first + n;
-    let started = std::time::Instant::now();
-    let found = long.validate();
-    assert!(started.elapsed() < std::time::Duration::from_secs(10));
-    assert_eq!(
-        found
+    let long = |n: usize| {
+        let mut long = p.clone();
+        let first = long.counters.next_station_id;
+        let count = n as StationId;
+        let s = long.station_mut(y).unwrap();
+        for i in 0..count {
+            let mut rec = s.archived[1].clone();
+            rec.id = first + i;
+            rec.lines.clear();
+            rec.into = Some(first + (i + 1) % count);
+            s.archived.push(rec);
+        }
+        long.counters.next_station_id = first + count;
+        (long, n)
+    };
+    crate::linear_time::assert_linear("an owner cycle", 25_000, long, |(long, n)| {
+        let started = std::time::Instant::now();
+        let found = long.validate();
+        let elapsed = started.elapsed();
+        let cycles = found
             .iter()
             .filter(|v| matches!(v, Violation::ArchivedOwnerCycle { .. }))
-            .count(),
-        n as usize
-    );
+            .count();
+        assert_eq!(cycles, *n);
+        elapsed
+    });
 }
 
 /// The record helpers keep list order: a subtree taken out keeps its

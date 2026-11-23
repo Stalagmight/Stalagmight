@@ -159,6 +159,40 @@ describe('Detach Line from Station under RS', () => {
     expect(unmergeStations).toHaveBeenCalledWith(slot(MAIN, 3), { renames: [], restKeep: 50 });
   });
 
+  // RS-FX10: the picker comes before what it decides, after the sentence it
+  // answers. Injection: render RestPicker after DetachResults again.
+  it('puts the remaining-junction picker before what depends on it', async () => {
+    const results = [
+      { line_id: SIDE, station_id: 40, name: '0', comes_off: true, joined_with: [NORTH] },
+      { line_id: NORTH, station_id: 40, name: '0', comes_off: true, joined_with: [SIDE] },
+      { line_id: MAIN, station_id: 3, name: '3', comes_off: false, joined_with: [] },
+    ];
+    invokeIpc.mockImplementation(async (_cmd: string, args: { lineId: number }) =>
+      args.lineId === MAIN ? { ...MAIN_KEEPS, lines: results } : SIDE_BACK,
+    );
+    useProjectStore.setState({
+      stations: useProjectStore.getState().stations.map((s) =>
+        s.station_ref.line_id === MAIN
+          ? {
+              ...s,
+              archived: [
+                { id: 40, name: '0', lines: [SIDE] },
+                { id: 50, name: '9', lines: [NORTH] },
+              ],
+            }
+          : s,
+      ),
+    } as never);
+    open({ chosenLine: MAIN });
+    const picker = await screen.findByTestId('unmerge-stations-rest');
+    const follows = (a: HTMLElement, b: HTMLElement) =>
+      (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    expect(follows(screen.getByTestId('unmerge-stations-naming'), picker)).toBe(true);
+    for (const id of ['unmerge-stations-comes-back', 'unmerge-stations-inside-50', 'unmerge-stations-results']) {
+      expect(follows(picker, screen.getByTestId(id)), id).toBe(true);
+    }
+  });
+
   it('says what a loop closure made the line show before', async () => {
     invokeIpc.mockImplementation(async () =>
       base({ name: '3', station_id: 60, restored: false, shown_before: { id: 8, name: '8', home_line: NORTH } }),

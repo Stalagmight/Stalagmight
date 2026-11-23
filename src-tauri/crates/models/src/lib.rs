@@ -23,6 +23,12 @@ pub mod import_receipt;
 pub mod line;
 pub mod line_combine;
 pub mod line_split;
+#[cfg(any(test, feature = "test-support"))]
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "test support: a failed assert is how a complexity check fails"
+)]
+pub mod linear_time;
 pub mod newer_schema;
 pub mod placement_suggest;
 pub mod previews;

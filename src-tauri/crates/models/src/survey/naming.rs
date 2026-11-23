@@ -436,6 +436,24 @@ impl Project {
             .collect()
     }
 
+    /// The answers a dialog may send for `letters` (rule L's, called on the
+    /// state it left, as [`Self::alternative_letters`]): each station of
+    /// the collisions, with every letter offered it, rule L's or the other
+    /// answer's ([`Project::apply_renames`] takes these verbatim).
+    pub(super) fn offered_letters(
+        &self,
+        letters: &[LetteredStation],
+    ) -> HashMap<StationId, Vec<String>> {
+        let mut offered: HashMap<StationId, Vec<String>> = HashMap::new();
+        for letter in letters.iter().chain(&self.alternative_letters(letters)) {
+            offered
+                .entry(letter.station)
+                .or_default()
+                .push(letter.to.clone());
+        }
+        offered
+    }
+
     /// Whether some shot already has `uuid`.
     pub fn is_shot_uuid_taken(&self, uuid: &str) -> bool {
         self.shot_uuids().contains(uuid)

@@ -19,7 +19,7 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import ShownIdentityEditDialog from '../ShownIdentityEditDialog';
-import { proceedText } from '../ShownIdentityPrompt';
+import { proceedNamesLines, proceedText } from '../ShownIdentityPrompt';
 import { buildStationColumns } from '../../SingleSystemView/dataTableStationColumns';
 import type { Station } from '../../../types/project';
 
@@ -126,5 +126,16 @@ describe('proceedText', () => {
   it('leaves out what it does not know yet', () => {
     expect(proceedText(t, 'name', 'Main / 8', '8E', null)).toBe('Rename Main / 8 to 8E');
     expect(proceedText(t, 'name', 'Main / 8', undefined, 'Main and Loop')).toBe('Rename Main / 8');
+  });
+
+  // RS-FX10: the prompt's "changes it on every line" sentence is shown only
+  // when the button does not name the lines.
+  it('names the lines exactly when it can say the whole edit', () => {
+    expect(proceedNamesLines('name', '8E', 'Main and Loop')).toBe(true);
+    expect(proceedNamesLines('comment', undefined, 'Main and Loop')).toBe(true);
+    expect(proceedNamesLines('both', '8E', 'Main and Loop')).toBe(true);
+    expect(proceedNamesLines('name', '8E', null)).toBe(false);
+    expect(proceedNamesLines('name', undefined, 'Main and Loop')).toBe(false);
+    expect(proceedNamesLines('both', '', 'Main and Loop')).toBe(false);
   });
 });

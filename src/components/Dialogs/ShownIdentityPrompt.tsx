@@ -57,11 +57,23 @@ export function proceedText(
   to: string | undefined,
   lines: string | null,
 ): string {
-  if ((edit === 'name' || edit === 'both') && (to === undefined || to === '')) {
+  if (renamesWithoutName(edit, to)) {
     return t(`dialogs.shownIdentity.proceedLoop.${edit}`, { station });
   }
   const key = lines === null ? 'proceedTo' : 'proceedOn';
   return t(`dialogs.shownIdentity.${key}.${edit}`, { station, to, lines });
+}
+
+/** A rename with no new name to say: the button names only the station. */
+function renamesWithoutName(edit: ShownEdit, to: string | undefined): boolean {
+  return (edit === 'name' || edit === 'both') && (to === undefined || to === '');
+}
+
+/** Whether the go-on button names the lines the edit changes it on
+ *  ({@link proceedText}): once they are known, unless a rename has no new
+ *  name to say. */
+export function proceedNamesLines(edit: ShownEdit, to: string | undefined, lines: string | null): boolean {
+  return lines !== null && !renamesWithoutName(edit, to);
 }
 
 export function ShownIdentityPrompt({
@@ -138,9 +150,10 @@ export function ShownIdentityPrompt({
               line: homeLine !== undefined ? labels.lineName(homeLine) : line,
             })}
       </p>
-      {lines !== null && (
+      {lines !== null && !proceedNamesLines(edit, newName?.trim(), lines) && (
         <p className="text-text-secondary" data-testid="shown-identity-prompt-lines">
-          {/* The lines are named once, on the button (RS-FX8, N6). */}
+          {/* Said only when the button does not say it: the lines are named
+              once, on the button (RS-FX8, N6; RS-FX10). */}
           {t(`dialogs.shownIdentity.changes.${edit}`)}
         </p>
       )}

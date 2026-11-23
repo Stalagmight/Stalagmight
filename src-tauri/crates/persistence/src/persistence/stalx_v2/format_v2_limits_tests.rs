@@ -5,6 +5,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::models::linear_time::assert_linear;
 use crate::models::survey::{ArchivedStation, CounterKind, LineMeta, Project, StartAt, Violation};
 use crate::models::{Person, ShotData, SurveyCredit};
 
@@ -276,53 +277,68 @@ fn repeats(violations: &[Violation]) -> usize {
 
 /// Data review finding data-1: N8 found each repeat of a line once by a
 /// linear scan of the repeats found so far, so one long line of stations
-/// that all share a name took about 5e9 comparisons before the file was
-/// refused as damaged. Injection: the scan (`out.contains`) back in
-/// `line_name_repeats` takes this test far past its bound.
+/// that all share a name took about 5e9 comparisons (at the 99,999-shot cap)
+/// before the file was refused as damaged. The refusal is linear: 4x the
+/// line (24,000 then 96,000 shots) takes about 4x the time
+/// ([`crate::models::linear_time`], RS-FX10). Injection: a scan of the
+/// repeats found so far back in `line_name_repeats` took 13.5x the time at
+/// 4x the line here.
 #[test]
 fn a_long_line_of_one_repeated_name_is_refused_in_linear_time() {
-    let bytes = encode(
-        &one_line(MAX_SHOTS_PER_LINE),
-        &Extras::default(),
-        Mode::Normal,
-    )
-    .unwrap();
-    let text = rewritten(text_of(&bytes), false, |_| "x".to_string());
-    let started = Instant::now();
-    let refused = decode(text.as_bytes(), &DecodeOptions::default());
-    let elapsed = started.elapsed();
-    match refused {
-        Err(DecodeError::Invalid { violations }) => {
-            assert_eq!(repeats(&violations), MAX_SHOTS_PER_LINE);
-        }
-        other => panic!("{:?}", other.map(|_| ())),
-    }
-    assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+    let text = |shots: usize| {
+        let bytes = encode(&one_line(shots), &Extras::default(), Mode::Normal).unwrap();
+        let text = rewritten(text_of(&bytes), false, |_| "x".to_string());
+        (text, shots)
+    };
+    assert_linear(
+        "a long line of one name, refused",
+        24_000,
+        text,
+        |(text, shots)| {
+            let started = Instant::now();
+            let refused = decode(text.as_bytes(), &DecodeOptions::default());
+            let elapsed = started.elapsed();
+            match refused {
+                Err(DecodeError::Invalid { violations }) => {
+                    assert_eq!(repeats(&violations), *shots);
+                }
+                other => panic!("{:?}", other.map(|_| ())),
+            }
+            elapsed
+        },
+    );
 }
 
 /// Data review finding data-2: an earlier version 2 file whose long line
 /// shows one name at every station is settled by rule L at decode, which
 /// built each lettered station's taken names from every station of its
 /// lines and re-ranked every holder from the whole closure list: about
-/// 1e10 string clones before decode returned. Injection: rule L as it was
-/// (`names_around` per lettered station) runs this test past 3 minutes
-/// here; it takes about 2 s.
+/// 1e10 string clones at the 99,999-shot cap before decode returned. The
+/// lettering is linear: 4x the line (12,000 then 48,000 shots) takes about
+/// 4x the time ([`crate::models::linear_time`], RS-FX10). Injection: rule L
+/// as it was (`names_around` per lettered station) makes it quadratic (past
+/// 3 minutes at the cap).
 #[test]
 fn an_earlier_file_with_a_long_line_of_one_name_is_lettered_in_linear_time() {
-    let bytes = encode(
-        &one_line(MAX_SHOTS_PER_LINE),
-        &Extras::default(),
-        Mode::Normal,
-    )
-    .unwrap();
-    let text = rewritten(text_of(&bytes), true, |_| "x".to_string());
-    let started = Instant::now();
-    let mut decoded = decode(text.as_bytes(), &DecodeOptions::default()).unwrap();
-    let report = decoded.upgrade().unwrap();
-    let elapsed = started.elapsed();
-    assert_eq!(report.lettered, MAX_SHOTS_PER_LINE);
-    assert!(decoded.project.validate().is_empty());
-    assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+    let text = |shots: usize| {
+        let bytes = encode(&one_line(shots), &Extras::default(), Mode::Normal).unwrap();
+        let text = rewritten(text_of(&bytes), true, |_| "x".to_string());
+        (text, shots)
+    };
+    assert_linear(
+        "a long line of one name, lettered",
+        12_000,
+        text,
+        |(text, shots)| {
+            let started = Instant::now();
+            let mut decoded = decode(text.as_bytes(), &DecodeOptions::default()).unwrap();
+            let report = decoded.upgrade().unwrap();
+            let elapsed = started.elapsed();
+            assert_eq!(report.lettered, *shots);
+            assert!(decoded.project.validate().is_empty());
+            elapsed
+        },
+    );
 }
 
 /// A version 2 file written by hand: line 0 runs `shots` shots from station
@@ -418,79 +434,98 @@ fn no_record(_: u64) -> Option<String> {
     None
 }
 
-/// 50,000 closures (the cap) chaining consecutive stations of a 99,999-shot
-/// line, each archiving its later end: every shown identity resolves
-/// through up to 50,000 kept ends, and C2 follows each chain. Data review
-/// finding data-2 (the upgrade at decode must stay linear) in the closure
-/// shape: rule K measured the whole line twice per closure, the
-/// normalisation and validate walked each chain from its kept end, and
-/// every slot's shown identity walked the chain again. Injection: those
-/// four as they were run this test past 4 minutes here; it takes about 3 s.
+/// Closures chaining consecutive stations of a long line, each archiving
+/// its later end: every shown identity resolves through the whole chain of
+/// kept ends, and C2 follows each chain. Data review finding data-2 (the
+/// upgrade at decode must stay linear) in the closure shape: rule K
+/// measured the whole line twice per closure, the normalisation and
+/// validate walked each chain from its kept end, and every slot's shown
+/// identity walked the chain again. Linear now, for an earlier file (the
+/// upgrade archives every closure) and a current one: 4x the closures and
+/// the line (5,000 closures on 10,000 shots, then 20,000 on 40,000) take
+/// about 4x the time ([`crate::models::linear_time`], RS-FX10). Injection:
+/// those four as they were ran past 4 minutes at the caps (50,000 closures,
+/// 99,999 shots).
 #[test]
 fn a_chain_of_closure_archives_decodes_in_linear_time() {
-    let closures: Vec<(u64, u64, Option<&str>)> = (0..50_000).map(|i| (i, i + 1, None)).collect();
-    let archived: Vec<(u64, u64, Option<&str>)> =
-        (0..50_000).map(|i| (i, i + 1, Some("b"))).collect();
-    for (earlier, closures) in [(true, &closures), (false, &archived)] {
-        let text = Crafted {
-            shots: MAX_SHOTS_PER_LINE as u64,
-            sides: &[],
-            name: &own_name,
-            record: &no_record,
-            closures,
-            earlier,
-        }
-        .text();
-        let started = Instant::now();
-        let mut decoded = decode(text.as_bytes(), &DecodeOptions::default()).unwrap();
-        let report = decoded.upgrade();
-        let elapsed = started.elapsed();
-        assert_eq!(
-            report.map(|r| r.closures_archived),
-            earlier.then_some(50_000)
-        );
-        assert_eq!(decoded.project.shown(50_000), 0);
-        assert!(
-            elapsed < Duration::from_secs(20),
-            "earlier {earlier}: {elapsed:?}"
-        );
+    for earlier in [true, false] {
+        let text = |closures: usize| {
+            let end = (!earlier).then_some("b");
+            let chain: Vec<(u64, u64, Option<&str>)> =
+                (0..closures as u64).map(|i| (i, i + 1, end)).collect();
+            let text = Crafted {
+                shots: 2 * closures as u64,
+                sides: &[],
+                name: &own_name,
+                record: &no_record,
+                closures: &chain,
+                earlier,
+            }
+            .text();
+            (text, closures)
+        };
+        let what = format!("a chain of closure archives, earlier {earlier}");
+        assert_linear(&what, 5_000, text, |(text, closures)| {
+            let started = Instant::now();
+            let mut decoded = decode(text.as_bytes(), &DecodeOptions::default()).unwrap();
+            let report = decoded.upgrade();
+            let elapsed = started.elapsed();
+            assert_eq!(
+                report.map(|r| r.closures_archived),
+                earlier.then_some(*closures)
+            );
+            assert_eq!(
+                decoded.project.shown(*closures as crate::models::StationId),
+                0
+            );
+            elapsed
+        });
     }
 }
 
-/// 40,000 junctions of a 99,999-shot line (line ids stop at 42,948), each a
-/// one-shot side line's own station that an earlier build showed on the long
-/// line by a record (a U1 alias): the upgrade keeps each record (its line is the longest) and
-/// re-keys the node to its id. Data review finding data-2 in the junction
-/// shape: rule K measured the long line once per junction, and each re-key
-/// rebuilt the topology and walked every datum, closure and placement.
-/// Injection: one `rekey_node` and one measure per junction, as before,
-/// run this test past 4 minutes here; it takes about 2 s.
+/// Junctions of a long line, each a one-shot side line's own station that
+/// an earlier build showed on the long line by a record (a U1 alias): the
+/// upgrade keeps each record (its line is the longest) and re-keys the node
+/// to its id. Data review finding data-2 in the junction shape: rule K
+/// measured the long line once per junction, and each re-key rebuilt the
+/// topology and walked every datum, closure and placement. Linear now: 4x
+/// the junctions and the line (4,000 junctions on 10,000 shots, then 16,000
+/// on 40,000) take about 4x the time ([`crate::models::linear_time`],
+/// RS-FX10). Injection: one `rekey_node` and one measure per junction, as
+/// before, ran past 4 minutes at 40,000 junctions on 99,999 shots (line ids
+/// stop at 42,948).
 #[test]
 fn an_earlier_file_with_many_swapped_junctions_upgrades_in_linear_time() {
-    let sides: Vec<u64> = (1..=40_000).collect();
-    let record = |id: u64| (1..=40_000).contains(&id).then(|| format!("r{id}"));
-    let text = Crafted {
-        shots: MAX_SHOTS_PER_LINE as u64,
-        sides: &sides,
-        name: &own_name,
-        record: &record,
-        closures: &[],
-        earlier: true,
-    }
-    .text();
-    let started = Instant::now();
-    let mut decoded = decode(text.as_bytes(), &DecodeOptions::default()).unwrap();
-    let report = decoded.upgrade().unwrap();
-    let elapsed = started.elapsed();
-    assert_eq!(report.swapped.len(), 40_000);
-    let p = &decoded.project;
-    let junction = p.station_at(crate::models::StationRef::new(0, 7)).unwrap();
-    assert_eq!(p.stations[&junction].name, "r7");
-    assert_eq!(
-        p.record_naming(junction, 7).map(|r| r.name.as_str()),
-        Some("7")
-    );
-    assert!(elapsed < Duration::from_secs(20), "{elapsed:?}");
+    let text = |junctions: usize| {
+        let count = junctions as u64;
+        let sides: Vec<u64> = (1..=count).collect();
+        let record = |id: u64| (1..=count).contains(&id).then(|| format!("r{id}"));
+        let text = Crafted {
+            shots: 5 * count / 2,
+            sides: &sides,
+            name: &own_name,
+            record: &record,
+            closures: &[],
+            earlier: true,
+        }
+        .text();
+        (text, junctions)
+    };
+    assert_linear("swapped junctions", 4_000, text, |(text, junctions)| {
+        let started = Instant::now();
+        let mut decoded = decode(text.as_bytes(), &DecodeOptions::default()).unwrap();
+        let report = decoded.upgrade().unwrap();
+        let elapsed = started.elapsed();
+        assert_eq!(report.swapped.len(), *junctions);
+        let p = &decoded.project;
+        let junction = p.station_at(crate::models::StationRef::new(0, 7)).unwrap();
+        assert_eq!(p.stations[&junction].name, "r7");
+        assert_eq!(
+            p.record_naming(junction, 7).map(|r| r.name.as_str()),
+            Some("7")
+        );
+        elapsed
+    });
 }
 
 /// Data review finding data-2, last part: stalx-reader's deadline stopped
@@ -643,48 +678,78 @@ fn hub_text(sides: u64, history: u64) -> String {
     t
 }
 
-/// Pre-PR review (RS-FX9 item 2): one hub of 42,001 lines (line ids stop at
-/// 42,948) holding a million history records besides a record per side line,
-/// as an earlier build of version 2 wrote it. The upgrade
-/// found each slot's record (what the slot showed, `Before::of`), each line's
-/// (`native_lines` in rule K) and the kept station's home line per changed
-/// slot (the conversion notice) by scanning the hub's whole record list: about
-/// 1e11 record visits, hours before decode returned. Each is now one lookup in
-/// a map built once (`RecordIndex`, a per-station line set, a home line per
-/// identity). Injection: on 3b6bdf77e this test runs past
-/// 3 minutes here (killed); it takes a few seconds.
+/// Pre-PR review (RS-FX9 item 2): one hub of many lines holding many
+/// history records besides a record per side line, as an earlier build of
+/// version 2 wrote it. The upgrade found each slot's record (what the slot
+/// showed, `Before::of`), each line's (`native_lines` in rule K) and the
+/// kept station's home line per changed slot (the conversion notice) by
+/// scanning the hub's whole record list: about 1e11 record visits at 42,001
+/// lines and a million records (line ids stop at 42,948), hours before
+/// decode returned. Each is now one lookup in a map built once
+/// (`RecordIndex`, a per-station line set, a home line per identity): 4x
+/// the hub (2,500 side lines and 60,000 history records, then 10,000 and
+/// 240,000) takes about 4x the time ([`crate::models::linear_time`],
+/// RS-FX10). Injection: on 3b6bdf77e the full-size hub ran past 3 minutes
+/// (killed).
 #[test]
 fn an_earlier_hub_with_many_records_upgrades_in_linear_time() {
-    const SIDES: u64 = 42_000;
-    let text = hub_text(SIDES, 1_000_000);
-    let started = Instant::now();
-    let mut decoded = decode(text.as_bytes(), &DecodeOptions::default()).unwrap();
-    let report = decoded.upgrade().unwrap();
-    let elapsed = started.elapsed();
-    assert_eq!(report.records, 1_042_000);
-    assert!(
-        report.swapped.is_empty(),
-        "the hub's own line 0 wins rule K"
+    let hub = |sides: usize| {
+        let history = 24 * sides;
+        (hub_text(sides as u64, history as u64), sides, history)
+    };
+    assert_linear(
+        "an earlier hub's records",
+        2_500,
+        hub,
+        |(text, sides, history)| {
+            let started = Instant::now();
+            let mut decoded = decode(text.as_bytes(), &DecodeOptions::default()).unwrap();
+            let report = decoded.upgrade().unwrap();
+            let elapsed = started.elapsed();
+            assert_eq!(report.records, sides + history);
+            assert!(
+                report.swapped.is_empty(),
+                "the hub's own line 0 wins rule K"
+            );
+            // Every side line showed the hub by its alias and now shows the
+            // hub.
+            assert_eq!(report.changes.shown_as_other(), *sides);
+            let p = &decoded.project;
+            assert_eq!(p.slot_name(crate::models::StationRef::new(7, 0)), Some("0"));
+            assert_eq!(p.record_naming(0, 7).map(|r| r.name.as_str()), Some("a7"));
+            elapsed
+        },
     );
-    // Every side line showed the hub by its alias and now shows the hub.
-    assert_eq!(report.changes.shown_as_other(), SIDES as usize);
-    let p = &decoded.project;
-    assert_eq!(p.slot_name(crate::models::StationRef::new(7, 0)), Some("0"));
-    assert_eq!(p.record_naming(0, 7).map(|r| r.name.as_str()), Some("a7"));
-    assert!(elapsed < Duration::from_secs(20), "{elapsed:?}");
 }
 
 /// Pre-PR review (RS-FX9 item 2): a reader's deadline stopped an earlier
 /// file's upgrade only between its steps, so a step that had started (what
 /// each slot showed, rule K per junction, the notice's per-slot changes) ran
 /// to its end however long it took. The upgrade now asks per line and per
-/// junction too: a deadline passing on the tenth ask stops it there, inside
-/// its first step. Injection: on 3b6bdf77e the upgrade asked once, after rule
-/// K, and this one ran to its end.
+/// junction too: its first step alone asks once per line, so a deadline
+/// that passes on the tenth ask (far more asks than there are steps) stops
+/// the upgrade with the deadline's error before that step has asked for
+/// every line, inside it (RS-FX10: not pinned to the exact ask, so another
+/// check between steps changes nothing). Injection: on 3b6bdf77e the
+/// upgrade asked once, after rule K, and this one ran to its end.
 #[test]
 fn an_upgrade_asks_its_deadline_inside_its_steps() {
     let decoded = decode(hub_text(2_000, 0).as_bytes(), &DecodeOptions::default()).unwrap();
-    let asked = std::cell::Cell::new(0);
+    let lines = decoded.project.lines().len();
+    let counted = std::cell::Cell::new(0_usize);
+    let mut whole = decoded.project.clone();
+    let report = super::upgrade::run(&mut whole, &|| {
+        counted.set(counted.get() + 1);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(report.changes.shown_as_other(), 2_000);
+    assert!(
+        counted.get() > lines,
+        "a whole upgrade asks per line and more"
+    );
+
+    let asked = std::cell::Cell::new(0_usize);
     let in_time = || {
         asked.set(asked.get() + 1);
         if asked.get() >= 10 {
@@ -693,28 +758,56 @@ fn an_upgrade_asks_its_deadline_inside_its_steps() {
             Ok(())
         }
     };
-    let mut project = decoded.project.clone();
+    let mut project = decoded.project;
     assert_eq!(
         super::upgrade::run(&mut project, &in_time).map(|_| ()),
         Err(DecodeError::DeadlinePassed)
     );
-    assert_eq!(asked.get(), 10);
-    let mut whole = decoded.project.clone();
-    let report = super::upgrade::run(&mut whole, &|| Ok(())).unwrap();
-    assert_eq!(report.changes.shown_as_other(), 2_000);
+    let asked = asked.get();
+    assert!(
+        (10..lines).contains(&asked),
+        "stopped after {asked} asks: inside the first step, which asks for each of {lines} lines"
+    );
 }
 
-/// Pre-PR review (RS-FX9 item 3): `records` records of station 0 all name
-/// line 1 (A3 allows one). Validation finds `records - 1` repeats, and
-/// salvage repaired each by walking the station's whole record list, so
-/// 200,000 records cost about 4e10 record visits; salvage has no deadline.
-/// The repeats are now grouped per station and settled in one walk of its
-/// records, each repeat still reported. Injection: on 3b6bdf77e this test
-/// takes about a minute here (58 s) against its 10 s bound; it takes about
-/// a second.
+/// Pre-PR review (RS-FX9 item 3): the records of station 0 all name line 1
+/// (A3 allows one). Validation finds all but one as repeats, and salvage
+/// repaired each by walking the station's whole record list, so 200,000
+/// records cost about 4e10 record visits; salvage has no deadline. The
+/// repeats are now grouped per station and settled in one walk of its
+/// records, each repeat still reported: 4x the records (25,000 then
+/// 100,000) take about 4x the time ([`crate::models::linear_time`],
+/// RS-FX10). Injection: on 3b6bdf77e salvage took 58 s here at 200,000
+/// records, quadratic.
 #[test]
 fn salvaging_many_records_naming_one_line_is_linear() {
-    const RECORDS: u64 = 200_000;
+    assert_linear(
+        "salvaging records naming one line",
+        25_000,
+        |records| (records_naming_one_line(records as u64), records),
+        |(text, records)| {
+            let started = Instant::now();
+            let (project, report) = decode_salvage(text.as_bytes());
+            let elapsed = started.elapsed();
+            let project = project.unwrap();
+            assert!(project.validate().is_empty());
+            let unnamed = report
+                .repairs
+                .iter()
+                .filter(|r| matches!(r, super::Repair::UnnamedArchivedLine { line: 1, .. }))
+                .count();
+            assert_eq!(unnamed, records - 1);
+            let kept = &project.stations[&0].archived;
+            assert_eq!(kept[0].lines, [1], "the first record keeps the line");
+            assert!(kept[1..].iter().all(|r| r.lines.is_empty()));
+            elapsed
+        },
+    );
+}
+
+/// A version 2 file whose station 0 holds `records` records, every one
+/// naming line 1 (a crafted file: A3 allows one).
+fn records_naming_one_line(records: u64) -> String {
     let mut t = format!(
         "{{\"format\":\"stalx\",\"version\":2,\"solver\":1,{REQUIRES},\n\
          \"conventions\":{{\"length\":\"m\",\"angles\":\"deg\",\"azimuth\":\"cw-from-north\",\
@@ -723,7 +816,7 @@ fn salvaging_many_records_naming_one_line_is_linear() {
          \"project\":{{\"name\":\"x\",\"created\":\"2025-01-01T00:00:00Z\",\
          \"modified\":\"2025-01-01T00:00:00Z\"}},\n\"stations\":[\n[0,\"0\",{{\"archived\":["
     );
-    for i in 0..RECORDS {
+    for i in 0..records {
         let sep = if i == 0 { "" } else { "," };
         let _ = write!(
             t,
@@ -738,21 +831,7 @@ fn salvaging_many_records_naming_one_line_is_linear() {
          {{\"id\":0,\"color\":\"#000\",\"start\":0}},\n[\"u0\",1,1.0,0.0,0.0,0.0,0.0],\n\
          {{\"id\":1,\"color\":\"#000\",\"start\":0}},\n[\"u1\",2,1.0,90.0,0.0,0.0,0.0]\n],\n\
          \"placements\":[{{\"station\":0,\"x\":0.0,\"y\":0.0}}],\n\"end\":true}}\n",
-        10 + RECORDS
+        10 + records
     );
-    let started = Instant::now();
-    let (project, report) = decode_salvage(t.as_bytes());
-    let elapsed = started.elapsed();
-    let project = project.unwrap();
-    assert!(project.validate().is_empty());
-    let unnamed = report
-        .repairs
-        .iter()
-        .filter(|r| matches!(r, super::Repair::UnnamedArchivedLine { line: 1, .. }))
-        .count();
-    assert_eq!(unnamed, RECORDS as usize - 1);
-    let records = &project.stations[&0].archived;
-    assert_eq!(records[0].lines, [1], "the first record keeps the line");
-    assert!(records[1..].iter().all(|r| r.lines.is_empty()));
-    assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+    t
 }

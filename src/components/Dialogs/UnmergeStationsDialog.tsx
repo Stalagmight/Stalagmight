@@ -527,22 +527,9 @@ export default function UnmergeStationsDialog() {
               </p>
             )}
 
-            {naming && selected && (
-              <ComesBack
-                preview={naming}
-                line={selected.line_id}
-                lines={naming.kept ? otherLines.length : 1}
-                nameOf={nameOf}
-                inside={recordsInside(junctionRecords, naming.station_id, naming.kept)}
-              />
-            )}
-
-            {naming && naming.lines.length > 0 && <DetachResults preview={naming} nameOf={nameOf} />}
-
-            {naming && <ShownElsewhere preview={naming} />}
-
-            {naming && <HiddenComments hidden={naming.comments_hidden} testId="unmerge-stations-comments-hidden" />}
-
+            {/* The remaining junction's station comes before what it decides:
+                what the lines that come off get back, the stations inside
+                it and the After Detach list (RS-FX10). */}
             {naming && (naming.rest_choices ?? []).length > 1 && (
               <RestPicker
                 preview={naming}
@@ -559,6 +546,22 @@ export default function UnmergeStationsDialog() {
                 {t('dialogs.detachLine.restFailed')}
               </p>
             )}
+
+            {naming && selected && (
+              <ComesBack
+                preview={naming}
+                line={selected.line_id}
+                lines={naming.kept ? otherLines.length : 1}
+                nameOf={nameOf}
+                inside={recordsInside(junctionRecords, naming.station_id, naming.kept)}
+              />
+            )}
+
+            {naming && naming.lines.length > 0 && <DetachResults preview={naming} nameOf={nameOf} />}
+
+            {naming && <ShownElsewhere preview={naming} />}
+
+            {naming && <HiddenComments hidden={naming.comments_hidden} testId="unmerge-stations-comments-hidden" />}
 
             {!waiting && (
               <p className="text-xs text-text-secondary" data-testid="unmerge-stations-explain">

@@ -542,6 +542,55 @@ fn a_detach_rename_follows_the_station_name_rules() {
     );
 }
 
+/// RS-FX10 item 2: a dialog's answers are the backend's own letters, built
+/// from the untrimmed name. Line A shows `" 2"` twice once the detach gives
+/// A3 back, and already holds `2a`; rule L's answer is `" 2a"`, which
+/// trimmed would be that `2a`. Each offered letter goes through verbatim;
+/// the trimmed name, or the letter padded further (no longer the offered
+/// one, so a user's name, trimmed), refuses as a repeat of `2a`. Injection:
+/// on 7953325ba `apply_renames` trimmed every name, and the backend's own
+/// answer refused with `NameTaken`.
+#[test]
+fn a_detach_takes_its_own_letter_of_a_padded_name_verbatim() {
+    let mut p = project();
+    let a = free_line(&mut p, [0.0, 0.0], run(90.0, 3, 10.0));
+    let b = free_line(&mut p, [100.0, 50.0], run(0.0, 2, 5.0));
+    let (a0, a2, a3, b0) = (at(&p, a, 0), at(&p, a, 2), at(&p, a, 3), at(&p, b, 0));
+    p.station_mut(a3).unwrap().name = " 2".to_string();
+    ok(p.merge_keeping_stationary(a3, b0));
+    p.station_mut(a2).unwrap().name = " 2".to_string();
+    p.station_mut(a0).unwrap().name = "2a".to_string();
+    assert_valid(&p);
+
+    let naming = p.detach_naming(b0, a, None).unwrap();
+    let letters: Vec<_> = naming
+        .collisions
+        .iter()
+        .chain(&naming.alternatives)
+        .map(|l| (l.station, l.from.as_str(), l.to.as_str()))
+        .collect();
+    assert_eq!(letters, [(a3, " 2", " 2a"), (a2, " 2", " 2a")]);
+    for (station, other) in [(a3, a2), (a2, a3)] {
+        let mut q = p.clone();
+        ok(q.detach_line(b0, a, &[(station, " 2a".to_string())], None));
+        assert_valid(&q);
+        assert_eq!(q.stations[&station].name, " 2a", "verbatim");
+        assert_eq!(q.stations[&other].name, " 2");
+        assert_eq!(q.stations[&a0].name, "2a");
+    }
+    for name in ["2a", " 2a "] {
+        let mut q = p.clone();
+        assert!(
+            matches!(
+                q.detach_line(b0, a, &[(a3, name.to_string())], None),
+                Err(OpError::NameTaken { line, name }) if line == a && name == "2a"
+            ),
+            "{name:?}"
+        );
+        assert_eq!(q, p, "a refusal changes nothing");
+    }
+}
+
 /// RS-FX9 item 1 on the commands that make no collision of their own: a
 /// merge of two plain stations and a loop closure (creating one repeats no
 /// name, RS-FX5) refuse any rename, so a dialog cannot rename an unrelated
