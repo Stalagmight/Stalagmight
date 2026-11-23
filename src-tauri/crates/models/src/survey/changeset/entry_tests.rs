@@ -367,7 +367,7 @@ fn a_non_finite_number_is_refused_on_write() {
 }
 
 /// A station image carries every field of its archived records (RS 10):
-/// `{id, name, comment?, external?, lines?}`, empty ones left out; an
+/// `{id, name, comment?, external?, into?, lines?}`, empty ones left out; an
 /// unknown key, a missing name or the U1 alias arrays are refused (the
 /// history format version guards older entries).
 #[test]
@@ -381,7 +381,7 @@ fn an_archived_record_row_carries_every_field() {
             name: "0".to_string(),
             comment: None,
             external: None,
-            into: None,
+            into: Some(9),
             lines: Vec::new(),
         },
         ArchivedStation {
@@ -396,7 +396,7 @@ fn an_archived_record_row_carries_every_field() {
     let text = serde_json::to_string(&StationRow(station.clone())).unwrap();
     assert_eq!(
         text,
-        r#"[3,"3",{"archived":[{"id":7,"name":"0"},{"id":9,"name":"1","comment":"tie-off","external":"A9","lines":[2,4]}]}]"#
+        r#"[3,"3",{"archived":[{"id":7,"name":"0","into":9},{"id":9,"name":"1","comment":"tie-off","external":"A9","lines":[2,4]}]}]"#
     );
     let back: StationRow = serde_json::from_str(&text).unwrap();
     assert_eq!(back.0, station);
