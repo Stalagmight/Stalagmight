@@ -782,11 +782,13 @@ For context; nothing here changes the format. The app's side is
   downloaded revision and after an upload lands, and counts a marked file
   whose survey has that digest as holding nothing to upload. The digest is
   SHA-256, written as `sha256:` and lowercase hex, over the bytes
-  `stalagmight survey digest 1` and a newline, then these fields, each
+  `stalagmight survey digest 2` and a newline, then these fields, each
   preceded by its length in bytes as an unsigned 64-bit little-endian
   integer: the `base` revision id; then, for every top-level member except
-  `format`, `version`, `solver`, `generator`, `summary`, `local`, `history`
-  and `end`, sorted by key, its key and its value's text as written, with
+  `format`, `version`, `solver`, `generator`, `summary`, `local`, `history`,
+  `end` and `counters` (the next ids to hand out: an add and its Undo leave
+  them advanced over a survey that is the revision's again), sorted by key,
+  its key and its value's text as written, with
   `project` without its `modified` key and `speleodb` without `endpoint` and
   `name` (their other members re-joined in file order, no whitespace). It
   describes the `base` revision, not the file, and it is bound to that revision

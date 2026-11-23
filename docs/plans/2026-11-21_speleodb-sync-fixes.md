@@ -156,9 +156,11 @@ of `speleo_link` per edit).
   from the bytes as written (SHA-256, a fixed domain, length-prefixed fields),
   every member an upload carries that is survey content: everything but
   `format`, `version`, `solver`, `generator`, `summary` (derived), `local`,
-  `history` (cut per push) and `end`, with `project.modified` (an edit and the
-  edit back change it and nothing else) and the link's `endpoint` and `name`
-  (rewritten without an edit) left out. The BASE id is hashed first, so a digest
+  `history` (cut per push), `end` and `counters` (allocation state; amended
+  after the X3 pre-PR review, should-fix 2: an add and its Undo leave them
+  advanced), with `project.modified` (an edit and the edit back change it and
+  nothing else) and the link's `endpoint` and `name` (rewritten without an
+  edit) left out. The BASE id is hashed first, so a digest
   kept over another BASE never matches. Byte-level, so a link reader answers
   without decoding the survey.
 - *Recorded where the copy is known to hold BASE*, as

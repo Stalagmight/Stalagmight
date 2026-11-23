@@ -12,15 +12,24 @@
 //! What it covers: every member an upload carries that is survey content,
 //! hashed from the bytes as written (canonical form, `docs/file-format.md`
 //! section 8): `requires`, `conventions`, `project` without `modified`,
-//! `settings`, `counters`, `speleodb` without `endpoint` and `name`, the body
-//! members (`sections` through `imports`) and any unknown top-level member.
+//! `settings`, `speleodb` without `endpoint` and `name`, the body members
+//! (`sections` through `imports`) and any unknown top-level member.
 //! Left out: `format`, `version`, `solver` and `generator` (which build wrote
 //! it), `summary` (derived from the body), `local` (per machine), `history`
-//! (cut per push), `end`, the edit time `project.modified` (an edit and the
-//! edit back change it and nothing else) and the link's `endpoint` and
-//! `name` (the app rewrites them from the session and the server's name
-//! without an edit). The revision id the digest belongs to is hashed first,
-//! so a digest kept over another BASE never matches.
+//! (cut per push), `end`, `counters` (the next ids to hand out: allocation
+//! state, not the survey; Undo never hands an id back, so an add and its Undo
+//! leave them advanced over a body that is BASE's again), the edit time
+//! `project.modified` (an edit and the edit back change it and nothing else)
+//! and the link's `endpoint` and `name` (the app rewrites them from the
+//! session and the server's name without an edit). The revision id the digest
+//! belongs to is hashed first, so a digest kept over another BASE never
+//! matches.
+//!
+//! Leaving `counters` out is safe for the one question the digest answers:
+//! every id the body uses is below its counter, so counters that are ahead of
+//! BASE's while the body is BASE's name ids nothing uses. A copy found clean
+//! that way uploads nothing, and its next download installs BASE's counters
+//! with BASE's body.
 //!
 //! Byte-level on purpose: a link reader answers from the file without
 //! decoding the survey (plan 6.1). Two files with the same survey written by
@@ -37,7 +46,7 @@ use super::error::EncodeError;
 use super::local::{complete_v2, replace_keys, top_members};
 
 /// Members that are not survey content (see the module docs).
-const NOT_SURVEY: [&str; 8] = [
+const NOT_SURVEY: [&str; 9] = [
     "format",
     "version",
     "solver",
@@ -46,6 +55,7 @@ const NOT_SURVEY: [&str; 8] = [
     "local",
     "history",
     "end",
+    "counters",
 ];
 
 /// Keys left out of a member that is otherwise survey content.
@@ -58,8 +68,11 @@ const LEFT_OUT: [(&str, &[&str]); 2] = [
 /// never compares equal to this one.
 const PREFIX: &str = "sha256:";
 
-/// The domain the hash is taken in.
-const DOMAIN: &[u8] = b"stalagmight survey digest 1\n";
+/// The domain the hash is taken in. Rule 2 leaves `counters` out; a digest
+/// recorded under rule 1 never matches one taken now, which is the
+/// conservative answer (the copy keeps its mark until its next download or
+/// upload records a new digest).
+const DOMAIN: &[u8] = b"stalagmight survey digest 2\n";
 
 /// The digest of the survey in `bytes` (a complete version 2 file) for the
 /// BASE revision `base` (see the module docs). Refused like the local-only
