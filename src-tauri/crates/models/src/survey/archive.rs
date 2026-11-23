@@ -264,8 +264,10 @@ pub struct SlotOwner {
     /// The closure archiving the node, when the slot is a loop end: "shown
     /// as Main / 20 through a loop closure; Remove the closure".
     pub loop_closure: Option<ClosureId>,
-    /// The line's own station there, archived by a merge (the record naming
-    /// the slot's line at the node): "Detach Side to get back its own
+    /// The station a Detach of the slot's line gives back, archived by a
+    /// merge: the record naming the line at the node, or the record it was
+    /// archived under, directly under the node's identity (RS-FX4: the
+    /// line's station before that merge). "Detach Side to get back its own
     /// station 0".
     pub own_station: Option<StationId>,
 }
@@ -391,7 +393,10 @@ impl Project {
             home_line: self.home_line(shown),
             foreign: !self.is_native(shown, slot.line_id),
             loop_closure: self.archiving_closure(node).map(|c| c.id),
-            own_station: self.record_naming(node, slot.line_id).map(|r| r.id),
+            own_station: self.stations.get(&node).and_then(|s| {
+                let record = s.record_for(slot.line_id)?;
+                Some(s.record_top(record.id).map_or(record.id, |top| top.id))
+            }),
         })
     }
 

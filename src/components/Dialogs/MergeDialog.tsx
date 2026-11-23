@@ -314,13 +314,7 @@ function KeepOutcome({ preview, kept }: { preview: MergeKeepPreview; kept: KeepC
         </p>
       )}
       <p className="text-xs text-text-secondary" data-testid="merge-hidden-back">
-        {preview.not_given_back.length > 0 && keptName !== null
-          ? t('dialogs.mergeStations.detachBringsBackExcept', {
-              count: preview.not_given_back.length,
-              lines: listNames(preview.not_given_back.map(labels.lineName), t),
-              station: keptName,
-            })
-          : t('dialogs.mergeStations.detachBringsBack')}
+        {t('dialogs.mergeStations.detachBringsBack')}
       </p>
       <HiddenComments hidden={preview.comments_hidden} testId="merge-comments-hidden" />
     </div>

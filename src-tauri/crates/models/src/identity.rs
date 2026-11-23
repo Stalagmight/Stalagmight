@@ -295,8 +295,10 @@ pub struct StationOwner {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub loop_closure: Option<u64>,
-    /// The line's own station there, archived by a merge ("Detach Side to
-    /// get back its own station 0").
+    /// The station a Detach of the line gives back there, archived by a
+    /// merge ("Detach Side to get back its own station 0"): the line's own
+    /// station, or the junction it was part of when a later merge archived
+    /// that junction whole.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub own_station: Option<StationIdentity>,

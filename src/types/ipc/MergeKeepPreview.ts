@@ -2,4 +2,4 @@
 import type { NameCollision } from "./NameCollision";
 import type { StationIdentity } from "./StationIdentity";
 
-export interface MergeKeepPreview { keep: number, renamed_lines: Array<number>, collisions: Array<NameCollision>, hidden: StationIdentity, unarchived?: bigint, comments_hidden: Array<StationIdentity>, not_given_back: Array<number>, }
+export interface MergeKeepPreview { keep: number, renamed_lines: Array<number>, collisions: Array<NameCollision>, hidden: StationIdentity, unarchived?: bigint, comments_hidden: Array<StationIdentity>, }

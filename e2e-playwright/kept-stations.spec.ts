@@ -195,6 +195,71 @@ test.describe('Kept and archived stations (RS)', () => {
     await expect.poll(() => nameAt(page, ref(mainId, 3))).toBe('3');
   });
 
+  test('detach gives a junction merged away back whole, with its archived station inside it', async ({ page }) => {
+    // RS-FX4: Side / 0 and Third / 0 are one station (Side's kept, Third's
+    // archived in it); merging that junction into Main / 3 keeping Main's
+    // archives Side / 0 with Third's station still inside it.
+    await setupMockedPage(page);
+    await createProject(page, 'Kept Stations');
+    const third: LineSeed = { name: 'Third', shots: [{ azimuth_in: 180, azimuth_out: 180, length: 7, depth_in: 3, depth_out: 3 }] };
+    await seedProjectWithLines(page, [main, side, third]);
+    await waitForMapIdle(page);
+    const [mainId, sideId, thirdId] = await page.evaluate(() => {
+      const e2e = (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__;
+      return e2e.projectStore.getState().project!.lines.map((l) => l.id);
+    });
+    const merge = (a: Ref, b: Ref, keep: number) =>
+      page.evaluate(
+        async ({ a, b, keep }) => {
+          const e2e = (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__;
+          await e2e.projectStore.getState().mergeStations(a, b, { keep, renames: [] });
+        },
+        { a, b, keep },
+      );
+    await merge(ref(thirdId!, 0), ref(sideId!, 0), sideId! * 100_000);
+    await merge(ref(sideId!, 0), ref(mainId!, 3), mainId! * 100_000 + 3);
+    await expect.poll(() => nameAt(page, ref(thirdId!, 0))).toBe('3');
+    await page.evaluate((at) => {
+      (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__.uiStore
+        .getState()
+        .setSelection({ type: 'station', stationRef: at });
+    }, ref(mainId!, 3));
+    // "Archived here" lists Third's station inside Side's.
+    await expect(page.getByTestId(`station-detail-record-${sideId! * 100_000}-inside`)).toContainText(
+      `0 (Station ID ${thirdId! * 100_000}), Third's own station`,
+    );
+
+    // Detaching Third gives back Side / 0, on Side and Third together.
+    await page.getByTestId(`detail-unmerge-${thirdId}-0`).click();
+    const dialog = page.getByTestId('unmerge-stations-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(page.getByTestId('unmerge-stations-naming')).toHaveText(
+      'Third comes off and gets back the station it had here before the merge.',
+    );
+    await expect(page.getByTestId('unmerge-stations-comes-back')).toContainText(
+      `It gets back 0 (Station ID ${sideId! * 100_000}).`,
+    );
+    await expect(page.getByTestId('unmerge-stations-together')).toHaveText(
+      'Side comes off with Third: they were one station before the merge.',
+    );
+    await page.getByTestId('unmerge-stations-confirm').click();
+    await expect(dialog).toBeHidden();
+
+    await expect.poll(() => nameAt(page, ref(mainId!, 3))).toBe('3');
+    await expect.poll(() => nameAt(page, ref(sideId!, 0))).toBe('0');
+    // Third shows Side's station again: its own is still inside it.
+    await expect.poll(() => nameAt(page, ref(thirdId!, 0))).toBe('0');
+    const shownId = await page.evaluate(
+      (at) =>
+        (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__.projectStore
+          .getState()
+          .stations.find((s) => s.station_ref.line_id === at.line_id && s.station_ref.station_index === at.station_index)
+          ?.shown?.id,
+      ref(thirdId!, 0),
+    );
+    expect(shownId).toBe(sideId! * 100_000);
+  });
+
   test('create a loop closure keeping one end, then keeping both names', async ({ page }) => {
     const [mainId, sideId] = await setUp(page);
     const openClosure = async () => {
