@@ -463,3 +463,25 @@ fn a_lettered_line_gives_the_next_letter_to_a_line_joined_at_its_junction() {
     assert_eq!(names(&p, a), ["A0", "A1", "A2", "B1", "B2", "C1", "C2"]);
     assert_valid(&p);
 }
+
+/// RS 4.4 shared join (M-P1-4a): K's end merged onto O's start keeping O's
+/// station, so a record names K at the junction. Combining K and O there
+/// leaves the combined line native at the junction (the record drops K and
+/// O, and is history now), so A3 and A4 hold and the junction keeps its
+/// identity (Combine's prefix plan may still rename it). Injection: keep the
+/// record's K (the U1 `settle_shared_join_aliases`) and the combine is
+/// refused (no native line).
+#[test]
+fn a_shared_join_named_by_a_record_keeps_a_native_line() {
+    let mut p = empty();
+    let k = line(&mut p, "K", run("k", 90.0, 10.0, 2));
+    let o = line_at(&mut p, "O", [20.0, 0.0], run("o", 0.0, 10.0, 2));
+    let (k2, o0) = (st(&p, k, 2), st(&p, o, 0));
+    p.merge_stations_auto(k2, o0, o0).unwrap();
+    assert!(!p.is_native(o0, k) && p.is_native(o0, o));
+    ok(p.combine_lines(k, o, &options("KO")));
+    assert_valid(&p);
+    assert!(p.is_native(o0, k));
+    assert_eq!(p.shown(o0), o0, "the kept station holds the junction");
+    assert!(p.stations[&o0].archived.iter().all(|r| r.is_history()));
+}
