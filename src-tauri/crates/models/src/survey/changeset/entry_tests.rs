@@ -12,14 +12,17 @@ use chrono::{TimeZone, Utc};
 use super::testkit::{record_walk, Recorded};
 use super::{
     decode_entry, encode_entry, redo, undo, EntryError, EntryLimits, HistoryEntry, HistoryRefs,
-    PreviewRow, RecordedPreview, HISTORY_FORMAT_VERSION,
+    PreviewRow, RecordedPreview, HISTORY_FORMAT_VERSION, OLDEST_HISTORY_FORMAT_VERSION,
 };
+use crate::prose::{self, ProsePart, ProseShot, ProseShotEnd, ProseStation};
+use crate::StationRef;
 
 fn entry(changes: super::Changeset) -> HistoryEntry {
     HistoryEntry {
         timestamp: Utc.with_ymd_and_hms(2026, 11, 20, 12, 59, 0).unwrap(),
         kind: "update_shot".to_string(),
         label: "Update shot Main: 4 \u{2192} 5 \"quoted\" \u{e9}".to_string(),
+        label_parts: Vec::new(),
         refs: HistoryRefs {
             lines: vec![3],
             stations: vec![7, 8],
@@ -82,23 +85,29 @@ fn an_entry_is_canonical_compact_json_and_a_fixpoint() {
 #[test]
 fn an_entry_of_another_version_or_an_unknown_member_is_refused() {
     let (text, _, _) = samples().into_iter().nth(5).unwrap();
-    let other = text.replacen("{\"v\":2,", "{\"v\":3,", 1);
+    assert_eq!(
+        (OLDEST_HISTORY_FORMAT_VERSION, HISTORY_FORMAT_VERSION),
+        (2, 3)
+    );
+    let v3 = "{\"v\":3,";
+    assert!(text.starts_with(v3), "{text}");
+    let other = text.replacen(v3, "{\"v\":4,", 1);
     assert_eq!(
         decode_entry(&other, &EntryLimits::default()).unwrap_err(),
-        EntryError::Version(3)
+        EntryError::Version(4)
     );
     // A version 1 entry (U1 alias rows) is an earlier version's.
-    let older = text.replacen("{\"v\":2,", "{\"v\":1,", 1);
+    let older = text.replacen(v3, "{\"v\":1,", 1);
     assert_eq!(
         decode_entry(&older, &EntryLimits::default()).unwrap_err(),
         EntryError::Version(1)
     );
-    let extra = text.replacen("{\"v\":2,", "{\"v\":2,\"cmd\":{},", 1);
+    let extra = text.replacen(v3, "{\"v\":3,\"cmd\":{},", 1);
     assert!(matches!(
         decode_entry(&extra, &EntryLimits::default()),
         Err(EntryError::Syntax(_))
     ));
-    let no_version = text.replacen("{\"v\":2,", "{", 1);
+    let no_version = text.replacen(v3, "{", 1);
     assert!(decode_entry(&no_version, &EntryLimits::default()).is_err());
     let bad_time = text.replacen("2026-11-20T12:59:00", "yesterday-ish", 1);
     assert!(matches!(
@@ -407,4 +416,164 @@ fn an_archived_record_row_carries_every_field() {
     ] {
         assert!(serde_json::from_str::<StationRow>(bad).is_err(), "{bad}");
     }
+}
+
+// ----- label parts (RS-PROSE, format version 3) -----------------------------------
+
+/// A label naming a shot and a line, with its parts (the station part with
+/// a slot, as a builder hands it over).
+fn labelled(changes: super::Changeset) -> HistoryEntry {
+    let shot = ProsePart::Shot(ProseShot {
+        text: "Main: 4 \u{2192} 5".to_string(),
+        line_id: Some(3),
+        context: Some("Main".to_string()),
+        from: ProseShotEnd {
+            name: "4".to_string(),
+            home_line: None,
+            loop_end: None,
+        },
+        to: ProseShotEnd {
+            name: "5".to_string(),
+            home_line: Some(1),
+            loop_end: Some(true),
+        },
+    });
+    let station = ProsePart::Station(ProseStation {
+        text: "Side / 0".to_string(),
+        line_id: Some(1),
+        context: Some("Side".to_string()),
+        name: "0".to_string(),
+        home_line: None,
+        loop_end: None,
+        station_id: Some(42),
+        slot: Some(StationRef::new(1, 0)),
+    });
+    let marked = format!(
+        "Update shot {} near {} in line {}",
+        prose::mark(&shot),
+        prose::mark(&station),
+        prose::mark(&prose::line_part(Some(3), "Main", true))
+    );
+    let (label, label_parts) = prose::split(&marked);
+    HistoryEntry {
+        label,
+        label_parts,
+        ..entry(changes)
+    }
+}
+
+#[test]
+fn a_labels_parts_say_its_words_and_round_trip_without_slots() {
+    let mut e = labelled(super::Changeset::default());
+    assert_eq!(
+        e.label,
+        "Update shot Main: 4 \u{2192} 5 near Side / 0 in line \"Main\""
+    );
+    assert_eq!(prose::plain(&e.label_parts), e.label);
+    e.fit_limits(&EntryLimits::default());
+    let text = encode_entry(&e).unwrap();
+    assert!(
+        text.contains("\"label_parts\":[{\"kind\":\"text\""),
+        "{text}"
+    );
+    assert!(!text.contains("slot"), "a slot is a session handle: {text}");
+    let back = decode_entry(&text, &EntryLimits::default()).unwrap();
+    assert_eq!(back.label, e.label);
+    assert_eq!(back.label_parts, e.label_parts);
+    assert_eq!(prose::plain(&back.label_parts), back.label);
+    assert_eq!(back.label_parts.iter().filter(|p| p.is_name()).count(), 3);
+    assert_eq!(encode_entry(&back).unwrap(), text, "a fixpoint");
+    // A label that names nothing writes no key.
+    let plain = encode_entry(&entry(super::Changeset::default())).unwrap();
+    assert!(!plain.contains("label_parts"), "{plain}");
+}
+
+#[test]
+fn a_version_2_entry_still_decodes_with_a_plain_label() {
+    let mut e = labelled(super::Changeset::default());
+    e.fit_limits(&EntryLimits::default());
+    let v3 = encode_entry(&e).unwrap();
+    // A version 2 entry: the same layout without parts.
+    let start = v3.find(",\"label_parts\":").unwrap();
+    let end = v3.find(",\"refs\":").unwrap();
+    let v2 = format!("{{\"v\":2,{}{}", &v3[7..start], &v3[end..]);
+    assert!(v2.starts_with("{\"v\":2,\"t\":"), "{v2}");
+    let back = decode_entry(&v2, &EntryLimits::default()).unwrap();
+    assert_eq!(back.label, e.label);
+    assert!(back.label_parts.is_empty(), "a version 2 label reads plain");
+    assert_eq!(back.refs.stations, vec![7, 8]);
+    // Parts in a version 2 entry are not version 2's: read plain too.
+    let v2_with_parts = v3.replacen("{\"v\":3,", "{\"v\":2,", 1);
+    let back = decode_entry(&v2_with_parts, &EntryLimits::default()).unwrap();
+    assert!(back.label_parts.is_empty());
+}
+
+#[test]
+fn a_cut_label_drops_its_parts() {
+    let mut e = labelled(super::Changeset::default());
+    let limits = EntryLimits {
+        max_text_chars: 20,
+        ..EntryLimits::default()
+    };
+    e.fit_limits(&limits);
+    assert_eq!(e.label.chars().count(), 20);
+    assert!(e.label.ends_with('\u{2026}'));
+    assert!(e.label_parts.is_empty(), "parts never say other words");
+    // Within the limits, the parts stay (without their slots).
+    let mut e = labelled(super::Changeset::default());
+    e.fit_limits(&EntryLimits::default());
+    assert_eq!(prose::plain(&e.label_parts), e.label);
+    assert!(e.label_parts.iter().all(|p| match p {
+        ProsePart::Station(s) => s.slot.is_none() && s.station_id == Some(42),
+        _ => true,
+    }));
+    // A part whose own strings are past the limits drops them too.
+    let mut e = labelled(super::Changeset::default());
+    for part in &mut e.label_parts {
+        if let ProsePart::Station(s) = part {
+            s.context = Some("x".repeat(100));
+        }
+    }
+    e.fit_limits(&EntryLimits {
+        max_text_chars: 99,
+        ..EntryLimits::default()
+    });
+    assert!(e.label_parts.is_empty());
+}
+
+#[test]
+fn parts_that_do_not_fit_cost_the_pills_never_the_entry() {
+    let mut e = labelled(super::Changeset::default());
+    e.fit_limits(&EntryLimits::default());
+    let text = encode_entry(&e).unwrap();
+    let limits = EntryLimits::default();
+    // Other words than the label's.
+    let other_words = text.replacen("\"text\":\"Side / 0\"", "\"text\":\"Side / 9\"", 1);
+    assert_ne!(other_words, text);
+    let back = decode_entry(&other_words, &limits).unwrap();
+    assert_eq!(back.label, e.label);
+    assert!(back.label_parts.is_empty());
+    // A kind this build does not know, and a value that is no list.
+    for hostile in [
+        text.replacen("\"kind\":\"line\"", "\"kind\":\"section\"", 1),
+        {
+            let start = text.find("\"label_parts\":").unwrap();
+            let end = text.find(",\"refs\":").unwrap();
+            format!("{}\"label_parts\":\"nope\"{}", &text[..start], &text[end..])
+        },
+    ] {
+        assert_ne!(hostile, text);
+        let back = decode_entry(&hostile, &limits).unwrap();
+        assert_eq!(back.label, e.label);
+        assert!(back.label_parts.is_empty(), "{hostile}");
+    }
+    // A slot a hand edit put back is dropped on read.
+    let slotted = text.replacen(
+        "\"station_id\":42",
+        "\"station_id\":42,\"slot\":{\"line_id\":1,\"station_index\":0}",
+        1,
+    );
+    assert_ne!(slotted, text);
+    let back = decode_entry(&slotted, &limits).unwrap();
+    assert_eq!(back.label_parts, e.label_parts);
 }

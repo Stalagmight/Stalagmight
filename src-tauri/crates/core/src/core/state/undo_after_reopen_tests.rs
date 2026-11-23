@@ -508,6 +508,42 @@ fn a_readable_history_opens_without_the_banner() {
     assert_eq!(state.get_redo_stack().len(), 1);
 }
 
+/// A version 2 entry (no label parts, RS-PROSE) still reads: no banner, its
+/// label plain; the version 3 entries beside it keep their parts.
+#[test]
+fn a_version_2_entry_still_opens_with_a_plain_label() {
+    let dir = TempDir::new().unwrap();
+    let (path, _) = file_with_history(&dir);
+    let before = open(&path).get_redo_stack();
+    assert_eq!(before[0].description, "Create shot in line \"Main\"");
+    assert!(
+        before[0].description_parts.is_some(),
+        "a version 3 entry names its line"
+    );
+    rewrite_history(&path, |history| {
+        let redo = history.redo.pop().unwrap();
+        // Version 2's layout: the same entry without `label_parts`.
+        let text = redo.as_str();
+        let start = text.find(",\"label_parts\":").unwrap();
+        let end = start
+            + ["refs", "preview", "ops"]
+                .iter()
+                .filter_map(|key| text[start..].find(&format!(",\"{key}\":")))
+                .min()
+                .unwrap();
+        let v2 = format!("{}{}", &text[..start], &text[end..]);
+        history
+            .redo
+            .push(with_version(&RawJson::parse(&v2).unwrap(), 2));
+    });
+    let state = open(&path);
+    assert!(!state.history_discarded(), "a version 2 entry reads");
+    let redo = state.get_redo_stack();
+    assert_eq!(redo[0].description, before[0].description);
+    assert_eq!(redo[0].description_parts, None, "its label reads plain");
+    assert!(state.redo().success, "and it steps");
+}
+
 /// One entry of an earlier history format (the redo entry here) drops BOTH
 /// stacks whole, with the earlier-version words; the survey is untouched.
 #[test]

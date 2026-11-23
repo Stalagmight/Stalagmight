@@ -78,7 +78,7 @@ pub use digest::{
 };
 pub use entry::{
     decode_entry, encode_entry, EntryError, EntryLimits, HistoryEntry, HistoryRefs, PreviewRow,
-    RecordedPreview, HISTORY_FORMAT_VERSION,
+    RecordedPreview, HISTORY_FORMAT_VERSION, OLDEST_HISTORY_FORMAT_VERSION,
 };
 pub use values::{ShotField, Val};
 
