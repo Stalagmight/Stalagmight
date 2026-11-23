@@ -8,7 +8,6 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { identityLabels, lineDisplayName } from '../../utils/stationIdentity';
 import { lineNameProblem, lineNameProblemMessage, nextFreeLineName } from '../../utils/nameValidation';
 import { formatLength } from '../../utils/formatStats';
-import { formatStationLabel } from '../../utils/formatters';
 import { defaultConfig } from '../../types/config';
 import { combinePlanFor, defaultCombinedName } from '../../utils/combineLines';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
@@ -19,7 +18,10 @@ import type { CombinePick } from '../../types/ipc/CombinePick';
 import type { LineId, StationRef } from '../../types/project';
 import type { CreditedPerson, Shot } from '../../types/ipc.generated';
 import { formatCreditDateRange, shotCredit, summarizeCredits } from '../../utils/lineCredit';
+import { useProse } from '../../hooks/useProse';
+import type { ProsePart } from '../../utils/prose';
 import { Button } from '../common/Button';
+import { Prose } from '../common/Prose';
 import { DialogWrapper } from './DialogWrapper';
 import { CombinePlanNotes } from './CombinePlanNotes';
 
@@ -63,7 +65,8 @@ function CombinedCreditSummary({ shots }: { shots: Array<Pick<Shot, 'credit'>> }
 }
 
 /**
- * One line's lettering as the note reads it: `Main 0..3 → A0..A3`. The range
+ * One line's lettering as the note reads it: `Main 0..3 → A0..A3` (`lineName`
+ * may be a prose token: the line pill). The range
  * spans the lettered stations only. When some of the line's stations are not
  * lettered (a custom `Junction` between `1` and `5` keeps its name, a `Sump`
  * both lines hold is listed on its own), the counts say so, so the range never
@@ -152,6 +155,12 @@ export default function CombineLinesDialog() {
   );
   const keptName = lineDisplayName(kept?.name);
   const otherName = lineDisplayName(other?.name);
+  // The sentences name the lines, the join station and the stations as prose
+  // pills (RS-PROSE); a line gone since the dialog opened reads plain. Button
+  // labels and the name field stay plain text.
+  const prose = useProse();
+  const keptLine = kept ? prose.line(kept.id) : keptName;
+  const otherLine = other ? prose.line(other.id) : otherName;
 
   // The two lines become the combined one, so neither of their names is a
   // clash; every other line's is.
@@ -185,14 +194,18 @@ export default function CombineLinesDialog() {
   // The stations the combine renames for the line shown as kept, if any.
   const renames = plan?.station_renames ?? null;
   // The join station by its line and name: `Main Line / 17`; by the name it
-  // will have when the combine renames it (`Main Line / A3`).
-  const joinLabel = renames ? `${keptName} / ${renames.join_name}` : join ? labels.station(join, true) : '';
+  // will have when the combine renames it (`Main Line / A3`), a pill on the
+  // kept line with that name.
+  const renamedJoin: ProsePart | null = renames
+    ? { kind: 'station', text: `${keptName} / ${renames.join_name}`, line_id: keptId, context: keptName, name: renames.join_name }
+    : null;
+  const joinLabel = renamedJoin ? prose.part(renamedJoin) : join ? prose.station(join, true) : '';
   const keptShots = (keepB ? candidate?.shot_count_b : candidate?.shot_count_a) ?? 0;
   const otherShots = (keepB ? candidate?.shot_count_a : candidate?.shot_count_b) ?? 0;
   const summary = t('dialogs.combineSections.summary', {
-    kept: keptName,
+    kept: keptLine,
     keptShots: t('dialogs.combineSections.shots', { count: keptShots }),
-    other: otherName,
+    other: otherLine,
     otherShots: t('dialogs.combineSections.shots', { count: otherShots }),
     station: joinLabel,
   });
@@ -200,9 +213,9 @@ export default function CombineLinesDialog() {
   // keeps its station 0 unless the join is at its start.
   const keptEnd = keepB ? candidate?.end_b : candidate?.end_a;
   const otherEnd = keepB ? candidate?.end_a : candidate?.end_b;
-  const placement = `${otherName} will be ${candidate?.reverses ? 'reversed and ' : ''}added ${
+  const placement = `${otherLine} will be ${candidate?.reverses ? 'reversed and ' : ''}added ${
     keptEnd === 'start' ? 'before' : 'after'
-  } ${keptName}.`;
+  } ${keptLine}.`;
 
   const keptText = (a: string | null | undefined, b: string | null | undefined) => (keepB ? b : a) ?? '';
   const otherText = (a: string | null | undefined, b: string | null | undefined) => (keepB ? a : b) ?? '';
@@ -214,7 +227,8 @@ export default function CombineLinesDialog() {
   const blocked =
     candidate?.blocked_reason ?? (keepB ? candidate?.blocked_keeping_b : candidate?.blocked_keeping_a) ?? null;
   const lineName = (id: LineId) => labels.lineName(id);
-  const listNames = (ids: LineId[]) => ids.map(lineName).join(', ');
+  /** Line names as pills, for a sentence: `Side, Annex`. */
+  const listNames = (ids: LineId[]) => ids.map((id) => prose.line(id)).join(', ');
   const handleConfirm = async () => {
     if (isSubmitting || isStale || blocked || nameError) return;
     if (isEditingBlockedNow()) {
@@ -286,22 +300,30 @@ export default function CombineLinesDialog() {
       data-testid="combine-lines-dialog"
     >
       <div className="space-y-4">
-        <p className="text-text-secondary" data-testid="combine-summary">{summary}</p>
-        {!isStale && <p className="text-sm" data-testid="combine-plan">{placement}</p>}
+        <p className="text-text-secondary" data-testid="combine-summary">
+          <Prose text={summary} />
+        </p>
+        {!isStale && (
+          <p className="text-sm" data-testid="combine-plan">
+            <Prose text={placement} />
+          </p>
+        )}
         {/* Outside the folded Details: renamed stations are a change the user
             sees everywhere afterwards, so they are told before confirming. */}
         {!isStale && renames && (
           <p className="text-sm" data-testid="combine-rename-note">
-            {stationRenameNote(renames, keptName, otherName)}
+            <Prose text={stationRenameNote(renames, keptLine, otherLine)} />
           </p>
         )}
         {!isStale && candidate?.join_kind === 'closure' && (
           <p className="text-sm" data-testid="combine-closure-join">
-            {t('dialogs.combineSections.closureJoin', {
-              kept: keptName,
-              other: otherName,
-              distance: formatLength(plan?.shift_m ?? 0, lengthUnit, 2),
-            })}
+            <Prose
+              text={t('dialogs.combineSections.closureJoin', {
+                kept: keptLine,
+                other: otherLine,
+                distance: formatLength(plan?.shift_m ?? 0, lengthUnit, 2),
+              })}
+            />
           </p>
         )}
         {/* Outside the folded Details: the user is told before confirming that
@@ -316,7 +338,11 @@ export default function CombineLinesDialog() {
 
         <div className="flex items-center justify-between gap-2 text-sm">
           <span data-testid="combine-kept-label">
-            Keep <strong>{keptName}</strong> (the combined line continues it, in its direction)
+            Keep{' '}
+            <strong>
+              <Prose text={keptLine} />
+            </strong>{' '}
+            (the combined line continues it, in its direction)
           </span>
           <Button onClick={() => setKeepB((v) => !v)} disabled={isSubmitting || isStale} data-testid="combine-swap-kept">
             Keep {otherName} instead
@@ -366,22 +392,30 @@ export default function CombineLinesDialog() {
                 disabled={isSubmitting}
                 data-testid="combine-swap-lr"
               />
-              Swap {otherName}'s left and right walls
+              {/* A sentence beside the control: the pill's drawing is aria-hidden,
+                  so the checkbox's accessible name is the plain sentence. */}
+              <span>
+                <Prose text={`Swap ${otherLine}'s left and right walls`} />
+              </span>
             </label>
           </div>
         )}
 
         {joinArchived && (
           <p className="text-sm text-text-secondary" data-testid="combine-join-archived">
-            {t('dialogs.combineSections.joinArchived', {
-              count: joinArchived.lines.length,
-              station: formatStationLabel(
-                joinArchived.name,
-                joinArchived.lines[0] === undefined ? null : lineName(joinArchived.lines[0]),
-              ),
-              lines: listNames(joinArchived.lines),
-              kept: joinLabel,
-            })}
+            <Prose
+              text={t('dialogs.combineSections.joinArchived', {
+                count: joinArchived.lines.length,
+                // The archived station by its first line, as `identityLabelOf` words it.
+                station: prose.identity(
+                  joinArchived.lines[0] === undefined
+                    ? { id: joinArchived.id, name: joinArchived.name }
+                    : { id: joinArchived.id, name: joinArchived.name, home_line: joinArchived.lines[0] },
+                ),
+                lines: listNames(joinArchived.lines),
+                kept: joinLabel,
+              })}
+            />
           </p>
         )}
 
@@ -401,25 +435,30 @@ export default function CombineLinesDialog() {
           <div className="mt-3 space-y-4">
             {candidate?.reverses && (
               <p data-testid="combine-reverse-explain">
-                Reversing {otherName} reciprocates its bearings and swaps its depths, so every station stays where
-                it is.
+                <Prose
+                  text={`Reversing ${otherLine} reciprocates its bearings and swaps its depths, so every station stays where it is.`}
+                />
               </p>
             )}
 
             {candidate && candidate.branches.length > 0 && (
               <p className="text-text-secondary" data-testid="combine-branches-note">
-                {t('dialogs.combineSections.branchesNote', {
-                  names: listNames(candidate.branches),
-                  count: candidate.branches.length,
-                })}
+                <Prose
+                  text={t('dialogs.combineSections.branchesNote', {
+                    names: listNames(candidate.branches),
+                    count: candidate.branches.length,
+                  })}
+                />
               </p>
             )}
             {candidate && candidate.loose_ends.length > 0 && (
               <p className="text-text-secondary" data-testid="combine-loose-ends-note">
-                {t('dialogs.combineSections.looseEndsNote', {
-                  names: listNames(candidate.loose_ends),
-                  count: candidate.loose_ends.length,
-                })}
+                <Prose
+                  text={t('dialogs.combineSections.looseEndsNote', {
+                    names: listNames(candidate.loose_ends),
+                    count: candidate.loose_ends.length,
+                  })}
+                />
               </p>
             )}
             {candidate?.depth_difference_m != null && (
@@ -436,8 +475,6 @@ export default function CombineLinesDialog() {
                 candidate={candidate}
                 plan={plan}
                 keptId={keptId}
-                keptName={keptName}
-                otherName={otherName}
                 keptQuality={kept?.quality}
                 otherQuality={other?.quality}
                 lengthUnit={lengthUnit}
@@ -447,7 +484,9 @@ export default function CombineLinesDialog() {
             )}
 
             <p className="text-text-secondary" data-testid="combine-direction-note">
-              The combined line keeps {keptName}'s survey direction ({kept?.direction === 'out' ? 'Out' : 'In'}).
+              <Prose
+                text={`The combined line keeps ${keptLine}'s survey direction (${kept?.direction === 'out' ? 'Out' : 'In'}).`}
+              />
             </p>
 
             {!isStale && kept && other && (

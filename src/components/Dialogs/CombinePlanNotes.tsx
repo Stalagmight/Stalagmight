@@ -2,6 +2,8 @@ import { Trans, useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { DetailLink } from '../common/DetailLink';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useProse } from '../../hooks/useProse';
+import { Prose } from '../common/Prose';
 import type { LengthUnit } from '../../types/config';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
 import type { CombinePlan } from '../../types/ipc/CombinePlan';
@@ -21,13 +23,12 @@ interface CombinePlanNotesProps {
   candidate: CombineCandidate;
   plan: CombinePlan;
   keptId: LineId;
-  keptName: string;
-  otherName: string;
   keptQuality: number | undefined;
   otherQuality: number | undefined;
   lengthUnit: LengthUnit;
+  /** A line's plain name, for a tie end's link pill. */
   lineName: (id: LineId) => string;
-  /** A station by name (`17`); with `withLine`, `Main Line / 17`. */
+  /** A station by name (`17`), for a tie end's link pill. */
   stationLabel: (ref: StationRef, withLine?: boolean) => string;
 }
 
@@ -43,13 +44,14 @@ interface CombinePlanNotesProps {
  * through the join. (Shot identities are project-unique on the station graph,
  * so none is renewed: `repeated_shot_ids` is always 0 and has no note.) The user reads all of
  * it before confirming; nothing here is a refusal.
+ *
+ * Each note names its lines and stations as prose pills (RS-PROSE); the ties
+ * name theirs as link pills (`TieEnd`).
  */
 export function CombinePlanNotes({
   candidate,
   plan,
   keptId,
-  keptName,
-  otherName,
   keptQuality,
   otherQuality,
   lengthUnit,
@@ -57,18 +59,22 @@ export function CombinePlanNotes({
   stationLabel,
 }: CombinePlanNotesProps) {
   const { t } = useTranslation();
+  const prose = useProse();
   const distance = (m: number) => formatLength(m, lengthUnit, 2);
-  const listNames = (ids: LineId[]) => ids.map(lineName).join(', ');
+  /** Line names as pills, for a note: `Side, Annex`. */
+  const listNames = (ids: LineId[]) => ids.map((id) => prose.line(id)).join(', ');
   // The line whose join station the joined station keeps as shown: the
   // fixed side's, so the kept one unless the kept side moves.
   const otherId = candidate.line_a === keptId ? candidate.line_b : candidate.line_a;
+  const keptName = prose.line(keptId);
+  const otherName = prose.line(otherId);
   const fixedId = plan.moving_line === keptId ? otherId : keptId;
   const notes: Array<{ key: string; text: string }> = [];
 
   // A move within the side-by-side tolerance (#740) is planned exactly but
   // listed only when it changes a tie: see `combineMoveShown`.
   if (plan.moving_line !== null && combineMoveShown(plan)) {
-    const moving = lineName(plan.moving_line);
+    const moving = prose.line(plan.moving_line);
     const key = combineMoveIsSmall(plan)
       ? 'moveSideBySide'
       : candidate.join_kind === 'closure'
@@ -142,7 +148,7 @@ export function CombinePlanNotes({
       text: t('dialogs.combineSections.joinedMoves', {
         names: listNames(joined.lines),
         count: joined.lines.length,
-        station: stationLabel(joined.station, true),
+        station: prose.station(joined.station, true),
         distance: formatLength(joined.shift_m, lengthUnit, joined.shift_m <= COMBINE_SIDE_BY_SIDE_M ? 4 : 2),
       }),
     });
@@ -177,7 +183,7 @@ export function CombinePlanNotes({
       <ul className="list-disc pl-5 space-y-1">
         {notes.map((note) => (
           <li key={note.key} data-testid={`combine-note-${note.key}`}>
-            {note.text}
+            <Prose text={note.text} />
           </li>
         ))}
         {plan.torn_ties.length > 0 && (
