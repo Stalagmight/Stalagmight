@@ -622,11 +622,17 @@ the sparse `station_archived` (`Station::archived`) and `station_shown`
   (`candidates`), the default keep, the closure that forces a keep, and per
   keep offered (`keeps`) the lines that will show the kept name, the station
   hidden and every collision with two answers (`NameCollision`: rule L's
-  `letter` and the `alternative` that letters the other station).
+  `letter` and the `alternative` that letters the other station), the loop
+  closure whose archive the keep drops so the kept station is shown at its
+  end (`unarchived`), every other comment the merge hides
+  (`comments_hidden`) and the lines Detach will not give back
+  (`not_given_back`, the archived station's own records' lines).
 - `preview_detach_line(station_ref, line_id, rest_keep)`: what comes back
   (name, comment, Station ID), the lines that come off together, the
   remaining-junction choices, the identity a loop closure showed before, the
-  collisions. `preview_loop_closure` (both ends, allowed keeps, default, one
+  collisions, the slots away from the junction that show another station
+  afterwards (`shown_elsewhere`) and the comments it hides
+  (`comments_hidden`). `preview_loop_closure` (both ends, allowed keeps, default, one
   option per allowed end plus "Keep both names"), `preview_remove_loop_closure`
   (what comes back, on which slot, the collisions) and
   `preview_station_identity` (whose station a slot shows, every line a rename
@@ -638,7 +644,11 @@ the sparse `station_archived` (`Station::archived`) and `station_shown`
   rule L letters every collision. `CommandResult.identities`
   (`IdentityNotice`) names what a command did to identities on its own: the
   letters, the archived identities a delete restored, the closures whose
-  archive was dropped.
+  archive was dropped, and the comments it hid (`hidden`: a promotion, a
+  moved loop end; the model's `IdentityReport::hidden`, computed from the
+  states before and after the command). The delete previews carry the same
+  for the delete (`identities`) and, when Split is offered too, for Split
+  (`split_identities`).
 
 ### Equivalence with today
 
