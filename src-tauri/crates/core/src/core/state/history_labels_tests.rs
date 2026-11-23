@@ -687,6 +687,56 @@ fn a_detach_that_keeps_a_hub_names_every_line_that_comes_off() {
     );
 }
 
+/// RS-FX4: Far merged into Side's start (Side kept), then that junction
+/// into Main 4 (Main kept): Detach of Far gives back Side's station on Side
+/// and Far together, and the label names both lines that come off.
+#[test]
+fn a_detach_of_a_junction_merged_away_names_every_line_that_comes_off() {
+    let mut p = survey();
+    let far = p
+        .add_line(named("Far"), StartAt::New, vec![shot(3.0, 270.0)])
+        .unwrap();
+    let far_start = p.line(far).unwrap().start;
+    p.set_placement(far_start, -100.0, 0.0).unwrap();
+    let o = open_on(&p);
+    for (a, b) in [
+        (StationRef::new(far, 0), StationRef::new(SIDE, 0)),
+        (StationRef::new(SIDE, 0), StationRef::new(MAIN, 4)),
+    ] {
+        exec(
+            &o.state,
+            Command::MergeStations {
+                station_a: a,
+                station_b: b,
+                keep: Some(survey_of(&o.state).topology().station_at(b).unwrap()),
+                renames: None,
+            },
+        );
+    }
+    exec(
+        &o.state,
+        Command::UnmergeStations {
+            station_ref: StationRef::new(far, 0),
+            renames: None,
+            rest_keep: None,
+        },
+    );
+    assert_eq!(
+        top(&o.state).description,
+        "Detach lines \"Side\" and \"Far\" from Main / 4"
+    );
+    let p = survey_of(&o.state);
+    let side0 = p.topology().station_at(StationRef::new(SIDE, 0)).unwrap();
+    assert_eq!(
+        p.topology().station_at(StationRef::new(far, 0)),
+        Some(side0)
+    );
+    assert_ne!(
+        p.topology().station_at(StationRef::new(MAIN, 4)),
+        Some(side0)
+    );
+}
+
 #[test]
 fn closures_name_their_ends_when_created_and_removed() {
     let o = open();
