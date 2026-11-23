@@ -1738,7 +1738,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       //   Stalagmight; `project_read_only_reason` answers `text`, saves are
       //   refused with `READ_ONLY_FILE: ...`.
       // - __MOCK_SET_CONVERSION_NOTICE__(view): the next `take_conversion_notice`
-      //   hands `view` (a ConversionNoticeView) over, once.
+      //   hands `view` (a ConversionNoticeView) over, once; a view without
+      //   `change_parts` / `detail_parts` (RS-PROSE) gets them empty and
+      //   index-aligned, as the backend always sends them.
       // - __MOCK_SET_LEGACY_ORIGIN__(true): the open project came from a 0.6.0
       //   file, so its next successful save converts it and says so
       //   (`legacy_converted`: `saved` to the open file, `saved_as_new_file`
@@ -1757,7 +1759,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         mockReadOnlyReason = reason;
       };
       (window as unknown as Record<string, unknown>).__MOCK_SET_CONVERSION_NOTICE__ = (notice: unknown) => {
-        mockConversionNotice = notice;
+        const view = notice as { changes?: unknown[]; details?: unknown[] } | null;
+        mockConversionNotice =
+          view && typeof view === 'object'
+            ? {
+                change_parts: (view.changes ?? []).map(() => []),
+                detail_parts: (view.details ?? []).map(() => []),
+                ...view,
+              }
+            : notice;
       };
       (window as unknown as Record<string, unknown>).__MOCK_SET_LEGACY_ORIGIN__ = (on: boolean) => {
         mockLegacyOrigin = !!on;
@@ -7001,6 +7011,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               const name = lines.find((x) => x.id === r.line_id)?.name?.trim();
               return `${name ? name : `Line ${r.line_id}`} ${r.line_id}:${r.station_index}`;
             };
+            // No `parts` (RS-PROSE, optional): the toast reads these words plain.
             const removedWarnings = removedTies.map((r) => ({
               code: 'CLOSURE_REMOVED_ACROSS_ONE_SHOT',
               message: `Removed the merge of ${label(r.station_a)} and ${label(r.station_b)}: combining the lines left its two stations at the two ends of one shot.`,

@@ -7,18 +7,24 @@
  * old file format" and kept saying "the new format is written the first time
  * the project is saved" after that save.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import '../../i18n';
 import { ConversionNoticeBanner } from '../ConversionNoticeBanner';
 import type { ConversionNoticeView } from '../../types/ipc/ConversionNoticeView';
+import type { ProsePart } from '../../types/ipc/ProsePart';
+import { useUIStore } from '../../store/uiStore';
+import { partsToPlain } from '../../utils/prose';
+import { accessibleText } from '../../test/accessibleText';
 
 const notice = (extra: Partial<ConversionNoticeView> = {}): ConversionNoticeView => ({
   source: 'old_format',
   changes: ['3 stations moved by up to 2.50 m', 'the comment of Side / 0 is hidden'],
   details: [],
+  change_parts: [],
+  detail_parts: [],
   brings_back: false,
   file: 'not_yet_saved',
   ...extra,
@@ -92,6 +98,98 @@ describe('ConversionNoticeBanner', () => {
     expect(list.querySelectorAll('li')).toHaveLength(30);
     expect(list).toHaveTextContent('Branch 1 / 0 is now shown as Main / 19');
     expect(button).toHaveTextContent('Hide details');
+  });
+
+  describe('prose pills (RS-PROSE)', () => {
+    const station = (line_id: number, line: string, name: string, station_id: number): ProsePart => ({
+      kind: 'station', text: `${line} / ${name}`, line_id, context: line, name, station_id,
+    });
+    const shownAs: ProsePart[] = [
+      station(2, 'Side', '0', 20),
+      { kind: 'text', text: ' is now shown as ' },
+      station(1, 'Main', '12', 11),
+    ];
+    const hidden: ProsePart[] = [
+      { kind: 'text', text: 'the comment of ' },
+      station(2, 'Side', '0', 20),
+      { kind: 'text', text: ' is hidden' },
+    ];
+
+    beforeEach(() => {
+      useUIStore.setState({ syntacticLevel: 'full', resolvedTheme: 'dark' });
+    });
+
+    it('draws the stations a clause names and reads the sentence plain text wrote', () => {
+      const changes = ['3 stations moved by up to 2.50 m', partsToPlain(shownAs), partsToPlain(hidden)];
+      render(
+        <ConversionNoticeBanner
+          notice={notice({ changes, change_parts: [[], shownAs, hidden], brings_back: true })}
+          onDismiss={() => {}}
+        />,
+      );
+      const text = screen.getByTestId('conversion-notice-text');
+      const pills = [...text.querySelectorAll('.sh-ppill')];
+      expect(pills.map((p) => p.getAttribute('data-prose-kind'))).toEqual(['station', 'station', 'station']);
+      expect(pills[0]!.querySelector('[aria-hidden="true"]')!.textContent).toBe('Side: 0#20');
+      expect(accessibleText(text)).toBe(
+        '3 stations moved by up to 2.50 m; Side / 0 is now shown as Main / 12; the comment of Side / 0 is hidden.',
+      );
+    });
+
+    it('capitalises a sentence that opens with words, never a name', () => {
+      const { unmount } = render(
+        <ConversionNoticeBanner
+          notice={notice({ changes: [partsToPlain(hidden)], change_parts: [hidden] })}
+          onDismiss={() => {}}
+        />,
+      );
+      expect(accessibleText(screen.getByTestId('conversion-notice-text'))).toBe('The comment of Side / 0 is hidden.');
+      unmount();
+      const lower: ProsePart[] = [station(3, 'annex', '2', 30), { kind: 'text', text: ' is now shown as 2a' }];
+      render(
+        <ConversionNoticeBanner
+          notice={notice({ changes: [partsToPlain(lower)], change_parts: [lower] })}
+          onDismiss={() => {}}
+        />,
+      );
+      // The name is the line's own; the sentence opens with its pill.
+      expect(accessibleText(screen.getByTestId('conversion-notice-text'))).toBe('annex / 2 is now shown as 2a.');
+    });
+
+    it('draws the names of each detail, and a clause without parts as its words', async () => {
+      const details = [partsToPlain(shownAs), 'Branch 1 / 0 is now shown as Main / 19'];
+      render(
+        <ConversionNoticeBanner
+          notice={notice({
+            changes: ["2 stations are now shown under another station's name"],
+            change_parts: [[]],
+            details,
+            detail_parts: [shownAs, []],
+          })}
+          onDismiss={() => {}}
+        />,
+      );
+      expect(screen.getByTestId('conversion-notice-text').querySelector('.sh-ppill')).toBeNull();
+      await userEvent.click(screen.getByTestId('conversion-notice-details-button'));
+      const items = screen.getByTestId('conversion-notice-details').querySelectorAll('li');
+      expect(items[0]!.querySelectorAll('.sh-ppill')).toHaveLength(2);
+      expect(accessibleText(items[0]!)).toBe(details[0]);
+      expect(items[1]!.querySelector('.sh-ppill')).toBeNull();
+      expect(items[1]!.textContent).toBe(details[1]);
+    });
+
+    it('is the plain sentence below Full', () => {
+      useUIStore.setState({ syntacticLevel: 'off' });
+      render(
+        <ConversionNoticeBanner
+          notice={notice({ changes: [partsToPlain(shownAs)], change_parts: [shownAs] })}
+          onDismiss={() => {}}
+        />,
+      );
+      const text = screen.getByTestId('conversion-notice-text');
+      expect(text.querySelector('.sh-ppill')).toBeNull();
+      expect(text.textContent).toBe('Side / 0 is now shown as Main / 12.');
+    });
   });
 
   it('dismisses', async () => {
