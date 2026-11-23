@@ -1927,6 +1927,15 @@
     "shownIdentity": {
       "titleName": "Rename Station",
       "titleComment": "Station Comment",
+      "titleBatch": "Edit Stations",
+      "batchLead_one": "One station this edit changes is shown on other lines too:",
+      "batchLead_other": "{{count}} stations this edit changes are shown on other lines too:",
+      "batchBelongs": "On {{line}}, {{name}} belongs to {{home}}.",
+      "batchLoopEnd": "On {{line}}, {{name}} is shown as {{station}} through a loop closure.",
+      "batchLines": "The edit changes it on {{lines}}.",
+      "batchHeld": "Nothing is changed until you choose: the edit is applied whole or not at all.",
+      "batchProceed_one": "Apply the edit",
+      "batchProceed_other": "Apply all {{count}} edits",
       "belongs": "{{name}} belongs to {{line}}.",
       "loopEnd": "Shown as {{station}} through a loop closure.",
       "changes": {

@@ -2,6 +2,8 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { currentIdentityLabels } from '../../hooks/useIdentityLabels';
+import { editNeedsOwnerPrompt } from '../Dialogs/ShownIdentityPrompt';
 import { CheckIcon, CloseIcon } from '../common/icons';
 
 const OVERLAY_WIDTH = 220;
@@ -41,7 +43,15 @@ export default function CommentOverlay() {
       return;
     }
     if (commentTarget.type === 'station' && commentTarget.stationRef) {
-      await updateStationComment(commentTarget.stationRef, trimmed || null);
+      const ref = commentTarget.stationRef;
+      // A foreign slot or a loop end shows another station's comment, on
+      // other lines too: say whose it is before changing it (RS 5.4, ui-3).
+      if (editNeedsOwnerPrompt(currentIdentityLabels().shown(ref))) {
+        clearCommentTarget();
+        useUIStore.getState().openDialog('shown-identity-edit', { stationRef: ref, kind: 'comment', value: trimmed || null });
+        return;
+      }
+      await updateStationComment(ref, trimmed || null);
     } else if (commentTarget.type === 'shot' && commentTarget.lineId !== undefined && commentTarget.shotId !== undefined) {
       // Use "" not null for clearing: JSON null for Option<Option<String>> deserializes as outer None (= no update)
       await updateShot(commentTarget.lineId, commentTarget.shotId, { comment: trimmed || "" });
