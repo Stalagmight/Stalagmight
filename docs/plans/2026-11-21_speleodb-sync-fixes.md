@@ -1025,7 +1025,8 @@ injection that puts the old rule back).
     (`ownSpeleoRelease`: Discard, Done, Switch to Read Only, the held-lock
     prompt's and the sign-out's per-project releases, the revert's upload and
     unwind, the switch and quit's settle, Close), and `refreshLinkStatus` raises
-    no lost notice for a reply that overlapped one. Where this session's own
+    no lost notice for a reply that overlapped one of the same project's lock
+    (keyed by project after the X4 delta review, below). Where this session's own
     release of the open project's lock lands (Discard's null, the held-lock
     prompt's or the sign-out's release of the open project), the session is
     marked read-only (`markOwnReleaseEnded`), so a later refresh has no edit
@@ -1071,3 +1072,25 @@ injection that puts the old rule back).
 - **Nit 6:** `api_error`'s middleware arm kept the error text, which may carry
   the request URL; it keeps a fixed detail now (no middleware is installed).
   Test: `a_middleware_failure_keeps_no_url`.
+
+### The X4 delta review
+
+- **Should-fix 1: the own-release marker was project-blind.** Releasing a stale
+  lock on another project (the held-lock prompt, the sign-out loop) while a
+  refresh of the open project was in flight swallowed that project's genuine
+  "Editing stopped", for good once the reply turned it read-only. The marker is
+  keyed by the project whose lock is released (`ownSpeleoRelease(projectId,
+  work)`), and the refresh asks about the project its status is for. Close, the
+  settle, Done, Discard, Switch to Read Only and the revert pass the open (or
+  captured) project's id. A release of an unknown project still overlaps every
+  refresh. Test: "a release of another project does not swallow the open
+  project's real loss".
+- **Nit 2: the sign-out's marker ended at the bound.** It wrapped `bounded(...)`,
+  whose race gives up on the reply while the release still runs; a late landing
+  then read as a loss. The marker sits inside the bound around the release, and
+  the open project's session is marked as ended here when the release lands.
+  Test: the late-landing case (fake timers).
+- **Nit 3: the undescribed-history fallback never ran in production.** The
+  history client kept an empty description as `Some("")`; it reads an empty or
+  blank one as none now (above, should-fix 4). Test:
+  `an_empty_revision_description_reaches_the_history_as_none`.
