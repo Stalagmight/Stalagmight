@@ -1779,3 +1779,113 @@ every case" and RS-F's "The 8.3 oracle's rule L check".
   lists the same feature holds the old N8 and refuses such a file as
   damaged; only those unreleased development builds meet it (the latest
   tag, v0.5.5, writes neither version 2).
+
+## Deviations (package RS-FX6)
+
+Decisions the fixes after the real-app capture of the redesign (the
+capture's issues P1-1 to P3-19) took where this page is silent or the code
+disagreed, each with its reason. They supersede RS-UI's "One plain label for
+a loop end" and RS-FX3's "`K (loop end)` is a Plan pin label of its own"
+(the pin label below), and RS-UI's "The data table's dot and loop mark ride
+the row's gutter pill" where it says the Name column stays plain text.
+
+- **A collision answer names its station by role and Station ID (P1-1).**
+  The two stations of a collision share a name, so "Rename Side / 0 to 0a"
+  read the same for both answers. Each answer now says which station it
+  renames: the dialog's own station by its role ("the station that comes
+  back" in Detach and Remove Closure, "the kept station" in Merge), a
+  station native on the collision's line as that line's own ("Side's own 0
+  (Station ID 29)"), any other by its home line ("Main / 12 (Station ID
+  12)"). The Station ID alone already tells them apart; the role says why
+  the user might pick it. No wire change: the dialogs know their own
+  station.
+- **The Detach lead follows the chosen answer (P2-2).** The preview's names
+  are rule L's run, so its `name` is the default letter. The dialog shows
+  each station's name as the chosen answers leave it (a rename the answers
+  make, else the station's own name when it is in a collision, else the
+  preview's), in the one-sentence lead, "It gets back", the After Detach
+  list and "it will show". No second preview round trip.
+- **The IPC enum contract (P2-3).** `ConversionSource::EarlierVersion2`
+  takes `serde(rename = "earlier_version_2")`. `tests/ipc_enum_contract.rs`
+  deserialises every literal of every IPC enum's ts-rs declaration (unit
+  literals, internally tagged tags, externally tagged variant names) and
+  writes it back; an unknown variant or another string fails, and a tagged
+  variant with fields counts as recognised when serde asks for its fields.
+  A second test fails when a generated `src/types/ipc/*.ts` declares a
+  literal union the contract does not list, so a new enum cannot skip it.
+  The thirteen output-only enums derive `Deserialize` for the round trip
+  (the frontend only reads them, and the reading direction is the one that
+  broke). Struct field names are not covered: the only IPC fields with a
+  digit (`recalc_hold_stage1_bar`, `recalc_hold_stage2_bar`) are generated
+  as serde writes them.
+- **The full-screen table starts at the toolbar's bottom edge (P2-4).**
+  The view publishes `--toolbar-bottom` (re-measured when a banner resizes
+  the view) beside `--toolbar-h`; the floating menus keep `--toolbar-h`.
+- **A dotted station in words (P2-5).** The pill's home-line mark carries a
+  tooltip ("Belongs to Main") and screen-reader text ("(Main)"), so a pill
+  reads as plain text writes the slot. The Name column renders a muted
+  qualifier after the bare name: "(Main)" on a foreign slot, "(loop end)" on
+  a loop end (its line is the row's own, so "loop end on Side" would repeat
+  it); the edit, the copy and the sort read the bare name.
+- **Name repeats ride the merge preview (P2-6).**
+  `Project::name_repeats` lists every (line, name, the line's own station,
+  the dotted station, loop end or not) where a dotted slot or a loop end
+  shows the name of a native slot of the same line. `MergeMove::repeats` is
+  the merge's copy minus the state before it (so only repeats the merge
+  makes), on the wire `MergeKeepPreview.repeats` (`NameRepeat`). The dialog
+  says one sentence per repeat; the e2e mock lists them the same way.
+- **A restore's hidden comment by line, name and text (P2-7).**
+  `RestoredIdentity` gains `old_name` (set by the A4 restore) and
+  `old_home_line`, filled by `IdentityReport::with_hidden` from the state
+  before the op (the line whose departure caused the restore no longer
+  passes the node after it); the wire carries both. Notices word every
+  hidden comment as the dialogs do, "Annex / 3's comment ("...") is hidden:
+  Undo brings it back". A history record reads "3 (Station ID 54), no
+  longer on any line", without its former line: a history record keeps no
+  line by definition (A5), and remembering one would add a key to the file's
+  record and the changeset row, which this package does not take.
+- **A closure's loop end by its own identity in the conversion notice
+  (P2-8).** A closure left keeping both names names an end that another
+  closure archives as "Main / M4 (now shown as Side / S4)"; any other end
+  by its slot text as before.
+- **Hidden comments per identity in the notice (P3-9).** `CommentHidden`
+  carries the identity whose comment the slot showed; the banner counts
+  identities and lists each once, under the first line it is on ("the
+  comment of M4 on Main and Annex is hidden"). The upgrade and migration
+  reports' `comments_hidden` stay per slot, as the oracles count them.
+- **A loop end's Plan pin (P3-10).** "Loop / L8 (loop end, shown as Main /
+  8)": the closure's archive names the end's own station; without it (an
+  older backend) "Loop end on Loop, shown as Main / 8". The closures section
+  reads "Loop / L8, the loop end, is shown as Main / 8."
+- **One prompt wording (P3-11).** Both whose-station variants say "Rename
+  Main / 8 to 8E on Main and Loop" ("Change the comment of Main / 8 on Main
+  and Loop" for a comment); the lines once the preview answers, the new name
+  from the caller.
+- **What travels inside an archived junction (P3-12).** Read from the
+  slots' records (`Station.archived`, every slot of a node carries them):
+  the Merge dialog names the records directly under the station it
+  archives ("archived inside Side / 0 by an earlier merge, stays inside
+  it"), the Detach dialog the records under the one that comes back ("stays
+  archived inside it: detach Upper again to get it back"). History records
+  are not named. No wire change.
+- **The note on earlier letters (P3-13)** shows when a line that gets the
+  station back already shows its own name followed by letters (`0a`, `0b`):
+  the only trace a letter leaves. Without one the note said nothing true.
+- **The remaining-junction picker (P3-15)** draws each record as a pill by
+  its home line; the lead reads "They get back" when the station comes back
+  on several lines (the line keeps the junction and two or more others come
+  off).
+- **The history list (P3-16)** shows each description whole, wrapped to at
+  most three lines; the 40-character cut is gone.
+- **Sections panel dots (P3-17)** take `pillDot` against the panel
+  (`panelDotOf`), drawn as a 1 px border so the hover ring stays free.
+- **A pinned action row (P3-18).** Merge Stations, Detach Line from Station,
+  Create Loop Closure and Remove Closure end with `StickyDialogFooter`,
+  the import dialogs' sticky idiom; Playwright checks the buttons at
+  1024x640 and with the Detach body scrolling.
+- **Not RS-made, fixed while there (P3-19).** The merge depth list gives a
+  line's equal readings once with their count ("7.8 m (Main, 2 readings)",
+  so the list still adds up to the mean), grouped in the dialog by line and
+  displayed value; `formatFixed` writes a value that rounds to zero without
+  a sign (every caller, not Station details only). The closure dialog's red
+  error next to a refused Create is left as the capture noted.
