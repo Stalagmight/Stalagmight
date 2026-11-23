@@ -847,33 +847,48 @@ fn crafted_hub(sides: usize, history: usize) -> (Project, StationId, Vec<LineId>
 }
 
 /// Pre-PR review (RS-FX9 item 2), the per-line record scans of the model:
-/// at a hub of 4,001 lines and a million history records, `native_lines`
-/// (the home line every foreign slot's dot reads), Detach's case-2 test
-/// (`detach_keeps`, every command label and preview of a detach) and the
-/// epilogue's A4 restore (every command) each walked the hub's records once
-/// per line: about 4e9 record visits apiece. Each now builds the hub's
-/// named lines once. Injection: on 3b6bdf77e this test takes about 220 s
-/// here against its 10 s bound; it takes about 4 s, mostly building the hub.
+/// at a hub of many lines and history records, `native_lines` (the home line
+/// every foreign slot's dot reads), Detach's case-2 test (`detach_keeps`,
+/// every command label and preview of a detach) and the epilogue's A4
+/// restore (every command) each walked the hub's records once per line:
+/// lines x records (about 4e9 record visits apiece at 4,001 lines and a
+/// million records). Each now builds the hub's named lines once, so the
+/// lookups cost the hub's lines plus its records: 4x the hub (500 then 2,000
+/// side lines, 125,000 then 500,000 history records) takes about 4x the time
+/// ([`crate::linear_time`], RS-FX10). Injection: `native_lines` alone
+/// scanning the records per line again, as before RS-FX9, took 17x the time
+/// at 4x the hub here (1.7 s, then 29 s).
 #[test]
 fn record_lookups_at_a_hub_cost_its_lines_plus_its_records() {
-    let (mut p, hub, lines) = crafted_hub(4_000, 1_000_000);
-    assert!(p.validate().is_empty());
-    let started = std::time::Instant::now();
-    let main = p.lines()[0].id;
-    assert_eq!(p.native_lines(hub), vec![main]);
-    assert_eq!(p.home_line(hub), Some(main));
-    assert!(p.detach_keeps(hub, main), "every other line is named");
-    assert!(!p.detach_keeps(hub, lines[0]));
-    assert!(
-        p.restore_archived_identities().is_empty(),
-        "line 0 is native"
+    let hub = |history: usize| {
+        let (p, hub, lines) = crafted_hub(history / 250, history);
+        assert!(p.validate().is_empty());
+        (p, hub, lines, history)
+    };
+    crate::linear_time::assert_linear(
+        "record lookups at a hub",
+        125_000,
+        hub,
+        |(p, hub, lines, history)| {
+            let (mut p, hub) = (p.clone(), *hub);
+            let main = p.lines()[0].id;
+            let started = std::time::Instant::now();
+            let native = p.native_lines(hub);
+            let home = p.home_line(hub);
+            let keeps = (p.detach_keeps(hub, main), p.detach_keeps(hub, lines[0]));
+            let none = p.restore_archived_identities();
+            // Every line named (A4 broken): the restore gives the hub a
+            // record back.
+            p.station_mut(hub).unwrap().archived[*history]
+                .lines
+                .push(main);
+            let restored = p.restore_archived_identities();
+            let elapsed = started.elapsed();
+            assert_eq!((native, home), (vec![main], Some(main)));
+            assert_eq!(keeps, (true, false), "every other line is named");
+            assert!(none.is_empty(), "line 0 is native");
+            assert_eq!(restored.len(), 1);
+            elapsed
+        },
     );
-    // Every line named (A4 broken): the restore gives the hub a record back.
-    p.station_mut(hub).unwrap().archived[1_000_000]
-        .lines
-        .push(main);
-    let restored = p.restore_archived_identities();
-    assert_eq!(restored.len(), 1);
-    let elapsed = started.elapsed();
-    assert!(elapsed < std::time::Duration::from_secs(10), "{elapsed:?}");
 }
