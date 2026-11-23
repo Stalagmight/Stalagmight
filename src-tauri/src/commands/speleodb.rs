@@ -27,7 +27,7 @@ use crate::speleodb::{
     DoneResult, PushResult, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus,
     SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
     SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision, SpeleoSessionStatus,
-    StartEditingResult, UpdateResult,
+    StartEditingResult, TakeRemoteResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -256,7 +256,7 @@ pub async fn speleodb_push(
 /// gates this behind a second destroy-confirmation - it is the only irreversible
 /// choice in the divergence prompt, so there is no single-click path to it.
 #[tauri::command]
-pub async fn speleodb_take_remote(app: AppHandle) -> Result<String, SpeleoErrorDto> {
+pub async fn speleodb_take_remote(app: AppHandle) -> Result<TakeRemoteResult, SpeleoErrorDto> {
     run_transfer(app, AppState::speleodb_take_remote).await
 }
 

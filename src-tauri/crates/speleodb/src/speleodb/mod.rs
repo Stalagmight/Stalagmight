@@ -40,11 +40,12 @@ pub use tls::{clean_endpoint_input, validate_endpoint};
 // [Track A] #186/D-B2: SpeleoDbAction + the structured SpeleoErrorDto cross IPC.
 pub use contract::{EndpointRefusal, SpeleoDbAction, TransportCause};
 pub use models::{
-    DoneResult, Permission, PushResult, RemoteState, SpeleoAccessVerification, SpeleoCollaborator,
-    SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult,
-    SpeleoOpenResult, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
-    SpeleoReadOnlyOpen, SpeleoReleaseContext, SpeleoRevision, SpeleoSessionStatus,
-    StartEditingResult, UnpushedLocalEdits, UpdateResult, Visibility,
+    DoneResult, EditingStopped, Permission, PushResult, RemoteState, SpeleoAccessVerification,
+    SpeleoCollaborator, SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus,
+    SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
+    SpeleoPublishParams, SpeleoPublishResult, SpeleoReadOnlyOpen, SpeleoReleaseContext,
+    SpeleoRevision, SpeleoSessionStatus, StartEditingResult, TakeRemoteResult, UnpushedLocalEdits,
+    UpdateResult, Visibility,
 };
 
 /// Errors from the SpeleoDB client and native-file handling.

@@ -500,9 +500,13 @@ fn take_remote_keeps_the_lock_and_the_edit_session() {
     let cache = open_p(&state, id, &stub.base);
     assert!(gate_open(&state), "precondition: an edit session on P");
 
-    let local_path = state.speleodb_take_remote().expect("take remote");
+    let took = state.speleodb_take_remote().expect("take remote");
 
-    assert_eq!(Path::new(&local_path), cache.as_path());
+    assert_eq!(Path::new(&took.local_path), cache.as_path());
+    assert_eq!(
+        took.editing_stopped, None,
+        "SpeleoDB records this account's lock"
+    );
     assert_eq!(
         open_name(&state).as_deref(),
         Some("Revision X"),

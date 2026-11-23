@@ -266,6 +266,8 @@ export * from './ipc/StartEditingResult';
 export * from './ipc/DoneResult';
 export * from './ipc/UpdateResult';
 export * from './ipc/PushResult';
+export * from './ipc/TakeRemoteResult';
+export * from './ipc/EditingStopped';
 export * from './ipc/Visibility';
 export * from './ipc/SpeleoCollaborator';
 export * from './ipc/SpeleoPublishParams';

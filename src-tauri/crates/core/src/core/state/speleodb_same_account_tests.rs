@@ -74,6 +74,8 @@ struct Remote {
     /// The `.stalx` each accepted upload carried, by the revision it made: what
     /// a download of that revision serves (Take the SpeleoDB version).
     files: std::collections::HashMap<String, String>,
+    /// Drop every project read (the holder read) without a reply.
+    drop_project_reads: bool,
 }
 
 impl Remote {
@@ -234,6 +236,8 @@ fn server() -> (String, Shared) {
             } else if line.contains("/acquire/") {
                 remote.holder = Some(ME.to_owned());
                 (200, project)
+            } else if remote.drop_project_reads && line.starts_with("GET") {
+                continue;
             } else {
                 (200, project)
             };
@@ -813,9 +817,14 @@ fn b_takes_the_speleodb_version_over_a(
     }
     let took = b.run(|state| state.speleodb_take_remote().map_err(|e| e.message));
     assert_eq!(
-        took.as_deref().map(Path::new),
+        took.as_ref().map(|took| Path::new(&took.local_path)),
         Ok(b.path.as_path()),
         "B reloads its copy"
+    );
+    assert_eq!(
+        took.as_ref().map(|took| took.editing_stopped.clone()),
+        Ok(None),
+        "nothing stopped an edit session SpeleoDB still records the lock of"
     );
     let on_disk = b.link_on_disk();
     assert_eq!(on_disk.base_commit_sha, a_head, "B now holds A's revision");
@@ -988,4 +997,137 @@ fn opening_resumes_a_lock_this_run_claims() {
         "{resumed:?}"
     );
     assert!(a.run(|state| state.edit_enabled()));
+}
+
+#[test]
+fn taking_the_speleodb_version_after_the_lock_was_handed_back_elsewhere_stops_editing() {
+    // Farm finding P2-take-remote-editable (seed 950411, step 12): B edits under
+    // the account's lock; A's revision becomes SpeleoDB's latest; another
+    // session of the SAME account hands the lock back on the server (its Close);
+    // B takes the SpeleoDB version. Since X3 take_remote trusted B's claim and
+    // came back with the edit gate open while SpeleoDB recorded no lock at all.
+    let temp = tempfile::tempdir().expect("temp");
+    let (endpoint, remote) = server();
+    let a = Session::start(&temp.path().join("a"), &endpoint);
+    let b = Session::start(&temp.path().join("b"), &endpoint);
+    let pushed = a.run(push("From A"));
+    assert!(matches!(pushed, PushResult::Pushed { .. }), "{pushed:?}");
+    remote.lock().expect("remote").holder = None;
+
+    let took = b.run(|state| state.speleodb_take_remote().map_err(|e| e.message));
+
+    assert_eq!(
+        took.map(|took| took.editing_stopped),
+        Ok(Some(crate::speleodb::EditingStopped::Released)),
+        "the result says why editing stopped"
+    );
+    assert!(
+        !b.run(|state| state.edit_enabled()),
+        "the SpeleoDB version opens read-only: SpeleoDB records no lock"
+    );
+    assert!(
+        b.run(|state| state.speleodb_holds_claim(ID)),
+        "the claim stays as the pointer a later holder-checked release needs"
+    );
+    {
+        let remote = remote.lock().expect("remote");
+        assert!(
+            !remote
+                .lines
+                .iter()
+                .any(|l| l.contains("/acquire/") || l.contains("/release/")),
+            "nothing is taken or handed back: {:?}",
+            remote.lines
+        );
+    }
+    assert_eq!(
+        b.link_on_disk().base_commit_sha,
+        remote.lock().expect("remote").tip(),
+        "the SpeleoDB version replaced the copy"
+    );
+}
+
+#[test]
+fn taking_the_speleodb_version_over_a_lock_someone_else_holds_now_says_who() {
+    // The same, with the lock taken by another account since it was handed back.
+    let temp = tempfile::tempdir().expect("temp");
+    let (endpoint, remote) = server();
+    let a = Session::start(&temp.path().join("a"), &endpoint);
+    let b = Session::start(&temp.path().join("b"), &endpoint);
+    let pushed = a.run(push("From A"));
+    assert!(matches!(pushed, PushResult::Pushed { .. }), "{pushed:?}");
+    remote.lock().expect("remote").holder = Some("someone@example.com".to_owned());
+
+    let took = b.run(|state| state.speleodb_take_remote().map_err(|e| e.message));
+
+    assert_eq!(
+        took.map(|took| took.editing_stopped),
+        Ok(Some(crate::speleodb::EditingStopped::HeldBy {
+            email: "someone@example.com".to_owned()
+        }))
+    );
+    assert!(!b.run(|state| state.edit_enabled()));
+}
+
+#[test]
+fn taking_the_speleodb_version_when_the_holder_read_gets_no_reply_goes_on_editing() {
+    // The conservative side (plan, X6): a holder read that gets no reply cannot
+    // tell, and a blip must not end a live session. The session goes on, as
+    // before the check; every upload reads the holder again before it sends.
+    let temp = tempfile::tempdir().expect("temp");
+    let (endpoint, remote) = server();
+    let a = Session::start(&temp.path().join("a"), &endpoint);
+    let b = Session::start(&temp.path().join("b"), &endpoint);
+    let pushed = a.run(push("From A"));
+    assert!(matches!(pushed, PushResult::Pushed { .. }), "{pushed:?}");
+    remote.lock().expect("remote").drop_project_reads = true;
+
+    let took = b.run(|state| state.speleodb_take_remote().map_err(|e| e.message));
+
+    assert_eq!(took.map(|took| took.editing_stopped), Ok(None));
+    assert!(b.run(|state| state.edit_enabled()), "the session goes on");
+}
+
+#[test]
+fn reload_project_after_the_lock_was_handed_back_elsewhere_stops_editing() {
+    // Reload Project carries the edit session across its fast-forward the same
+    // way, so it had the same trust gap: B, editing a clean copy, is behind A's
+    // upload; the account's other session hands the lock back; B reloads.
+    // Injection: drop the check from `speleodb_reload_locked` and B comes back
+    // editing.
+    let temp = tempfile::tempdir().expect("temp");
+    let (endpoint, remote) = server();
+    let a = Session::start(&temp.path().join("a"), &endpoint);
+    let b = Session::start(&temp.path().join("b"), &endpoint);
+    let pushed = a.run(push("From A"));
+    assert!(matches!(pushed, PushResult::Pushed { .. }), "{pushed:?}");
+    remote.lock().expect("remote").holder = None;
+
+    let path = b.path.to_string_lossy().into_owned();
+    let reloaded = b.run(move |state| {
+        // The consent the frontend takes before Reload Project.
+        let expected = state
+            .speleodb_project_access_at(path, true)
+            .map_err(|e| e.message)?
+            .and_then(|access| access.release_context)
+            .ok_or_else(|| "no release context".to_owned())?;
+        state
+            .speleodb_reload(false, Some(expected))
+            .map_err(|e| e.message)
+    });
+
+    match reloaded {
+        Ok(crate::speleodb::UpdateResult::FastForwarded {
+            editing_stopped, ..
+        }) => assert_eq!(
+            editing_stopped,
+            Some(crate::speleodb::EditingStopped::Released)
+        ),
+        other => panic!("expected a fast-forward, got {other:?}"),
+    }
+    assert!(!b.run(|state| state.edit_enabled()), "B reloads read-only");
+    assert_eq!(
+        b.link_on_disk().base_commit_sha,
+        remote.lock().expect("remote").tip()
+    );
 }
