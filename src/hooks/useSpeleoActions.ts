@@ -21,14 +21,16 @@ import { openExitPrompt, type PendingExit } from '../utils/quit';
 import { speleoErrorAction, humanizeSpeleoError } from '../utils/speleoError';
 import { replacedRevisionsOf } from '../utils/speleoReplacedRevisions';
 import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
-import { ownSpeleoRelease } from '../utils/speleoLockLost';
+import { editingStoppedMessage, ownSpeleoRelease } from '../utils/speleoLockLost';
 import { confirmSpeleoReloadDiscard } from '../utils/speleoReloadConfirm';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import type {
   DoneResult,
+  EditingStopped,
   PushResult,
   SpeleoFileAccess,
   StartEditingResult,
+  TakeRemoteResult,
   UpdateResult,
 } from '../types/ipc.generated';
 
@@ -159,6 +161,18 @@ export function useSpeleoActions(): SpeleoActions {
     },
     [humanizeError, showToast],
   );
+
+  /** The backend ended the edit session before an in-place reload because
+      SpeleoDB no longer records this account's lock (`editing_stopped`, farm
+      finding P2-take-remote-editable). The session is read-only from here, so the
+      tree replacement's status re-read has no edit session to call lost (whose
+      generic words would say the discarded changes are kept). */
+  const stopEditingBeforeReload = useCallback((stopped: EditingStopped | undefined): void => {
+    if (!stopped) return;
+    useSpeleoStore.setState((state) => (state.link?.editState === 'editing'
+      ? { link: { ...state.link, editState: 'read-only' } }
+      : {}));
+  }, []);
 
   /** After an in-place reload that should have kept or started an edit session
       (a Start Editing that downloaded a newer revision first, Take the SpeleoDB
@@ -324,10 +338,16 @@ export function useSpeleoActions(): SpeleoActions {
           break;
         case 'fast_forwarded':
           // The backend reopened the new tip in place, keeping whatever edit
-          // session there was. Reconcile the view through the shared seam (it
-          // stops when the project or login moved on), never `loadProject`: its
-          // `cancel_loading` would end that edit session (see startEditing).
-          await applySpeleoTreeReplacement(issuedFor, true);
+          // session there was - unless SpeleoDB no longer records this account's
+          // lock, which it says (`editing_stopped`). Reconcile the view through the
+          // shared seam (it stops when the project or login moved on), never
+          // `loadProject`: its `cancel_loading` would end that edit session (see
+          // startEditing).
+          stopEditingBeforeReload(result.editing_stopped);
+          if (!(await applySpeleoTreeReplacement(issuedFor, true))) break;
+          if (result.editing_stopped) {
+            showSpeleoReadOnlyNotice(editingStoppedMessage(result.editing_stopped), 'lockLost');
+          }
           break;
         case 'divergence_needed':
           break;
@@ -337,7 +357,7 @@ export function useSpeleoActions(): SpeleoActions {
     } finally {
       endBusy(busyToken);
     }
-  }, [applyUpdate, refreshLinkStatus, showToast, t, handleError, beginBusy, endBusy]);
+  }, [applyUpdate, refreshLinkStatus, showToast, t, handleError, beginBusy, endBusy, stopEditingBeforeReload]);
 
   const push = useCallback(
     async (
@@ -602,8 +622,12 @@ export function useSpeleoActions(): SpeleoActions {
       // of it may be editing under it), so an edit session carries over the
       // reload and a read-only one stays read-only; the link status re-read
       // below shows which. A read-only project never takes the lock by itself
-      // (data#3): it resumes with Resume editing.
-      await invokeIpc<string>('speleodb_take_remote');
+      // (data#3): it resumes with Resume editing. The edit session goes on only
+      // while SpeleoDB still records this account's lock: when it does not (the
+      // account's other session handed it back), the backend shuts the gate
+      // before the reload and says why (`editing_stopped`).
+      const took = await invokeIpc<TakeRemoteResult>('speleodb_take_remote');
+      stopEditingBeforeReload(took.editing_stopped);
       // Reconcile the view through the shared seam, never `loadProject`: that is
       // a project switch, and its `cancel_loading` moved the backend's session on,
       // which ended the edit session the reload had just carried (sdbdemo2 issue
@@ -612,9 +636,14 @@ export function useSpeleoActions(): SpeleoActions {
       // success toast, and the divergence dialog does not close over it.
       if (!(await applySpeleoTreeReplacement(issuedFor, true))) return false;
       showToast(t('speleodb.editBar.toasts.tookRemote'), TOAST_KEYS.SPELEODB_TOOK_REMOTE, 'success');
-      // The confirmation said editing goes on; when the status says it did not,
-      // the notice says so rather than a silent read-only badge.
-      if (wasEditing) editingAfterReload(issuedFor);
+      // The confirmation said editing goes on; when it did not, the notice says
+      // why (the lock SpeleoDB no longer records) or at least that it did not,
+      // rather than a silent read-only badge.
+      if (took.editing_stopped) {
+        showSpeleoReadOnlyNotice(editingStoppedMessage(took.editing_stopped), 'lockLost');
+      } else if (wasEditing) {
+        editingAfterReload(issuedFor);
+      }
       return true;
     } catch (e) {
       handleError(e, 'speleodb.editBar.toasts.takeRemoteFailed');
@@ -622,7 +651,7 @@ export function useSpeleoActions(): SpeleoActions {
     } finally {
       endBusy(busyToken);
     }
-  }, [showToast, t, handleError, beginBusy, endBusy, editingAfterReload]);
+  }, [showToast, t, handleError, beginBusy, endBusy, editingAfterReload, stopEditingBeforeReload]);
 
   return { busy, startEditing, discardChanges, update, push, done, takeRemote };
 }

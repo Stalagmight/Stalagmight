@@ -1,7 +1,7 @@
 import i18n from '../i18n';
 import { emailsMatch } from './email';
 import { permissionAtLeast } from './speleoPermission';
-import type { SpeleoLinkStatus } from '../types/ipc.generated';
+import type { EditingStopped, SpeleoLinkStatus } from '../types/ipc.generated';
 import type { SpeleoLinkState } from '../store/speleoStore';
 
 /**
@@ -37,6 +37,20 @@ export function speleoLockLostMessage(
     return i18n.t('speleodb.readOnlyNotice.lockLostTaken', { email: status.lock_holder });
   }
   return null;
+}
+
+/**
+ * What to tell a session whose in-place reload (Take the SpeleoDB version,
+ * Reload Project) came back read-only because SpeleoDB, asked right before it,
+ * no longer recorded this account's lock (`editing_stopped`; farm finding
+ * P2-take-remote-editable). Worded like "Editing stopped" after a status
+ * refresh, but about the SpeleoDB version now on screen, and never "your
+ * changes are kept": Take the SpeleoDB version has just discarded them.
+ */
+export function editingStoppedMessage(stopped: EditingStopped): string {
+  return stopped.kind === 'held_by'
+    ? i18n.t('speleodb.readOnlyNotice.reloadLockTaken', { email: stopped.email })
+    : i18n.t('speleodb.readOnlyNotice.reloadLockReleased');
 }
 
 /**

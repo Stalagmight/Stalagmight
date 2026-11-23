@@ -1079,7 +1079,7 @@ describe('useSpeleoActions - an in-place reload keeps the edit session (sdbdemo2
 
   it('Take remote while editing goes on editing the SpeleoDB version', async () => {
     const { loadProject, refreshLinkStatus } = backend(true);
-    invokeIpcMock.mockImplementation(async (cmd) => (cmd === 'speleodb_take_remote' ? '/remote.stalx' : null));
+    invokeIpcMock.mockImplementation(async (cmd) => (cmd === 'speleodb_take_remote' ? { local_path: '/remote.stalx' } : null));
     const { result } = renderHook(() => useSpeleoActions());
 
     let took: boolean | undefined;
@@ -1098,7 +1098,7 @@ describe('useSpeleoActions - an in-place reload keeps the edit session (sdbdemo2
 
   it('Take remote from a read-only project stays read-only, with no notice', async () => {
     backend(false);
-    invokeIpcMock.mockImplementation(async (cmd) => (cmd === 'speleodb_take_remote' ? '/remote.stalx' : null));
+    invokeIpcMock.mockImplementation(async (cmd) => (cmd === 'speleodb_take_remote' ? { local_path: '/remote.stalx' } : null));
     const { result } = renderHook(() => useSpeleoActions());
 
     await act(async () => {
@@ -1115,7 +1115,7 @@ describe('useSpeleoActions - an in-place reload keeps the edit session (sdbdemo2
     invokeIpcMock.mockImplementation(async (cmd) => {
       // The session ended meanwhile (a lost-lock signal): the reload carries nothing.
       model.bound = false;
-      return cmd === 'speleodb_take_remote' ? '/remote.stalx' : null;
+      return cmd === 'speleodb_take_remote' ? { local_path: '/remote.stalx' } : null;
     });
     const { result } = renderHook(() => useSpeleoActions());
 
@@ -1126,6 +1126,55 @@ describe('useSpeleoActions - an in-place reload keeps the edit session (sdbdemo2
     const notice = useSpeleoReadOnlyNotice.getState().notice;
     expect(notice?.kind).toBe('stillReadOnly');
     expect(notice?.message).toBe(i18n.t('speleodb.readOnlyNotice.reloadedNotEditing'));
+  });
+
+  // Farm finding P2-take-remote-editable: another session of the account handed
+  // the lock back on the server, and Take remote came back editable. The backend
+  // now reads the holder before the reload, shuts the gate and says why
+  // (`editing_stopped`); the notice words it as "Editing stopped", never the
+  // generic "editing did not start", and never "your changes are kept" (Take
+  // remote has just discarded them).
+  it.each([
+    [{ kind: 'released' }, 'speleodb.readOnlyNotice.reloadLockReleased', {}],
+    [{ kind: 'held_by', email: 'other@example.com' }, 'speleodb.readOnlyNotice.reloadLockTaken', { email: 'other@example.com' }],
+  ] as const)('Take remote whose lock SpeleoDB no longer records says editing stopped (%o)', async (stopped, key, values) => {
+    const { model } = backend(true);
+    invokeIpcMock.mockImplementation(async (cmd) => {
+      if (cmd !== 'speleodb_take_remote') return null;
+      model.bound = false;
+      return { local_path: '/remote.stalx', editing_stopped: stopped };
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.takeRemote();
+    });
+
+    const notice = useSpeleoReadOnlyNotice.getState().notice;
+    expect(notice?.kind).toBe('lockLost');
+    expect(notice?.message).toBe(i18n.t(key, values));
+    expect(notice?.message).not.toContain('kept on this computer');
+    expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+  });
+
+  it('Reload Project whose lock SpeleoDB no longer records says editing stopped', async () => {
+    const { model } = backend(true);
+    useSpeleoStore.setState((state) => ({ link: { ...state.link, hasUnpushedEdits: false } as never }));
+    invokeIpcMock.mockImplementation(async (cmd) => {
+      if (cmd === 'speleodb_project_access_at') return { release_context: {} };
+      if (cmd !== 'speleodb_update') return null;
+      model.bound = false;
+      return { kind: 'fast_forwarded', local_path: '/remote.stalx', editing_stopped: { kind: 'released' } };
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.update();
+    });
+
+    const notice = useSpeleoReadOnlyNotice.getState().notice;
+    expect(notice?.kind).toBe('lockLost');
+    expect(notice?.message).toBe(i18n.t('speleodb.readOnlyNotice.reloadLockReleased'));
   });
 
   it('one Resume editing click on a copy behind downloads, takes the lock and edits', async () => {
