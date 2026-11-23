@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
+import { trackDialogComplete } from '../../utils/telemetry';
 import type { StationRef } from '../../types/project';
 import { DialogWrapper } from './DialogWrapper';
 import { ShownIdentityPrompt } from './ShownIdentityPrompt';
@@ -42,7 +43,10 @@ export default function ShownIdentityEditDialog() {
     } finally {
       setBusy(false);
     }
-    if (useUIStore.getState().activeDialog === DIALOG_ID) closeDialog();
+    if (useUIStore.getState().activeDialog === DIALOG_ID) {
+      trackDialogComplete(DIALOG_ID);
+      closeDialog();
+    }
   };
 
   return (

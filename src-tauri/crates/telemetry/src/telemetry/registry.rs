@@ -301,6 +301,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.reverse-line",
     "action.dialog.line-adjust",
     "action.dialog.settings",
+    "action.dialog.shown-identity-edit",
     "action.dialog.open-from-speleodb",
     "action.dialog.speleodb-done",
     "action.dialog.speleodb-divergence",
@@ -378,6 +379,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.reverse-line",
     "dialog-cancel.line-adjust",
     "dialog-cancel.settings",
+    "dialog-cancel.shown-identity-edit",
     "dialog-cancel.open-from-speleodb",
     "dialog-cancel.speleodb-done",
     "dialog-cancel.speleodb-divergence",
@@ -491,6 +493,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.reverse-line",
     "dwell.dialog.line-adjust",
     "dwell.dialog.settings",
+    "dwell.dialog.shown-identity-edit",
     "dwell.dialog.open-from-speleodb",
     "dwell.dialog.speleodb-done",
     "dwell.dialog.speleodb-divergence",
@@ -656,6 +659,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.reverse-line",
     "active-dwell.dialog.line-adjust",
     "active-dwell.dialog.settings",
+    "active-dwell.dialog.shown-identity-edit",
     "active-dwell.dialog.open-from-speleodb",
     "active-dwell.dialog.speleodb-done",
     "active-dwell.dialog.speleodb-divergence",
@@ -1249,7 +1253,9 @@ mod tests {
         //   + 3 kept and archived stations (RS 7): command.preview_loop_closure,
         //       command.preview_remove_loop_closure,
         //       command.preview_station_identity = 756.
-        assert_eq!(EVENT_NAMES.len(), 756);
+        //   + 4 the data table's "whose station is this?" prompt (RS 5.4): the
+        //       full per-dialog set for shown-identity-edit = 760.
+        assert_eq!(EVENT_NAMES.len(), 760);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
