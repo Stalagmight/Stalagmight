@@ -21,7 +21,7 @@
 //! [`Project::normalise_closure_archives`] (C1 and C2, RS 5.4).
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::{LineId, StationId, StationRef};
 
@@ -29,10 +29,16 @@ use super::{ArchivedStation, ClosureId, LetteredStation, LoopClosure, Project, S
 
 /// Which node's identity each closure-archived node shows (RS 5.1), built
 /// once from the closure list: the first closure in list order archiving a
-/// node counts (invariant C1 allows only one).
+/// node counts (invariant C1 allows only one). Every archived node's
+/// resolution is worked out as the index is built, each chain once, so a
+/// lookup never walks a chain: a crafted file chaining 50,000 archives
+/// costs its slots, not its slots times the chain.
 #[derive(Debug, Clone, Default)]
 pub struct ShownIndex {
     kept_of: BTreeMap<StationId, StationId>,
+    /// Per archived node, the node whose identity it shows; `None` when its
+    /// chain cycles (invariant C2 broken).
+    resolved: BTreeMap<StationId, Option<StationId>>,
 }
 
 impl ShownIndex {
@@ -44,7 +50,8 @@ impl ShownIndex {
                 kept_of.entry(archived).or_insert(kept);
             }
         }
-        Self { kept_of }
+        let resolved = resolve_chains(&kept_of);
+        Self { kept_of, resolved }
     }
 
     /// Whether no closure archives anything.
@@ -65,14 +72,10 @@ impl ShownIndex {
     /// The node whose identity `node` shows, following kept ends; `None`
     /// when the chain cycles (invariant C2 broken).
     pub fn resolve(&self, node: StationId) -> Option<StationId> {
-        let mut current = node;
-        for _ in 0..=self.kept_of.len() {
-            match self.kept_of.get(&current) {
-                None => return Some(current),
-                Some(&next) => current = next,
-            }
+        match self.resolved.get(&node) {
+            Some(&shown) => shown,
+            None => Some(node),
         }
-        None
     }
 
     /// [`Self::resolve`], or `node` itself on a cycle (total, for display).
@@ -84,6 +87,75 @@ impl ShownIndex {
     pub fn archived_nodes(&self) -> impl Iterator<Item = StationId> + '_ {
         self.kept_of.keys().copied()
     }
+}
+
+/// Where each node of `kept_of` ends up following kept ends: the first node
+/// that is not archived, or `None` on a chain that cycles. Each node is
+/// walked once: a walk stops at a node already resolved, and every node it
+/// passed takes that node's answer.
+fn resolve_chains(
+    kept_of: &BTreeMap<StationId, StationId>,
+) -> BTreeMap<StationId, Option<StationId>> {
+    let mut resolved: BTreeMap<StationId, Option<StationId>> = BTreeMap::new();
+    let mut path: Vec<StationId> = Vec::new();
+    let mut on_path: HashSet<StationId> = HashSet::new();
+    for &start in kept_of.keys() {
+        if resolved.contains_key(&start) {
+            continue;
+        }
+        path.clear();
+        on_path.clear();
+        let mut current = start;
+        let answer = loop {
+            if let Some(&known) = resolved.get(&current) {
+                break known;
+            }
+            let Some(&next) = kept_of.get(&current) else {
+                break Some(current);
+            };
+            if !on_path.insert(current) {
+                break None;
+            }
+            path.push(current);
+            current = next;
+        };
+        for &node in &path {
+            resolved.insert(node, answer);
+        }
+    }
+    resolved
+}
+
+/// The nodes of `kept_of` that lie on a cycle of kept ends (invariant C2
+/// broken), each found by one walk: a walk stops at a node an earlier walk
+/// passed, and a node met twice in one walk closes a cycle.
+pub(super) fn archive_cycle_nodes(kept_of: &BTreeMap<StationId, StationId>) -> HashSet<StationId> {
+    let mut walked: HashSet<StationId> = HashSet::new();
+    let mut on_cycle: HashSet<StationId> = HashSet::new();
+    let mut path: Vec<StationId> = Vec::new();
+    for &start in kept_of.keys() {
+        if walked.contains(&start) {
+            continue;
+        }
+        path.clear();
+        let mut current = start;
+        loop {
+            if !walked.insert(current) {
+                // Met again in this walk: the path from its first visit is a
+                // cycle. Met from an earlier walk: nothing new.
+                if let Some(first) = path.iter().position(|&n| n == current) {
+                    on_cycle.extend(path[first..].iter().copied());
+                }
+                break;
+            }
+            path.push(current);
+            match kept_of.get(&current) {
+                Some(&next) => current = next,
+                None => break,
+            }
+        }
+    }
+    on_cycle
 }
 
 /// A node an epilogue gave back an archived identity (RS 4.3).
@@ -280,15 +352,6 @@ impl Project {
 
     // ----- rule K -----------------------------------------------------------
 
-    /// The longest measured length among `lines`, `None` when there are
-    /// none.
-    fn longest_of(&self, lines: &[LineId]) -> Option<f64> {
-        lines
-            .iter()
-            .filter_map(|&l| self.line(l).map(super::Line::measured_length))
-            .max_by(f64::total_cmp)
-    }
-
     /// Rule K (RS 2) over per-line candidates `(id, own lines)`: the one with
     /// the longest line, ties to the lowest id; a candidate with no line
     /// loses. `None` when there is no candidate.
@@ -296,27 +359,31 @@ impl Project {
         &self,
         candidates: impl IntoIterator<Item = (StationId, Vec<LineId>)>,
     ) -> Option<StationId> {
-        let mut best: Option<(Option<f64>, StationId)> = None;
-        for (id, lines) in candidates {
-            let length = self.longest_of(&lines);
-            let better = match &best {
-                None => true,
-                Some((best_length, best_id)) => match (length, best_length) {
-                    (Some(_), None) => true,
-                    (None, Some(_)) => false,
-                    (None, None) => id < *best_id,
-                    (Some(x), Some(y)) => match x.total_cmp(y) {
-                        Ordering::Greater => true,
-                        Ordering::Less => false,
-                        Ordering::Equal => id < *best_id,
-                    },
-                },
-            };
-            if better {
-                best = Some((length, id));
-            }
+        rule_k_by(candidates, |line| {
+            self.line(line).map(super::Line::measured_length)
+        })
+    }
+
+    /// Every line's measured length (rule K's measure), for a pass that
+    /// applies rule K many times: measuring a line per candidate would cost
+    /// its shots each time.
+    pub fn measured_lengths(&self) -> MeasuredLengths {
+        let mut lengths = HashMap::with_capacity(self.lines.len());
+        for line in &self.lines {
+            lengths
+                .entry(line.id)
+                .or_insert_with(|| line.measured_length());
         }
-        best.map(|(_, id)| id)
+        MeasuredLengths(lengths)
+    }
+
+    /// [`Self::rule_k`] measured by `lengths` (this project's
+    /// [`Self::measured_lengths`]).
+    pub fn rule_k_measured(
+        lengths: &MeasuredLengths,
+        candidates: impl IntoIterator<Item = (StationId, Vec<LineId>)>,
+    ) -> Option<StationId> {
+        rule_k_by(candidates, |line| lengths.0.get(&line).copied())
     }
 
     /// Rule K over node candidates (the merge and closure dialogs): each is
@@ -328,7 +395,44 @@ impl Project {
                 .map(|&node| (node, self.lines_shown_on(self.shown(node)))),
         )
     }
+}
 
+/// Every line's measured length ([`Project::measured_lengths`]).
+#[derive(Debug, Clone, Default)]
+pub struct MeasuredLengths(HashMap<LineId, f64>);
+
+/// Rule K with `length` measuring each line (`None`: no such line).
+fn rule_k_by(
+    candidates: impl IntoIterator<Item = (StationId, Vec<LineId>)>,
+    length: impl Fn(LineId) -> Option<f64>,
+) -> Option<StationId> {
+    let mut best: Option<(Option<f64>, StationId)> = None;
+    for (id, lines) in candidates {
+        let length = lines
+            .iter()
+            .filter_map(|&line| length(line))
+            .max_by(f64::total_cmp);
+        let better = match &best {
+            None => true,
+            Some((best_length, best_id)) => match (length, best_length) {
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                (None, None) => id < *best_id,
+                (Some(x), Some(y)) => match x.total_cmp(y) {
+                    Ordering::Greater => true,
+                    Ordering::Less => false,
+                    Ordering::Equal => id < *best_id,
+                },
+            },
+        };
+        if better {
+            best = Some((length, id));
+        }
+    }
+    best.map(|(_, id)| id)
+}
+
+impl Project {
     // ----- re-identification -------------------------------------------------
 
     /// Give node `old` the id `new` everywhere: its key in `stations` and its
@@ -377,6 +481,62 @@ impl Project {
             if placement.station == old {
                 placement.station = new;
             }
+        }
+    }
+
+    /// [`Self::rekey_node`] for every `(old, new)` pair at once, in one walk
+    /// of the lines, datums, closures and placements: an upgrade that re-keys
+    /// thousands of junctions must not rebuild the topology and walk every
+    /// datum, closure and placement per junction. Each `new` must be free and
+    /// no `new` another pair's `old`.
+    pub fn rekey_nodes(&mut self, pairs: &[(StationId, StationId)]) {
+        let map: HashMap<StationId, StationId> = pairs
+            .iter()
+            .copied()
+            .filter(|(old, new)| old != new)
+            .collect();
+        if map.is_empty() {
+            return;
+        }
+        let rekey = |id: &mut StationId| {
+            if let Some(&new) = map.get(id) {
+                *id = new;
+            }
+        };
+        let moved: Vec<Station> = map
+            .keys()
+            .filter_map(|old| self.stations.remove(old))
+            .collect();
+        for mut station in moved {
+            rekey(&mut station.id);
+            self.stations.insert(station.id, station);
+        }
+        self.drop_caches();
+        for line in &mut self.lines {
+            rekey(&mut line.start);
+            for shot in &mut line.shots {
+                rekey(&mut shot.to);
+            }
+            if line.hand_moves.keys().any(|id| map.contains_key(id)) {
+                let hands = std::mem::take(&mut line.hand_moves);
+                line.hand_moves = hands
+                    .into_iter()
+                    .map(|(mut id, hand)| {
+                        rekey(&mut id);
+                        (id, hand)
+                    })
+                    .collect();
+            }
+        }
+        for datum in &mut self.datums {
+            rekey(&mut datum.station);
+        }
+        for closure in &mut self.closures {
+            rekey(&mut closure.a);
+            rekey(&mut closure.b);
+        }
+        for placement in &mut self.placements {
+            rekey(&mut placement.station);
         }
     }
 
@@ -464,39 +624,43 @@ impl Project {
         if self.closures.iter().all(|c| c.archived.is_none()) {
             return Vec::new();
         }
-        let mut kept_of: BTreeMap<StationId, StationId> = BTreeMap::new();
+        // The archives kept so far form trees whose roots are not archived:
+        // `up` points each archived node at a node of its chain (shortened
+        // as it is followed). An archived end is a root (C1 refuses one
+        // that is not), so following the kept end reaches it exactly when
+        // it is the root of the kept end's tree (C2), and each test costs
+        // about a lookup, not a walk of the chain.
+        let mut up: HashMap<StationId, StationId> = HashMap::new();
         let mut dropped = Vec::new();
         for closure in &mut self.closures {
             let Some((archived, kept)) = closure.archive() else {
                 continue;
             };
-            if kept_of.contains_key(&archived) || reaches(&kept_of, kept, archived) {
+            if up.contains_key(&archived) || chain_root(&mut up, kept) == archived {
                 closure.archived = None;
                 dropped.push(closure.id);
             } else {
-                kept_of.insert(archived, kept);
+                up.insert(archived, kept);
             }
         }
         dropped
     }
 }
 
-/// Whether following `kept_of` from `from` reaches `target` (bounded by the
-/// map's size, so it ends on a cycle that does not hold `target`).
-pub(super) fn reaches(
-    kept_of: &BTreeMap<StationId, StationId>,
-    from: StationId,
-    target: StationId,
-) -> bool {
-    let mut current = from;
-    for _ in 0..=kept_of.len() {
-        if current == target {
-            return true;
-        }
-        match kept_of.get(&current) {
-            Some(&next) => current = next,
-            None => return false,
-        }
+/// The root of `node`'s tree in `up` (the first node with no entry), every
+/// node passed pointed at it. `up` holds no cycle.
+fn chain_root(up: &mut HashMap<StationId, StationId>, node: StationId) -> StationId {
+    let mut root = node;
+    while let Some(&next) = up.get(&root) {
+        root = next;
     }
-    false
+    let mut current = node;
+    while current != root {
+        let Some(&next) = up.get(&current) else {
+            break;
+        };
+        up.insert(current, root);
+        current = next;
+    }
+    root
 }

@@ -198,6 +198,11 @@ impl Before {
 /// identity becomes a record naming the old native lines, with its external
 /// id; the comments follow `comments`. Returns the `(old, new)` ids of the
 /// re-keyed junctions, in old-id order.
+///
+/// Linear in the survey: lines are measured once and every junction is
+/// re-keyed in one walk ([`Project::rekey_nodes`]), as each junction's
+/// choice reads only its own lines and records, which no other junction's
+/// re-key changes.
 pub(crate) fn keep_longest(
     project: &mut Project,
     comments: Comments,
@@ -208,6 +213,7 @@ pub(crate) fn keep_longest(
         .filter(|(_, s)| s.archived.iter().any(|r| !r.is_history()))
         .map(|(&id, _)| id)
         .collect();
+    let lengths = project.measured_lengths();
     let mut swapped = Vec::new();
     for node in junctions {
         let native = project.native_lines(node);
@@ -223,7 +229,7 @@ pub(crate) fn keep_longest(
                     .map(|r| (r.id, r.lines.clone())),
             )
             .collect();
-        let Some(winner) = project.rule_k(candidates) else {
+        let Some(winner) = Project::rule_k_measured(&lengths, candidates) else {
             continue;
         };
         if winner == node {
@@ -247,9 +253,9 @@ pub(crate) fn keep_longest(
             (_, own) => station.comment = own,
         }
         station.archived.push(old);
-        project.rekey_node(node, winner);
         swapped.push((node, winner));
     }
+    project.rekey_nodes(&swapped);
     swapped
 }
 
@@ -299,6 +305,7 @@ pub(crate) fn settle(project: &mut Project, before: &Before) -> Settled {
 /// candidates, RS 2) is local.
 pub(crate) fn archive_closures(project: &mut Project) -> (usize, Vec<ClosureId>) {
     let topology = project.topology_arc();
+    let lengths = project.measured_lengths();
     let picks: Vec<Option<ClosureEnd>> = project
         .closures
         .iter()
@@ -306,8 +313,10 @@ pub(crate) fn archive_closures(project: &mut Project) -> (usize, Vec<ClosureId>)
             if c.archived.is_some() || c.a == c.b {
                 return c.archived;
             }
-            let kept =
-                project.rule_k([(c.a, topology.lines_of(c.a)), (c.b, topology.lines_of(c.b))])?;
+            let kept = Project::rule_k_measured(
+                &lengths,
+                [(c.a, topology.lines_of(c.a)), (c.b, topology.lines_of(c.b))],
+            )?;
             Some(if kept == c.a {
                 ClosureEnd::B
             } else {
@@ -323,7 +332,8 @@ pub(crate) fn archive_closures(project: &mut Project) -> (usize, Vec<ClosureId>)
         closure.archived = pick;
     }
     let refused = project.normalise_closure_archives();
-    let archived = given.iter().filter(|id| !refused.contains(id)).count();
+    let refused_set: BTreeSet<ClosureId> = refused.iter().copied().collect();
+    let archived = given.iter().filter(|id| !refused_set.contains(id)).count();
     (archived, refused)
 }
 
@@ -352,6 +362,7 @@ fn slot_changes(
     let mut names = Vec::new();
     let mut comments = Vec::new();
     let mut order: Vec<String> = Vec::new();
+    let mut ordered: BTreeSet<String> = BTreeSet::new();
     for (position, line) in project.lines().iter().enumerate() {
         let chain = topology.chain_at(position).unwrap_or(&[]);
         for (i, &node) in chain.iter().enumerate() {
@@ -386,7 +397,7 @@ fn slot_changes(
             }
             if name_changed || comment_hidden {
                 let here = label(line.id);
-                if !order.contains(&here) {
+                if ordered.insert(here.clone()) {
                     order.push(here);
                 }
             }
@@ -397,6 +408,7 @@ fn slot_changes(
 
 /// The closures `ids` as the notice names them, ends by their shown names.
 fn closures_keep_both(project: &Project, ids: &[ClosureId]) -> Vec<ClosureKeepsBoth> {
+    let ids: BTreeSet<ClosureId> = ids.iter().copied().collect();
     project
         .closures
         .iter()

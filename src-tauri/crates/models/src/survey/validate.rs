@@ -974,8 +974,8 @@ impl Project {
             }
         }
         // C1: one archiving closure per station; C2: no cycle of archives
-        // (each check bounded, so a crafted file reports instead of
-        // hanging).
+        // (the cycles found by one walk of the archives, so a crafted file
+        // reports instead of hanging, in time linear in its closures).
         let mut kept_of: BTreeMap<StationId, StationId> = BTreeMap::new();
         let mut archived_by: BTreeMap<StationId, ClosureId> = BTreeMap::new();
         for c in &self.closures {
@@ -993,13 +993,12 @@ impl Project {
                 kept_of.insert(archived, kept);
             }
         }
+        let on_cycle = super::archive::archive_cycle_nodes(&kept_of);
         for c in &self.closures {
-            let Some((archived, kept)) = c.archive() else {
+            let Some((archived, _)) = c.archive() else {
                 continue;
             };
-            if archived_by.get(&archived) == Some(&c.id)
-                && super::archive::reaches(&kept_of, kept, archived)
-            {
+            if archived_by.get(&archived) == Some(&c.id) && on_cycle.contains(&archived) {
                 out.push(Violation::ClosureArchiveCycle {
                     closure: c.id,
                     station: archived,
