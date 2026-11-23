@@ -116,9 +116,9 @@ impl GasReach {
             let rep = representative(&node_route, run, last_run);
             route.push(rep);
             route_ends.push([node_route[run.0], node_route[run.1]]);
-            // The line naming the entry: a leg that touches its station (the
-            // arriving one at the run's first node, the departing one at its
-            // last), else what the node route said for that node.
+            // The line naming the entry: the node route's line for the node
+            // the entry names (its arriving swum leg's, else its departing
+            // one's, else its lowest line id).
             let at = if last_run { run.1 } else { run.0 };
             route_lines.push(self.route_lines.get(at).copied().flatten());
         }
