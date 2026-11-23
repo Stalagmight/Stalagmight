@@ -20,7 +20,7 @@
 //! Fully synthetic data.
 
 use crate::config::{GasConfig, ReservePreset};
-use crate::gas::{CylRole, Cylinder, Diver, GasReachField, TankMaterial};
+use crate::gas::{CylRole, Cylinder, Diver, TankMaterial};
 use crate::{LineId, StationId, StationRef};
 
 use super::super::ops_test_helpers::{assert_valid, branch, free_line, ok, run};
@@ -185,7 +185,7 @@ fn a_way_point_on_a_loop_end_indexes_the_collapsed_route() {
 fn the_wire_route_has_no_tie_leg_at_a_loop_end() {
     let (p, a, b) = loop_survey(true);
     let (a3, b2) = (at(&p, a, 3), at(&p, b, 2));
-    let field: GasReachField = plan(&p, a3, b2, &[]).to_wire(&p, &[]);
+    let field = plan(&p, a3, b2, &[]).to_wire(&p, &[]);
     let legs: Vec<(StationRef, StationRef)> = field.route.iter().map(|l| (l.from, l.to)).collect();
     assert_eq!(
         legs,
