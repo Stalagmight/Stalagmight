@@ -12,6 +12,7 @@ import {
   asPushKind,
   asDoneKind,
   isUnwoundNotEdited,
+  markOwnReleaseEnded,
   speleoProjectSessionIssuedFor,
   speleoProjectSessionStillCurrent,
 } from '../store/speleoStore';
@@ -20,6 +21,7 @@ import { openExitPrompt, type PendingExit } from '../utils/quit';
 import { speleoErrorAction, humanizeSpeleoError } from '../utils/speleoError';
 import { replacedRevisionsOf } from '../utils/speleoReplacedRevisions';
 import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
+import { ownSpeleoRelease } from '../utils/speleoLockLost';
 import { confirmSpeleoReloadDiscard } from '../utils/speleoReloadConfirm';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import type {
@@ -256,10 +258,15 @@ export function useSpeleoActions(): SpeleoActions {
       );
       const busyToken = beginBusy();
       try {
-        const result = await invokeIpc<StartEditingResult | null>('speleodb_discard_changes', {
+        const result = await ownSpeleoRelease(() => invokeIpc<StartEditingResult | null>('speleodb_discard_changes', {
           keepLock,
           acknowledged: true,
-        });
+        }));
+        // `null`: the backend handed the lock back after the discard. The edit
+        // session is over by this session's hand, so the status the tree
+        // replacement re-reads below (no holder) is not "Editing stopped"
+        // (pre-PR review of the X3 round, must-fix 1).
+        if (result === null && speleoProjectSessionStillCurrent(issuedFor)) markOwnReleaseEnded();
         const routed = result
           ? await routeStartEditingResult(result, false, issuedFor)
           : null;
@@ -492,10 +499,10 @@ export function useSpeleoActions(): SpeleoActions {
       // it BEFORE the call.
       const hadUnpushedEdits = useSpeleoStore.getState().link?.hasUnpushedEdits ?? false;
       try {
-        const result = await invokeIpc<DoneResult>('speleodb_done', {
+        const result = await ownSpeleoRelease(() => invokeIpc<DoneResult>('speleodb_done', {
           message: message ?? null,
           acceptOlderVersion: opts?.acceptOlderVersion ?? false,
-        });
+        }));
         if (!current()) return null;
         if (result.kind === 'released' && useProjectStore.getState().projectTreeGeneration !== treeGeneration) {
           // The release happened, but newer frontend work is not covered by that

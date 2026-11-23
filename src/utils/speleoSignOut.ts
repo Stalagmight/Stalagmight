@@ -44,11 +44,12 @@
  */
 import { create } from 'zustand';
 import { useProjectStore } from '../store/projectStore';
-import { useSpeleoStore } from '../store/speleoStore';
+import { markOwnReleaseEnded, useSpeleoStore } from '../store/speleoStore';
 import type { SpeleoProjectSummary } from '../types/ipc.generated';
 import { emailsMatch } from './email';
 import { invokeIpc } from './ipc';
 import { describeSpeleoError } from './speleoError';
+import { ownSpeleoRelease } from './speleoLockLost';
 import { needsSpeleoExitPrompt } from './speleoExit';
 import { fetchSpeleoLocalStates, lockNotTakenHere } from './speleoLocalState';
 
@@ -159,12 +160,14 @@ export async function releaseSignOutLocks(projects: SignOutProject[]): Promise<S
   const failed: SignOutProject[] = [];
   for (const project of projects) {
     try {
-      await bounded(
+      await ownSpeleoRelease(() => bounded(
         invokeIpc('speleodb_release_lock', { projectId: project.summary.id }, {
           purpose: 'hand a lock back before signing out',
         }),
         'Handing the project back',
-      );
+      ));
+      // The open project's lock, handed back here: no "Editing stopped" for it.
+      if (project.summary.id === useSpeleoStore.getState().remoteProjectId) markOwnReleaseEnded();
     } catch {
       failed.push(project);
     }

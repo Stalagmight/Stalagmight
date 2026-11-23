@@ -38,3 +38,38 @@ export function speleoLockLostMessage(
   }
   return null;
 }
+
+/**
+ * Releases this session starts itself (Discard and hand back the lock, Done,
+ * Switch to Read Only, the held-lock prompt's and the sign-out's per-project
+ * releases, the revert's unwind, a close or a switch settling the lock). A status
+ * refresh that overlaps one reads "no lock for this account" because this session
+ * just gave it back, which is no loss: it must not raise "Editing stopped"
+ * (pre-PR review of the X3 round, must-fix 1). The callers also mark the session
+ * read-only once their own release has landed, so a refresh issued after it never
+ * sees an edit session to lose.
+ */
+let ownReleaseEpoch = 0;
+let ownReleasesInFlight = 0;
+
+/** Run `work`, a release this session starts, under the marker. */
+export async function ownSpeleoRelease<T>(work: () => Promise<T>): Promise<T> {
+  ownReleaseEpoch += 1;
+  ownReleasesInFlight += 1;
+  try {
+    return await work();
+  } finally {
+    ownReleasesInFlight -= 1;
+    ownReleaseEpoch += 1;
+  }
+}
+
+/** Taken when a status refresh is issued, for {@link ownReleaseSince}. */
+export function ownReleaseMark(): number {
+  return ownReleaseEpoch;
+}
+
+/** Whether a release of this session's own ran, or is running, since `mark`. */
+export function ownReleaseSince(mark: number): boolean {
+  return ownReleasesInFlight > 0 || ownReleaseEpoch !== mark;
+}
