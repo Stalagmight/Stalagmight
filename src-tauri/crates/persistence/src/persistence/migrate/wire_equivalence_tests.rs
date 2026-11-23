@@ -497,15 +497,20 @@ impl<'a> Case<'a> {
             return;
         }
         let junction = self.junction(slot);
-        // A junction's name is per line (I-3): every slot, a junction's
-        // included, shows the name 0.6.0 showed there, so a different name is
-        // explained only by a letter the migration gave a repeat.
+        // RS 8.3: a junction shows its kept station's name on every line, so
+        // a junction slot's name may differ from the one 0.6.0 showed there;
+        // any other different name is explained only by a letter the
+        // migration gave a repeat. RS-F: the Z3 oracle under rule K and
+        // rule L (only a name the conversion notice lists).
         for (key, class) in [
             (
                 "id",
                 Some("identity: a junction shares the survivor's Station ID"),
             ),
-            ("name", None),
+            (
+                "name",
+                Some("identity: a junction shows its kept station's name on every line"),
+            ),
             (
                 "comment",
                 Some("identity: a junction shares one (joined) comment"),

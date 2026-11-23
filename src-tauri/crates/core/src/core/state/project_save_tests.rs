@@ -857,8 +857,9 @@ fn a_converted_legacy_file_round_trips_as_a_fixpoint() {
 /// its stored offset drifted 5 m, and a merge row that resolves nothing makes
 /// A the cascade's seed) converts with C's two stations moved onto B: the
 /// open offers the conversion notice once. The same survey clean moves
-/// nothing, and C still shows its start by its own name (I-3: each line keeps
-/// the names it showed), so it raises no notice.
+/// nothing, but C shows its start by the kept junction's name and its own 1
+/// takes the letter (RS 8.3), so the notice lists those names. RS-F: the
+/// 8.3 notice (rule K, hidden comments, grouped by line).
 #[test]
 fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
     crate::app_dirs::init_for_test();
@@ -887,18 +888,15 @@ fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
     let path = dir.path().join("clean.stalx");
     write_legacy_drift(&path, false);
     let state = open(&path);
-    assert_eq!(
-        state.take_conversion_notice(),
-        None,
-        "nothing a line shows changed"
-    );
+    let notice = state.take_conversion_notice().expect("the names C shows");
+    assert_eq!(notice.changes, ["Line 3 / 0 is now shown as 1", "Line 3 / 1 is now shown as 1a"], "{notice:?}");
     let project = state.get_project_state().unwrap();
     let c = project.lines()[2].id;
     let start = project.line(c).unwrap().start;
     assert_eq!(
         project.shown_name(start),
-        Some("0"),
-        "C's start keeps its name"
+        Some("1"),
+        "C shows the kept junction's name"
     );
 }
 
@@ -996,9 +994,14 @@ fn a_conversion_that_joined_comments_says_so() {
     let opened = state.execute(Command::OpenProject { path });
     assert!(opened.success, "{:?}", opened.error);
     let notice = state.take_conversion_notice().expect("a notice");
+    // RS-F: comments are not joined under 8.3 (each member keeps its own).
     assert_eq!(
         notice.changes,
-        ["a merged station's two comments were joined"],
+        [
+            "Line 2 / 0 is now shown as 1",
+            "Line 2 / 1 is now shown as 1a",
+            "a merged station's two comments were joined"
+        ],
         "{notice:?}"
     );
     assert!(notice.details.is_empty(), "{notice:?}");

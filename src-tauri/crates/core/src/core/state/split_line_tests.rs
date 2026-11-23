@@ -1255,10 +1255,10 @@ fn a_split_at_a_loaded_station_undoes_and_redoes_exactly() {
     }
 }
 
-/// The label names the cut station as the line shows it (I-3): Side's
-/// station 1 survived a merge with Main's station 2, so Main knows the
-/// junction by an alias ("2") and the label says 2, not the junction's own
-/// name. Injection: naming it by the station's own name fails it with "at 1".
+/// The label names the cut station as the line shows it (RS 4.1): Side's
+/// station 1 is kept by a merge with Main's station 2, so Main shows the
+/// junction as "1" (its own station 1 took the letter) and the label says 1.
+/// Injection: naming it by Main's archived record fails it with "at 2".
 #[test]
 fn the_label_names_the_cut_station_as_the_line_shows_it() {
     let (mut p, main) = main_survey();
@@ -1271,13 +1271,13 @@ fn the_label_names_the_cut_station_as_the_line_shows_it() {
     let j = st(&p, side, 1);
     p.merge_keeping_stationary(st(&p, main, 2), j).unwrap();
     assert_eq!(st(&p, main, 2), j, "Side's station survives the merge");
-    assert_eq!(p.shown_name(j), Some("2"));
     assert_eq!(p.shown_name(j), Some("1"));
+    assert_eq!(p.record_naming(j, main).map(|r| r.name.as_str()), Some("2"));
     let opened = open(&p);
     let state = &opened.state;
     let result = state.execute_split_line(main, SplitAt::Station { station_index: 2 }, options());
     assert!(result.success, "{:?}", result.error);
-    assert_eq!(history(state)[0].1, "Split line \"Main\" at 2");
+    assert_eq!(history(state)[0].1, "Split line \"Main\" at 1");
 }
 
 /// The label is worded at record time: the line by the name it had before

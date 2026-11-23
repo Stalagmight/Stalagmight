@@ -46,12 +46,13 @@ fn csv_rows_name_a_junction_once_on_every_line() {
     assert_eq!(rows.len(), 1 + shots);
 }
 
-/// A line merged onto another line's station keeps its own name for it (I-3):
-/// its rows print that name, the other line's rows the station's own, and both
-/// the junction's one Station ID. Injection: print `station.name` on every
-/// line and Side's first row reads `Main`'s "2", next to its own "2".
+/// A line merged onto another line's station shows the kept station (RS 4.1):
+/// both lines' rows print the kept name and the junction's one Station ID
+/// (Side's own station 2 took the letter). Injection: print a line's archived
+/// record name and Side's first row reads "0". RS-X: the exporters' shown
+/// ids for closure-archived ends (RS 9).
 #[test]
-fn csv_rows_name_a_junction_by_each_lines_own_name() {
+fn csv_rows_name_a_junction_by_its_kept_name() {
     use super::super::test_helpers::Survey;
     let mut s = Survey::new("Merged");
     let main = s.named(
@@ -80,14 +81,14 @@ fn csv_rows_name_a_junction_by_each_lines_own_name() {
         rows[2]
     );
     assert!(
-        rows[3].starts_with(&format!("Side,0,1,{junction},{side1},")),
+        rows[3].starts_with(&format!("Side,2,1,{junction},{side1},")),
         "{}",
         rows[3]
     );
     let json =
         serde_json::to_value(json_export(&project, Utc.timestamp_opt(0, 0).unwrap())).unwrap();
     let side_shots = &json["lines"][1]["shots"];
-    assert_eq!(side_shots[0]["from"], "0", "{side_shots}");
+    assert_eq!(side_shots[0]["from"], "2", "{side_shots}");
     assert_eq!(side_shots[0]["from_id"], junction, "{side_shots}");
 }
 

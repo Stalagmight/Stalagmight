@@ -856,11 +856,10 @@ fn a_combine_removes_the_merge_it_would_tear_across_one_shot() {
     assert!(!combined.topology().is_junction(x1), "O left X's end");
 }
 
-/// The same shape with O merged onto X's end instead of started there: O
-/// knows the junction by an alias ("0", its own start before the merge), so
-/// the warning names O's slot by O's name, as the Combine dialog lists it
-/// (I-3), not by the junction's own name. Injection: naming the slot by the
-/// station's own name (`station.name`) fails it with "O / <X's name>".
+/// The same shape with O merged onto X's end instead of started there: X's
+/// end is kept, so O shows it by X's name too (RS 4.1) and the warning names
+/// both slots by the kept name, as the Combine dialog lists them. Injection:
+/// naming O's slot by the archived record's name fails it with "O / 0".
 #[test]
 fn a_removed_merge_names_each_slot_as_its_line_shows_it() {
     let mut p = empty("Passage");
@@ -871,8 +870,8 @@ fn a_removed_merge_names_each_slot_as_its_line_shows_it() {
     let o = line_at(&mut p, "O", [30.0, 30.0], vec![shot(90.0, 5.0)]);
     p.merge_keeping_stationary(st(&p, o, 0), x1).unwrap();
     assert_eq!(st(&p, o, 0), x1, "X's end survives the merge");
-    assert_eq!(p.shown_name(x1), Some("0"), "O knows it by its own start");
     let own = p.stations.get(&x1).unwrap().name.clone();
+    assert_eq!(p.shown_name(x1), Some(own.as_str()), "O shows the kept name");
     assert_ne!(own, "0", "the junction's own name is X's");
     p.push_closure(
         k1,
@@ -894,7 +893,7 @@ fn a_removed_merge_names_each_slot_as_its_line_shows_it() {
     assert_eq!(
         warnings,
         vec![format!(
-            "Removed the merge of O / 0 and X / {own}: combining the lines left its two \
+            "Removed the merge of O / {own} and X / {own}: combining the lines left its two \
              stations at the two ends of one shot."
         )]
     );
@@ -935,12 +934,11 @@ fn a_combine_removes_a_closure_its_join_puts_across_one_shot() {
         (o, LineEnd::Start),
         &[(slot(k, 1), slot(o, 0), CombineRemovedKind::LoopClosure)],
     );
-    // By the names before the combine: K is "Joined" now, O is gone. O's
-    // start keeps its "0": the junction on K's start is named "0" on both
-    // lines, and O knows it by its alias (O's own "3"), so the merge
-    // lettered nothing (review findings D-migration-upgrade-8 and UX-3).
+    // By the names before the combine: K is "Joined" now, O is gone. The
+    // junction on K's start is kept, so O shows it as "0" too, and O's own
+    // start took the letter (rule L, RS 2).
     let o0 = p.stations.get(&st(&p, o, 0)).unwrap().name.clone();
-    assert_eq!(o0, "0");
+    assert_eq!(o0, "0a");
     assert_eq!(
         warnings,
         vec![format!(

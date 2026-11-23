@@ -650,8 +650,24 @@ pub(super) fn check(legacy: &LegacySurvey, migrated: &Migrated) -> Result<(), St
     let at = |sr: StationRef| station_of.get(&(sr.line_id, sr.station_index)).copied();
 
     // Every line shows each of its stations by the name 0.6.0 showed there
-    // (its stored name, else its index; a merged member's line by the
-    // member's name, I-3): the frozen reader made names unique per line.
+    // (its stored name, else its index), or the change is declared in the
+    // conversion notice's list (RS 8.3: a junction shows its kept station on
+    // every line, and a repeat takes a letter). RS-F: the 8.3 oracle (rule K,
+    // rule L never lettering an identity shown on two or more lines, hidden
+    // comments).
+    let declared: BTreeSet<(String, String, String)> = migrated
+        .extras
+        .names_changed
+        .iter()
+        .map(|c| (c.line.clone(), c.from.clone(), c.to.clone()))
+        .collect();
+    if r.names_changed != migrated.extras.names_changed.len() {
+        return Err(format!(
+            "names changed: {} reported, {} listed",
+            r.names_changed,
+            migrated.extras.names_changed.len()
+        ));
+    }
     for line in &lp.lines {
         for index in 0..=line.shots.len() {
             let sr = StationRef::new(line.id, index as u32);
@@ -662,19 +678,14 @@ pub(super) fn check(legacy: &LegacySurvey, migrated: &Migrated) -> Result<(), St
                 .station_name_at(sr)
                 .map_or_else(|| index.to_string(), str::to_string);
             let now = p.shown_name(station).unwrap_or_default();
-            if now != was {
+            let label = p.line_label_of(line.id);
+            if now != was && !declared.contains(&(label, was.clone(), now.to_string())) {
                 return Err(format!(
-                    "slot {}:{index} reads {now:?}, 0.6.0 showed {was:?}",
+                    "slot {}:{index} reads {now:?}, 0.6.0 showed {was:?}, undeclared",
                     line.id
                 ));
             }
         }
-    }
-    if r.names_changed != 0 || r.stations_renamed != 0 {
-        return Err(format!(
-            "names changed: {} slots, {} stations renamed",
-            r.names_changed, r.stations_renamed
-        ));
     }
 
     // Merged members are one station, or tied by a Tie closure.
