@@ -359,7 +359,8 @@ impl Crafted<'_> {
              \"modified\":\"2025-01-01T00:00:00Z\"}},\n\"stations\":["
         );
         let mut rows = Vec::new();
-        for id in 0..next {
+        let stations = next;
+        for id in 0..stations {
             let name = serde_json::to_string(&(self.name)(id)).unwrap();
             match (id <= self.shots).then(|| (self.record)(id)).flatten() {
                 Some(record) => {
@@ -511,7 +512,7 @@ fn a_decode_deadline_stops_between_phases() {
             Err(DecodeError::DeadlinePassed)
         );
         let later = DecodeOptions {
-            deadline: Some(Instant::now() + Duration::from_secs(3600)),
+            deadline: Some(Instant::now() + Duration::from_hours(1)),
             ..DecodeOptions::default()
         };
         assert!(decode(text.as_bytes(), &later).is_ok());

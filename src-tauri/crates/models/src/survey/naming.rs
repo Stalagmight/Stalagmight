@@ -294,16 +294,15 @@ impl Project {
         let mut out: Vec<NameCollision> = Vec::new();
         let mut of_name: HashMap<&str, usize> = HashMap::new();
         for (name, first, second) in self.line_name_repeats(topology, index, position) {
-            match of_name.get(name) {
-                Some(&at) => out[at].identities.push(second),
-                None => {
-                    of_name.insert(name, out.len());
-                    out.push(NameCollision {
-                        line: line.id,
-                        name: name.to_string(),
-                        identities: vec![first, second],
-                    });
-                }
+            if let Some(&at) = of_name.get(name) {
+                out[at].identities.push(second);
+            } else {
+                of_name.insert(name, out.len());
+                out.push(NameCollision {
+                    line: line.id,
+                    name: name.to_string(),
+                    identities: vec![first, second],
+                });
             }
         }
         out
@@ -610,7 +609,7 @@ impl Lettering {
         let cursor = self.everywhere_cursors.entry(base.to_string()).or_insert(0);
         loop {
             let name = letter_candidate(base, *cursor);
-            if !everywhere.get(&name).is_some_and(|&n| n > 0) {
+            if everywhere.get(&name).is_none_or(|&n| n == 0) {
                 return name;
             }
             *cursor += 1;

@@ -337,7 +337,7 @@ fn a_read_only_earlier_revision_opens_without_its_history_or_a_save_promise() {
             "the copy keeps the revision's history"
         );
         let (_, fingerprint) = stalx_v2::Fingerprint::read(&source, u64::MAX).unwrap();
-        let opened = prepared.into_opened(source.clone(), fingerprint);
+        let opened = prepared.into_opened(source, fingerprint);
         assert!(opened.history.is_empty(), "{:?}", opened.history);
         assert_eq!(
             opened.history_dropped,
