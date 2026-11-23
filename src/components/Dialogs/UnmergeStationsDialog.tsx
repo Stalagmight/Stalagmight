@@ -219,7 +219,7 @@ export default function UnmergeStationsDialog() {
       );
       return t(clicked ? 'dialogs.detachLine.togetherClicked' : 'dialogs.detachLine.together', { line, others });
     }
-    return <EntityBlob entity="line">{clicked ? t('dialogs.detachLine.thisLine', { line }) : line}</EntityBlob>;
+    return <EntityBlob entity="line" lineId={ref.line_id}>{clicked ? t('dialogs.detachLine.thisLine', { line }) : line}</EntityBlob>;
   };
 
   const handleConfirm = async () => {

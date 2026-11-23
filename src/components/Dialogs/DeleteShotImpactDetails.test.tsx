@@ -48,7 +48,8 @@ describe('DeleteShotImpactDetails - closures across one shot (#737)', () => {
     expect(block).toHaveTextContent(
       'Close Gap & Delete removes these loop closures (they would span a single shot)'
     );
-    expect(block).toHaveTextContent('#3: Main Line / A1 <-> Main Line / A5');
+    // Full highlighting: line pills, the line as the context.
+    expect(block).toHaveTextContent(/#3: Main Line: A1( Station ID \d+)? <-> Main Line: A5/);
     expect(block.textContent).not.toMatch(/\d+:\d+ /);
     // Not mixed up with the closures removed because a station goes.
     expect(screen.queryByText('Removed closures')).toBeNull();

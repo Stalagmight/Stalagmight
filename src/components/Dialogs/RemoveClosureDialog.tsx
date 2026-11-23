@@ -3,8 +3,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { getErrorMessage } from '../../utils/ipc';
 import type { StationRef } from '../../types/project';
-import { useIdentityLabels } from '../../hooks/useIdentityLabels';
-import { EntityBlob } from '../common/EntityBlob';
+import { StationBlob } from '../common/EntityBlob';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
@@ -21,7 +20,6 @@ function sameStationRef(a: StationRef, b: StationRef): boolean {
 export default function RemoveClosureDialog() {
   const { closeDialog, dialogData } = useUIStore();
   const { stations, removeLoopClosure } = useProjectStore();
-  const labels = useIdentityLabels();
 
   const anchorStation = dialogData.anchorStation as StationRef | undefined;
   const closuresFromDialog = dialogData.closures as ClosureChoice[] | undefined;
@@ -68,7 +66,7 @@ export default function RemoveClosureDialog() {
   );
 
   const getStationDisplayLabel = (ref: StationRef): ReactNode => (
-    <EntityBlob entity="station">{labels.station(ref, true)}</EntityBlob>
+    <StationBlob station={ref} withLine />
   );
 
   const handleConfirm = async () => {

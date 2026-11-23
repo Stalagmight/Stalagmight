@@ -88,8 +88,9 @@ describe('ClosureDialog - refusal guard (#737)', () => {
     render(<ClosureDialog />);
 
     const dialog = screen.getByTestId('closure-dialog');
-    expect(dialog).toHaveTextContent('Station A:Main Line / 4');
-    expect(dialog).toHaveTextContent('Station B:Main Line / 5');
+    // Full highlighting: each a line pill, its line as the muted context.
+    expect(dialog).toHaveTextContent('Station A:Main Line: 4');
+    expect(dialog).toHaveTextContent('Station B:Main Line: 5');
     expect(dialog.textContent).not.toMatch(/\d+:\d+|Line 0/);
   });
 

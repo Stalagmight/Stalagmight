@@ -217,7 +217,7 @@ export default function LineAdjustDialog() {
         )}
 
         <div className="text-sm text-text-secondary mb-4">
-          Adjusting: <EntityBlob entity="line">{lineDisplayName(line.name)}</EntityBlob>
+          Adjusting: <EntityBlob entity="line" lineId={line.id}>{lineDisplayName(line.name)}</EntityBlob>
         </div>
 
         {connectedCount > 1 && (

@@ -306,6 +306,17 @@ export function pillColorsOf(lineColor: string | null | undefined, themeName: st
   return colors;
 }
 
+/** {@link missingPillColors} for a named app theme, cached. */
+export function missingPillColorsOf(themeName: string): MissingPillColors {
+  const cached = missingCache.get(themeName);
+  if (cached) return cached;
+  const colors = missingPillColors(pillThemeOf(themeName));
+  missingCache.set(themeName, colors);
+  return colors;
+}
+
+const missingCache = new Map<string, MissingPillColors>();
+
 /** The second dot (a station's home line) on a pill already coloured `on`. */
 export function pillMarkOf(markColor: string | null | undefined, on: PillColors, themeName: string): PillDot {
   const theme = pillThemeOf(themeName);

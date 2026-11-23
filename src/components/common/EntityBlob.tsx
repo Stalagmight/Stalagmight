@@ -1,51 +1,146 @@
 /**
- * EntityBlob - the entity "pill" used for ids in the data table. Same style as
- * the detail-panel link pills (entity symbol + tinted background + dim
- * entity-colored border), but with just the id text (`LineID:ID`) - no
- * divider and no separate suffix.
+ * EntityBlob - a line pill that is not a link: the data table's row gutters
+ * and line picker, and the station, shot and line names in dialogs. Same look
+ * as the `DetailLink` pill (`LinePill.tsx`): the colour of its line, a dot,
+ * an optional muted context, the main part and, for a station, its Station
+ * ID as a muted superscript.
  *
  * Renders the pill only when the highlighting level is "full"; otherwise it
- * renders its children as plain text, so callers can wrap an id unconditionally.
+ * renders `plain` (or its children) as plain text, so callers can wrap a name
+ * unconditionally.
  */
-import type { CSSProperties } from 'react';
+import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useUIStore } from '../../store/uiStore';
 import type { BlobEntity } from '../../theme/syntacticPalette';
-import { syntacticVarName, syntacticLevelAtLeast } from '../../theme/syntacticPalette';
-import { EntitySymbol } from './toolIcons';
+import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
+import type { StationRef } from '../../types/project';
+import { markOf, PillParts, pillStyle, usePillColors } from './LinePill';
 
 export interface EntityBlobProps {
-  /** Which geometry entity this represents (drives the color + symbol). */
+  /** Which entity this names (`station`, `shot`, `line`). */
   entity: BlobEntity;
-  /** The id text rendered in the pill. */
-  children: React.ReactNode;
+  /** The line the pill belongs to, whose colour it takes; null for a neutral pill. */
+  lineId: number | null;
+  /** The main part: a station name, a shot, a line name. */
+  children: ReactNode;
+  /** The muted, smaller context before the main part (a line name), shown with a colon. */
+  context?: string | null | undefined;
+  /** A station's Station ID, as a muted superscript at the end. */
+  stationId?: number | null | undefined;
+  /** A station pill's home-line mark: the line the station belongs to (see `LinePill.tsx`). */
+  homeLineId?: number | null | undefined;
+  /** A shot pill's two ends, each with an optional home-line mark; replaces `children` in the pill. */
+  shotEnds?:
+    | { from: string; to: string; fromHomeLineId?: number | null | undefined; toHomeLineId?: number | null | undefined }
+    | null
+    | undefined;
+  /** What the lower highlighting levels show; defaults to `children`. */
+  plain?: ReactNode | undefined;
+  /** After everything, inside the pill (the data table's picker chevron). */
+  trailing?: ReactNode | undefined;
   /** Optional tooltip. */
-  title?: string;
+  title?: string | undefined;
   /** Extra classes for the pill. */
-  className?: string;
-  testId?: string;
+  className?: string | undefined;
+  testId?: string | undefined;
 }
 
-export function EntityBlob({ entity, children, title, className = '', testId }: EntityBlobProps) {
+export function EntityBlob({
+  entity,
+  lineId,
+  children,
+  context,
+  stationId,
+  homeLineId,
+  shotEnds,
+  plain,
+  trailing,
+  title,
+  className = '',
+  testId,
+}: EntityBlobProps) {
+  const { t } = useTranslation();
   const level = useUIStore((s) => s.syntacticLevel);
+  const pill = usePillColors(lineId);
 
   // Only the Full level paints pills; otherwise keep the plain text rendering.
   if (!syntacticLevelAtLeast(level, 'full')) {
-    return <>{children}</>;
+    return (
+      <>
+        {plain ?? children}
+        {trailing}
+      </>
+    );
   }
 
   return (
     <span
-      className={`sh-pill inline-flex items-center gap-1 align-middle rounded-full px-2 py-0.5 text-xs leading-none text-text-primary tabular-nums ${className}`}
-      style={{ '--o': `var(${syntacticVarName(entity)})` } as CSSProperties}
+      className={`sh-lpill ${className}`}
+      style={pillStyle(pill.colors)}
       data-entity={entity}
       data-testid={testId}
       title={title}
     >
-      <span className="flex shrink-0 items-center">
-        <EntitySymbol entity={entity} size={14} />
-      </span>
-      {children}
+      <PillParts
+        testId={testId}
+        context={context}
+        main={children}
+        shotEnds={
+          shotEnds
+            ? {
+                from: shotEnds.from,
+                to: shotEnds.to,
+                fromMark: markOf(pill, shotEnds.fromHomeLineId),
+                toMark: markOf(pill, shotEnds.toHomeLineId),
+              }
+            : null
+        }
+        mark={entity === 'station' ? markOf(pill, homeLineId) : null}
+        stationId={entity === 'station' ? stationId : null}
+        stationIdLabel={t('identity.stationId')}
+        trailing={trailing}
+      />
     </span>
+  );
+}
+
+/**
+ * A station as a pill: its name, its Station ID, its line's colour and, with
+ * `withLine`, its line as the context (`Main Line: 17`). Below Full it is the
+ * plain label (`Main Line / 17`).
+ */
+export function StationBlob({
+  station,
+  withLine = false,
+  homeLineId,
+  className,
+  testId,
+  title,
+}: {
+  station: StationRef;
+  withLine?: boolean | undefined;
+  homeLineId?: number | null | undefined;
+  className?: string | undefined;
+  testId?: string | undefined;
+  title?: string | undefined;
+}) {
+  const labels = useIdentityLabels();
+  return (
+    <EntityBlob
+      entity="station"
+      lineId={station.line_id}
+      context={withLine ? labels.lineName(station.line_id) : null}
+      stationId={labels.stationId(station)}
+      homeLineId={homeLineId}
+      plain={labels.station(station, withLine)}
+      className={className}
+      testId={testId}
+      title={title}
+    >
+      {labels.station(station)}
+    </EntityBlob>
   );
 }
 

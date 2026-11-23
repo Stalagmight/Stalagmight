@@ -5,9 +5,8 @@ import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
-import { EntityBlob } from '../common/EntityBlob';
+import { StationBlob } from '../common/EntityBlob';
 import { DialogWrapper } from './DialogWrapper';
-import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { getErrorColor } from '../../utils/colors';
 import { formatFixed, formatPercent } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -19,7 +18,6 @@ export default function ClosureDialog() {
   const precision = useDecimalPrecision();
   const { closeDialog, dialogData, clearMergeStations } = useUIStore();
   const { createLoopClosure, executeBatch } = useProjectStore();
-  const labels = useIdentityLabels();
 
   const stationA = dialogData.stationA as StationRef | undefined;
   const stationB = dialogData.stationB as StationRef | undefined;
@@ -112,13 +110,13 @@ export default function ClosureDialog() {
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station A:</span>
             <span className="inline-flex items-center gap-1.5">
-              <EntityBlob entity="station">{labels.station(stationA, true)}</EntityBlob>
+              <StationBlob station={stationA} withLine />
             </span>
           </div>
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station B:</span>
             <span className="inline-flex items-center gap-1.5">
-              <EntityBlob entity="station">{labels.station(stationB, true)}</EntityBlob>
+              <StationBlob station={stationB} withLine />
             </span>
           </div>
         </div>

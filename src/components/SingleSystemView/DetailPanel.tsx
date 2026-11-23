@@ -565,7 +565,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                         })}
                         data-testid={warningOpenShotTestId(warning)}
                       >
-                        <EntityBlob entity="shot">{shot}</EntityBlob>
+                        <EntityBlob entity="shot" lineId={warning.lineId}>{shot}</EntityBlob>
                       </button>
                       {' '}
                       {body}
