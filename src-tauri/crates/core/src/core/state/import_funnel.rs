@@ -1568,7 +1568,8 @@ fn file_station_entry(line_name: &str, joined: &str, file: &FileStation) -> Entr
 /// are settled by rule L against `before` (the project before the import).
 /// The receipt names every archive (a note; a warning when the hidden end
 /// is a station the project held before the import, `first_new_station`
-/// being the first Station ID the import minted), every closure that keeps
+/// being the first Station ID the import minted), with the hidden end's
+/// comment when the kept end does not show it, every closure that keeps
 /// both names, and every letter.
 fn archive_import_closures(
     project: &mut Project,
@@ -1633,22 +1634,38 @@ fn archive_import_closures(
             ));
             continue;
         };
-        let own = project.station(archived).map_or("", |s| s.name.as_str());
-        let hidden = station_label(project, line_of(archived, archived), own);
+        let own = project.station(archived);
+        let hidden = station_label(
+            project,
+            line_of(archived, archived),
+            own.map_or("", |s| s.name.as_str()),
+        );
         let shown = station_label(
             project,
             line_of(project.shown(kept), kept),
             project.shown_name(kept).unwrap_or_default(),
         );
+        // Every slot of the archived end now shows the kept end's comment
+        // (RS 5.1): its own is hidden unless the kept end shows the same
+        // (U-P1-2: said even when the names match).
+        let own_comment = own
+            .and_then(|s| s.comment.as_deref())
+            .filter(|c| !c.is_empty());
+        let comment_hidden = own_comment.is_some_and(|c| project.shown_comment(kept) != Some(c));
+        let (and_comment, back) = if comment_hidden {
+            (", and its comment is hidden", " and comment")
+        } else {
+            ("", "")
+        };
         if archived < first_new_station {
             outcome.identity_warnings.push(format!(
                 "Loop closure: station \"{hidden}\", already in the project, is now shown as \
-                 \"{shown}\": Remove Closure brings its name back"
+                 \"{shown}\"{and_comment}: Remove Closure brings its name{back} back"
             ));
         } else {
             outcome.identity_notes.push(format!(
-                "Loop closure: station \"{hidden}\" is shown as \"{shown}\": Remove Closure \
-                 brings its own name back"
+                "Loop closure: station \"{hidden}\" is shown as \"{shown}\"{and_comment}: Remove \
+                 Closure brings its own name{back} back"
             ));
         }
     }
