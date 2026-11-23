@@ -23,7 +23,9 @@
 //! # Five oracles
 //!
 //! Every comparison runs: the stored survey (the canonical v2 text, every
-//! number at 12 significant digits as the 0.6.0 engine compared it, uuids
+//! number at 12 significant digits as the 0.6.0 engine compared it, a
+//! placement's coordinates at 12 significant digits of the survey's extent,
+//! since each route computes them by its own walks of the piece, uuids
 //! masked only where both routes mint shots), the model's own integrity
 //! verdict (`validate`), the Computed View (every slot within 1e-6 m), and
 //! the ID ALLOCATORS (the station, closure and Section counters, the derived
@@ -1501,6 +1503,75 @@ enum Allocators {
     Unchecked,
 }
 
+/// How far apart two routes may leave a placement coordinate: twelve
+/// significant digits (the stored survey's comparison) of the survey's
+/// extent, the largest raw coordinate of either side, not of the
+/// coordinate's own value.
+///
+/// A placement is a computed position: `settle_placements` walks the piece
+/// from its still point to the placement station, a chain of sums whose
+/// terms are as large as the survey, and every edit walks it again. Two
+/// routes that walk it a different number of times (one range delete, n
+/// single deletes) leave it a few ulps of those terms apart, and on a
+/// placement near the origin that is its own twelfth significant digit
+/// (farm seed 580006372, package RS-FX7).
+fn placement_tolerance(left: &Project, right: &Project) -> f64 {
+    let extent = [left, right]
+        .into_iter()
+        .flat_map(|p| p.raw_positions().slots(p))
+        .map(|slot| slot.x.abs().max(slot.y.abs()))
+        .fold(0.0_f64, f64::max);
+    1e-11 * extent
+}
+
+/// Each placement of the right route's stored survey that names the
+/// station the left one names at the same place in the list, with
+/// coordinates within [`placement_tolerance`] of the left's, takes the
+/// left's stored coordinates: what the strict comparison still sees is a
+/// placement on another station, in another order, or one that moved.
+/// The coordinates are judged on the projects' own values, before the
+/// stored survey's rounding.
+fn settle_placement_rounding(
+    left: &Project,
+    right: &Project,
+    l: &serde_json::Value,
+    r: &mut serde_json::Value,
+) {
+    let (Some(serde_json::Value::Array(ls)), Some(serde_json::Value::Array(rs))) =
+        (l.get("placements"), r.get_mut("placements"))
+    else {
+        return;
+    };
+    if ls.len() != rs.len() {
+        return;
+    }
+    let tolerance = placement_tolerance(left, right);
+    let raw = |p: &Project, station: u64| {
+        p.placements
+            .iter()
+            .find(|pl| u64::from(pl.station) == station)
+            .map(|pl| [pl.x, pl.y])
+    };
+    for (a, b) in ls.iter().zip(rs.iter_mut()) {
+        let station = a.get("station").and_then(serde_json::Value::as_u64);
+        let Some(station) =
+            station.filter(|&s| b.get("station").and_then(serde_json::Value::as_u64) == Some(s))
+        else {
+            continue;
+        };
+        let (Some(was), Some(is)) = (raw(left, station), raw(right, station)) else {
+            continue;
+        };
+        if (was[0] - is[0]).abs() <= tolerance && (was[1] - is[1]).abs() <= tolerance {
+            for key in ["x", "y"] {
+                if let (Some(value), Some(slot)) = (a.get(key), b.get_mut(key)) {
+                    *slot = value.clone();
+                }
+            }
+        }
+    }
+}
+
 /// Every way two observed states differ, as readable lines.
 fn differences(
     left: &Observed,
@@ -1525,6 +1596,7 @@ fn differences(
         }
         None => (left.stored.clone(), right.stored.clone()),
     };
+    settle_placement_rounding(&left.project, &right.project, &l, &mut r);
     if allocators != Allocators::Equal {
         // The stored counters are allocators: compared by the rule below.
         for stored in [&mut l, &mut r] {
@@ -3866,6 +3938,82 @@ fn a_move_out_and_back_lands_within_its_rounding() {
         "{} divergence(s):\n\n{}",
         problems.len(),
         problems.join("\n\n")
+    );
+}
+
+/// Farm seed 580006372 of range-shift-is-n-single-deletes (sg-rs-metamorphic-
+/// closures, finding d14345c9943b's signature; package RS-FX7): a range of
+/// two shots that removes no junction, no closure, no promotion. Each route
+/// walks the piece from the edited line's start to its placement station,
+/// the range once and the singles twice, and the placement landed near the
+/// origin, so the walk's rounding (1.8e-15 m, an ulp of the 20 m sums it
+/// adds) was its twelfth significant digit: `-1.74799425406e-4` against
+/// `...404`. Placements are compared at twelve significant digits of the
+/// survey's extent ([`placement_tolerance`]). Injection: compare the stored
+/// placements strictly again (skip `settle_placement_rounding`).
+#[test]
+fn a_placement_two_routes_walk_differently_agrees_within_the_surveys_digits() {
+    let _config = crate::test_helpers::isolated_config();
+    let (built, problems) =
+        pinned_seed_problems("range-shift-is-n-single-deletes", &[(580_006_372, true)]);
+    assert!(
+        built >= 4,
+        "the pinned seed built only {built} range pair(s)"
+    );
+    assert!(
+        problems.is_empty(),
+        "{} divergence(s):\n\n{}",
+        problems.len(),
+        problems.join("\n\n")
+    );
+}
+
+/// [`placement_tolerance`] is not vacuous: the farm seed's two placements,
+/// apart in their twelfth significant digit, agree; a placement two
+/// tolerances off is reported, and so would the first pair be without the
+/// tolerance.
+#[test]
+fn a_placement_past_the_surveys_digits_is_reported() {
+    let _config = crate::test_helpers::isolated_config();
+    let twins = Twins::build(580_006_372, true, GATE_PRELUDE).expect("twins");
+    let start = observe(&twins.left, Mask::Strict);
+    assert!(
+        !start.project.placements.is_empty(),
+        "the seed has a placement"
+    );
+    let at = |y: f64| {
+        let mut project = start.project.clone();
+        project.placements[0].y = y;
+        Observed {
+            stored: stored_of(&project, Mask::Strict),
+            mask: Mask::Strict,
+            verdict: start.verdict.clone(),
+            adjusted: start.adjusted.clone(),
+            allocators: start.allocators.clone(),
+            project,
+        }
+    };
+    let range = -1.747_994_254_057_694_3e-4;
+    let left = at(range);
+    let walked = at(-1.747_994_254_039_930_7e-4);
+    assert_ne!(
+        json_differences(&left.stored, &walked.stored),
+        Vec::<String>::new(),
+        "twelve significant digits of the value tell them apart"
+    );
+    let found = differences(&left, &walked, None, Allocators::Equal);
+    assert!(found.problems.is_empty(), "{:?}", found.problems);
+    let tolerance = placement_tolerance(&left.project, &walked.project);
+    assert!(tolerance > 0.0 && tolerance < 1e-8, "{tolerance}");
+    let moved = at(range + 2.0 * tolerance);
+    let found = differences(&left, &moved, None, Allocators::Equal);
+    assert!(
+        found
+            .problems
+            .iter()
+            .any(|problem| problem.contains(".placements[0].y")),
+        "{:?}",
+        found.problems
     );
 }
 
