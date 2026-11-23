@@ -464,10 +464,8 @@ impl Project {
     /// identity would show on), in list order.
     fn rest_candidates(&self, station: StationId, line: LineId) -> Vec<(StationId, Vec<LineId>)> {
         self.stations.get(&station).map_or_else(Vec::new, |s| {
-            s.archived
-                .iter()
-                .filter(|r| r.into.is_none())
-                .map(|r| (r.id, s.subtree_lines(r.id)))
+            s.top_records_with_lines()
+                .into_iter()
                 .filter(|(_, lines)| lines.iter().any(|&l| l != line))
                 .collect()
         })

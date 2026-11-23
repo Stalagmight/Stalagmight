@@ -728,12 +728,7 @@ impl Project {
             let Some(station) = self.stations.get(&node) else {
                 continue;
             };
-            let candidates: Vec<(StationId, Vec<LineId>)> = station
-                .archived
-                .iter()
-                .filter(|r| r.into.is_none() && !r.is_history())
-                .map(|r| (r.id, station.subtree_lines(r.id)))
-                .collect();
+            let candidates = station.top_records_with_lines();
             let Some(chosen) = self.rule_k(candidates) else {
                 continue;
             };

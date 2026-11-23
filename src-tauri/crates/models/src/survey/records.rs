@@ -17,7 +17,7 @@
 //! following `into` never cycles. Every resolution here is linear and
 //! bounded, so a crafted file whose owners cycle reports instead of hanging.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{LineId, StationId};
 
@@ -189,15 +189,41 @@ impl Station {
     /// Every line record `top`'s subtree names, in list order (the lines
     /// a Detach of any of them takes off together).
     pub fn subtree_lines(&self, top: StationId) -> Vec<LineId> {
+        let mut seen = HashSet::new();
         let mut lines = Vec::new();
         for i in self.subtree(top) {
             for &line in &self.archived[i].lines {
-                if !lines.contains(&line) {
+                if seen.insert(line) {
                     lines.push(line);
                 }
             }
         }
         lines
+    }
+
+    /// Each record directly under this station's identity that is not
+    /// history, with every line its subtree names (in list order): the
+    /// candidates a Detach's remaining lines or an A4 restore choose among,
+    /// each measured over the lines it would be shown on. One walk for all.
+    pub fn top_records_with_lines(&self) -> Vec<(StationId, Vec<LineId>)> {
+        let (tops, _) = walk(&self.archived);
+        let mut lines: Vec<Vec<LineId>> = vec![Vec::new(); self.archived.len()];
+        let mut seen = HashSet::new();
+        for (record, top) in self.archived.iter().zip(&tops) {
+            if let Some(top) = *top {
+                for &line in &record.lines {
+                    if seen.insert(line) {
+                        lines[top].push(line);
+                    }
+                }
+            }
+        }
+        self.archived
+            .iter()
+            .zip(lines)
+            .filter(|(r, _)| r.into.is_none() && !r.is_history())
+            .map(|(r, lines)| (r.id, lines))
+            .collect()
     }
 
     /// Take record `id` out of the list; the records archived under it move
