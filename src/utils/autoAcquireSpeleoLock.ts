@@ -100,14 +100,17 @@ export async function autoAcquireSpeleoLock(path: string, current: () => boolean
           heldLockPromptOpen: heldLocks.length > 0 && state.heldLockPromptOpen };
       });
     }
+    // Opened with un-uploaded work of our own (a fast-forward copy, or "Open my
+    // local copy"): say that it is safe, not just that the project is read-only.
+    const keeps = useSpeleoStore.getState().link?.hasUnpushedEdits === true;
     if (result.kind === 'locked_by' && emailsMatch(result.email, useSpeleoStore.getState().session?.userEmail ?? null)) {
       // This account's own lock, which this computer did not take: the same
-      // words as the held-lock prompt, and Resume editing edits it here too.
-      showSpeleoReadOnlyNotice(i18n.t('speleodb.readOnlyNotice.heldByYourAccount'), 'opened');
+      // words as the held-lock prompt, and Resume editing edits it here too
+      // (with the kept-changes sentence over un-uploaded work: pre-PR should-fix 3).
+      showSpeleoReadOnlyNotice(i18n.t(keeps
+        ? 'speleodb.readOnlyNotice.heldByYourAccountKeepsChanges'
+        : 'speleodb.readOnlyNotice.heldByYourAccount'), 'opened');
     } else if (result.kind === 'locked_by') {
-      // Opened with un-uploaded work of our own (a fast-forward copy, or "Open my
-      // local copy"): say that it is safe, not just that the project is read-only.
-      const keeps = useSpeleoStore.getState().link?.hasUnpushedEdits === true;
       const key = result.email
         ? (keeps ? 'speleoExitPrompt.readOnly.lockedByKeepsChanges' : 'speleodb.readOnlyNotice.lockedBy')
         : (keeps ? 'speleoExitPrompt.readOnly.unavailableKeepsChanges' : 'speleodb.readOnlyNotice.unavailable');

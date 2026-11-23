@@ -4168,6 +4168,7 @@
       "failed": "The editing lock could not be acquired. This project is open read-only.",
       "reloadedNotEditing": "The SpeleoDB version is open, but editing did not start. Resume editing tries again.",
       "heldByYourAccount": "Your account already holds this project's write lock. It may belong to Stalagmight open on another computer with this account, or to a session that did not exit cleanly, so the project opened read-only. Resume editing edits it here too.",
+      "heldByYourAccountKeepsChanges": "Your account already holds this project's write lock. It may belong to Stalagmight open on another computer with this account, or to a session that did not exit cleanly, so the project opened read-only. Your changes are kept on this computer, and Resume editing edits it here too.",
       "continue": "Continue read-only"
     },
     "release": {
