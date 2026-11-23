@@ -397,3 +397,47 @@ fn the_merge_preview_names_the_lines_detach_does_not_give_back() {
     assert_eq!(p.topology().lines_of(x1), vec![lx]);
     assert_eq!(p.shown(at(&p, lx2, 0)), y1);
 }
+
+/// `Project::hidden_comments` (RS 12): a comment shown before is hidden when
+/// an identity no slot shows keeps it (here a loop end a closure archives);
+/// not when another identity shows it now, alone or as one part of a
+/// Combine "Both" join (`kept`, a newline, `other`); a text that merely
+/// contains it is no such part. Injection: test `contains` instead of
+/// `holds_text` fails the last case.
+#[test]
+fn a_comment_is_hidden_unless_another_station_shows_it() {
+    let mut before = project();
+    let a = free_line(&mut before, [0.0, 0.0], run(90.0, 3, 10.0));
+    name_line(&mut before, a, "A");
+    let (a0, a3) = (at(&before, a, 0), at(&before, a, 3));
+    comment(&mut before, a3, "x");
+    assert_valid(&before);
+    let mut after = before.clone();
+    ok(after.create_closure(a3, Some(a), a0, Some(a), BATCH, Some(a0), &[]));
+    assert_eq!(after.shown(a3), a0);
+    let hidden = after.hidden_comments(&before);
+    assert_eq!(
+        hidden
+            .iter()
+            .map(|h| (h.station, h.held_by))
+            .collect::<Vec<_>>(),
+        [(a3, a3)]
+    );
+    assert_eq!(
+        (hidden[0].name.as_str(), hidden[0].comment.as_str()),
+        ("A3", "x")
+    );
+    for (shown, is_hidden) in [
+        ("x", false),
+        ("A0 note\nx", false),
+        ("x\nA0 note", false),
+        ("xx", true),
+    ] {
+        comment(&mut after, a0, shown);
+        assert_eq!(
+            !after.hidden_comments(&before).is_empty(),
+            is_hidden,
+            "{shown:?}"
+        );
+    }
+}

@@ -378,10 +378,10 @@ impl Project {
             }
             let shown_elsewhere = shown_after.iter().any(|(&other, &now)| {
                 other != id
-                    && now.contains(text)
+                    && holds_text(now, text)
                     && shown_before
                         .get(&other)
-                        .is_none_or(|was| !was.contains(text))
+                        .is_none_or(|was| !holds_text(was, text))
             });
             if shown_elsewhere {
                 continue;
@@ -630,6 +630,18 @@ impl Project {
         }
         dropped
     }
+}
+
+/// Whether the comment `shown` is `text` or holds it as one of the two
+/// parts Combine's "Both" pick joins (`kept`, a newline, `other`).
+fn holds_text(shown: &str, text: &str) -> bool {
+    shown == text
+        || shown
+            .strip_prefix(text)
+            .is_some_and(|rest| rest.starts_with('\n'))
+        || shown
+            .strip_suffix(text)
+            .is_some_and(|rest| rest.ends_with('\n'))
 }
 
 /// Whether following `kept_of` from `from` reaches `target` (bounded by the
