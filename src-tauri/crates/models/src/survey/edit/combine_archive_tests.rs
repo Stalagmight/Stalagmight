@@ -334,3 +334,51 @@ fn ok_op<T>(
         Err(error) => panic!("op refused: {error}"),
     }
 }
+
+/// M-P1-2 on the Combine join: each join station is archived by a closure
+/// of its own line, so the joined node would be archived twice (C1); the
+/// normalisation keeps the earlier closure's archive and reports the other.
+#[test]
+fn a_join_of_two_archived_ends_keeps_the_earlier_archive() {
+    let mut p = empty();
+    let k = line(&mut p, "K", run("k", 90.0, 10.0, 2));
+    let o = line_at(&mut p, "O", [20.0, 0.0], run("o", 0.0, 10.0, 2));
+    name_line(&mut p, k, "K", 0);
+    name_line(&mut p, o, "O", 0);
+    let (k0, k2, o0, o2) = (st(&p, k, 0), st(&p, k, 2), st(&p, o, 0), st(&p, o, 2));
+    let first = ok_op(p.create_closure(
+        k2,
+        Some(k),
+        k0,
+        Some(k),
+        ClosureStrategy::Batch,
+        Some(k0),
+        &[],
+    ))
+    .value
+    .closure
+    .id;
+    let second = ok_op(p.create_closure(
+        o0,
+        Some(o),
+        o2,
+        Some(o),
+        ClosureStrategy::Batch,
+        Some(o2),
+        &[],
+    ))
+    .value
+    .closure
+    .id;
+    assert_eq!(shown(&p, k), ["K0", "K1", "K0"]);
+    assert_eq!(shown(&p, o), ["O2", "O1", "O2"]);
+    let report = ok(p.combine_lines(k, o, &opts(CombinePick::Kept, LineEnd::End, LineEnd::Start)));
+    assert_valid(&p);
+    assert_eq!(report.identities.unarchived, vec![second]);
+    assert_eq!(p.shown(k2), k0);
+    assert!(p
+        .closures
+        .iter()
+        .any(|c| c.id == first && c.archive() == Some((k2, k0))));
+    assert_eq!(shown(&p, k), ["K0", "K1", "K0", "O1", "O2"]);
+}

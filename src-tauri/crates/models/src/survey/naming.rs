@@ -187,8 +187,9 @@ impl Project {
     /// Make the names line `line` shows unique in chain order: the first
     /// identity showing a name keeps it, a later one gets a letter suffix
     /// free on every line it is shown on. Returns the renamed identities in
-    /// chain order. RS-M2 (Combine) and RS-F (the 0.6.0 migration) replace
-    /// its chain-order choice by rule L ([`Self::letter_collisions`]).
+    /// chain order. Combine settles its repeats by rule L instead
+    /// ([`Self::letter_collisions`]); RS-F replaces this chain-order choice
+    /// in the 0.6.0 migration too.
     pub fn uniquify_line_names(&mut self, line: LineId) -> Vec<StationId> {
         let Some(chain) = self.topology().chain(line).map(<[StationId]>::to_vec) else {
             return Vec::new();
