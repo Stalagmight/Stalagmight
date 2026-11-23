@@ -115,13 +115,15 @@ fn a_loop_end_shows_the_kept_identity_with_its_mark() {
 }
 
 /// RS 7: the Merge dialog gets both stations, the default keep, and for
-/// each keep the lines that will show the kept name, the station hidden,
-/// and every collision with rule L's answer and the other one (rename the
-/// kept station). Applying either answer as the command's renames merges;
-/// no answer refuses. Injection: drop the alternative and the dialog can
-/// offer only one answer.
+/// each keep the lines that will show the kept name and the station hidden.
+/// Keeping B's 0, A shows it at its end with B's dot beside A's own 0; keeping
+/// A's 2, B shows it at its start beside B's own 2: RS-FX5 ("dotted slots
+/// don't collide") makes neither a collision, so neither keep lists one and
+/// the merge with no answer goes through. (Before RS-FX5 each keep listed
+/// one, with rule L's letter and the alternative.) Injection: count foreign
+/// slots in `NativeSlots::is_native` and each keep lists a collision again.
 #[test]
-fn the_merge_preview_offers_both_keeps_and_both_answers() {
+fn the_merge_preview_offers_both_keeps_and_no_dotted_collision() {
     let (p, a, b) = two_lines();
     let (a0, a2, b0, b2) = (at(&p, a, 0), at(&p, a, 2), at(&p, b, 0), at(&p, b, 2));
     let result = p
@@ -137,33 +139,24 @@ fn the_merge_preview_offers_both_keeps_and_both_answers() {
     let keeps: Vec<StationId> = preview.keeps.iter().map(|k| k.keep).collect();
     assert_eq!(keeps, [a2, b0]);
 
-    // Keeping B's 0: A's own 0 repeats on A.
+    // Keeping B's 0: A's own 0 stays beside the dotted 0 on A.
     let keep_b = &preview.keeps[1];
     assert_eq!(keep_b.hidden, identity(a2, "2", Some(a)));
     assert_eq!(keep_b.renamed_lines, [a]);
-    assert_eq!(keep_b.collisions.len(), 1);
-    let collision = &keep_b.collisions[0];
-    assert_eq!((collision.line_id, collision.name.as_str()), (a, "0"));
-    assert_eq!(collision.letter.station.id, a0, "rule L letters A's 0");
-    assert_eq!(collision.letter.to, "0a");
-    assert_eq!(collision.alternative.station.id, b0, "or the kept station");
-    assert_eq!(collision.alternative.to, "0a");
+    assert!(keep_b.collisions.is_empty(), "{:?}", keep_b.collisions);
 
-    // Keeping A's 2: B's own 2 repeats on B.
+    // Keeping A's 2: B's own 2 stays beside the dotted 2 on B.
     let keep_a = &preview.keeps[0];
     assert_eq!(keep_a.hidden, identity(b0, "0", Some(b)));
-    assert_eq!(keep_a.collisions[0].letter.station.id, b2);
-    assert_eq!(keep_a.collisions[0].alternative.station.id, a2);
+    assert!(keep_a.collisions.is_empty(), "{:?}", keep_a.collisions);
 
-    for answer in [&collision.letter, &collision.alternative] {
+    for keep in [a2, b0] {
         let mut q = p.clone();
-        let renames = [(answer.station.id, answer.to.clone())];
-        ok(q.merge_stations(a2, b0, b0, &renames));
+        ok(q.merge_stations(a2, b0, keep, &[]));
         assert_valid(&q);
-        assert_eq!(q.shown_name(answer.station.id), Some("0a"));
+        assert_eq!(q.shown_name(a0), Some("0"));
+        assert_eq!(q.shown_name(b2), Some("2"));
     }
-    let mut unanswered = p;
-    assert!(unanswered.merge_stations(a2, b0, b0, &[]).is_err());
 }
 
 /// RS 4.2, 7: after a merge the Detach preview names what comes back with

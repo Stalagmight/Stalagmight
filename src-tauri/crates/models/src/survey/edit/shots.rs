@@ -463,20 +463,10 @@ impl Project {
         })
     }
 
-    /// A shot named the way the user reads it: `Line: from -> to`.
+    /// A shot named the way the user reads it: `Line: from -> to`
+    /// ([`Project::shot_text`]).
     pub(super) fn shot_label_at(&self, line: LineId, index: usize) -> String {
-        let name = |i: usize| {
-            self.line(line)
-                .and_then(|l| l.station(i))
-                .and_then(|s| self.shown_name(s))
-                .map_or_else(|| i.to_string(), str::to_string)
-        };
-        format!(
-            "{}: {} \u{2192} {}",
-            self.line_label_of(line),
-            name(index),
-            name(index + 1)
-        )
+        self.shot_text(line, index)
     }
 
     // ----- delete -----------------------------------------------------------

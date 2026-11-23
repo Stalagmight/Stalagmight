@@ -51,6 +51,9 @@ Decisions the user took when asked (2026-11-23):
   line, or the slot's node is closure-archived. A Split Line Here half, a line
   created at a station and an import join are native: no dot. A foreign slot
   shows the shown identity's name with a dot in its **home line's** colour.
+- **Native slot** (RS-FX5): a slot that shows its own node's identity on a
+  native line of the node: not a foreign slot and not a loop end (a node a
+  closure archives). Only native slots count for N8.
 - **Home line** of an identity: the first native line of the node holding it,
   in the model's line order (`Project.lines`, not the Sections panel grouping).
   It only picks the dot's colour.
@@ -63,15 +66,17 @@ Decisions the user took when asked (2026-11-23):
   its shown identity is shown on; a **per-line candidate** (0.6.0 members, U1
   aliases, records chosen by the epilogue or a detach) over its own lines only
   (M-P2-5).
-- **Rule L** (letter rule, U-P1-1, M-P1-3): when an op shows an identity on a
-  line where another identity already shows the same name (an N8 collision),
-  the station that takes a letter suffix (`12` -> `12a`, `uniquify_station_name`)
-  is the colliding identity that is shown on fewer lines; on a tie, the one
-  that is new on the line (restored, imported, line-local). An identity shown on
-  more lines than the colliding one is never lettered, and chain order never
-  decides. The letter is chosen free on every line the lettered identity is
-  shown on, so the pass terminates. Every automatic path uses rule L and reports
-  each letter.
+- **Rule L** (letter rule, U-P1-1, M-P1-3): when an op shows an identity
+  through a native slot of a line where another native slot already shows the
+  same name for another identity (an N8 collision; a foreign slot or a loop
+  end never makes one, RS-FX5), the station that takes a letter suffix (`12`
+  -> `12a`, `name_with_free_letter`) is the colliding identity that is shown
+  on fewer lines (every line, its foreign slots and loop ends included); on a
+  tie, the one that is new on the line by its own name (restored, imported,
+  line-local). An identity shown on more lines than the colliding one is never
+  lettered, and chain order never decides. The letter is chosen free among the
+  native slots of every line the lettered identity is native on, so the pass
+  terminates. Every automatic path uses rule L and reports each letter.
 
 ## 3. Model
 
@@ -97,9 +102,12 @@ Invariants (validate checks C1 and C2 before N8, and every resolution of
   and nothing restores it.
 - **C1** A node is the archived end of at most one closure.
 - **C2** Following "archived end -> kept end" never cycles.
-- **N8** (replaces invariant 8) On each line, slots that show different shown
-  identities have different names. Two slots of one shown identity on a line (a
-  same-line closure) are allowed.
+- **N8** (replaces invariant 8; RS-FX5) On each line, the native slots that
+  show different identities have different names. A foreign slot and a loop
+  end show another station's identity (with the home-line dot or the loop
+  mark) and count for no uniqueness, against native slots or each other:
+  Main / 12 kept at Branch's start, Branch shows the dotted 12 and keeps its
+  own 12. A rename is checked on the lines its identity is native on.
 
 **Epilogue** (every op, including Combine, which today skips it, M-P1-4): clear
 stale record lines (A2); enforce A4 on every node that lacks a native line (not
@@ -138,12 +146,16 @@ except where the op carries the user's renames.
    why (M-P2-4).
 5. **A closure-archived candidate** keeps showing its closure's kept end after
    the merge; its radio says "shown as K through a loop closure" (5.4).
-6. `renames` apply in the same op. Every collision the merge creates (N8 on
-   every line the kept shown identity will be shown on, closure subtrees
-   included, M-P2-1) must be answered by `renames`, or the merge refuses with
-   `OpError::NameTaken { line, name }`. The preview lists each collision with
-   two answers: letter the other station by rule L (the default, e.g. "Rename
-   Side / 12 to 12a") or rename the kept station (U-P2-6).
+6. `renames` apply in the same op. Every collision the merge creates must be
+   answered by `renames`, or the merge refuses with `OpError::NameTaken {
+   line, name }`. The preview lists each collision with two answers: letter
+   the other station by rule L (the default, e.g. "Rename Side / 12 to 12a")
+   or rename the kept station (U-P2-6). Since RS-FX5 the merge itself makes
+   none: the lines that show the kept identity anew (the archived station's,
+   closure subtrees included, M-P2-1) show it through foreign slots or loop
+   ends, and its own lines keep their native names. A collision comes only
+   from what the epilogue does (a closure archive the normalisation drops, a
+   restore, a promotion), which rule L letters and the preview lists.
 
 The preview (`merge_preview(a, b, keep)`) adds: both identities, the default
 keep, the lines whose shown name changes, the collisions with their suggested
@@ -166,7 +178,10 @@ entrance), else rule K (U-P3-2).
 - Orphan placement keeps the target (placed) station; rule K only decides when
   neither is placed (U-P2-9).
 - Every collision is resolved by rule L and named in the import receipt (imports)
-  or the action's notice.
+  or the action's notice. A join that archives the file's station there (or
+  lands on a loop end) shows the target through a dotted slot, so the new
+  line's own station of the target's name keeps it (RS-FX5); only a native
+  join slot (no record, the target no loop end) letters it.
 
 ### 4.2 Detach Line from Station (unmerge)
 
@@ -188,7 +203,9 @@ entrance), else rule K (U-P3-2).
 - Datums, closure ends and hand moves move by `via` as today, and a closure's
   `archived` marker follows its end; the identities this shows anew on other
   lines are part of the preview (M-P2-8).
-- Every identity shown anew is checked by N8 on every line it will be shown on.
+- Every identity shown anew through a native slot is checked by N8 on that
+  line (RS-FX5: the restored station on its own lines; a line that shows it
+  through a foreign slot or a loop end is no collision).
   The preview lists each collision with its rule-L suggestion; the dialog asks;
   an unanswered collision refuses with `NameTaken`. A letter given earlier
   because of the junction stays (the dialog says so, U-P3-9).
@@ -262,7 +279,10 @@ archived end is not archived by another closure (C1) and `shown(keep)` is not
 that end (C2). The dialog shows the two allowed choices; when rule K's choice
 is not allowed, the default is **"Keep both names"** (`keep: None`, the closure
 archives nothing), next to the other end if that one is allowed (U-P2-11).
-Collisions: as 4.1 step 6, on every line the kept identity will be shown on.
+Collisions: none (RS-FX5). The archived end and its closure subtree become
+loop ends, which count for no uniqueness, and an allowed keep drops no other
+archive, so creating a closure never repeats a name; the preview lists no
+collision.
 
 ### 5.3 Remove
 
@@ -297,7 +317,8 @@ Paths without a dialog: rule L, reported.
 - **Datums** set through a closure-archived slot go on that node, and the action
   says so (U-P2-15).
 - **Same-line closure**: the line shows the kept identity at both slots (N8
-  allows it); the archived slot carries the loop-end mark (6).
+  allows it: the archived slot is a loop end); the archived slot carries the
+  loop-end mark (6).
 
 ## 6. Display and wire
 
@@ -323,8 +344,11 @@ Paths without a dialog: rule L, reported.
   the loop mark on loop ends; editing a name or comment there goes through the
   prompt of 5.4.
 - **Pills**: station and shot pills pass `homeLineId` on foreign slots
-  (`rs/P-pills`); plain-text contexts (warnings, toasts, aria, tooltips) write
-  "Side / 12 (Main)" for a foreign slot (U-P3-8).
+  (`rs/P-pills`); plain-text contexts (warnings, toasts, search results,
+  history rows, aria, tooltips, closure texts, Plan lists) write "12 (Main)"
+  and "Side / 12 (Main)" for a foreign slot and "12 (loop end on Side)" and
+  "Main / 12 (loop end on Side)" for a loop end (U-P3-8, RS-FX5), so two
+  "12"s on one line read apart; one helper on each side words it.
 - **History rows** name the kept station: "Merge Side / 0 into Main / 12 (keeps
   12)", "Create loop closure: Side / 17 shown as Main / 3" (U-P3-6).
 - **Plan mode**: routes, the ruler path and turn or drop lists collapse
@@ -341,14 +365,17 @@ Paths without a dialog: rule L, reported.
   closure"), default per 4.1. Below it: the lines that will show the kept name;
   "Side / 0 is archived" plus "with its comment" only when it has one; "Detach
   Line from Station brings it back". The geometry sentence reads "Side moves
-  24 m onto Main / 12's position". One row per collision with its two answers.
+  24 m onto Main / 12's position". One row per collision with its two answers
+  (since RS-FX5 only for a collision the epilogue makes; the archived line's
+  own station named like the kept one is none).
 - **Create Loop Closure**: "Both ends show:" with the allowed choices and
-  "Keep both names" (5.2), plus collision rows.
+  "Keep both names" (5.2). No collision rows (RS-FX5, 5.2).
 - **Detach Line from Station**: what comes back (name, comment when there is
   one, Station ID); the lines that come off together; one row per collision; a
   picker for the remaining junction when several records could show it; a note
   that earlier letters stay.
-- **Remove Closure**: what comes back; one row per collision.
+- **Remove Closure**: what comes back; one row per collision (the returning
+  end's name against the native stations of its own lines).
 - **Entry points that skip a dialog today** (U-P2-7): the "Also on" detach
   button, the context menu's single-closure Remove, the ClosuresSection remove
   button and the warning resolution's remove. Each opens its dialog whenever the
@@ -392,7 +419,9 @@ sources (U-P2-13d). It:
    identity, records get none;
 3. gives each closure an archived end by rule K over own lines, in list order,
    when allowed by C1 and C2, else none (never the other end) (U-P2-11);
-4. resolves N8 by rule L;
+4. resolves N8 by rule L (native slots only, RS-FX5: a line that now shows a
+   junction's kept station through a foreign slot beside a station of its own
+   of that name letters nothing);
 5. reports, per line, every name shown differently, every comment hidden, every
    letter, and every closure left with no archive.
 
@@ -410,12 +439,17 @@ once (declared).
   lines); the others become records with their own name, comment and external.
 - Migrated `Tie` closures and 0.6.0 loop closures get an archived end as 8.2
   step 3.
-- N8 by rule L (replacing `settle_junction_names`' chain-order lettering); the
-  migration oracle checks that no identity shown on two or more lines is ever
-  lettered.
+- N8 by rule L (replacing `settle_junction_names`' chain-order lettering),
+  native slots only (RS-FX5): a merge group's lines other than the kept
+  member's show it through foreign slots, so their own stations keep their
+  names; rule L fires only where native slots repeat a name, which a 0.6.0
+  line does not (its load letters a crafted repeat as 0.6.0 showed it). The
+  migration oracle checks that every letter answers two native slots and that
+  no identity shown on two or more lines is lettered for one on fewer.
 - The conversion notice lists, grouped by line: stations now shown under
   another station's name, **comments now hidden** (`comments_hidden`, raised
-  even when every name matches, U-P1-2), letters, and closures with no archive;
+  even when every name matches, U-P1-2), letters (since RS-FX5 none for a
+  dotted repeat), and closures with no archive;
   it says Detach Line from Station or Remove Closure brings each back.
   "Comments were joined" no longer occurs for merges.
 
@@ -431,13 +465,18 @@ once (declared).
   loop tie.
 - **CSV and JSON**: shown name and shown id (readings only: a shared id is how
   those consumers tie a loop); a same-line closure lists one id twice on that
-  line. Stated in each exporter's module doc.
+  line. Since RS-FX5 a name may repeat on a line (the dotted junction and the
+  line's own station of its name), and the shown id keeps the rows
+  unambiguous: the dotted slot carries the kept station's id, the one its
+  home line's rows carry. Stated in each exporter's module doc.
 - **Image export**: no name, id or comment at a closure-archived node (6).
 - **stalx-reader**: node ids per slot, plus the shown name per slot and a
-  `shown_as` map; `station_comments` skips closure-archived nodes.
+  `shown_as` map; `station_comments` skips closure-archived nodes. A name may
+  repeat on a section at a junction or a loop end (RS-FX5); its doc says to
+  tie stations by `station_ids`.
 - **Imports**: closures an import creates (`import_funnel.rs` `push_closure`)
-  take rule K with the allowed fallback, else none, collisions by rule L, all
-  named in the receipt; joins per 4.1.
+  take rule K with the allowed fallback, else none, all named in the receipt
+  (an archive letters nothing, RS-FX5); joins per 4.1.
 
 ## 10. Undo
 
@@ -453,20 +492,27 @@ archives.
 - A junction shows one station, the kept one, on every line; the others are
   archived with their own name and comment and come back with Detach Line from
   Station.
+- A line may show one name twice (RS-FX5): a junction slot showing the kept
+  station (with its home line's dot) or a loop end (with the loop mark) counts
+  for no uniqueness, so the line's own station of that name keeps it. Plain
+  texts name the dotted one "12 (Main)" and a loop end "12 (loop end on
+  Side)".
 - Merge asks which station is kept and never joins comments. A collision is
-  answered in the dialog (letter the other station, or rename the kept one).
+  answered in the dialog (letter the other station, or rename the kept one);
+  the archived line's own station named like the kept one is none.
 - A loop closure shows its two ends as one station; the hidden end has no label
   but stays a point of its own; Remove Closure brings its name back.
 - Upgraded files keep each junction's station on the longest line and archive
   one end of each closure the same way; the notice lists what is shown
-  differently, hidden comments and letters.
+  differently, hidden comments and letters (none for a dotted repeat).
 - Imports keep the project's station at a join, with the file's own station
-  archived.
+  archived; the file's other stations keep their names beside the dotted
+  junction.
 - Deletes that leave a junction on lines that knew it by another station bring
   that station back, keeping a comment that would otherwise vanish.
 - Exports: Ariane uses node ids; Compass, Walls, survex, CSV and JSON use shown
-  names (CSV and JSON also shown ids); the image export never labels a hidden
-  closure end.
+  names (CSV and JSON also shown ids, which tell a dotted name from the line's
+  own one); the image export never labels a hidden closure end.
 
 ## 12. Tests and fuzzing
 
@@ -1603,3 +1649,133 @@ and RS-FX1's "Records still carry no owner link".
   the nine pinned farm seeds. Its remaining exclusions (a merge or detach
   that also ran a promotion, a restore, a letter or the user's renames) are
   unchanged.
+
+## Deviations (package RS-FX5)
+
+The user's decision (2026-11-23), recorded as given: **"Dotted slots don't
+collide."** A slot that shows another station's identity does not count for
+name uniqueness on its line. That means a foreign slot (its line is named by
+an archived record, so it shows the kept station with the kept station's
+home-line dot) and a loop end (a closure-archived node, shown with the loop
+mark). Example: Main/12 is kept. Branch's start shows "12" with Main's dot,
+and Branch's own 13th station keeps its surveyed name "12". No letter is
+given. (It came from upgrading real surveys, where rule L lettered far more
+branch stations than any file had before RS.) Sections 2, 3, 4.1, 4.2, 5.2,
+5.4, 6, 7, 8.2, 8.3, 9 and 11 above are rewritten for it. Decisions this
+package took where the decision is silent, each with its reason; they
+supersede RS-UI's "Plain text for a foreign slot needs the line" and its
+collision rows for Create Loop Closure, RS-M2's closure-preview suggestions
+for a creation, RS-X's "Names settle around the file's own junction name in
+every case" and RS-F's "The 8.3 oracle's rule L check".
+
+- **One predicate, `NativeSlots`.** A slot is native when no closure archives
+  its node and no record of the node names its line; it then shows its own
+  node's identity. Built once per pass (the shown index and every
+  `(node, line)` a record names), so a hub of thousands of records costs its
+  record lines once, not a scan of its records per slot. N8 (validate), rule
+  L, the rename check, the dialogs' alternatives, Combine's prefix plan and
+  the migration oracle all read it; the wire's `shown` is present exactly on
+  the slots it calls not native, so the frontend, the e2e mock and the agent
+  harness read "no `shown`" for it.
+- **Rule L keeps its measure, judges "new" and frees the letter natively.**
+  The lettered identity is still the one shown on fewer lines, counting
+  every line it is shown on (foreign slots and loop ends included: that is
+  how visible a rename is). "Already on the line" is now "shown there by a
+  native slot before the op" (`native_pairs`): a station a line showed only
+  through a dotted slot was not there by its own name. The letter is the
+  first free among the native slots of the lines the identity is native on,
+  so a dotted `5a` does not block `5a` (one rule for letters and renames; a
+  rename to `5a` would be allowed there too).
+- **A rename is checked on the identity's native lines only** (point 3):
+  `conflicts_with_name` and `names_around` look at the lines where the
+  renamed identity is native (`native_lines_of_identity`: none for a loop
+  end's own identity) and at native slots of other identities there. A
+  rename through a foreign slot or a loop end addresses the kept station
+  (5.4), so it is checked on the kept station's own lines; the frontend's
+  `lineWithStationNamed` and the e2e mock's rename check do the same.
+- **Which paths still letter.** A merge's own mutation never makes a
+  collision now: every line that shows the kept identity anew shows it
+  through a foreign slot or a loop end, and the kept identity's own lines
+  keep their native names. A merge can still letter what its epilogue does
+  (a closure archive the normalisation drops, a promotion, a restore), so
+  the Merge dialog keeps its collision rows. A closure's creation never
+  makes one (5.2). Detach, Remove Closure, the A4 restore, Combine and
+  imports still can: each shows an identity natively where it was not.
+- **Combine's prefix plan reads native names only.** A dotted slot or a
+  loop end keeps showing another line's station on the combined line, so
+  it neither causes nor takes a prefix, and the retired join name counts
+  only when the other line showed it natively. Before, a dotted 12 on the
+  kept line against the other line's own 12 prefixed both lines and renamed
+  the kept junction (Main / 12 -> A12) through the dotted slot.
+- **Imports letter only at a native join slot.** The funnel letters a new
+  station named like the junction's shown name once the record decision is
+  made, and only when the junction's slot on the new line is native (no
+  record names the line there: the file gives the junction no name, comment
+  or external id of its own, or no Station ID was left for the record; and
+  the target is not a loop end). A junction the file gives no name of its
+  own takes the shown name for the creation rules' fill, as before, but the
+  settle reads it as the name the line's own station there will have: the
+  record's (the target's own name) when the file's comment or external id
+  makes one, else none, so a dotted junction letters none of the file's
+  stations. The closures' pass no longer runs rule L, and the copy of the
+  project taken before the import for it is gone: an imported closure's
+  archive makes loop ends only, and its keeps hold C1 and C2 in list order.
+- **The upgrades.** The 8.2 upgrade letters a name only where native slots
+  repeat it, which a U1 file holds only if crafted (U1's own N8 forbade it).
+  The 0.6.0 migration keeps its rule L pass as the shared `settle` step and
+  a safety net, but on a migrated survey it fires nowhere: a merge group's
+  other lines show the kept member through foreign slots, and the 0.6.0 load
+  itself letters a crafted repeat on one line, as 0.6.0 showed it. The
+  conversion notice lists no letter for a dotted repeat. Salvage letters
+  native repeats only, by the same pass.
+- **Dead code removed.** The Create Loop Closure preview's collisions
+  (`ClosureKeepPreview.collisions` on the wire, always empty; a debug
+  assertion stands for it), the dialog's collision rows, answers and their
+  renames for it, the e2e mock's create collisions, and the undo fuzzer's
+  reading of them (a drawn answer but "none" is the empty list the dialog
+  sends); the import funnel's rule L over its closures, the project copy it
+  needed and its receipt sentence ("Station X was renamed Y: after a loop
+  closure ..."); `uniquify_line_names` (chain order, already unused, kept by
+  RS-INT) and `uniquify_station_name` (unused by any operation). The
+  command's `renames` on Create Loop Closure stays: it is the API that
+  renames in the same op, and the dialog still sends an empty list so a
+  refusal is never lettered behind the user's back.
+- **Plain text names a dotted slot by its home line** (point 4). One helper
+  per side words every text that names a slot without the dot or the loop
+  mark: `slot_name_text`, `slot_text` and `shot_text` in the model
+  (`slot_text.rs`), `stationLabelOf` and `shotLabelAt` in the frontend
+  (`labels.station`, `labels.shotAt`, now qualified with or without the
+  line). Native `12`, `Side / 12`; foreign `12 (Main)`, `Side / 12 (Main)`;
+  loop end `12 (loop end on Side)`, `Main / 12 (loop end on Side)`; a shot
+  `Side: 12 (Main) -> 13` (arrow U+2192). The backend's `station_text`, the
+  five copies of the shot label (validation warnings, Reverse Line's
+  warnings, created shots' warnings, shot refusals, history rows), the
+  history `NameBook`, the split refusal and label, Combine's removed-tie
+  warnings and the receipt's joined station read the model's helper. The
+  Warnings tab strips a warning's `Shot <label> ` prefix by the frontend's
+  `shotAt(.., true)`, so the two must word it the same (pinned by vitest).
+  Pills draw bare names (`labels.stationPill`, `labels.shotPillAt`), and a
+  shot pill now draws the loop mark on a loop-end end too, as a station pill
+  does. Identity labels (records, previews, notices) name an identity by
+  its home line and stay as they are; Plan pins keep `K (loop end)`
+  (RS-FX3).
+- **Exports.** No exporter ties stations by name: Compass, Walls and survex
+  are import-only, Ariane ties by node id and writes no names, the image
+  labels each point once. CSV and JSON write the shown name and the shown
+  Station ID, and the id keeps every row unambiguous: the dotted slot carries
+  the kept station's id, the one its home line's rows carry, and the line's
+  own station its own; their module docs now say the id, not the name, is the
+  key. Tests with the user's example pin each format (CSV, JSON, Ariane,
+  image, stalx-reader). stalx-reader keeps its API (no foreign flag): its
+  `station_names` doc says a section may repeat a name at a junction or a
+  loop end and to tie stations by `station_ids`.
+- **Oracles.** `rs-rule-l` now also fails a letter for a collision that is
+  not between two native slots; the migration oracle requires every letter
+  to answer two native slots; the agent harness's N8 counts slots without
+  `shown`; the metamorphic oracle's encoder-refusal test crafts a native
+  repeat. All gate seeds pass; the farm windows are for the farm.
+- **No file or history version bump.** A file this build writes may now show
+  a name twice on a line through a dotted slot. An earlier #827 build that
+  lists the same feature holds the old N8 and refuses such a file as
+  damaged; only those unreleased development builds meet it (the latest
+  tag, v0.5.5, writes neither version 2).

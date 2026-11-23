@@ -3,7 +3,7 @@
 //! counting each station once, hidden lines, determinism, byte equality with
 //! the legacy renderer where the models agree.
 
-use super::super::test_helpers::{cave, gps_at, meta, project, run, Cave};
+use super::super::test_helpers::{cave, dotted_twelve, gps_at, meta, project, run, Cave};
 use super::{export_image, export_value_histogram, generate_svg_string};
 use crate::export::color_scale::ExportValueKind;
 use crate::export::{ColorMode, ExportImageOptions, ImageFormat};
@@ -320,3 +320,30 @@ const LEGACY_SIMPLE_IDS_SVG: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
 </g>
 </svg>
 "##;
+
+/// RS-FX5, the user's example ([`dotted_twelve`]): Branch shows Main's 12 at
+/// its start (dotted) and its own 12 further on. The image labels each
+/// station once by its shown name, so "12" is drawn twice, once at the
+/// junction (Main's 12, one label for both lines) and once at Branch's own
+/// station: two points, two labels, nothing joined. In Station ID mode the
+/// two labels are the two Station IDs.
+#[test]
+fn a_lines_own_12_is_labelled_beside_the_dotted_junction() {
+    let fixture = dotted_twelve();
+    let names = texts(
+        &generate_svg_string(&fixture.project, &labelled(false)).unwrap(),
+        "station-names",
+    );
+    assert_eq!(names.iter().filter(|n| *n == "12").count(), 2, "{names:?}");
+    let ids = texts(
+        &generate_svg_string(&fixture.project, &labelled(true)).unwrap(),
+        "station-labels",
+    );
+    for station in [fixture.junction, fixture.own_12] {
+        assert_eq!(
+            ids.iter().filter(|t| **t == station.to_string()).count(),
+            1,
+            "{ids:?}"
+        );
+    }
+}

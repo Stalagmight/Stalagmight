@@ -502,8 +502,9 @@ fn ids_and_names_survive_a_save_and_reopen() {
 
 /// A merge makes one station with the kept station's id, name and comment,
 /// shown on every line (RS 4.1); the other station is archived whole, with
-/// its own comment, as a record naming B. B's own "2" takes the letter
-/// (rule L: the junction is shown on two lines).
+/// its own comment, as a record naming B. B's own "2" keeps its name
+/// beside the dotted 2 at B's start (RS-FX5: a foreign slot counts for no
+/// uniqueness).
 #[test]
 fn a_merge_shares_one_id_and_name_and_archives_the_other_station() {
     let mut p = empty("Junction");
@@ -531,7 +532,7 @@ fn a_merge_shares_one_id_and_name_and_archives_the_other_station() {
             .collect::<Vec<_>>(),
         [(b0, "0".to_string(), Some("sump".to_string()), vec![b])]
     );
-    assert_eq!(names(&p, b), ["2", "1", "2a"]);
+    assert_eq!(names(&p, b), ["2", "1", "2"]);
     // Every slot of the junction shows the one id, name and comment.
     let stations = state.project_state_wire().unwrap().stations;
     let wire: Vec<_> = stations
@@ -576,10 +577,10 @@ fn a_detach_mints_a_station_named_as_the_junction_and_redo_gives_it_back() {
 }
 
 #[test]
-fn a_merge_letters_the_moving_lines_own_station_by_rule_l() {
+fn a_merge_leaves_the_moving_lines_own_station_its_name() {
     // B's own station 1 is named like A:1, the kept station B now shows at
-    // its start (RS 4.1). Rule L letters B's own 1 (shown on one line), never
-    // the junction (shown on two), and A is untouched.
+    // its start (RS 4.1) with A's dot: a foreign slot counts for no
+    // uniqueness (RS-FX5), so B keeps its own 1, and A is untouched.
     let mut p = empty("Names");
     let a = line_at(&mut p, "A", [0.0, 0.0], shots(2));
     let b = line_at(&mut p, "B", [50.0, 0.0], shots(2));
@@ -588,7 +589,7 @@ fn a_merge_letters_the_moving_lines_own_station_by_rule_l() {
     let before = snapshot(state);
     merge(state, slot(b, 0), slot(a, 1));
     let p = project(state);
-    assert_eq!(names(&p, b), ["1", "1a", "2"]);
+    assert_eq!(names(&p, b), ["1", "1", "2"]);
     assert!(!p.is_native(st(&p, a, 1), b));
     assert!(p.is_foreign_slot(slot(b, 0)));
     assert_eq!(p.stations[&st(&p, a, 1)].name, "1");

@@ -18,7 +18,8 @@
 //!   station's (a merged junction used to print each line's own station),
 //!   and a loop end a closure archives is written under its kept end's name
 //!   and id (these files hold readings only, so a shared id is how their
-//!   readers tie a loop).
+//!   readers tie a loop). A name may repeat on a line where one slot shows
+//!   another station (RS-FX5), so the id, not the name, is the key.
 //! - **Ariane:** a row's `ID` is the Station ID of the node the row ends at
 //!   (a START's, the node it stands on), so ids are stable across exports;
 //!   CLOSURE rows and the GPS-fix STARTs take ids above every station. A

@@ -115,10 +115,12 @@ export default function UnrecognisedShotKindDialog() {
                 <tr key={shot.shot_id} className="border-t border-border">
                   <td className="p-2">
                     {/* `Main Line: 4 → 5`: shot number n (1-based) runs from
-                        station n - 1 to station n of its line. */}
+                        station n - 1 to station n of its line; each end is
+                        its plain label (`12 (Main)` for a foreign slot). The
+                        line's name is the report's. */}
                     {formatShotLabel(
-                      labels.stationName({ line_id: shot.line_id, station_index: shot.shot_number - 1 }),
-                      labels.stationName({ line_id: shot.line_id, station_index: shot.shot_number }),
+                      labels.station({ line_id: shot.line_id, station_index: shot.shot_number - 1 }),
+                      labels.station({ line_id: shot.line_id, station_index: shot.shot_number }),
                       shot.line_name ?? t('dialogs.unrecognisedShotKind.unnamedSection'),
                     )}
                   </td>

@@ -1229,9 +1229,10 @@ function ProjectDataTable({ lines }: DataTableProps) {
             entity="shot"
             lineId={selectedLineId}
             shotEnds={shotEndMarks(labels, selectedLineId, shotIndex)}
+            plain={labels.shotAt(selectedLineId, shotIndex)}
             className="min-w-0 max-w-full"
           >
-            {labels.shotAt(selectedLineId, shotIndex)}
+            {labels.shotPillAt(selectedLineId, shotIndex)}
           </EntityBlob>
         </span>
       ) : (
@@ -1890,7 +1891,7 @@ function ProjectDataTable({ lines }: DataTableProps) {
                       type="station"
                       target={{ lineId: ref.line_id, position: ref.station_index }}
                       displayText={labels.station(ref, true)}
-                      pillLabel={labels.station(ref)}
+                      pillLabel={labels.stationPill(ref)}
                       onSelect={() => selectLinkedStation(ref)}
                       onHoverStart={() => setHoveredStation(ref)}
                       onHoverEnd={() => setHoveredStation(null)}
@@ -1923,7 +1924,7 @@ function ProjectDataTable({ lines }: DataTableProps) {
                       type="station"
                       target={{ lineId: c.station_ref.line_id, position: c.station_ref.station_index }}
                       displayText={labels.station(c.station_ref, true)}
-                      pillLabel={labels.station(c.station_ref)}
+                      pillLabel={labels.stationPill(c.station_ref)}
                       onSelect={() => selectLinkedStation(c.station_ref)}
                       onHoverStart={() => setHoveredStation(c.station_ref)}
                       onHoverEnd={() => setHoveredStation(null)}

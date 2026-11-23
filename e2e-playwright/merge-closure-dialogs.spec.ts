@@ -126,13 +126,12 @@ test.describe('Merge and Closure Dialogs', () => {
     await expect(closureDialog.getByText('0.5m').first()).toBeVisible();
 
     // No strategy options (auto strategy is applied): the radios are the
-    // keep choice (RS 5.2), both ends and "Keep both names", and the two
-    // answers to the one name the default keep repeats (Main Line's 0 shown
-    // on Side Passage, which has its own 0; the mock models collisions).
+    // keep choice (RS 5.2), both ends and "Keep both names". Main Line's 0
+    // shown on Side Passage, which has its own 0, is a loop end there and
+    // repeats no name (RS-FX5), so there is nothing else to answer.
     await expect(page.getByTestId('closure-keep')).toBeVisible();
     await expect(page.getByTestId('closure-keep').locator('input[type="radio"]')).toHaveCount(3);
-    await expect(page.getByTestId('closure-collision-0')).toBeVisible();
-    await expect(closureDialog.locator('input[type="radio"]')).toHaveCount(5);
+    await expect(closureDialog.locator('input[type="radio"]')).toHaveCount(3);
     await expect(page.getByTestId('closure-keep-both')).toBeVisible();
 
     // Should have Cancel and Create Closure buttons

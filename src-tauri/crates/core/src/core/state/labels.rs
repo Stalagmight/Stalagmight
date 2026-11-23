@@ -138,10 +138,20 @@ impl<'p> NameBook<'p> {
         }
     }
 
-    /// `Line name / station name` of the station at a slot.
+    /// The name the slot shows as plain text, a dotted slot or a loop end
+    /// qualified (`12 (Main)`, `12 (loop end on Side)`;
+    /// `Project::slot_name_text`, RS-FX5).
+    pub(crate) fn station_name_text(&self, slot: StationRef) -> Option<String> {
+        self.project.topology().station_at(slot)?;
+        Some(self.project.slot_name_text(slot))
+    }
+
+    /// `Line name / station name` of the station at a slot, a dotted slot or
+    /// a loop end qualified (`Side / 12 (Main)`, `Main / 12 (loop end on
+    /// Side)`; `Project::slot_text`, RS-FX5).
     pub(crate) fn station(&self, slot: StationRef) -> Option<String> {
-        let name = self.station_name(slot)?;
-        Some(format!("{} / {name}", self.line(slot.line_id)?))
+        self.line(slot.line_id)?;
+        self.project.slot_text(slot)
     }
 
     /// The slots of the lines a detach at `slot` takes off the station
@@ -229,10 +239,10 @@ impl<'p> NameBook<'p> {
             .shots
             .iter()
             .position(|s| s.id == shot_id)?;
-        let index = u32::try_from(index).ok()?;
-        let from = self.station_name(StationRef::new(line_id, index))?;
-        let to = self.station_name(StationRef::new(line_id, index.checked_add(1)?))?;
-        Some(format!("{}: {from} \u{2192} {to}", self.line(line_id)?))
+        let at = u32::try_from(index).ok()?;
+        self.station_name(StationRef::new(line_id, at))?;
+        self.station_name(StationRef::new(line_id, at.checked_add(1)?))?;
+        Some(self.project.shot_text(line_id, index))
     }
 
     /// The name of Section `id`, or `#id`.
@@ -930,7 +940,7 @@ pub(crate) fn delete_shots_label(
     let station = |index: usize| {
         u32::try_from(index)
             .ok()
-            .and_then(|i| names.station_name(StationRef::new(line_id, i)))
+            .and_then(|i| names.station_name_text(StationRef::new(line_id, i)))
             .unwrap_or_else(|| index.to_string())
     };
     let count = last.saturating_sub(first) + 1;

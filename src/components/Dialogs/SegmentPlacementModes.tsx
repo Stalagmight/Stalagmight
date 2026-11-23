@@ -221,7 +221,7 @@ export function SegmentPlacementModes({
                           value={String(fromExistingStationIdx)}
                           onChange={(v) => onFromExistingStationChange(Number(v))}
                           options={Array.from({ length: fromExistingStationCount }, (_, i) =>
-                            stationOption(i, labels.stationName({ line_id: fromExistingLineId, station_index: i })),
+                            stationOption(i, labels.station({ line_id: fromExistingLineId, station_index: i })),
                           )}
                           className="flex-1"
                           data-testid="from-existing-station-select"

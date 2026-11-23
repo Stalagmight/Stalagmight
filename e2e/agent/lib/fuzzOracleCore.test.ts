@@ -487,6 +487,24 @@ describe('checkProjectInvariants', () => {
       expect(violationsAfter(merged)).toEqual([]);
     });
 
+    // RS-FX5: a foreign slot counts for no name uniqueness, so line 2 keeps
+    // its own J beside the junction's dotted J; two native slots still may not.
+    it('accepts a foreign slot and a native slot of one name on a line (N8 on native slots)', () => {
+      expect(
+        violationsAfter((state) => {
+          merged(state);
+          slots(state)[3]!.name = 'J';
+        }),
+      ).toEqual([]);
+      expect(
+        violationsAfter((state) => {
+          merged(state);
+          slots(state)[3]!.name = 'J';
+          slots(state)[4]!.name = 'J';
+        }).filter((v) => v.includes('shows two stations named')),
+      ).toEqual(['line 2 shows two stations named "J" (Station IDs 12 and 13, at 2/2)']);
+    });
+
     it('fires when a foreign slot carries no shown station, or a native slot carries one', () => {
       expect(
         violationsAfter((state) => {

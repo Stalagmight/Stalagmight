@@ -651,7 +651,7 @@ function SameResultBody({ same: { off, keeper, preview } }: { same: SameDetachRe
           name: displayStationName(preview.name),
           id: preview.station_id,
           keeper: keeperLine,
-          station: labels.stationName(keeper),
+          station: labels.station(keeper),
         })}
       </p>
       {comment !== '' && (

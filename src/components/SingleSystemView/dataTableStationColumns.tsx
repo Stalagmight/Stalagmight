@@ -34,8 +34,9 @@ export interface StationColumnContext {
    *  station picker at the pointer. */
   onConnectionsCellClick: (station: Station, pos: { x: number; y: number }) => void;
   /** Names for the rename check and the connections tooltip. A rename to a
-   *  name another station holds on any line through the station is refused
-   *  inline before it reaches the backend (`stationNameTakenOn`, plan 5.3). */
+   *  name a native slot of another station shows, on a line the renamed
+   *  station is native on, is refused inline before it reaches the backend
+   *  (`stationNameTakenOn`, plan 5.3, RS-FX5). */
   labels?: Pick<IdentityLabels, 'station' | 'stationName' | 'stationId' | 'lineName' | 'stationNameTakenOn'>;
 }
 
@@ -88,7 +89,8 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
   return [
     {
       // The editable copy of the gutter's name pill (set_station_name: trimmed,
-      // never empty, unique on every line through the station). Hidden by default
+      // never empty, unique among the native slots of every line the shown
+      // station is native on, RS-FX5). Hidden by default
       // (STATION_DEFAULT_HIDDEN / the backend panels default).
       key: 'name',
       header: t('dataTable.stationColumns.name'),

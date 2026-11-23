@@ -10,7 +10,9 @@
  * of the line the station belongs to, right after its name, for a station
  * shown on a line that is not its home line. A loop end (a station a loop
  * closure shows as its other end, RS 6) carries a small loop mark there too,
- * even where it has no dot.
+ * even where it has no dot. A shot pill carries each end's marks after that
+ * end's name. The marks stand for the qualifier plain text adds (`12 (Main)`,
+ * `3 (loop end on Side)`), so a pill's names are bare.
  */
 import { useCallback, type CSSProperties, type ReactNode } from 'react';
 import { useShallow } from 'zustand/react/shallow';
@@ -127,16 +129,20 @@ export function LoopEndMark({ label, testId }: { label?: string | undefined; tes
   );
 }
 
-/** A shot's two station names, each with its home-line mark when it has one. */
+/** A shot's two station names, each with its home-line mark and its loop
+ *  mark when it has one (a station pill's marks, per end). */
 export interface ShotEnds {
   from: string;
   to: string;
   fromMark?: PillDot | null | undefined;
   toMark?: PillDot | null | undefined;
+  fromLoopEnd?: boolean | undefined;
+  toLoopEnd?: boolean | undefined;
 }
 
 export interface PillPartsProps {
-  /** Test id root: parts get `-dot`, `-id` (the context), `-home-dot`, `-station-id`. */
+  /** Test id root: parts get `-dot`, `-id` (the context), `-home-dot`, `-loop-end`, `-station-id`,
+   *  and a shot's ends `-from-home-dot`, `-from-loop-end`, `-to-home-dot`, `-to-loop-end`. */
   testId?: string | undefined;
   /** Muted context before the main part, shown with a colon (`Main Line:`). */
   context?: string | null | undefined;
@@ -148,7 +154,7 @@ export interface PillPartsProps {
   mark?: PillDot | null | undefined;
   /** A station pill's loop mark (a loop end, RS 6), after the name and its dot. */
   loopEnd?: boolean | undefined;
-  /** Words read for the loop mark by a screen reader. */
+  /** Words read for a loop mark (the station's, or a shot end's) by a screen reader. */
   loopEndLabel?: string | undefined;
   /** A station's Station ID, as a muted superscript at the end. */
   stationId?: number | null | undefined;
@@ -196,9 +202,11 @@ export function PillParts({
           <>
             {shotEnds.from}
             {shotEnds.fromMark && <HomeLineMark mark={shotEnds.fromMark} testId={part('from-home-dot')} />}
+            {shotEnds.fromLoopEnd && <LoopEndMark label={loopEndLabel} testId={part('from-loop-end')} />}
             {` ${SHOT_ARROW} `}
             {shotEnds.to}
             {shotEnds.toMark && <HomeLineMark mark={shotEnds.toMark} testId={part('to-home-dot')} />}
+            {shotEnds.toLoopEnd && <LoopEndMark label={loopEndLabel} testId={part('to-loop-end')} />}
           </>
         ) : (
           main

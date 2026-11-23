@@ -74,8 +74,9 @@ pub(super) fn slot_bits(p: &Project) -> Vec<[u64; 3]> {
 
 /// The demo's W2/W4 survey: Far Room (0, 1, 2, 3; 3 x 10 m) and the Upstream
 /// piece (0, 1, 2, 3; 3 x 5 m), Upstream's start merged onto Far Room's end,
-/// which is kept and carries a comment. Upstream's own `3` takes the letter
-/// (rule L: the junction is shown on two lines).
+/// which is kept and carries a comment. Upstream's start shows Far Room's
+/// `3` with Far Room's dot (a foreign slot), and Upstream's own `3` keeps its
+/// name: a foreign slot counts for no uniqueness (RS-FX5).
 fn far_room_and_upstream() -> (Project, LineId, LineId) {
     let mut p = project();
     let far = free_line(&mut p, [0.0, 0.0], run(90.0, 3, 10.0));
@@ -83,8 +84,9 @@ fn far_room_and_upstream() -> (Project, LineId, LineId) {
     let (f3, u0) = (at(&p, far, 3), at(&p, up, 0));
     p.station_mut(f3).unwrap().comment = Some("Far Room: large chamber".to_string());
     let out = ok(p.merge_stations_auto(u0, f3, f3));
-    assert_eq!(out.identities.lettered.len(), 1);
+    assert!(out.identities.lettered.is_empty());
     assert_valid(&p);
+    assert_eq!(shown(&p, up), ["3", "1", "2", "3"]);
     (p, far, up)
 }
 
@@ -453,7 +455,7 @@ fn a_delete_restores_the_record_and_carries_the_comment_over() {
     assert_eq!(back.name, "0");
     assert_eq!(back.comment.as_deref(), Some("Far Room: large chamber"));
     assert_eq!(back.archived, vec![record(f3, "3", vec![])], "history");
-    assert_eq!(shown(&p, up), ["0", "1", "2", "3a"], "a letter stays");
+    assert_eq!(shown(&p, up), ["0", "1", "2", "3"], "nothing was lettered");
     undo_is_exact(&before, &p);
 }
 
@@ -779,7 +781,11 @@ fn crafted_closure_archives_report_instead_of_hanging() {
 /// below the counter; A5: a record with no line is history, shown nowhere.
 #[test]
 fn a1_and_a5_hold_for_records() {
-    let (mut p, far, _) = far_room_and_upstream();
+    let (mut p, far, up) = far_room_and_upstream();
+    // Upstream's own 3 sits beside the dotted 3 (RS-FX5); once the record
+    // is history below, Upstream's slot is native and would repeat it.
+    let u3 = at(&p, up, 3);
+    p.station_mut(u3).unwrap().name = "own 3".to_string();
     let f3 = at(&p, far, 3);
     let u0 = p.stations[&f3].archived[0].id;
     let mut twice = p.clone();

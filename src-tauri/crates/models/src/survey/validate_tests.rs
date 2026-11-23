@@ -964,14 +964,23 @@ fn records_follow_a2_to_a4_and_their_names_count_nowhere() {
     assert!(!p.is_foreign_slot(StationRef::new(l0, 1)));
     assert_eq!(p.home_line(s1), Some(l0));
     assert_eq!(p.shown_name(s1), Some(name.as_str()), "every line shows s1");
-    // A rename of s1 is checked on every line it is shown on.
+    // A rename of s1 is checked only on the lines it is native on (RS-FX5):
+    // L1 shows it through a foreign slot, which counts for no uniqueness,
+    // so "end" is free; on L0 a native station's name is not.
+    assert!(p.conflicts_with_name(s1, "end").is_empty());
+    let l0_next = at(&p, l0, 2);
+    let taken = p.stations[&l0_next].name.clone();
     assert_eq!(
-        p.conflicts_with_name(s1, "end"),
+        p.conflicts_with_name(s1, &taken),
         vec![NameConflict {
-            line: l1,
-            other: l1_end
+            line: l0,
+            other: l0_next
         }]
     );
+    // And L1's end may take the name s1 shows on L1's foreign slot.
+    let mut dotted = p.clone();
+    dotted.stations.get_mut(&l1_end).unwrap().name = name;
+    assert_eq!(dotted.validate(), Vec::new());
     // A3: a second record naming L1.
     let mut twice = p.clone();
     let second = twice.mint_station_id().unwrap();

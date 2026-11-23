@@ -317,8 +317,10 @@ test.describe('Stations grid', () => {
  * station two lines pass, sharing its Station ID, and every line shows the
  * kept station (the mock keeps Main Line's "3"; Side's own "0" is archived).
  * A rename in Main Line's stations grid renames the kept station on every
- * line it is shown on: a name either line already shows is refused inline
- * (the backend would refuse it too), and a free one shows on both.
+ * line it is shown on. A name Main Line, where the kept station is native,
+ * already shows is refused inline (the backend would refuse it too); Side's
+ * slot is foreign and counts for no name uniqueness (RS-FX5), so a name only
+ * Side shows is allowed and Side then shows it twice.
  */
 test.describe('Stations grid at a junction', () => {
   const junctionSeeds: LineSeed[] = [
@@ -381,19 +383,15 @@ test.describe('Stations grid at a junction', () => {
     await expect(page.getByTestId('grid-invalid-flash')).toBeVisible();
     expect(await getStationName(page, mainId, 3)).toBe('3');
 
-    // "S2" is Side Line's, and Side shows the junction too: refused.
+    // "S2" is Side Line's own name, but Side shows the junction through a
+    // foreign slot (Main Line's dot), which repeats no name (RS-FX5): both
+    // lines show the kept S2, and Side keeps its own S2 too.
     await editor.fill('S2');
     await page.keyboard.press('Enter');
-    await expect(editor).toBeVisible();
-    expect(await getStationName(page, sideId, 0)).toBe('3');
-
-    // "J" is free on both lines: both show it.
-    await editor.fill('J');
-    await page.keyboard.press('Enter');
     await expect(editor).toHaveCount(0);
-    await expect(page.getByTestId('grid-cell-3-name')).toHaveText('J');
-    expect(await getStationName(page, mainId, 3)).toBe('J');
-    expect(await getStationName(page, sideId, 0)).toBe('J');
+    await expect(page.getByTestId('grid-cell-3-name')).toHaveText('S2');
+    await expect.poll(() => getStationName(page, mainId, 3)).toBe('S2');
+    await expect.poll(() => getStationName(page, sideId, 0)).toBe('S2');
     expect(await getStationName(page, sideId, 2)).toBe('S2');
   });
 

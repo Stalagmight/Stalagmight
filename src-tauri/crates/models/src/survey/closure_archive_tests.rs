@@ -194,62 +194,36 @@ fn a_keep_must_pass_c1_and_c2_else_keep_both_names_is_the_default() {
     assert_valid(&p);
 }
 
-/// RS 5.2 with 4.1 step 6: a name the archive shows twice on a line must be
-/// answered by the renames (the other station, or the kept one), or the
-/// creation refuses; the preview offers rule L's answer, and the form
-/// without a dialog applies it.
+/// RS-FX5 ("dotted slots don't collide"): a loop end shows its kept end
+/// with the loop mark and counts for no uniqueness, so archiving B3 behind
+/// A4 shows "A4" on B beside B's own station B1 renamed "A4": the creation
+/// needs no answer, letters nothing, and both stay. Before RS-FX5 the
+/// creation refused (`NameTaken`) and rule L lettered B1. Injection: count
+/// loop ends in `NativeSlots::is_native` and the creation refuses again.
 #[test]
-fn a_closure_answers_the_names_it_shows_twice() {
+fn a_closure_shows_its_kept_end_beside_a_station_of_the_same_name() {
     let (mut p, a, b) = loop_survey();
     let (a4, b1, b3) = (at(&p, a, 4), at(&p, b, 1), at(&p, b, 3));
     p.station_mut(b1).unwrap().name = "A4".to_string();
     assert_valid(&p);
-    let before = p.clone();
-    assert_eq!(
-        p.create_closure(b3, Some(b), a4, Some(a), BATCH, Some(a4), &[])
-            .err(),
-        Some(OpError::NameTaken {
-            line: b,
-            name: "A4".to_string()
-        })
-    );
-    assert_eq!(p, before);
     let naming = p
         .closure_naming((b3, Some(b)), (a4, Some(a)), BATCH, Some(a4))
         .unwrap();
-    assert_eq!(naming.collisions.len(), 1);
-    let letter = &naming.collisions[0];
-    // B1 is shown on one line, A4 will be shown on two: B1 takes the letter.
-    assert_eq!((letter.station, letter.other, letter.line), (b1, a4, b));
-    assert_eq!((letter.from.as_str(), letter.to.as_str()), ("A4", "A4a"));
-
-    let mut other = p.clone();
-    ok(other.create_closure(
-        b3,
-        Some(b),
-        a4,
-        Some(a),
-        BATCH,
-        Some(a4),
-        &[(b1, "B1".to_string())],
-    ));
-    assert_eq!(shown(&other, b), ["A0", "B1", "B2", "A4"]);
-    let mut kept = p.clone();
-    ok(kept.create_closure(
-        b3,
-        Some(b),
-        a4,
-        Some(a),
-        BATCH,
-        Some(a4),
-        &[(a4, "End".to_string())],
-    ));
-    assert_eq!(shown(&kept, a)[4], "End");
-    assert_eq!(shown(&kept, b), ["A0", "A4", "B2", "End"]);
+    assert!(naming.collisions.is_empty(), "{:?}", naming.collisions);
+    assert!(naming.alternatives.is_empty());
+    let mut answered = p.clone();
+    let out = ok(answered.create_closure(b3, Some(b), a4, Some(a), BATCH, Some(a4), &[]));
+    assert!(out.identities.lettered.is_empty());
+    assert_valid(&answered);
+    assert_eq!(shown(&answered, b), ["A0", "A4", "B2", "A4"]);
+    assert!(answered.is_native_slot(StationRef::new(b, 1)));
+    assert!(
+        !answered.is_native_slot(StationRef::new(b, 3)),
+        "a loop end"
+    );
     let out = ok(p.create_closure_auto(b3, Some(b), a4, Some(a), BATCH, Some(a4)));
-    assert_eq!(out.identities.lettered, naming.collisions);
-    assert_eq!(shown(&p, b), ["A0", "A4a", "B2", "A4"]);
-    assert_valid(&p);
+    assert!(out.identities.lettered.is_empty());
+    assert_eq!(p, answered);
 }
 
 // ----- remove -----------------------------------------------------------------

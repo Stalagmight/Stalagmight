@@ -17,6 +17,7 @@ import type { BlobEntity } from '../../theme/syntacticPalette';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import type { StationRef } from '../../types/project';
 import { markOf, PillParts, pillStyle, usePillColors } from './LinePill';
+import type { ShotEndMarks } from './shotEndMarks';
 
 export interface EntityBlobProps {
   /** Which entity this names (`station`, `shot`, `line`). */
@@ -33,11 +34,8 @@ export interface EntityBlobProps {
   homeLineId?: number | null | undefined;
   /** A station pill's loop mark: a loop closure shows this station as its other end (RS 6). */
   loopEnd?: boolean | undefined;
-  /** A shot pill's two ends, each with an optional home-line mark; replaces `children` in the pill. */
-  shotEnds?:
-    | { from: string; to: string; fromHomeLineId?: number | null | undefined; toHomeLineId?: number | null | undefined }
-    | null
-    | undefined;
+  /** A shot pill's two ends, each with an optional home-line mark and loop mark; replaces `children` in the pill. */
+  shotEnds?: ShotEndMarks | null | undefined;
   /** What the lower highlighting levels show; defaults to `children`. */
   plain?: ReactNode | undefined;
   /** After everything, inside the pill (the data table's picker chevron). */
@@ -97,6 +95,8 @@ export function EntityBlob({
                 to: shotEnds.to,
                 fromMark: markOf(pill, shotEnds.fromHomeLineId),
                 toMark: markOf(pill, shotEnds.toHomeLineId),
+                fromLoopEnd: shotEnds.fromLoopEnd,
+                toLoopEnd: shotEnds.toLoopEnd,
               }
             : null
         }
@@ -112,11 +112,12 @@ export function EntityBlob({
 }
 
 /**
- * A station as a pill: its name, the Station ID it shows, its line's colour
- * and, with `withLine`, its line as the context (`Main Line: 17`). A foreign
- * slot carries the dot of its shown station's home line, and a loop end the
- * loop mark (RS 6), unless `homeLineId` says otherwise. Below Full it is the
- * plain label (`Main Line / 17`, `Side / 12 (Main)` for a foreign slot).
+ * A station as a pill: its bare name, the Station ID it shows, its line's
+ * colour and, with `withLine`, its line as the context (`Main Line: 17`). A
+ * foreign slot carries the dot of its shown station's home line, and a loop
+ * end the loop mark (RS 6), unless `homeLineId` says otherwise. Below Full it
+ * is the plain label (`17`, `Main Line / 17`; `12 (Main)`, `Side / 12 (Main)`
+ * for a foreign slot; `3 (loop end on Side)` for a loop end).
  */
 export function StationBlob({
   station,
@@ -147,7 +148,7 @@ export function StationBlob({
       testId={testId}
       title={title}
     >
-      {labels.station(station)}
+      {labels.stationPill(station)}
     </EntityBlob>
   );
 }

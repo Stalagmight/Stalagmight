@@ -382,9 +382,10 @@ fn create_line_reports_validation_warnings_with_the_shots_labels() {
 
 /// Reverse Line's warnings name each station as the line shows it (RS 4.1):
 /// Side's station 2 is kept by a merge with Main's station 1, so Main shows
-/// the junction as "2" and its own station 2 took the letter (rule L).
+/// the junction as "2" with Side's dot, beside its own station 2 (RS-FX5),
+/// so the warning's plain text qualifies the dotted one: `2 (Side)`.
 /// Injection: naming the junction by Main's archived record fails it with
-/// "Main: 2a \u{2192} 1".
+/// "Main: 2 \u{2192} 1".
 #[test]
 fn reverse_line_warnings_name_a_junction_as_the_line_shows_it() {
     use super::topology_kit::{deep, empty, line_at, open, st};
@@ -404,7 +405,7 @@ fn reverse_line_warnings_name_a_junction_as_the_line_shows_it() {
     let j = st(&p, side, 2);
     p.merge_keeping_stationary(st(&p, main, 1), j).unwrap();
     assert_eq!(p.shown_name(j), Some("2"));
-    assert_eq!(p.shown_name(st(&p, main, 2)), Some("2a"));
+    assert_eq!(p.shown_name(st(&p, main, 2)), Some("2"));
     let opened = open(&p);
     let r = opened.state.execute(Command::ReverseLine {
         line_id: main,
@@ -419,7 +420,7 @@ fn reverse_line_warnings_name_a_junction_as_the_line_shows_it() {
         .collect();
     assert_eq!(messages.len(), 1, "{:?}", r.warnings);
     assert!(
-        messages[0].starts_with("Shot Main: 2a \u{2192} 2 "),
+        messages[0].starts_with("Shot Main: 2 \u{2192} 2 (Side) "),
         "{messages:?}"
     );
 }

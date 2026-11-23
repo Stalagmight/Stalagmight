@@ -55,6 +55,7 @@ mod build;
 mod naming;
 mod positions;
 mod records;
+mod slot_text;
 mod topology;
 mod types;
 mod validate;
@@ -217,6 +218,12 @@ mod closure_archive_tests;
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
+mod dotted_names_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
 mod kept_report_tests;
 #[cfg(test)]
 #[expect(
@@ -303,7 +310,7 @@ pub use build::{BuildError, StaleAttachments, StartAt};
 pub use closures::{ClosureAcrossOneShot, ShotKey, TieGroups};
 pub use gas::{GasProfilePoint, GasReach};
 pub use graph::{AlongLine, RulerPoint, StationDistances, StationPositions};
-pub use naming::{LetteredStation, NameCollision, NameConflict};
+pub use naming::{LetteredStation, NameCollision, NameConflict, NativeSlots};
 pub use positions::{
     Anchor, PositionIssue, RawPositions, SlotPosition, ALIGNMENT_TOLERANCE_M, CORRECTION_EPSILON_M,
 };

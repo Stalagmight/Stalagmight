@@ -89,8 +89,9 @@ export default function EditStationDialog() {
   const accuracy = parseDatumAccuracy(accuracyInput);
 
   const nameChanged = name.trim() !== storedName;
-  // A junction's name must be free on every line through it (plan 5.3), so
-  // the message names the line the name is taken on.
+  // The name must be free among the native slots of every line the shown
+  // station is native on (plan 5.3, RS-FX5), so the message names the line
+  // the name is taken on.
   const nameTakenOn = stationRef && nameChanged ? labels.stationNameTakenOn(stationRef, name.trim()) : null;
   const nameProblem = stationRef && nameChanged ? stationRenameProblem(name, nameTakenOn) : null;
   const nameError = nameProblem

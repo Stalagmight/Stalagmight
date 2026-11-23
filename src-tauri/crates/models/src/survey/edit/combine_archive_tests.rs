@@ -451,3 +451,55 @@ fn a_join_shows_the_kept_join_station_over_a_loop_end() {
     assert!(report.identities.unarchived.contains(&id));
     assert!(p.closures.iter().all(|c| c.archived.is_none()));
 }
+
+/// RS-FX5 ("dotted slots don't collide") in Combine's prefix plan: K's start
+/// is merged onto Main's 12, kept, so K shows a dotted "12" there; O ends
+/// at its own native "12". Combining K and O end to start, the combined line
+/// shows both "12"s (one dotted), so the plan sees no collision and renames
+/// nothing; before RS-FX5 the dotted name counted and both lines were
+/// prefixed (`A0`.., `B12`). A native repeat still prefixes: O's "1" against
+/// K's "1" once K's own 1 is there. Injection: build the plan's name lists
+/// from every slot and the first combine prefixes again.
+#[test]
+fn a_dotted_name_causes_no_combine_prefix() {
+    let mut p = empty();
+    let main = line_at(&mut p, "Main", [0.0, 0.0], run("m", 90.0, 10.0, 13));
+    let k = line_at(&mut p, "K", [300.0, 300.0], run("k", 0.0, 5.0, 2));
+    let k2 = st(&p, k, 2);
+    let o = line_from(&mut p, "O", k2, run("o", 0.0, 5.0, 2));
+    name_line(&mut p, main, "", 0);
+    name_line(&mut p, k, "", 0);
+    for (i, name) in ["y", "12"].into_iter().enumerate() {
+        let s = st(&p, o, i + 1);
+        p.station_mut(s).unwrap().name = name.to_string();
+    }
+    let (k0, m12) = (st(&p, k, 0), st(&p, main, 12));
+    merge(&mut p, k0, m12);
+    assert_valid(&p);
+    assert_eq!(shown(&p, k), ["12", "1", "2"]);
+    assert!(!p.is_native_slot_of(m12, k), "K's start is dotted");
+    let before = p.clone();
+    let report = ok(p.combine_lines(k, o, &opts(CombinePick::Kept, LineEnd::End, LineEnd::Start)));
+    assert_valid(&p);
+    assert!(
+        report.station_renames.is_none(),
+        "{:?}",
+        report.station_renames
+    );
+    assert_eq!(shown(&p, k), ["12", "1", "2", "y", "12"]);
+    assert!(p.line(o).is_none(), "O is combined into K");
+    assert!(report.identities.lettered.is_empty());
+    assert_eq!(shown(&p, main)[12], "12", "Main's 12 is untouched");
+    undo_is_exact(&before, &p);
+
+    // A native repeat still prefixes: O's middle station named like K's 1.
+    let mut q = before;
+    let o1 = st(&q, o, 1);
+    q.station_mut(o1).unwrap().name = "1".to_string();
+    let report = ok(q.combine_lines(k, o, &opts(CombinePick::Kept, LineEnd::End, LineEnd::Start)));
+    assert_valid(&q);
+    assert!(report.station_renames.is_some());
+    let names = shown(&q, k);
+    assert_eq!(names[0], "12", "the dotted join keeps its name");
+    assert_ne!(names[1], names[3], "{names:?}");
+}

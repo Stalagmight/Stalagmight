@@ -208,8 +208,10 @@ pub struct ClosureKeepPreview {
     #[ts(optional)]
     pub hidden: Option<StationIdentity>,
     /// The lines on which a station shows another identity afterwards.
+    /// No name collision is listed: the archived end becomes a loop end,
+    /// which shows the kept end with the loop mark and counts for no name
+    /// uniqueness (RS-FX5), so creating a closure never repeats a name.
     pub renamed_lines: Vec<LineId>,
-    pub collisions: Vec<NameCollisionWire>,
 }
 
 /// Why a loop closure may not keep an end (RS 5.2), for the dialog's note

@@ -515,8 +515,10 @@ fn an_old_file_and_its_json_conversion_read_the_same() {
 /// A version 2 file an earlier build wrote (no `archived-stations`, a U1
 /// alias row) reads as the app upgrades it: the junction keeps the station
 /// on its longest line (Main, 30 m) on both sections, and Side's own "M2",
-/// which the earlier build showed beside the junction's alias "S0", takes a
-/// letter (rule L: it is shown on one section, the junction on two).
+/// which the earlier build showed beside the junction's alias "S0", keeps
+/// its name beside the junction's M2 (RS-FX5: Side shows the junction with
+/// Main's dot, which counts for no uniqueness); the Station IDs tell them
+/// apart.
 #[test]
 fn an_earlier_version_2_file_reads_upgraded() {
     let text = "{\"format\":\"stalx\",\"version\":2,\"solver\":1,\"requires\":[],\n\
@@ -540,7 +542,9 @@ fn an_earlier_version_2_file_reads_upgraded() {
     let (main, side) = (survey.sections[0].id, survey.sections[1].id);
     assert_eq!(name_at(&survey, at(main, 2)), "M2");
     assert_eq!(name_at(&survey, at(side, 0)), "M2");
-    assert_eq!(name_at(&survey, at(side, 1)), "M2a");
+    assert_eq!(name_at(&survey, at(side, 1)), "M2");
+    let side_ids = &survey.sections[1].station_ids;
+    assert_ne!(side_ids[0], side_ids[1]);
 }
 
 /// Record owners (RS-FX4): a junction merged into another with a record of
@@ -592,4 +596,57 @@ fn record_owners_read_and_a_cycle_is_corrupt() {
     );
     let err = read_bytes(&cycle, &ReadOptions::default()).unwrap_err();
     assert_eq!(invalid_kind(&err), Some(InvalidKind::Corrupt), "{err}");
+}
+
+/// RS-FX5, the user's example: Main / 12 is kept at Branch's start (Branch's
+/// own station there archived), and Branch's own 13th station keeps its
+/// surveyed name "12". The reader lists "12" at both Branch positions, as
+/// the app shows them, and the Station IDs keep them apart: Branch's start
+/// is the junction's id (merged with Main's 12), its 12th position its own.
+#[test]
+fn a_sections_own_12_reads_apart_from_its_dotted_junction() {
+    let mut p = Project::new("Dotted", None);
+    let main = p
+        .add_line(
+            meta("Main"),
+            StartAt::New,
+            (0..14).map(|_| leg(0.0)).collect(),
+        )
+        .unwrap();
+    let branch = p
+        .add_line(
+            meta("Branch"),
+            StartAt::New,
+            (0..12).map(|_| leg(0.0)).collect(),
+        )
+        .unwrap();
+    let start = p.line(branch).unwrap().start;
+    p.set_placement(start, 500.0, 500.0).unwrap();
+    for line in [main, branch] {
+        let chain: Vec<u32> = p.line(line).unwrap().stations().collect();
+        for (i, s) in chain.into_iter().enumerate() {
+            p.station_mut(s).unwrap().name = i.to_string();
+        }
+    }
+    let m12 = p.line(main).unwrap().station(12).unwrap();
+    let b0 = p.line(branch).unwrap().station(0).unwrap();
+    let own_12 = p.line(branch).unwrap().station(12).unwrap();
+    let out = p.merge_stations(b0, m12, m12, &[]).unwrap();
+    assert!(out.identities.lettered.is_empty());
+    assert!(p.validate().is_empty(), "{:?}", p.validate());
+
+    let survey = read_bytes(&encoded(&p), &ReadOptions::default()).unwrap();
+    assert_eq!(name_at(&survey, at(branch, 0)), "12");
+    assert_eq!(name_at(&survey, at(branch, 12)), "12");
+    assert_eq!(name_at(&survey, at(main, 12)), "12");
+    let section = survey.sections.iter().find(|s| s.id == branch).unwrap();
+    assert_eq!(section.station_ids[0], m12, "the junction's id");
+    assert_eq!(section.station_ids[12], own_12, "Branch's own");
+    assert_ne!(m12, own_12);
+    assert!(survey
+        .station_merges
+        .iter()
+        .any(|m| [m.a, m.b] == [at(main, 12), at(branch, 0)]
+            || [m.a, m.b] == [at(branch, 0), at(main, 12)]));
+    super::tests::assert_names_unique_per_section(&survey);
 }

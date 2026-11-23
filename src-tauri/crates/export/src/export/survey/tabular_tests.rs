@@ -4,7 +4,9 @@
 
 use chrono::{TimeZone, Utc};
 
-use super::super::test_helpers::{cave, flat, meta, project, run, Cave, Survey};
+use super::super::test_helpers::{
+    cave, dotted_twelve, flat, meta, project, run, Cave, DottedTwelve, Survey,
+};
 use super::{json_export, write_csv, write_json};
 use crate::export::CSV_HEADER;
 use crate::models::survey::{ClosureStrategy, Project, StartAt};
@@ -233,4 +235,56 @@ fn csv_export_is_byte_stable() {
     super::export_csv(&cave.project, &a).unwrap();
     super::export_csv(&cave.project, &b).unwrap();
     assert_eq!(std::fs::read(a).unwrap(), std::fs::read(b).unwrap());
+}
+
+/// RS-FX5, the user's example ([`dotted_twelve`]): Main / 12 is kept at
+/// Branch's start, which shows "12" with Main's dot, and Branch's own 13th
+/// station keeps its surveyed name "12". CSV and JSON write both by their
+/// shown name "12" (RS 9), and the shown Station ID keeps them apart: Branch's
+/// first row starts at the junction's id, the id Main's row into its 12 ends
+/// at (the junction stays tied), while Branch's row into its own 12 ends at
+/// that station's own id. A reader tying stations by name alone would join
+/// them; the module docs say to tie by Station ID. Injection: write the
+/// junction's archived record id on Branch and the first row no longer ties.
+#[test]
+fn csv_and_json_keep_a_lines_own_12_apart_from_its_dotted_junction() {
+    let DottedTwelve {
+        project,
+        main,
+        branch,
+        junction,
+        own_12,
+    } = dotted_twelve();
+    let at = |line, i| project.line(line).unwrap().station(i).unwrap();
+    let text = csv(&project);
+    let rows: Vec<&str> = text.lines().collect();
+    // Header, Main's 14 rows, then Branch's 12.
+    assert!(
+        rows[12].starts_with(&format!("Main,11,12,{},{junction},", at(main, 11))),
+        "{}",
+        rows[12]
+    );
+    assert!(
+        rows[15].starts_with(&format!("Branch,12,1,{junction},{},", at(branch, 1))),
+        "{}",
+        rows[15]
+    );
+    assert!(
+        rows[26].starts_with(&format!("Branch,11,12,{},{own_12},", at(branch, 11))),
+        "{}",
+        rows[26]
+    );
+    assert_eq!(rows.len(), 1 + 14 + 12);
+
+    let json =
+        serde_json::to_value(json_export(&project, Utc.timestamp_opt(0, 0).unwrap())).unwrap();
+    let main_shots = &json["lines"][0]["shots"];
+    let branch_shots = &json["lines"][1]["shots"];
+    assert_eq!(main_shots[11]["to"], "12");
+    assert_eq!(main_shots[11]["to_id"], junction);
+    assert_eq!(branch_shots[0]["from"], "12", "{branch_shots}");
+    assert_eq!(branch_shots[0]["from_id"], junction, "tied to Main's 12");
+    assert_eq!(branch_shots[11]["to"], "12", "{branch_shots}");
+    assert_eq!(branch_shots[11]["to_id"], own_12, "Branch's own 12");
+    assert_ne!(junction, own_12);
 }

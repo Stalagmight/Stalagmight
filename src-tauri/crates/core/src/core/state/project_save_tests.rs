@@ -857,9 +857,10 @@ fn a_converted_legacy_file_round_trips_as_a_fixpoint() {
 /// its stored offset drifted 5 m, and a merge row that resolves nothing makes
 /// A the cascade's seed) converts with C's two stations moved onto B: the
 /// open offers the conversion notice once. The same survey clean moves
-/// nothing, but C shows its start by the kept junction's name and its own 1
-/// takes the letter (RS 8.3), so the notice lists those names, the kept one
-/// by its own line.
+/// nothing, but C shows its start by the kept junction's name (RS 8.3), so
+/// the notice lists that name, the kept one by its own line. C's own 1
+/// keeps its name beside the dotted 1 (RS-FX5: a foreign slot counts for no
+/// uniqueness), so no letter is listed.
 #[test]
 fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
     crate::app_dirs::init_for_test();
@@ -891,10 +892,7 @@ fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
     let notice = state.take_conversion_notice().expect("the names C shows");
     assert_eq!(
         notice.changes,
-        [
-            "Line 3 / 0 is now shown as Line 2 / 1",
-            "Line 3 / 1 is now shown as 1a"
-        ],
+        ["Line 3 / 0 is now shown as Line 2 / 1"],
         "{notice:?}"
     );
     assert!(notice.brings_back);
@@ -970,7 +968,7 @@ fn the_file_is_legacy_until_a_save_writes_the_open_project() {
 /// still says what each line now shows differently: C's start shows the
 /// junction kept on the longer line B (its own comment, never a joined
 /// one), so C's own name and comment there are hidden, and the notice says
-/// so; C's own 1 takes the letter.
+/// so; C's own 1 keeps its name beside the dotted 1 (RS-FX5).
 #[test]
 fn a_conversion_that_hides_a_comment_says_so() {
     use super::legacy_fixture_kit::{frozen, old, slot, write_legacy_file, Legacy};
@@ -1008,7 +1006,6 @@ fn a_conversion_that_hides_a_comment_says_so() {
         notice.changes,
         [
             "Line 2 / 0 is now shown as Line 1 / 1",
-            "Line 2 / 1 is now shown as 1a",
             "the comment of Line 2 / 0 is hidden"
         ],
         "{notice:?}"

@@ -840,38 +840,44 @@ impl Project {
         station.comment = joined_comment(station.comment.clone(), gone, pick);
     }
 
+    /// The names the native slots of `line` show, in chain order, `skip`
+    /// left out (RS-FX5: a foreign slot or a loop end keeps showing another
+    /// station's identity on the combined line, with its dot or loop mark,
+    /// and counts for no uniqueness there, so it neither causes nor takes a
+    /// prefix).
+    fn native_line_names(&self, line: LineId, skip: Option<StationId>) -> Vec<String> {
+        let native = super::super::super::NativeSlots::of(self);
+        self.line_stations(line)
+            .unwrap_or(&[])
+            .iter()
+            .filter(|s| Some(**s) != skip && native.is_native(**s, line))
+            .filter_map(|s| self.stations.get(s).map(|st| st.name.clone()))
+            .collect()
+    }
+
     /// The prefix plan (`station_naming::plan_combine_prefixes`) on the names
-    /// the two lines show, `jo` being the other line's join station (its
-    /// name is retired). At a merged join `jo` is a station of the kept line
-    /// too, and the combined line shows it by the kept line's name: it is
-    /// left out of the other line's names, as 0.6.0's retired member name
-    /// was the other line's own, so a lettered kept name there does not count
-    /// as a letter family of the other line (which would stop the kept line
-    /// continuing its scheme).
+    /// the native slots of the two lines show (RS-FX5), `jo` being the other
+    /// line's join station (its name is retired). At a merged join `jo` is a
+    /// station of the kept line too, and the combined line shows it by the
+    /// kept line's name: it is left out of the other line's names, as
+    /// 0.6.0's retired member name was the other line's own, so a lettered
+    /// kept name there does not count as a letter family of the other line
+    /// (which would stop the kept line continuing its scheme).
     fn combine_prefix_plan(
         &self,
         kept: LineId,
         other: LineId,
         jo: StationId,
     ) -> crate::station_naming::CombinePrefixes {
-        let kept_chain = self.line_stations(kept).unwrap_or(&[]);
-        let shared_join = kept_chain.contains(&jo);
-        // Each line's names as it shows them (`Project::shown_name`): the
-        // combined line shows every station as its line did.
-        let names = |_line: LineId, chain: &[StationId], skip: Option<StationId>| -> Vec<String> {
-            chain
-                .iter()
-                .filter(|s| Some(**s) != skip)
-                .filter_map(|s| self.shown_name(*s).map(str::to_string))
-                .collect()
-        };
-        let kept_names = names(kept, kept_chain, None);
-        let other_names = names(
-            other,
-            self.line_stations(other).unwrap_or(&[]),
-            shared_join.then_some(jo),
-        );
-        let join_name = self.shown_name(jo).map(str::to_string);
+        let shared_join = self.line_stations(kept).unwrap_or(&[]).contains(&jo);
+        let kept_names = self.native_line_names(kept, None);
+        let other_names = self.native_line_names(other, shared_join.then_some(jo));
+        // The retired join name only when the other line shows `jo` by its
+        // own name; a dotted join is no name of the other line's.
+        let join_name = self
+            .is_native_slot_of(jo, other)
+            .then(|| self.stations.get(&jo).map(|s| s.name.clone()))
+            .flatten();
         plan_combine_prefixes(
             &kept_names.iter().map(String::as_str).collect::<Vec<_>>(),
             &other_names.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -887,17 +893,23 @@ impl Project {
         }
         let kept_chain: Vec<StationId> = self.line_stations(kept).unwrap_or(&[]).to_vec();
         let other_chain: Vec<StationId> = self.line_stations(other).unwrap_or(&[]).to_vec();
+        let native = super::super::super::NativeSlots::of(self);
         let mut done: BTreeSet<StationId> = BTreeSet::new();
-        for (chain, renames) in [(kept_chain, &plan.kept), (other_chain, &plan.other)] {
+        for (line, chain, renames) in [
+            (kept, kept_chain, &plan.kept),
+            (other, other_chain, &plan.other),
+        ] {
             for s in chain {
-                if s == jo && s != jk || !done.insert(s) {
+                // A dotted slot or a loop end shows another line's station:
+                // the plan renames native names only (RS-FX5).
+                if s == jo && s != jk || !native.is_native(s, line) || !done.insert(s) {
                     continue;
                 }
-                let Some(name) = self.shown_name(s).map(str::to_string) else {
+                let Some(name) = self.stations.get(&s).map(|st| st.name.clone()) else {
                     continue;
                 };
                 if let Some(to) = renames.get(&name) {
-                    // The shown identity's name, which its other lines show
+                    // The station's own name, which its other lines show
                     // too; a repeat there is rule L's (RS 4.4), settled with
                     // the combine's other collisions.
                     self.set_shown_name(s, to.clone());
@@ -921,14 +933,11 @@ impl Project {
             CombinePrefixReason::Collision => crate::CombineRenameReason::Collision,
             CombinePrefixReason::Lettered => crate::CombineRenameReason::Lettered,
         };
-        let names = |line: LineId| -> Vec<String> {
-            self.line_stations(line)
-                .unwrap_or(&[])
-                .iter()
-                .filter_map(|s| self.shown_name(*s).map(str::to_string))
-                .collect()
-        };
-        let retired = self.shown_name(jo).map(str::to_string);
+        let names = |line: LineId| -> Vec<String> { self.native_line_names(line, None) };
+        let retired = self
+            .is_native_slot_of(jo, other)
+            .then(|| self.stations.get(&jo).map(|s| s.name.clone()))
+            .flatten();
         let no_suffixes = BTreeSet::new();
         let suffixed_set: BTreeSet<String> = plan.other_suffixed.iter().cloned().collect();
         let summarize = |line: LineId,
@@ -970,7 +979,12 @@ impl Project {
             return None;
         }
         let join = self.shown_name(jk)?.to_string();
-        let join_name = plan.kept.get(&join).cloned().unwrap_or(join);
+        // The plan renames native names only: a dotted join keeps its name.
+        let join_name = if self.is_native_slot_of(jk, kept) {
+            plan.kept.get(&join).cloned().unwrap_or(join)
+        } else {
+            join
+        };
         Some(crate::CombineStationRenames {
             reason,
             kept: kept_renames,

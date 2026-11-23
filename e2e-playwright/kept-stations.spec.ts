@@ -5,11 +5,12 @@ import type { LineSeed } from './helpers/app';
 
 /**
  * Kept and archived stations in the four dialogs (plan 2026-11-23, RS 6 and
- * 7), through the mocked IPC: Merge Stations asks which station is kept and
- * answers a name collision; Detach Line from Station brings the archived
- * station back and answers its collision; Create Loop Closure keeps one end
- * or both names; Remove Closure says what comes back; the data table marks a
- * foreign slot with its home line's dot.
+ * 7), through the mocked IPC: Merge Stations asks which station is kept, and
+ * the other line keeps its own station of the kept name (a foreign slot or a
+ * loop end counts for no name uniqueness, RS-FX5); Detach Line from Station
+ * brings the archived station back and answers its collision; Create Loop
+ * Closure keeps one end or both names; Remove Closure says what comes back;
+ * the data table marks a foreign slot with its home line's dot.
  *
  * The mock keeps a junction's first slot in line order unless a merge names
  * `keep`, gives each slot the Station ID `lineId * 100000 + index`, and names
@@ -57,7 +58,7 @@ interface E2E {
 }
 
 /** Create Loop Closure through the store, keeping `keep`, with no renames
- *  (a dialog that saw no collision). */
+ *  (a closure makes loop ends only, which repeat no name, RS-FX5). */
 async function createClosure(page: Page, a: Ref, b: Ref, keep: number): Promise<{ success: boolean; error: string | null }> {
   return page.evaluate(
     ({ a, b, keep }) =>
@@ -117,7 +118,10 @@ async function nameAt(page: Page, at: Ref): Promise<string | undefined> {
 }
 
 test.describe('Kept and archived stations (RS)', () => {
-  test("merge keeping Main's station letters the colliding station on Side", async ({ page }) => {
+  // RS-FX5, "dotted slots don't collide": Main / 3 kept at Side's start
+  // shows 3 on Side with Main's dot, and Side's own 3 further on keeps its
+  // name, with no letter and nothing to answer.
+  test("merge keeping Main's station leaves Side its own station of that name", async ({ page }) => {
     const [mainId, sideId] = await setUp(page);
     // Side's second station is named 3: keeping Main / 3 shows 3 on Side too.
     await seedNames(page, [[sideId, 1, '3']]);
@@ -127,33 +131,55 @@ test.describe('Kept and archived stations (RS)', () => {
     await expect(page.getByTestId(`merge-keep-${mainId * 100_000 + 3}`)).toBeChecked();
     await expect(page.getByTestId('merge-hidden')).toHaveText('Side / 0 is archived.');
     await expect(page.getByTestId('merge-renamed-lines')).toHaveText('Side will show Main / 3.');
-    const row = page.getByTestId('merge-collision-0');
-    await expect(row).toContainText('On Side, 3 would name two stations');
-    await expect(page.getByTestId('merge-collision-0-letter')).toBeChecked();
-    await expect(row).toContainText('Rename Side / 3 to 3a');
+    // No collision rows: the dotted 3 repeats no name.
+    await expect(page.getByTestId('merge-collisions')).toHaveCount(0);
 
     await page.getByTestId('merge-confirm').click();
     await expect(page.getByTestId('merge-dialog')).toBeHidden();
     await expect.poll(() => nameAt(page, ref(sideId, 0))).toBe('3');
-    await expect.poll(() => nameAt(page, ref(sideId, 1))).toBe('3a');
+    await expect.poll(() => nameAt(page, ref(sideId, 1))).toBe('3');
     await expect.poll(() => nameAt(page, ref(mainId, 3))).toBe('3');
+
+    // The data table shows both 3s on Side: the start with Main's dot and
+    // Main's Station ID, Side's own 3 plain with its own.
+    await page.evaluate((lineId) => {
+      (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__.uiStore
+        .getState()
+        .setSelection({ type: 'line', lineId });
+    }, sideId);
+    await page.keyboard.press('Control+3');
+    await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
+    await page.getByTestId('data-table-view-stations').click();
+    await expect(page.getByTestId('data-table-view-stations')).toHaveAttribute('aria-checked', 'true');
+    // The gutter pills name both 3 (the dot says whose the first one is).
+    await expect(page.getByTestId(`data-table-station-pill-${sideId}-0`).locator('.sh-lpill-main')).toHaveText('3');
+    await expect(page.getByTestId(`data-table-station-pill-${sideId}-1`).locator('.sh-lpill-main')).toHaveText('3');
+    // So does the Name column (hidden by default; the eye menu shows it).
+    await page.getByTestId('data-table-columns-menu').click();
+    await page.getByTestId('data-table-columns-dropdown').getByTestId('col-vis-name').check();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('grid-cell-0-name')).toHaveText('3');
+    await expect(page.getByTestId('grid-cell-1-name')).toHaveText('3');
+    await expect(page.getByTestId(`data-table-station-pill-${sideId}-0-home-dot`)).toBeVisible();
+    await expect(page.getByTestId(`data-table-station-pill-${sideId}-1-home-dot`)).toHaveCount(0);
+    await expect(page.getByTestId('grid-cell-0-_stationId')).toHaveText(String(mainId * 100_000 + 3));
+    await expect(page.getByTestId('grid-cell-1-_stationId')).toHaveText(String(sideId * 100_000 + 1));
   });
 
-  test("merge keeping Side's station, renaming the kept station instead", async ({ page }) => {
+  test("merge keeping Side's station shows its 0 on Main beside Main's own 0", async ({ page }) => {
     const [mainId, sideId] = await setUp(page);
     await openMerge(page, ref(sideId, 0), ref(mainId, 3));
-    // Keeping Side / 0 shows 0 on Main, where Main / 0 already shows it.
+    // Keeping Side / 0 shows 0 on Main through a foreign slot, where Main / 0
+    // shows its own 0: no collision.
     await page.getByTestId(`merge-keep-${sideId * 100_000}`).click();
     await expect(page.getByTestId('merge-hidden')).toHaveText('Main / 3 is archived.');
     await expect(page.getByTestId('merge-renamed-lines')).toHaveText('Main will show Side / 0.');
-    await expect(page.getByTestId('merge-collision-0')).toContainText('On Main, 0 would name two stations');
-    await page.getByTestId('merge-collision-0-alternative').click();
+    await expect(page.getByTestId('merge-collisions')).toHaveCount(0);
 
     await page.getByTestId('merge-confirm').click();
     await expect(page.getByTestId('merge-dialog')).toBeHidden();
-    // The kept station took the letter; Main's own 0 kept its name.
-    await expect.poll(() => nameAt(page, ref(mainId, 3))).toBe('0a');
-    await expect.poll(() => nameAt(page, ref(sideId, 0))).toBe('0a');
+    await expect.poll(() => nameAt(page, ref(mainId, 3))).toBe('0');
+    await expect.poll(() => nameAt(page, ref(sideId, 0))).toBe('0');
     await expect.poll(() => nameAt(page, ref(mainId, 0))).toBe('0');
   });
 
@@ -409,20 +435,15 @@ test.describe('Kept and archived stations (RS)', () => {
   });
 
   // ui-6, ui-8: the mock models C1, so the note on rule K's refused end is
-  // reachable, and a command given renames refuses a collision they leave
-  // unanswered (NameTaken), as the backend does.
-  test("a closure whose rule K end may not be kept says why; unanswered renames refuse", async ({ page }) => {
+  // reachable. RS-FX5: a loop end counts for no name uniqueness, so a
+  // closure never repeats a name.
+  test("a closure whose rule K end may not be kept says why; a loop end repeats no name", async ({ page }) => {
     const [mainId, sideId] = await setUp(page);
-    // Main / 1 - Side / 2 keeping Main / 1: Side / 2 is a loop end.
-    // Keeping Main / 1 shows 1 on Side, where Side / 1 is named 1: no answer
-    // given, so the command refuses and nothing changes.
-    const created = await createClosure(page, ref(mainId, 1), ref(sideId, 2), mainId * 100_000 + 1);
-    expect(created.success).toBe(false);
-    expect(created.error).toContain('would show two stations named "1"');
-    await expect.poll(() => nameAt(page, ref(sideId, 2))).toBe('2');
-    await seedNames(page, [[sideId, 1, 'S1']]);
+    // Main / 1 - Side / 2 keeping Main / 1: Side / 2 is a loop end showing 1
+    // with the loop mark, beside Side's own 1.
     expect((await createClosure(page, ref(mainId, 1), ref(sideId, 2), mainId * 100_000 + 1)).success).toBe(true);
     await expect.poll(() => nameAt(page, ref(sideId, 2))).toBe('1');
+    await expect.poll(() => nameAt(page, ref(sideId, 1))).toBe('1');
 
     // Main / 2 - Side / 2: keeping Main / 2 (rule K, the first end in the
     // mock) would hide Side / 2 a second time (C1).
@@ -451,7 +472,6 @@ test.describe('Kept and archived stations (RS)', () => {
   // RS 6: a Plan pin on a loop end reads "K (loop end)".
   test('a Plan endpoint on a loop end reads as the station it is shown as', async ({ page }) => {
     const [mainId, sideId] = await setUp(page);
-    await seedNames(page, [[sideId, 1, 'S1']]);
     expect((await createClosure(page, ref(mainId, 1), ref(sideId, 2), mainId * 100_000 + 1)).success).toBe(true);
     await page.evaluate(
       (at) =>

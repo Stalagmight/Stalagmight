@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::super::{AzimuthExport, TmlProfile, SHORT};
 use super::{build_rows, build_xml};
-use crate::export::survey::test_helpers::{cave, gps_at, meta, project, run, Cave};
+use crate::export::survey::test_helpers::{cave, dotted_twelve, gps_at, meta, project, run, Cave};
 use crate::models::survey::{Project, StartAt, ZeroDatum};
 use crate::models::StationId;
 
@@ -512,4 +512,31 @@ fn a_second_datum_on_one_station_is_reported_unwritten() {
         ]
     );
     assert!(!xml.is_empty());
+}
+
+/// RS-FX5, the user's example ([`dotted_twelve`]): Branch shows Main's 12 at
+/// its start (dotted) and its own 12 further on. Ariane ties stations by
+/// node id and writes no station names, so the two never meet: Branch hangs
+/// off Main's row for the junction (its first row's `FromID` is the id
+/// Main's row into 12 ends at), and the row into Branch's own 12 ends at
+/// that station's own id. Injection: write the junction's archived record id
+/// for Branch's start and Branch hangs off nothing.
+#[test]
+fn a_lines_own_12_is_its_own_node_beside_the_dotted_junction() {
+    let fixture = dotted_twelve();
+    let (project, branch) = (&fixture.project, fixture.branch);
+    let rows = rows(project);
+    let into_junction: Vec<_> = rows
+        .iter()
+        .filter(|r| r.id == id(fixture.junction))
+        .collect();
+    assert_eq!(into_junction.len(), 1, "one row ends at the junction");
+    assert_eq!(into_junction[0].line, "Main");
+    let b1 = project.line(branch).unwrap().station(1).unwrap();
+    assert_eq!(row(&rows, id(b1)).from_id, id(fixture.junction), "tied");
+    let b11 = project.line(branch).unwrap().station(11).unwrap();
+    let own = row(&rows, id(fixture.own_12));
+    assert_eq!((own.from_id, own.line.as_str()), (id(b11), "Branch"));
+    assert_ne!(fixture.own_12, fixture.junction);
+    let _ = fixture.main;
 }
