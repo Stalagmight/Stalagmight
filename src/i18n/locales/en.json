@@ -3967,6 +3967,7 @@
     "workspace": {
       "newerOnServer": "SpeleoDB has a newer revision than this copy.",
       "newerOnServerResume": "SpeleoDB has a newer revision than this copy. Resume editing downloads it first.",
+    "newerOnServerReload": "SpeleoDB has a newer revision than this copy. Reload Project downloads it, and you go on editing.",
       "disabled": {
         "busy": "Wait for the current SpeleoDB operation to finish.",
         "noAccess": "Your SpeleoDB account has no access to this project.",
