@@ -499,6 +499,8 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().divergence).toBe('start');
       // Stays read-only (not enabled on divergence).
       expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+      // sdbdemo2 P3 (16b): the tab keeps saying so after the prompt is cancelled.
+      expect(useSpeleoStore.getState().link?.remoteState).toBe('conflict');
     });
 
   });
@@ -509,6 +511,7 @@ describe('speleoStore', () => {
     it('divergence_needed → divergence origin update', () => {
       useSpeleoStore.getState().applyUpdate({ kind: 'divergence_needed' });
       expect(useSpeleoStore.getState().divergence).toBe('update');
+      expect(useSpeleoStore.getState().link?.remoteState).toBe('conflict');
     });
 
     it('up_to_date clears a stale remote_ahead indicator', () => {
@@ -558,6 +561,7 @@ describe('speleoStore', () => {
       const s = useSpeleoStore.getState();
       expect(s.divergence).toBe('done');
       expect(s.link?.editState).toBe('editing');
+      expect(s.link?.remoteState).toBe('conflict');
     });
 
     it('R3: released with replaced revisions raises the banner that names them', () => {
@@ -601,6 +605,9 @@ describe('speleoStore', () => {
       const s = useSpeleoStore.getState();
       expect(s.divergence).toBe('push');
       expect(s.link?.editState).toBe('editing');
+      // sdbdemo2 P3 (16b): Save Changes refused, then Cancel - the tab still
+      // offers "Resolve synchronization conflict" instead of nothing at all.
+      expect(s.link?.remoteState).toBe('conflict');
     });
 
     it('push_unconfirmed → raises the banner, stays editing', () => {

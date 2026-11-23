@@ -81,6 +81,14 @@ export type SpeleoBanner =
   | { kind: 'no_anchor' }
   | PushFailedBanner;
 
+/** A hand-off verb found SpeleoDB diverged from the copy: the SpeleoDB tab says so
+    ("Resolve synchronization conflict") from now on, not only while the prompt it
+    raised is open (sdbdemo2 P3, screenshot 16b: after Cancel the tab showed no
+    conflict until a status refresh). The status's own verdict replaces it then. */
+function conflictSeen(link: SpeleoLinkState): { link: SpeleoLinkState } {
+  return { link: { ...link, remoteState: 'conflict' } };
+}
+
 /** [R3] Fold the revisions a landed upload reports it replaced into the ones
     already on screen: newest report first, each revision once. Nothing reported
     leaves the slot as it is: only a dismissal or leaving the project clears it. */
@@ -1295,7 +1303,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           };
         }
         case 'divergence_needed':
-          return { divergence: 'start' };
+          return { divergence: 'start', ...conflictSeen(state.link) };
         case 'locked_by':
           // Someone else holds it - mark locked even when the holder email is
           // unknown (keep the last-known email rather than nulling it).
@@ -1324,7 +1332,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
             divergence: null,
           };
         case 'divergence_needed':
-          return { divergence: 'update' };
+          return { divergence: 'update', ...conflictSeen(state.link) };
         // fast_forwarded: the caller reloads + re-seeds.
         default:
           return {};
@@ -1362,7 +1370,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
             ),
           };
         case 'divergence_needed':
-          return { divergence: 'done' };
+          return { divergence: 'done', ...conflictSeen(state.link) };
         case 'push_unconfirmed':
           // A landing with a late edit still names what it replaced (R3).
           return {
@@ -1409,7 +1417,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
             ),
           };
         case 'divergence_needed':
-          return { divergence: 'push' };
+          return { divergence: 'push', ...conflictSeen(state.link) };
         case 'push_unconfirmed':
           return {
             banner: { kind: 'push_unconfirmed' },
