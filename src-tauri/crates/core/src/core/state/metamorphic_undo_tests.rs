@@ -184,7 +184,13 @@
 //!   edited end and the partner had none, the edited end's;
 //! - a junction promoted both ways keeps each route's own survivor, so the
 //!   two show different stations; each is asserted to be its promotion's
-//!   kept station, with the same two ids;
+//!   kept station, with the same two ids, or, on the singles' side, the
+//!   record a later single delete gave back (RS 4.3) with that kept station
+//!   inside it (seed 580002296);
+//! - a promotion may keep its retired end (RS 5.4's name test), so the
+//!   merged node at the survivor's position carries the retired end's id: a
+//!   piece the range cut loose and placed there was measured as the
+//!   survivor (seeds 580002106, 580004294);
 //! - the singles' junction shows one identity on every line through it,
 //!   where the atomic route may show another of the same junction's
 //!   identities: allowed only when each holds the other, and the singles'
@@ -1254,6 +1260,15 @@ fn mirrored_junction_problems(
     // survivor (the closure archived nothing), so each junction shows the
     // station its own promotion kept, with that station's comment, and
     // both keep the same two ids (one as the node, one as its record).
+    // A later single delete may take the singles' kept station off its last
+    // native line, and the junction then shows the record rule K gives back
+    // (RS 4.3), with the kept station inside it (seed 580002296): the
+    // restore is reported, as the bullet on the shown identity below says.
+    let ids = |station: &Station| -> BTreeSet<StationId> {
+        std::iter::once(station.id)
+            .chain(station.archived.iter().map(|record| record.id))
+            .collect()
+    };
     let kept_apart = m.kept.filter(|(a, s)| a != s);
     if let Some((kept_a, kept_s)) = kept_apart {
         for (_, a) in &m.atomic_at {
@@ -1265,18 +1280,15 @@ fn mirrored_junction_problems(
                 ));
             }
         }
-        if s.id != kept_s {
+        let restored_later = ids(s).contains(&kept_s) && singles_shown.contains(&s.id);
+        if s.id != kept_s && !restored_later {
             problems.push(format!(
-                "the singles' junction of closure {} is {}, where their promotion kept {kept_s}",
-                m.closure, s.id
+                "the singles' junction of closure {} is {}, where their promotion kept {kept_s} \
+                 and no later single delete gave {} back with {kept_s} inside it",
+                m.closure, s.id, s.id
             ));
         }
     }
-    let ids = |station: &Station| -> BTreeSet<StationId> {
-        std::iter::once(station.id)
-            .chain(station.archived.iter().map(|record| record.id))
-            .collect()
-    };
     let atomic_ids: BTreeSet<StationId> = m.atomic_at.iter().flat_map(|(_, a)| ids(a)).collect();
     let edited_ends = m
         .absorbed
@@ -2329,7 +2341,7 @@ fn pair_range_shift_vs_singles(twins: &Twins, rng: &mut Rng) -> Option<Compariso
     }
     let mut cut_loose = Vec::new();
     let documented = partners.map(|partners| {
-        let (lines, problems) = pieces_cut_loose(&pre, &twins.left, line_id);
+        let (lines, problems) = pieces_cut_loose(&pre, &twins.left, line_id, &atomic_promotions);
         cut_loose = problems;
         let edited_head = lines.contains(&line_id);
         let atomic = twins.left.get_project_state();
@@ -2506,11 +2518,15 @@ fn doomed_anchor_partners(
 /// stays (seed 3019); and a piece the sweep then promoted a closure onto is
 /// one piece with the moving piece it took in, whose stations, the edited
 /// line's first among them, moved onto it while the placement station
-/// stayed (seeds 168, 219, 3136).
+/// stayed (seeds 168, 219, 3136). When that promotion (one of the range's
+/// `promotions`, named as in `pre`) kept its retired end, the placement
+/// station carries the retired end's id at the survivor's position, so it
+/// is measured as the survivor (RS 5.4; seeds 580002106, 580004294).
 fn pieces_cut_loose(
     pre: &Project,
     now: &AppState,
     edited: LineId,
+    promotions: &[Promotion],
 ) -> (BTreeSet<LineId>, Vec<String>) {
     let Some(p) = now.get_project_state() else {
         return (BTreeSet::new(), Vec::new());
@@ -2519,6 +2535,16 @@ fn pieces_cut_loose(
     let raw_before = pre.raw_positions();
     let raw_now = p.raw_positions();
     let topology = p.topology();
+    // Under RS a promotion may keep its retired end (RS 5.4, the name
+    // test): the merged node, at the survivor's position, carries the
+    // retired end's id, so a station of that id was measured as the
+    // survivor (named as in `pre`, as the preview names them).
+    let measured_as = |station: StationId| {
+        promotions
+            .iter()
+            .find(|promotion| promotion.kept == station && promotion.retired == station)
+            .map_or(station, |promotion| promotion.survivor)
+    };
     let mut lines = BTreeSet::new();
     let mut problems = Vec::new();
     for placement in p.placements.iter().filter(|pl| !had.contains(&pl.station)) {
@@ -2555,7 +2581,7 @@ fn pieces_cut_loose(
             continue;
         };
         let moved = |station: StationId| -> Option<f64> {
-            let (was, is) = (raw_before.xy(station)?, raw_now.xy(station)?);
+            let (was, is) = (raw_before.xy(measured_as(station))?, raw_now.xy(station)?);
             Some((is[0] - was[0]).hypot(is[1] - was[1]))
         };
         let (by_placement, by_still) = (moved(placement.station), moved(still));
@@ -3959,6 +3985,42 @@ fn a_placement_two_routes_walk_differently_agrees_within_the_surveys_digits() {
     assert!(
         built >= 4,
         "the pinned seed built only {built} range pair(s)"
+    );
+    assert!(
+        problems.is_empty(),
+        "{} divergence(s):\n\n{}",
+        problems.len(),
+        problems.join("\n\n")
+    );
+}
+
+/// Farm seeds of range-shift-is-n-single-deletes under RS (sg-rs-metamorphic-
+/// closures, finding d14345c9943b's signature; package RS-FX7), two oracle
+/// gaps. 580002106 and 580004294: the range's own sweep promotes a closure
+/// that keeps its retired end (RS 5.4's name test), so the merged node at
+/// the survivor's position carries the retired end's id; the piece cut
+/// loose and placed there names it, and its placement station was measured
+/// as the survivor, not where the retired end was. 580002296: the singles
+/// promote the closure the other way, keeping 4, and the next single delete
+/// takes 4 off its last native line, so rule K gives back 10 (RS 4.3) with
+/// 4 still inside the junction; the atomic route's junction shows 18, its
+/// own promotion's survivor. Injections: measure the placement station by
+/// its own id (no `measured_as`) fails the first two; require the singles'
+/// junction to be their promotion's kept station alone fails the third.
+#[test]
+fn a_promotion_that_keeps_its_retired_end_or_a_later_restore_is_followed() {
+    let _config = crate::test_helpers::isolated_config();
+    let (built, problems) = pinned_seed_problems(
+        "range-shift-is-n-single-deletes",
+        &[
+            (580_002_106, true),
+            (580_002_296, true),
+            (580_004_294, true),
+        ],
+    );
+    assert!(
+        built >= 10,
+        "the pinned seeds built only {built} range pair(s)"
     );
     assert!(
         problems.is_empty(),
