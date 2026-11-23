@@ -165,3 +165,17 @@ it('removes the current acquired project from the recovery prompt', async () => 
   expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(false);
   expect(useSpeleoStore.getState().heldLocks).toBeNull();
 });
+
+// sdbdemo2 P3 (screenshot 07): an automatic Start Editing whose lock request may
+// have landed leaves no "free when last checked" behind for the offline tab.
+it('a lock request that may have landed forgets the scan\'s "free"', async () => {
+  // A Recents open: no status has named the project yet, its recents entry does.
+  useSpeleoStore.setState({ remoteProjectId: null, remoteLocks: { remote: null, other: null } });
+  useProjectStore.setState({ recentProjects: [{ file_path: '/remote.stalx', speleodb_project_id: 'remote' } as never] });
+  ipc.mockRejectedValue({
+    message: 'Network error talking to SpeleoDB: error sending request', action: 'Retry', status: null,
+    transport: 'Dropped', lock_may_be_held: true,
+  });
+  await autoAcquireSpeleoLock('/remote.stalx', () => true);
+  expect(useSpeleoStore.getState().remoteLocks).toEqual({ other: null });
+});

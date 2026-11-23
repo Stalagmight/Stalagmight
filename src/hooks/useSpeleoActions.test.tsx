@@ -804,6 +804,8 @@ describe('useSpeleoActions - startEditing falls to the REFUSING answer (#270)', 
     useSpeleoReadOnlyNotice.setState({ notice: null });
     useSpeleoStore.setState({
       session: { loggedIn: true, userEmail: 'diver@example.com', endpoint: 'https://synthetic.example' },
+      // The last lock scan saw the lock free.
+      remoteProjectId: 'p1', remoteLocks: { p1: null },
     });
     invokeIpcMock.mockRejectedValue({
       message: 'Network error talking to SpeleoDB: error sending request', action: 'Retry', status: null,
@@ -821,6 +823,9 @@ describe('useSpeleoActions - startEditing falls to the REFUSING answer (#270)', 
       'The connection to SpeleoDB at https://synthetic.example was lost before it finished answering. '
         + `Check your network connection and try again.${said ? ` ${sentence}` : ''}`,
     );
+    // sdbdemo2 P3 (screenshot 07): a lock request that may have landed leaves no
+    // "free when last checked" behind; one that surely did not keeps the scan.
+    expect('p1' in useSpeleoStore.getState().remoteLocks).toBe(!said);
   });
 
   it('a Resume editing someone else is in the way of is titled for what happened too', async () => {

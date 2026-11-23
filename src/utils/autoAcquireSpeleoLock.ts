@@ -51,6 +51,25 @@ export function startEditingFailureNotice(message: string, error: unknown): stri
   return lockMayBeHeld(error) ? `${message} ${i18n.t('speleodb.readOnlyNotice.lockMayBeHeld')}` : message;
 }
 
+/**
+ * After a Start Editing refusal that says the lock may now be this account's
+ * (`lockMayBeHeld`), forget what the last lock scan saw for the open project
+ * (sdbdemo2 P3, screenshot 07): offline, the tab read it as "Offline - the lock
+ * was free when last checked" while SpeleoDB recorded this account as the
+ * holder. It now says the lock state is not known, until a scan or a status
+ * that heard from SpeleoDB says what it is. `path` names the project when no
+ * status has said its id yet (a Recents open): its recents entry does.
+ */
+export function forgetLastKnownLockIfMayBeHeld(error: unknown, path?: string): void {
+  if (!lockMayBeHeld(error)) return;
+  const { remoteProjectId, remoteLocks } = useSpeleoStore.getState();
+  const id = remoteProjectId ?? useProjectStore.getState().recentProjects
+    .find((p) => p.file_path === path)?.speleodb_project_id ?? null;
+  if (!id || !(id in remoteLocks)) return;
+  const { [id]: _forgotten, ...rest } = remoteLocks;
+  useSpeleoStore.setState({ remoteLocks: rest });
+}
+
 /** Called once after a new remote project load, never by a refresh or same-file reload. */
 export async function autoAcquireSpeleoLock(path: string, current: () => boolean): Promise<void> {
   const generation = useSpeleoStore.getState().sessionGeneration;
@@ -99,6 +118,7 @@ export async function autoAcquireSpeleoLock(path: string, current: () => boolean
   } catch (error) {
     if (!stillCurrent()) return;
     if (speleoErrorAction(error) === 'ReLogin') useSpeleoStore.getState().clearSession();
+    forgetLastKnownLockIfMayBeHeld(error, path);
     showSpeleoReadOnlyNotice(startEditingFailureNotice(
       humanizeSpeleoError(error, i18n.t('speleodb.readOnlyNotice.failed')), error,
     ), 'opened');

@@ -1,4 +1,8 @@
-import { showSpeleoReadOnlyNotice, startEditingFailureNotice } from '../utils/autoAcquireSpeleoLock';
+import {
+  forgetLastKnownLockIfMayBeHeld,
+  showSpeleoReadOnlyNotice,
+  startEditingFailureNotice,
+} from '../utils/autoAcquireSpeleoLock';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
@@ -231,6 +235,7 @@ export function useSpeleoActions(): SpeleoActions {
       return routed.editing;
     } catch (e) {
       if (speleoProjectSessionStillCurrent(issuedFor)) {
+        forgetLastKnownLockIfMayBeHeld(e);
         showSpeleoReadOnlyNotice(
           startEditingFailureNotice(humanizeError(e, 'speleodb.readOnlyNotice.failed'), e),
           'stillReadOnly',
