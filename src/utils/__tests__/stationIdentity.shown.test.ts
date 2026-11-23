@@ -2,14 +2,18 @@
  * RS 6: every display reads the identity a slot SHOWS. A slot keeps its node
  * id (groupings, moves, selections), and a foreign slot or a loop end carries
  * `shown`: the Station ID shown, its home line and the loop mark. Plain text
- * says whose station a foreign slot shows ("Side / 12 (Main)", U-P3-8) and
- * what a loop end is shown as ("Main / 3 (loop end on Side)").
+ * says whose station a foreign slot shows ("12 (Main)", "Side / 12 (Main)",
+ * U-P3-8) and what a loop end is shown as ("3 (loop end on Side)", "Main / 3
+ * (loop end on Side)"), with or without the line, since dotted slots may
+ * repeat a name on their line (RS-FX5); a pill takes the bare name and draws
+ * the dot and the loop mark.
  * Injection: reading `stationIds` for the displayed ID fails "reads the
- * shown Station ID".
+ * shown Station ID"; a plain label without the qualifier fails "says whose
+ * station a foreign slot shows".
  */
 import { describe, expect, it } from 'vitest';
 import '../../i18n';
-import { identityLabels, type IdentityData } from '../stationIdentity';
+import { identityLabels, warningMessageBody, type IdentityData } from '../stationIdentity';
 import type { ShownSlot } from '../../types/ipc/ShownSlot';
 
 const MAIN = 1;
@@ -65,15 +69,46 @@ describe('shown identity labels (RS 6)', () => {
     expect(labels.shown(main1)).toBeUndefined();
   });
 
-  it('says whose station a foreign slot shows in plain text (U-P3-8)', () => {
+  it('says whose station a foreign slot shows in plain text, with or without the line (U-P3-8, RS-FX5)', () => {
     expect(labels.station(side0, true)).toBe('Side / 12 (Main)');
+    expect(labels.station(side0)).toBe('12 (Main)');
+    // A native slot: the name, and the line on request.
     expect(labels.station(main1, true)).toBe('Main / 12');
-    // Without the line, the name alone.
-    expect(labels.station(side0)).toBe('12');
+    expect(labels.station(main1)).toBe('12');
   });
 
   it('names a loop end by what it is shown as and where it is', () => {
     expect(labels.station(side2, true)).toBe('Main / 3 (loop end on Side)');
+    expect(labels.station(side2)).toBe('3 (loop end on Side)');
+  });
+
+  it("gives a pill the bare name: the pill's dot and loop mark say the rest", () => {
+    expect(labels.stationPill(side0)).toBe('12');
+    expect(labels.stationPill(side2)).toBe('3');
+    expect(labels.stationPill(main1)).toBe('12');
+  });
+
+  it('names a shot by its ends in their plain form, and a pill by the bare names', () => {
+    // Side 0 -> 1 runs from the foreign 12; Side 1 -> 2 ends at the loop end.
+    expect(labels.shotAt(SIDE, 0)).toBe('12 (Main) \u2192 1');
+    expect(labels.shotAt(SIDE, 0, true)).toBe('Side: 12 (Main) \u2192 1');
+    expect(labels.shotAt(SIDE, 1, true)).toBe('Side: 1 \u2192 3 (loop end on Side)');
+    expect(labels.shot(SIDE, 3, true)).toBe('Side: 12 (Main) \u2192 1');
+    expect(labels.shotAt(MAIN, 0, true)).toBe('Main: 3 \u2192 12');
+    expect(labels.shotPillAt(SIDE, 0)).toBe('12 \u2192 1');
+    expect(labels.shotPillAt(SIDE, 1)).toBe('1 \u2192 3');
+  });
+
+  it("strips the backend's qualified shot from a warning (the two must stay in lockstep)", () => {
+    // The backend names a shot with each end qualified the same way
+    // (`Validator::shot_label`), so the Warnings tab's pill can replace it.
+    const zero = { lineId: SIDE, shotIndex: 0, message: 'Shot Side: 12 (Main) \u2192 1 has zero length' };
+    expect(warningMessageBody(labels, zero)).toBe('has zero length');
+    const loop = { lineId: SIDE, shotIndex: 1, message: 'Shot Side: 1 \u2192 3 (loop end on Side) has zero length' };
+    expect(warningMessageBody(labels, loop)).toBe('has zero length');
+    // A message naming the shot by its bare names is no longer the label.
+    const bare = { lineId: SIDE, shotIndex: 0, message: 'Shot Side: 12 \u2192 1 has zero length' };
+    expect(warningMessageBody(labels, bare)).toBe(bare.message);
   });
 
   it('checks a rename through a loop end on the lines its shown station is native on (RS-FX5)', () => {

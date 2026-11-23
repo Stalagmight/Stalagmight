@@ -1,8 +1,10 @@
 /**
  * Station, shot and line identity as the user sees it (SPEC 4.1/4.2).
  *
- * A station is named by its Name (unique within its line), a shot by its two
- * station names (`4 → 5`), a line by its project-unique name. The positional
+ * A station is named by its Name (unique among its line's native slots; a
+ * foreign slot or a loop end may repeat a name on its line, RS-FX5, so plain
+ * text qualifies it: `12 (Main)`, `12 (loop end on Side)`), a shot by its two
+ * station labels (`4 → 5`), a line by its project-unique name. The positional
  * handles the IPC addresses things with - `StationRef{line_id, station_index}`,
  * shot ids, line ids - are session handles that are never shown. Everything
  * user-visible that names a station, shot or line goes through here (or the
@@ -313,28 +315,47 @@ export function lineNameOf(src: IdentitySource, lineId: number): string {
 }
 
 /**
- * `17`, or `Main Line / 17` with `withLine`. With `withLine`, a plain-text
- * label also says whose station a foreign slot shows (RS 6, U-P3-8): `Side /
- * 12 (Main)` for a slot on Side that shows Main's station 12, and a loop end
- * names the station it is shown as and where it is: `Main / 3 (loop end on
- * Side)`. The pills say the same with a dot and a loop mark.
+ * A slot's plain-text label: `17`, or `Main Line / 17` with `withLine`. It is
+ * the one label every text that names a slot without drawing the dot or the
+ * loop mark uses (warnings, toasts, search results, history rows, aria labels,
+ * tooltips, dialog sentences, closure texts), so it says whose station a
+ * dotted slot shows (RS 6, U-P3-8), with or without the line: two slots of one
+ * line may show one name since dotted slots don't collide (RS-FX5), and the
+ * qualifier tells them apart.
+ *
+ * - native: `12`, `Side / 12`;
+ * - foreign (Side's slot showing Main's 12): `12 (Main)`, `Side / 12 (Main)`;
+ * - loop end (a closure on Side shows Main's 3): `3 (loop end on Side)`, and
+ *   with the line, named on the shown station's home line,
+ *   `Main / 3 (loop end on Side)`.
+ *
+ * A pill, which draws the dot and the loop mark itself, takes the bare name
+ * ({@link stationPillLabelOf}); an edit field takes {@link stationNameOf}.
  */
 export function stationLabelOf(src: IdentitySource, ref: StationRef, withLine = false): string {
   const name = stationNameOf(src, ref);
-  if (!withLine) return formatStationLabel(name);
-  const label = formatStationLabel(name, lineNameOf(src, ref.line_id));
   const shown = shownSlotOf(src, ref);
-  if (!shown) return label;
-  if (shown.loop_end) {
+  if (shown?.loop_end) {
+    const home = withLine ? lineNameOf(src, shown.home_line ?? ref.line_id) : null;
     return i18n.t('identity.loopEndLabel', {
-      station: formatStationLabel(name, lineNameOf(src, shown.home_line ?? ref.line_id)),
+      station: formatStationLabel(name, home),
       line: lineNameOf(src, ref.line_id),
     });
   }
-  if (shown.foreign && shown.home_line !== undefined && shown.home_line !== ref.line_id) {
+  const label = formatStationLabel(name, withLine ? lineNameOf(src, ref.line_id) : null);
+  if (shown?.foreign && shown.home_line !== undefined && shown.home_line !== ref.line_id) {
     return i18n.t('identity.foreignLabel', { station: label, home: lineNameOf(src, shown.home_line) });
   }
   return label;
+}
+
+/**
+ * A slot's bare name for a pill's main part (`12`), where the pill draws the
+ * home-line dot of a foreign slot and the loop mark of a loop end: the dot
+ * and the mark say what {@link stationLabelOf}'s qualifier says in text.
+ */
+export function stationPillLabelOf(src: IdentitySource, ref: StationRef): string {
+  return formatStationLabel(stationNameOf(src, ref));
 }
 
 /**
@@ -355,12 +376,27 @@ export function planStationLabelOf(src: IdentitySource, ref: StationRef): string
 /**
  * `4 → 5` (or `Main Line: 4 → 5` with `withLine`) for the shot at 0-based
  * position `shotIndex` of line `lineId`: it runs from station `shotIndex` to
- * station `shotIndex + 1`.
+ * station `shotIndex + 1`. Each end reads its plain-text label without the
+ * line ({@link stationLabelOf}): `12 (Main) → 13`, `Branch: 12 (Main) → 13`,
+ * `Side: 3 (loop end on Side) → 4`. The backend names a shot in its texts
+ * the same way (`Shot Branch: 12 (Main) → 13 has zero length`), which
+ * {@link warningMessageBody} relies on.
  */
 export function shotLabelAt(src: IdentitySource, lineId: number, shotIndex: number, withLine = false): string {
-  const from = stationNameOf(src, { line_id: lineId, station_index: shotIndex });
-  const to = stationNameOf(src, { line_id: lineId, station_index: shotIndex + 1 });
+  const from = stationLabelOf(src, { line_id: lineId, station_index: shotIndex });
+  const to = stationLabelOf(src, { line_id: lineId, station_index: shotIndex + 1 });
   return formatShotLabel(from, to, withLine ? lineNameOf(src, lineId) : null);
+}
+
+/**
+ * A shot pill's main part, `12 → 13`: each end's bare name, where the pill
+ * draws each end's dot and loop mark ({@link stationPillLabelOf}).
+ */
+export function shotPillLabelAt(src: IdentitySource, lineId: number, shotIndex: number): string {
+  return formatShotLabel(
+    stationPillLabelOf(src, { line_id: lineId, station_index: shotIndex }),
+    stationPillLabelOf(src, { line_id: lineId, station_index: shotIndex + 1 }),
+  );
 }
 
 /** The 0-based position of shot `shotId` in line `lineId`, or null when it is not there. */
@@ -405,10 +441,17 @@ export interface IdentityLabels {
   /** The home-line dot a foreign slot carries (see {@link homeMarkOf}). */
   homeMark: (ref: StationRef) => number | null;
   lineName: (lineId: number) => string;
+  /** A slot's plain-text label, qualified for a dotted slot (see {@link stationLabelOf}). */
   station: (ref: StationRef, withLine?: boolean) => string;
+  /** A station pill's bare main part (see {@link stationPillLabelOf}). */
+  stationPill: (ref: StationRef) => string;
   /** A Plan pin's label (see {@link planStationLabelOf}). */
   planStation: (ref: StationRef) => string;
+  /** A shot's plain-text label, each end qualified (see {@link shotLabelAt}). */
   shotAt: (lineId: number, shotIndex: number, withLine?: boolean) => string;
+  /** A shot pill's bare main part (see {@link shotPillLabelAt}). */
+  shotPillAt: (lineId: number, shotIndex: number) => string;
+  /** {@link shotLabelAt} for a shot addressed by its id (see {@link shotLabelOf}). */
   shot: (lineId: number, shotId: number, withLine?: boolean) => string | null;
 }
 
@@ -426,8 +469,10 @@ export function identityLabels(src: IdentitySource): IdentityLabels {
     homeMark: (ref) => homeMarkOf(src, ref),
     lineName: (lineId) => lineNameOf(src, lineId),
     station: (ref, withLine) => stationLabelOf(src, ref, withLine),
+    stationPill: (ref) => stationPillLabelOf(src, ref),
     planStation: (ref) => planStationLabelOf(src, ref),
     shotAt: (lineId, shotIndex, withLine) => shotLabelAt(src, lineId, shotIndex, withLine),
+    shotPillAt: (lineId, shotIndex) => shotPillLabelAt(src, lineId, shotIndex),
     shot: (lineId, shotId, withLine) => shotLabelOf(src, lineId, shotId, withLine),
   };
 }
@@ -435,10 +480,12 @@ export function identityLabels(src: IdentitySource): IdentityLabels {
 /**
  * A survey warning's message without the shot it opens with ("has zero
  * length"), for a view that shows the shot itself (the Warnings tab's shot
- * pill). The backend names the shot by its line and stations
- * (`Shot Main Line: 4 → 5 has zero length`), so the prefix is matched against
- * the same label; a message that does not open with it (a datum warning, or
- * one computed before a rename) is returned unchanged.
+ * pill). The backend names the shot by its line and stations, each end
+ * qualified as {@link shotLabelAt} qualifies it (`Shot Main Line: 4 → 5 has
+ * zero length`, `Shot Branch: 12 (Main) → 13 has zero length`), so the
+ * prefix is matched against the same label; a message that does not open
+ * with it (a datum warning, or one computed before a rename) is returned
+ * unchanged.
  */
 export function warningMessageBody(
   labels: Pick<IdentityLabels, 'shotAt'>,

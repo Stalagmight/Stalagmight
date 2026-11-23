@@ -3,10 +3,12 @@
  * slot (its line knew another station there; the junction shows the kept
  * one) ends with the shown Station ID and carries the home line's dot; a loop
  * end carries the loop mark, even with no dot. Shot pills carry each foreign
- * end's dot. The plain text below Full says whose station it is.
+ * end's dot and each loop end's loop mark, after the end's bare name (RS-FX5:
+ * the marks stand for the plain-text qualifier). The plain text below Full
+ * says whose station it is, with or without the line.
  * Injections: reading the node id for the superscript fails "ends with the
  * shown Station ID"; dropping the default home mark fails "carries the home
- * line's dot".
+ * line's dot"; the qualified label in the pill fails "names the station bare".
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -15,7 +17,9 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => []) }));
 
 import '../../../i18n';
 import { DetailLink } from '../DetailLink';
-import { StationBlob } from '../EntityBlob';
+import { EntityBlob, StationBlob } from '../EntityBlob';
+import { shotEndMarks } from '../shotEndMarks';
+import { identityLabels } from '../../../utils/stationIdentity';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { surveyDataFromLegacy } from '../../../types/survey-data';
@@ -77,6 +81,17 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     expect(screen.getByTestId('foreign-station-id')).toHaveTextContent('11');
   });
 
+  it('names the station bare in the pill: the dot and the loop mark say whose', () => {
+    render(
+      <>
+        <StationBlob station={{ line_id: SIDE, station_index: 0 }} testId="foreign" />
+        <StationBlob station={{ line_id: SIDE, station_index: 2 }} testId="loop" />
+      </>,
+    );
+    expect(screen.getByTestId('foreign')).toHaveTextContent(/^12\s*Station ID\s*11$/);
+    expect(screen.getByTestId('loop')).toHaveTextContent(/^3\s*loop end\s*Station ID\s*3$/);
+  });
+
   it('ends a loop end with the shown Station ID and the loop mark', () => {
     render(<StationBlob station={{ line_id: SIDE, station_index: 2 }} testId="loop" />);
     expect(screen.getByTestId('loop-station-id')).toHaveTextContent('3');
@@ -90,16 +105,20 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     expect(screen.queryByTestId('none-home-dot')).toBeNull();
   });
 
-  it('says whose station it is in plain text below Full (U-P3-8)', () => {
+  it('says whose station it is in plain text below Full, with or without the line (U-P3-8, RS-FX5)', () => {
     useUIStore.setState({ syntacticLevel: 'off' });
     render(
       <>
         <span data-testid="plain-foreign"><StationBlob station={{ line_id: SIDE, station_index: 0 }} withLine /></span>
         <span data-testid="plain-loop"><StationBlob station={{ line_id: SIDE, station_index: 2 }} withLine /></span>
+        <span data-testid="bare-foreign"><StationBlob station={{ line_id: SIDE, station_index: 0 }} /></span>
+        <span data-testid="bare-loop"><StationBlob station={{ line_id: SIDE, station_index: 2 }} /></span>
       </>,
     );
     expect(screen.getByTestId('plain-foreign')).toHaveTextContent('Side / 12 (Main)');
     expect(screen.getByTestId('plain-loop')).toHaveTextContent('Main / 3 (loop end on Side)');
+    expect(screen.getByTestId('bare-foreign')).toHaveTextContent(/^12 \(Main\)$/);
+    expect(screen.getByTestId('bare-loop')).toHaveTextContent(/^3 \(loop end on Side\)$/);
   });
 
   it('gives a station link the same: shown ID, dot, loop mark, and a spoken whose', () => {
@@ -119,11 +138,59 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     expect(screen.getByTestId(id)).toHaveAccessibleName('Select station Main / 3 (loop end on Side), Station ID 3');
   });
 
-  it("gives a shot link each foreign end's dot", () => {
+  it("gives a shot link each foreign end's dot, with the ends' bare names", () => {
     // Side's first shot runs from the foreign junction slot to Side 1.
-    render(<DetailLink type="shot" target={{ lineId: SIDE, position: 1 }} displayText="12 → 1" onSelect={() => {}} />);
+    render(
+      <DetailLink type="shot" target={{ lineId: SIDE, position: 1 }} displayText="12 (Main) → 1" onSelect={() => {}} />,
+    );
     const id = `shot-${SIDE}-1-link`;
     expect(screen.getByTestId(`${id}-from-home-dot`)).toBeInTheDocument();
     expect(screen.queryByTestId(`${id}-to-home-dot`)).toBeNull();
+    expect(screen.queryByTestId(`${id}-from-loop-end`)).toBeNull();
+    expect(screen.getByTestId(id)).toHaveTextContent(/^12\s*→\s*1$/);
+    expect(screen.getByTestId(id)).toHaveAccessibleName('Select shot 12 (Main) → 1');
+  });
+
+  it("gives a shot link a loop end's loop mark, with the ends' bare names (RS-FX5)", () => {
+    // Side's second shot runs from Side 1 to the loop end Side 2.
+    render(
+      <DetailLink
+        type="shot"
+        target={{ lineId: SIDE, position: 2 }}
+        displayText="1 → 3 (loop end on Side)"
+        onSelect={() => {}}
+      />,
+    );
+    const id = `shot-${SIDE}-2-link`;
+    expect(screen.getByTestId(`${id}-to-loop-end`)).toBeInTheDocument();
+    expect(screen.queryByTestId(`${id}-from-loop-end`)).toBeNull();
+    expect(screen.getByTestId(`${id}-to-home-dot`)).toBeInTheDocument();
+    expect(screen.getByTestId(id)).toHaveTextContent(/^1\s*→\s*3\s*loop end$/);
+  });
+
+  it("gives a shot pill (EntityBlob) the same marks through shotEndMarks", () => {
+    const labels = identityLabels({
+      surveyData: useProjectStore.getState().surveyData,
+      stations: useProjectStore.getState().stations,
+      lines: useProjectStore.getState().project?.lines,
+    });
+    const ends = shotEndMarks(labels, SIDE, 1);
+    expect(ends).toEqual({
+      from: '1',
+      to: '3',
+      fromHomeLineId: null,
+      toHomeLineId: MAIN,
+      fromLoopEnd: false,
+      toLoopEnd: true,
+    });
+    // A shot with no dotted end draws no marks.
+    expect(shotEndMarks(labels, MAIN, 0)).toBeNull();
+    render(
+      <EntityBlob entity="shot" lineId={SIDE} shotEnds={ends} testId="shot-pill">
+        {labels.shotPillAt(SIDE, 1)}
+      </EntityBlob>,
+    );
+    expect(screen.getByTestId('shot-pill-to-loop-end')).toBeInTheDocument();
+    expect(screen.getByTestId('shot-pill-to-home-dot')).toBeInTheDocument();
   });
 });

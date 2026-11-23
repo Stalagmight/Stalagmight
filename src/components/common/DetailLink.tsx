@@ -19,7 +19,6 @@ import i18n from '../../i18n';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useUIStore } from '../../store/uiStore';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
-import { displayStationName } from '../../utils/formatters';
 import { markOf, PillParts, pillStyle, useMissingPillStyle, usePillColors } from './LinePill';
 
 export type DetailLinkType = 'station' | 'shot' | 'line';
@@ -60,7 +59,9 @@ export interface DetailLinkProps {
   type: DetailLinkType;
   /** Target identifier (lineId required, position required for stations/shots) */
   target: DetailLinkTarget;
-  /** Text to display in the link */
+  /** Text to display in the link below Full: a slot's plain-text label
+   *  (`labels.station`, `labels.shotAt`), which qualifies a dotted slot
+   *  (`12 (Main)`). */
   displayText: string;
   /**
    * The target named with its line context, for the aria-label and the
@@ -84,8 +85,10 @@ export interface DetailLinkProps {
   onHoverEnd?: () => void;
   /**
    * The main part of the Full-level pill, at the surrounding text size: the
-   * station name (`17`), the shot (`4 → 5`) or the line name. Defaults to
-   * `displayText`.
+   * station's bare name (`17`, `labels.stationPill`: the pill draws a dotted
+   * slot's dot and loop mark), the shot (`4 → 5`) or the line name. Defaults
+   * to `displayText`. A shot pill with a marked end draws each end's bare
+   * name and marks instead.
    */
   pillLabel?: string;
   /**
@@ -258,22 +261,27 @@ export function DetailLink({
     : `underline ${isMissing ? 'text-warning' : 'text-accent'} ${focusClasses} ${cursorClass} ${className}`;
   const style = showPill ? (isMissing ? missingStyle : pillStyle(pill.colors)) : undefined;
 
-  // A shot with a home-line mark shows its two ends separately, so each mark
-  // sits right after its station's name.
+  // A shot with a home-line mark or a loop mark shows its two ends
+  // separately, so each mark sits right after its station's bare name (the
+  // marks say what the plain text's qualifier says).
   const shotIndex = type === 'shot' && position !== null ? position - 1 : null;
+  const marked = showPill && shotIndex !== null && !isMissing;
+  const endRef = (index: number) => ({ line_id: target.lineId, station_index: index });
   const endHome = (end: number | null | undefined, index: number): number | null | undefined =>
-    end !== undefined ? end : labels.homeMark({ line_id: target.lineId, station_index: index });
-  const fromMark =
-    showPill && shotIndex !== null && !isMissing ? markOf(pill, endHome(shotHomeLineIds?.from, shotIndex)) : null;
-  const toMark =
-    showPill && shotIndex !== null && !isMissing ? markOf(pill, endHome(shotHomeLineIds?.to, shotIndex + 1)) : null;
+    end !== undefined ? end : labels.homeMark(endRef(index));
+  const fromMark = marked ? markOf(pill, endHome(shotHomeLineIds?.from, shotIndex)) : null;
+  const toMark = marked ? markOf(pill, endHome(shotHomeLineIds?.to, shotIndex + 1)) : null;
+  const fromLoopEnd = marked && labels.shown(endRef(shotIndex))?.loop_end === true;
+  const toLoopEnd = marked && labels.shown(endRef(shotIndex + 1))?.loop_end === true;
   const shotEnds =
-    shotIndex !== null && (fromMark || toMark)
+    shotIndex !== null && (fromMark || toMark || fromLoopEnd || toLoopEnd)
       ? {
-          from: displayStationName(labels.stationName({ line_id: target.lineId, station_index: shotIndex })),
-          to: displayStationName(labels.stationName({ line_id: target.lineId, station_index: shotIndex + 1 })),
+          from: labels.stationPill(endRef(shotIndex)),
+          to: labels.stationPill(endRef(shotIndex + 1)),
           fromMark,
           toMark,
+          fromLoopEnd,
+          toLoopEnd,
         }
       : null;
 
