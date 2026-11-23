@@ -85,8 +85,10 @@ describe('Remove Closure under RS', () => {
   it('says what comes back on the row and for the closure chosen', async () => {
     render(<RemoveClosureDialog />);
     expect(screen.getByTestId('remove-closure-option-5-back')).toHaveTextContent('(17 comes back)');
+    // The preview's collision: by default rule L letters the station that
+    // comes back, so it comes back as 17a (RS-FX8, N2).
     expect(await screen.findByTestId('remove-closure-comes-back')).toHaveTextContent(
-      'Side / 17 comes back: Side shows it again instead of Main / 3.',
+      'Side / 17a comes back: Side shows it again instead of Main / 3.',
     );
     expect(screen.getByTestId('remove-closure-comes-back-comment')).toHaveTextContent('Its comment comes back too: "Arch"');
     expect(invokeIpc).toHaveBeenCalledWith('preview_remove_loop_closure', { closureId: 5 }, expect.anything());
@@ -100,7 +102,7 @@ describe('Remove Closure under RS', () => {
     const letter = await screen.findByTestId('remove-closure-collision-0-letter');
     expect(letter.parentElement).toHaveTextContent('Rename the station that comes back (Side / 17, Station ID 17) to 17a');
     expect(screen.getByTestId('remove-closure-collision-0-alternative').parentElement).toHaveTextContent(
-      "Rename Side's own 17 (Station ID 71) to 17a",
+      "Rename the 17 that is on Side now (Station ID 71) to 17a",
     );
   });
 
@@ -126,5 +128,24 @@ describe('Remove Closure under RS', () => {
     expect(await screen.findByTestId('remove-closure-nothing-back')).toHaveTextContent(
       'Both ends already show their own names, so no name changes.',
     );
+  });
+});
+
+/**
+ * RS-FX8, N2 (shot 54 of the RS capture): with the default answer (rule L
+ * letters the station that comes back) the dialog said "(17 comes back)" and
+ * "Side / 17 comes back", while the removal gave 17a. The row and the
+ * sentence follow the chosen answer, as Detach's do (P2-2). Injection: print
+ * `comes_back.name` again.
+ */
+describe('Remove Closure names what comes back as the answers leave it (RS-FX8)', () => {
+  it('says 17a for the letter, 17 when the other station takes it', async () => {
+    render(<RemoveClosureDialog />);
+    const sentence = await screen.findByTestId('remove-closure-comes-back');
+    expect(screen.getByTestId('remove-closure-option-5-back')).toHaveTextContent('(17a comes back)');
+    expect(sentence).toHaveTextContent('Side / 17a comes back: Side shows it again instead of Main / 3.');
+    fireEvent.click(screen.getByTestId('remove-closure-collision-0-alternative'));
+    expect(screen.getByTestId('remove-closure-option-5-back')).toHaveTextContent('(17 comes back)');
+    expect(screen.getByTestId('remove-closure-comes-back')).toHaveTextContent('Side / 17 comes back');
   });
 });

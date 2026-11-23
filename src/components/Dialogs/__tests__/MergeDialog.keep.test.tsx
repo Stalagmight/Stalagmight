@@ -3,7 +3,7 @@
  * (its pill: line, own name, Station ID), the backend's default checked; for
  * the chosen keep the dialog says which lines will show the kept name, which
  * station is archived ("with its comment" only when it has one), that Detach
- * Line from Station brings it back, and one row per name collision with its
+ * Line from Station brings that station back, and one row per name collision with its
  * two answers. Merge sends the keep and the answers. A loop closure between
  * the two forces the keep and the dialog says so; a station a loop closure
  * shows as another says "shown as K through a loop closure".
@@ -106,7 +106,7 @@ describe('Merge Stations keeps one station (RS 4.1)', () => {
     expect(screen.getByTestId('merge-keep-12-datum')).toHaveTextContent('(zero datum)');
     expect(screen.getByTestId('merge-renamed-lines')).toHaveTextContent('Side will show Main / 12.');
     expect(screen.getByTestId('merge-hidden')).toHaveTextContent('Side / 0 is archived with its comment.');
-    expect(screen.getByTestId('merge-hidden-back')).toHaveTextContent('Detach Line from Station brings it back.');
+    expect(screen.getByTestId('merge-hidden-back')).toHaveTextContent('Detach Line from Station brings Side / 0 back.');
     // The geometry is the same for either keep.
     expect(screen.getByTestId('merge-preview-move')).toHaveTextContent("Side moves 24 m onto Main / 12's position.");
   });
@@ -129,7 +129,7 @@ describe('Merge Stations keeps one station (RS 4.1)', () => {
     expect(row).toHaveTextContent('On Side, 12 would name two stations');
     expect(screen.getByTestId('merge-collision-0-letter')).toBeChecked();
     expect(screen.getByTestId('merge-collision-0-letter').parentElement).toHaveTextContent(
-      "Rename Side's own 12 (Station ID 41) to 12a",
+      "Rename the 12 that is on Side now (Station ID 41) to 12a",
     );
     expect(screen.getByTestId('merge-collision-0-alternative').parentElement).toHaveTextContent(
       'Rename the kept station (Main / 12, Station ID 12) to 12a',
@@ -251,7 +251,7 @@ describe('Merge Stations names what else the keep hides (RS-FX1)', () => {
     expect(screen.getByTestId('merge-loop-end-shown')).toHaveTextContent(
       'It was the hidden end of a loop closure: the closure stays, and Main / 12 is shown at that end too.',
     );
-    expect(screen.getByTestId('merge-hidden-back')).toHaveTextContent(/^Detach Line from Station brings it back\.$/);
+    expect(screen.getByTestId('merge-hidden-back')).toHaveTextContent(/^Detach Line from Station brings Side \/ 0 back\.$/);
     expect(screen.getByTestId('merge-comments-hidden-28')).toHaveTextContent(
       'Main / 3\'s comment ("Low air") is hidden. Undo brings it back.',
     );
@@ -261,7 +261,7 @@ describe('Merge Stations names what else the keep hides (RS-FX1)', () => {
     open(preview());
     expect(screen.queryByTestId('merge-loop-end-shown')).toBeNull();
     expect(screen.queryByTestId('merge-comments-hidden')).toBeNull();
-    expect(screen.getByTestId('merge-hidden-back')).toHaveTextContent(/^Detach Line from Station brings it back\.$/);
+    expect(screen.getByTestId('merge-hidden-back')).toHaveTextContent(/^Detach Line from Station brings Side \/ 0 back\.$/);
   });
 });
 
@@ -327,6 +327,11 @@ describe('Merge Stations says the name repeats and what travels inside (RS-FX6)'
     expect(screen.getByTestId('merge-hidden-inside-46')).toHaveTextContent(
       'Main / 0 (Station ID 46), archived inside Side / 0 by an earlier merge, stays inside it: a second Detach brings it back.',
     );
+    // RS-FX8, N4: Detach names the station it brings back and comes before
+    // the inside sentence, so no "it" points at the station inside.
+    const back = screen.getByTestId('merge-hidden-back');
+    expect(back).toHaveTextContent('Detach Line from Station brings Side / 0 back.');
+    expect(back.compareDocumentPosition(screen.getByTestId('merge-hidden-inside-46')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // A history record (no line) is not said.
     expect(screen.queryByTestId('merge-hidden-inside-47')).toBeNull();
   });
@@ -370,5 +375,19 @@ describe('groupDepthReadings', () => {
       { line_id: 2, depth: '7.8', count: 1 },
       { line_id: 1, depth: '7.9', count: 1 },
     ]);
+  });
+});
+
+/**
+ * RS-FX8, N2 (checked in Merge as in Remove Closure): the answer that letters
+ * the kept station renames it everywhere, so "Side will show Main / 12"
+ * follows the answer. Injection: word the kept station by its preview name.
+ */
+describe('Merge Stations names the kept station as the answers leave it (RS-FX8)', () => {
+  it('says Main / 12a once the kept station takes the letter', () => {
+    open(preview());
+    expect(screen.getByTestId('merge-renamed-lines')).toHaveTextContent('Side will show Main / 12.');
+    fireEvent.click(screen.getByTestId('merge-collision-0-alternative'));
+    expect(screen.getByTestId('merge-renamed-lines')).toHaveTextContent('Side will show Main / 12a.');
   });
 });

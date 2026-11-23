@@ -140,7 +140,8 @@ export function ShownIdentityPrompt({
       </p>
       {lines !== null && (
         <p className="text-text-secondary" data-testid="shown-identity-prompt-lines">
-          {t(`dialogs.shownIdentity.changes.${edit}`, { lines, count: owner?.lines.length ?? 0 })}
+          {/* The lines are named once, on the button (RS-FX8, N6). */}
+          {t(`dialogs.shownIdentity.changes.${edit}`)}
         </p>
       )}
       <div className="flex flex-col gap-2">

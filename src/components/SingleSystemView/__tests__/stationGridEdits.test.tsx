@@ -106,13 +106,17 @@ describe('committing a grid commit', () => {
     expect((data as { edits: StationGridEdit[] }).edits.map((e) => e.stationRef.station_index)).toEqual([0, 1, 2]);
   });
 
-  it('a lone edit keeps the single-station prompt', () => {
-    commitStationGridEdits(planStationGridEdits([{ row: 0, colKey: 'name', value: 'J' }], ROWS), openDialog, actions);
+  // RS-FX8, N6: it says whether it asked, so the grid keeps its cursor on
+  // the edited cell while the prompt is open.
+  it('a lone edit keeps the single-station prompt, and says it asked', () => {
+    const asked = commitStationGridEdits(planStationGridEdits([{ row: 0, colKey: 'name', value: 'J' }], ROWS), openDialog, actions);
+    expect(asked).toBe(true);
     expect(openDialog).toHaveBeenCalledWith('shown-identity-edit', { stationRef: slot(SIDE, 0), kind: 'name', value: 'J' });
   });
 
   it('native edits only: sent at once, in order', async () => {
-    commitStationGridEdits(planStationGridEdits([{ row: 1, colKey: 'comment', value: 'Wet' }, { row: 1, colKey: 'name', value: 'S1' }], ROWS), openDialog, actions);
+    const asked = commitStationGridEdits(planStationGridEdits([{ row: 1, colKey: 'comment', value: 'Wet' }, { row: 1, colKey: 'name', value: 'S1' }], ROWS), openDialog, actions);
+    expect(asked).toBe(false);
     expect(openDialog).not.toHaveBeenCalled();
     await waitFor(() => expect(setStationName).toHaveBeenCalledWith(slot(SIDE, 1), 'S1'));
     expect(updateStationComment).toHaveBeenCalledWith(slot(SIDE, 1), 'Wet');

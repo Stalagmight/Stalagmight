@@ -72,8 +72,8 @@ The line you detach gets its own station at the same place: a line that was
 merged there gets back the Station ID, name and comment it had before. If
 another station on that line has taken the name since, the dialog asks which
 of the two takes a letter, naming each by its Station ID ("Rename the station
-that comes back (Side / 0, Station ID 15) to 0a", "Rename Side's own 0
-(Station ID 29) to 0a"), and the name it says the line gets back follows your
+that comes back (Side / 0, Station ID 15) to 0a", "Rename the 0 that is on
+Side now (Station ID 29) to 0a"), and the name it says the line gets back follows your
 choice. A letter an earlier merge gave stays, and the dialog says so when
 there is one. When the station was
 itself a junction of several lines before that merge, those lines come off

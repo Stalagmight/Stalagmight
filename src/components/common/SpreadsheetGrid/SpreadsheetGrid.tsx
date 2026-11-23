@@ -18,7 +18,7 @@ import {
   type GridSelection,
   type CellCoord,
   type CellEdit,
-  ROW_HEIGHT,
+  ROW_HEIGHT, EDIT_HELD,
 } from './types';
 import { parseLocaleNumber, parseTSV, serializeRangeToTSV } from './gridClipboard';
 import {
@@ -74,8 +74,9 @@ export interface SpreadsheetGridProps<Row> {
   rows: Row[];
   /** Stable key per row (used for React keys only). */
   rowKey: (row: Row, index: number) => string | number; rowTestId?: (row: Row, index: number) => string | undefined; cellTestId?: (row: Row, index: number, colKey: string) => string | undefined;
-  /** Commit a single coerced cell value. */
-  onEdit: (rowIndex: number, colKey: string, value: unknown) => void;
+  /** Commit a single coerced cell value. Returning {@link EDIT_HELD} keeps
+   *  the active cell where it is (the host asks something first). */
+  onEdit: (rowIndex: number, colKey: string, value: unknown) => void | typeof EDIT_HELD;
   /** Commit many coerced edits as ONE undo unit (paste / fill / clear). */
   onBatchEdit?: (edits: CellEdit[]) => void;
   /** Offer moving the selected cells by dragging the selection's edge (needs
@@ -742,7 +743,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
             return next;
           });
         }
-        onEdit(cur.row, cur.colKey, value);
+        // A held edit keeps the cursor on its cell while the host asks.
+        if (onEdit(cur.row, cur.colKey, value) === EDIT_HELD) advance = null;
       }
       if (advance) {
         const t = arrowTarget(cur.row, colIdx, advance === 'down' ? 1 : -1, 0, rowCount, colCount);

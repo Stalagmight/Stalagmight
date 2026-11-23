@@ -33,7 +33,7 @@ import '../../../i18n';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
-import UnmergeStationsDialog from '../UnmergeStationsDialog';
+import UnmergeStationsDialog, { recordsInside } from '../UnmergeStationsDialog';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -180,5 +180,75 @@ describe('the remaining-junction pick and the preview on screen', () => {
     await waitFor(() => expect(screen.getByTestId('unmerge-stations-rest-40')).toBeChecked());
     expect(screen.getByTestId('unmerge-stations-rest-failed')).toBeInTheDocument();
     expect(screen.getByTestId('unmerge-stations-confirm')).not.toBeDisabled();
+  });
+});
+
+/**
+ * RS-FX8, N7 (shots 20, 21 of the RS capture): when the detached line keeps
+ * the junction, the lines that come off take every other archived station
+ * with them, inside the one they get back. Picking North / 9 as that station
+ * left Side / 0 archived in it, unsaid. The dialog names each one for either
+ * pick, and the ones archived inside the picked station as before; a history
+ * record stays with the junction. Injection: list only the records under the
+ * picked station.
+ */
+describe('what stays archived inside the remaining junction (RS-FX8)', () => {
+  beforeEach(() => {
+    useProjectStore.setState({
+      stations: [
+        {
+          station_ref: slot(MAIN, 3),
+          id: 3,
+          name: '3',
+          merged_with: [slot(SIDE, 0), slot(NORTH, 0)],
+          archived: [
+            { id: 40, name: '0', lines: [SIDE] },
+            { id: 41, name: '7', into: 40, lines: [SIDE] },
+            { id: 50, name: '9', lines: [NORTH] },
+            { id: 60, name: '5', lines: [] },
+          ],
+        },
+        { station_ref: slot(SIDE, 0), id: 3, name: '3', merged_with: [slot(MAIN, 3), slot(NORTH, 0)] },
+        { station_ref: slot(NORTH, 0), id: 3, name: '3', merged_with: [slot(MAIN, 3), slot(SIDE, 0)] },
+      ],
+    } as never);
+  });
+
+  it('names the other stations for either pick', async () => {
+    render(<UnmergeStationsDialog />);
+    await screen.findByTestId('unmerge-stations-rest');
+    // Default pick 40: 41 inside it, and North / 9 goes with the lines too.
+    expect(screen.getByTestId('unmerge-stations-inside-41')).toHaveTextContent(
+      'Side / 7 (Station ID 41) stays archived inside it: detach Side again to get it back.',
+    );
+    expect(screen.getByTestId('unmerge-stations-inside-50')).toHaveTextContent(
+      'North / 9 (Station ID 50) stays archived inside it: detach North again to get it back.',
+    );
+    expect(screen.queryByTestId('unmerge-stations-inside-60')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('unmerge-stations-rest-50'));
+    await waitFor(() =>
+      expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('They get back 9a (Station ID 50).'),
+    );
+    // Picked 50: Side / 0 stays archived in it now, and nothing names 50 itself.
+    expect(screen.getByTestId('unmerge-stations-inside-40')).toHaveTextContent(
+      'Side / 0 (Station ID 40) stays archived inside it: detach Side again to get it back.',
+    );
+    expect(screen.queryByTestId('unmerge-stations-inside-50')).toBeNull();
+    expect(screen.queryByTestId('unmerge-stations-inside-60')).toBeNull();
+  });
+});
+
+describe('recordsInside', () => {
+  const records = [
+    { id: 40, name: '0', lines: [SIDE] },
+    { id: 41, name: '7', into: 40, lines: [SIDE] },
+    { id: 50, name: '9', lines: [NORTH] },
+    { id: 60, name: '5', lines: [] },
+  ];
+  it('lists the records under the station, and with `kept` every other top record', () => {
+    expect(recordsInside(records, 40).map((r) => r.id)).toEqual([41]);
+    expect(recordsInside(records, 40, true).map((r) => r.id)).toEqual([41, 50]);
+    expect(recordsInside(records, 50, true).map((r) => r.id)).toEqual([40]);
   });
 });

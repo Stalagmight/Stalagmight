@@ -263,7 +263,7 @@ describe('Detach Line from Station after the RS capture (RS-FX6)', () => {
     const letter = await screen.findByTestId('unmerge-stations-collision-0-letter');
     expect(letter.parentElement).toHaveTextContent('Rename the station that comes back (Side / 0, Station ID 40) to 0a');
     expect(screen.getByTestId('unmerge-stations-collision-0-alternative').parentElement).toHaveTextContent(
-      "Rename Side's own 0 (Station ID 44) to 0a",
+      "Rename the 0 that is on Side now (Station ID 44) to 0a",
     );
     expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('It gets back 0a (Station ID 40).');
     expect(screen.getByTestId(`unmerge-stations-result-${SIDE}`)).toHaveTextContent('Side: 0a, Station ID 40 (comes off)');

@@ -76,6 +76,15 @@ export function nameQualifier(
   return null;
 }
 
+/**
+ * The Name column's default width, CSS px (RS-FX8, N3): wide enough for a
+ * three-digit name and its "(loop end)" qualifier at the grid's 12 px text
+ * (about 6.5 px a character, plus the cell's 16 px padding); at 72 px "8
+ * (loop end)" was cut to "8 (loop...". A longer qualifier (a long home line
+ * name) truncates on its own, never the name; the tooltip has it whole.
+ */
+export const NAME_COLUMN_WIDTH = 112;
+
 export function buildStationColumns(ctx: StationColumnContext): GridColumn<Station>[] {
   const { t, precision, geometryReadOnly } = ctx;
 
@@ -116,7 +125,7 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
       // (STATION_DEFAULT_HIDDEN / the backend panels default).
       key: 'name',
       header: t('dataTable.stationColumns.name'),
-      width: 72,
+      width: NAME_COLUMN_WIDTH,
       kind: 'text',
       getValue: (r) => displayStationName(r.name),
       // A dotted row says whose station it shows (P2-5); the edit, the copy
@@ -131,10 +140,14 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
             </span>
           );
         }
+        // The name never truncates; the qualifier does, at its end.
         return (
-          <span className="sg-cell-text" title={`${name} ${qualifier}`}>
-            {name}{' '}
-            <span className="text-text-secondary" data-testid={`station-name-qualifier-${r.station_ref.line_id}-${r.station_ref.station_index}`}>
+          <span className="flex min-w-0 items-baseline" title={`${name} ${qualifier}`}>
+            <span className="shrink-0 whitespace-pre">{`${name} `}</span>
+            <span
+              className="truncate text-text-secondary"
+              data-testid={`station-name-qualifier-${r.station_ref.line_id}-${r.station_ref.station_index}`}
+            >
               {qualifier}
             </span>
           </span>

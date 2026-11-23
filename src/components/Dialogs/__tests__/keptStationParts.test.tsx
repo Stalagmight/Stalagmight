@@ -33,7 +33,7 @@ describe('collisionAnswerText', () => {
       'Rename the station that comes back (Side / 0, Station ID 15) to 0a',
     );
     expect(collisionAnswerText(collision.alternative, collision, comesBack, lineName)).toBe(
-      "Rename Side's own 0 (Station ID 29) to 0a",
+      "Rename the 0 that is on Side now (Station ID 29) to 0a",
     );
   });
 

@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import i18n from '../../../i18n';
-import { buildStationColumns, nameQualifier } from '../dataTableStationColumns';
+import { buildStationColumns, NAME_COLUMN_WIDTH, nameQualifier } from '../dataTableStationColumns';
 import type { Station } from '../../../types/project';
 
 const MAIN = 1;
@@ -81,5 +81,54 @@ describe('the Name column', () => {
     const { container } = render(<>{column.render!(own, 12)}</>);
     expect(container).toHaveTextContent(/^12$/);
     expect(screen.queryByTestId(`station-name-qualifier-${SIDE}-12`)).toBeNull();
+  });
+});
+
+/**
+ * RS-FX8, N3 (shot 29 of the RS capture): at the 72 px default the Name
+ * cell read "8 (loop..."; the column is sized for a three-digit name and the
+ * "(loop end)" qualifier at the grid's 12 px text, and the qualifier, not the
+ * name, is what truncates when a long home line name does not fit.
+ * Injection: the 72 px width again.
+ */
+describe('the Name column fits its qualifier (RS-FX8)', () => {
+  // About 6.5 px a character at 12 px, plus the cell's 16 px padding.
+  const fits = (text: string) => Math.ceil(text.length * 6.5) + 16;
+
+  it('is wide enough for "888 (loop end)"', () => {
+    expect(NAME_COLUMN_WIDTH).toBeGreaterThanOrEqual(fits('888 (loop end)'));
+    const column = buildStationColumns({
+      t,
+      precision: { coordinates: 2, depth: 1, gps: 6 },
+      geometryReadOnly: false,
+      gpsOrigin: null,
+      onGpsCellClick: () => {},
+      onConnectionsCellClick: () => {},
+    }).find((c) => c.key === 'name');
+    expect(column?.width).toBe(NAME_COLUMN_WIDTH);
+  });
+
+  it('truncates the qualifier, never the name', () => {
+    const column = buildStationColumns({
+      t,
+      precision: { coordinates: 2, depth: 1, gps: 6 },
+      geometryReadOnly: false,
+      gpsOrigin: null,
+      onGpsCellClick: () => {},
+      onConnectionsCellClick: () => {},
+      labels: {
+        station: (ref) => String(ref.station_index),
+        stationName: (ref) => String(ref.station_index),
+        stationId: () => null,
+        lineName,
+        stationNameTakenOn: () => null,
+      },
+    }).find((c) => c.key === 'name')!;
+    render(<>{column.render!(loopEnd, 8)}</>);
+    const qualifier = screen.getByTestId(`station-name-qualifier-${SIDE}-8`);
+    expect(qualifier).toHaveTextContent('(loop end)');
+    expect(qualifier).toHaveClass('truncate');
+    expect(qualifier.previousElementSibling).toHaveClass('shrink-0');
+    expect(qualifier.parentElement).toHaveAttribute('title', '8 (loop end)');
   });
 });

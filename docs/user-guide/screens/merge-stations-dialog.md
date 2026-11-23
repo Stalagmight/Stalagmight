@@ -43,7 +43,7 @@ the merge would make a line show one name for two stations of its own (a
 loop closure it changes, for example) does a row ask how to settle it:
 rename the other station (for example `12` to `12a`) or rename the kept
 one. Both stations have one name, so each choice says which it renames, by
-its Station ID ("Rename Side's own 12 (Station ID 27) to 12a", "Rename the
+its Station ID ("Rename the 12 that is on Side now (Station ID 27) to 12a", "Rename the
 kept station (Main / 12, Station ID 12) to 12a"). When the archived station
 was itself a junction of earlier merges, it is archived whole, with the
 stations archived in it still inside it, and the dialog names them:

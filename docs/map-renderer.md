@@ -189,7 +189,19 @@ therefore reveal exactly as they would with no virtual labels, and jump labels
 as they would with no reference labels; tier, kind and ordinal still order
 labels within a rank. A label that loses its spot on a reveal-only rerun
 (re-showing jumps, say) uploads an unreachable reveal and stays hidden, as a
-fresh build would leave it. Below the 13.5 label band only line names are
+fresh build would leave it.
+
+**Line names stay off junctions.** A line name places first at every zoom from
+z10, and its em offset overlaps the station label of the station it anchors on
+at every zoom, so that station's label never shows while names are on. A
+line name therefore anchors on one of its line's own stations: the first
+non-reference station that is no junction slot (its Station ID on another
+slot) and no loop end, so a branch's name sits on its first own station and
+never takes the label of the junction it starts on; a line whose every
+station is shared (a one-shot tie) takes the middle of that shot. A build
+also emits, hidden at an unreachable reveal, every label a shown line name
+beats (`shadowedByKind`), so turning line names off brings them back on the
+reveal-only rerun, with no rebuild. Below the 13.5 label band only line names are
 built, yet a jump / reference line's name must not show there only to lose
 its spot, and vanish, once the station and shot labels around it are built: the
 line-only build gathers the shown expensive kinds near each such name and

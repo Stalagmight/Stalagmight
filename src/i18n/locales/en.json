@@ -1324,7 +1324,7 @@
       "archived": "{{station}} is archived.",
       "archivedWithComment": "{{station}} is archived with its comment.",
       "archivedInside": "{{station}} (Station ID {{id}}), archived inside {{hidden}} by an earlier merge, stays inside it: a second Detach brings it back.",
-      "detachBringsBack": "Detach Line from Station brings it back.",
+      "detachBringsBack": "Detach Line from Station brings {{station}} back.",
       "repeat": "{{line}} already has a station {{name}} (Station ID {{id}}); it keeps its name, and {{line}} shows {{name}} twice, the junction with {{home}}'s dot.",
       "repeatLoopEnd": "{{line}} already has a station {{name}} (Station ID {{id}}); it keeps its name, and {{line}} shows {{name}} twice, once at a loop end with the loop mark.",
       "loopEndShown": "It was the hidden end of a loop closure: the closure stays, and {{station}} is shown at that end too.",
@@ -1910,7 +1910,7 @@
       "rename": "Rename {{station}} (Station ID {{id}}) to {{to}}",
       "renameComesBack": "Rename the station that comes back ({{station}}, Station ID {{id}}) to {{to}}",
       "renameKept": "Rename the kept station ({{station}}, Station ID {{id}}) to {{to}}",
-      "renameOwn": "Rename {{line}}'s own {{name}} (Station ID {{id}}) to {{to}}",
+      "renameOwn": "Rename the {{name}} that is on {{line}} now (Station ID {{id}}) to {{to}}",
       "shownAsThroughClosure": "shown as {{station}} through a loop closure",
       "editingDisabled": "Editing is disabled in the current view.",
       "commentHidden": "{{station}}'s comment (\"{{comment}}\") is hidden. Undo brings it back."
@@ -1953,9 +1953,9 @@
       "belongs": "{{name}} belongs to {{line}}.",
       "loopEnd": "Shown as {{station}} through a loop closure.",
       "changes": {
-        "name": "A new name changes it on every line it is on: {{lines}}.",
-        "comment": "A new comment changes it on every line it is on: {{lines}}.",
-        "both": "A new name and comment change it on every line it is on: {{lines}}."
+        "name": "A new name changes it on every line it is on.",
+        "comment": "A new comment changes it on every line it is on.",
+        "both": "A new name and comment change it on every line it is on."
       },
       "proceedOn": {
         "name": "Rename {{station}} to {{to}} on {{lines}}",
