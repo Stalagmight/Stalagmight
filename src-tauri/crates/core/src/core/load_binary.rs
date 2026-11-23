@@ -754,8 +754,9 @@ mod tests {
         assert_eq!(merged, [1, 3]);
     }
 
-    /// A merged station's aliases ride the envelope on every slot of it, so a
-    /// binary load shows "Also known as" like a JSON refresh does.
+    /// A merged station's archived records ride the envelope on every slot of
+    /// it (as alias entries until RS-W), so a binary load shows "Also known
+    /// as" like a JSON refresh does; every slot shows the kept name (RS 4.1).
     #[test]
     fn a_junctions_aliases_ride_every_slot() {
         let mut project = Project::new("aliases", None);
@@ -771,15 +772,15 @@ mod tests {
         );
         let junction = project.line(main).unwrap().station(1).unwrap();
         let side_start = project.line(side).unwrap().start;
-        let merged = project.merge_stations(junction, side_start).unwrap().value;
-        let retired_on_main = merged.retired == junction;
+        let merged = project.merge_keeping_stationary(junction, side_start).unwrap().value;
+        let retired_on_main = merged.archived == junction;
         let retired_name = Some(if retired_on_main { "1" } else { "0" }.to_string());
         let retired_line = if retired_on_main { main } else { side };
 
         let decoded = decode(&project);
 
         let expected = vec![StationAliasWire {
-            id: merged.retired,
+            id: merged.archived,
             name: retired_name,
             line: Some(retired_line),
         }];
@@ -788,10 +789,11 @@ mod tests {
             decoded.station_aliases,
             vec![(1, expected.clone()), (3, expected)]
         );
-        // Each slot carries the name its own line shows the junction by.
+        // Every slot shows the kept station's name.
+        let kept_name = if retired_on_main { "0" } else { "1" };
         let names: std::collections::BTreeMap<u32, String> =
             decoded.station_names.into_iter().collect();
-        assert_eq!((names[&1].as_str(), names[&3].as_str()), ("1", "0"));
+        assert_eq!((names[&1].as_str(), names[&3].as_str()), (kept_name, kept_name));
     }
 
     #[test]

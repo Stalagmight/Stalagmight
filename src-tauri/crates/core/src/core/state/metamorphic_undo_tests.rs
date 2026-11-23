@@ -987,14 +987,14 @@ fn one_per_junction(records: Vec<Mirrored>) -> Vec<Mirrored> {
     out
 }
 
-/// The station of `p` that is `id` or carries it as an alias.
+/// The station of `p` that is `id` or carries it as an archived record.
 fn known_as(p: &Project, id: StationId) -> Option<StationId> {
     if p.stations.contains_key(&id) {
         return Some(id);
     }
     p.stations
         .values()
-        .find(|s| s.aliases.iter().any(|alias| alias.id == id))
+        .find(|s| s.archived.iter().any(|record| record.id == id))
         .map(|s| s.id)
 }
 
@@ -1174,7 +1174,7 @@ fn mirrored_junction_problems(atomic: &Project, singles: &Project, m: &Mirrored)
     }
     let ids = |station: &Station| -> BTreeSet<StationId> {
         std::iter::once(station.id)
-            .chain(station.aliases.iter().map(|alias| alias.id))
+            .chain(station.archived.iter().map(|record| record.id))
             .collect()
     };
     let atomic_ids: BTreeSet<StationId> = m.atomic_at.iter().flat_map(|(_, a)| ids(a)).collect();
@@ -3326,7 +3326,7 @@ fn an_adopted_survey_the_encoder_refuses_is_a_reported_divergence() {
         .expect("a line of three stations");
     let mut record = p.stations.get(&station).cloned().expect("the station");
     record.name = taken;
-    record.aliases.clear();
+    record.archived.clear();
     let documented = Documented {
         partners: BTreeSet::new(),
         allowed: BTreeSet::new(),

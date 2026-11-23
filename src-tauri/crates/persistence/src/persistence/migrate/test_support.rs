@@ -752,11 +752,11 @@ pub(super) fn check(legacy: &LegacySurvey, migrated: &Migrated) -> Result<(), St
     if shot_uuids_changed != r.shot_uuids_minted {
         return Err("shot uuids changed without being reported".to_string());
     }
-    // Every legacy Station ID survives, as a station or an alias.
+    // Every legacy Station ID survives, as a station or an archived record.
     let mut ids: BTreeSet<u32> = BTreeSet::new();
     for station in p.stations.values() {
         ids.insert(station.id);
-        ids.extend(station.aliases.iter().map(|a| a.id));
+        ids.extend(station.archived.iter().map(|r| r.id));
     }
     let lost = lp
         .station_ids

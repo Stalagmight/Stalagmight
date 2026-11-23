@@ -57,14 +57,15 @@ fn a_junction_is_labelled_once() {
     assert_eq!(names.iter().filter(|n| *n == "Hub").count(), 1, "{names:?}");
 }
 
-/// In names mode a junction is labelled by the name its representative
-/// slot's line shows (I-3), as the map labels it: Main passes the junction
-/// mid-line (so its slot represents the point) and knows it by an alias,
-/// "M1", while the station's own name, "S0", is the one Side shows.
-/// Injection: labelling every slot by the station's own name fails it.
+/// In names mode a junction is labelled by its shown (kept) name on every
+/// line (RS 4.1), as the map labels it: Main passes the junction mid-line
+/// (so its slot represents the point) and its own station there, "M1", is
+/// archived (a record naming Main), shown nowhere; the kept "S0" is what
+/// both lines show. Injection: labelling a slot by its line's record name
+/// fails it. RS-X: the image export's archived closure ends (RS 9).
 #[test]
-fn a_junction_is_labelled_by_the_name_its_representative_line_shows() {
-    use crate::models::survey::StationAlias;
+fn a_junction_is_labelled_by_its_kept_name() {
+    use crate::models::survey::ArchivedStation;
     let mut p = project("Alias");
     let main = p
         .add_line(
@@ -83,18 +84,20 @@ fn a_junction_is_labelled_by_the_name_its_representative_line_shows() {
     let alias = p.mint_station_id().unwrap();
     let station = p.stations.get_mut(&j).unwrap();
     station.name = "S0".to_string();
-    station.aliases.push(StationAlias {
+    station.archived.push(ArchivedStation {
         id: alias,
-        name: Some("M1".to_string()),
-        line: Some(main),
+        name: "M1".to_string(),
+        comment: None,
+        external: None,
+        lines: vec![main],
     });
-    assert_eq!(p.shown_name(j), Some("M1"));
+    assert_eq!(p.shown_name(j), Some("S0"));
     let names = texts(
         &generate_svg_string(&p, &labelled(false)).unwrap(),
         "station-names",
     );
-    assert!(names.contains(&"M1".to_string()), "{names:?}");
-    assert!(!names.contains(&"S0".to_string()), "{names:?}");
+    assert!(names.contains(&"S0".to_string()), "{names:?}");
+    assert!(!names.contains(&"M1".to_string()), "{names:?}");
 }
 
 /// A station comment is drawn once, at a junction too; a datum station gets

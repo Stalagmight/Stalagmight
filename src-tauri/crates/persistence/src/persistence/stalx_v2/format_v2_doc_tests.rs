@@ -6,7 +6,7 @@ use std::sync::Arc;
 use chrono::{TimeZone, Utc};
 
 use crate::models::survey::{
-    ClosureStrategy, LineMeta, Placement, Project, StartAt, StationAlias, ZeroDatum,
+    ClosureStrategy, LineMeta, Placement, Project, StartAt, ArchivedStation, ZeroDatum,
 };
 use crate::models::{
     AzimuthReference, CorrectionSource, GpsCoordinates, NorthReference, Person, Section, ShotData,
@@ -133,10 +133,14 @@ pub(super) fn example() -> (Project, Extras) {
     {
         let s = p.station_mut(junction).unwrap();
         s.comment = Some("tie-off on a rock".to_string());
-        s.aliases.push(StationAlias {
+        // RS 8.1: Side's own station there, archived by the merge. RS-F:
+        // the example's prose in docs/file-format.md.
+        s.archived.push(ArchivedStation {
             id: alias,
-            name: Some("B0".to_string()),
-            line: Some(side),
+            name: "B0".to_string(),
+            comment: None,
+            external: None,
+            lines: vec![side],
         });
     }
     let entrance = p.line(main).unwrap().start;

@@ -1269,7 +1269,7 @@ fn the_label_names_the_cut_station_as_the_line_shows_it() {
         vec![shot(90.0, 4.0), shot(90.0, 4.0)],
     );
     let j = st(&p, side, 1);
-    p.merge_stations(st(&p, main, 2), j).unwrap();
+    p.merge_keeping_stationary(st(&p, main, 2), j).unwrap();
     assert_eq!(st(&p, main, 2), j, "Side's station survives the merge");
     assert_eq!(p.shown_name(j), Some("2"));
     assert_eq!(p.shown_name(j), Some("1"));

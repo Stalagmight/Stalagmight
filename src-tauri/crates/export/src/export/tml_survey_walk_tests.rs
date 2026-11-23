@@ -140,7 +140,7 @@ fn random_survey(seed: u64) -> Project {
         );
         // A refused merge (it would close a loop, or tear a placed piece)
         // leaves the survey as it was.
-        let _ = survey.project.merge_stations(sa, sb);
+        let _ = survey.project.merge_keeping_stationary(sa, sb);
     }
     for _ in 0..rng.below(3) {
         let piece = &pieces[rng.below(pieces.len())];

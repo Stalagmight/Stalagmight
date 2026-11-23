@@ -1814,13 +1814,13 @@ fn deleting_a_first_shot_at_a_junction_moves_nothing_today_keeps_still() {
         .unwrap()
         .project;
     let junction = p.station_at(StationRef::new(0, 0)).unwrap();
-    let member = p.line_alias(junction, 3).cloned().unwrap();
+    let member = p.record_naming(junction, 3).cloned().unwrap();
     let shot = p.line(0).unwrap().shots[0].id;
     let done = p.delete_shot(0, shot).unwrap();
     assert!(!done.value.station_deleted);
     assert_eq!(p.station_at(StationRef::new(3, 0)), Some(member.id));
     assert_eq!(done.report.reidentified, vec![(junction, member.id)]);
-    assert_eq!(p.stations[&member.id].name, member.name.unwrap());
+    assert_eq!(p.stations[&member.id].name, member.name);
     assert!(done.report.sweep.promoted.is_empty());
     assert_eq!(done.value.closures_removed.len(), 1, "the member's Tie");
 }

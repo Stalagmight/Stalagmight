@@ -529,7 +529,7 @@ fn unmerges_name_the_stations_they_detach() {
         station_b: StationRef::new(BRANCH, 0),
     };
     record(&o.state, &cmd, |p| {
-        p.unmerge_station_pair(StationRef::new(MAIN, 2), StationRef::new(BRANCH, 0))
+        p.unmerge_station_pair(StationRef::new(MAIN, 2), StationRef::new(BRANCH, 0), crate::models::survey::NameAnswers::RuleL, None)
             .map(|_| ())
             .map_err(|e| e.to_string())
     });
@@ -551,7 +551,7 @@ fn unmerges_name_the_stations_they_detach() {
         station_ref: StationRef::new(BRANCH, 0),
     };
     record(&o.state, &cmd, |p| {
-        p.unmerge_station(StationRef::new(BRANCH, 0))
+        p.unmerge_station(StationRef::new(BRANCH, 0), crate::models::survey::NameAnswers::RuleL, None)
             .map(|_| ())
             .map_err(|e| e.to_string())
     });

@@ -1386,7 +1386,7 @@ fn the_legacy_origin_is_a_migrated_survey_with_the_old_shapes() {
         aliases += project
             .stations
             .values()
-            .map(|s| s.aliases.len())
+            .map(|s| s.archived.len())
             .sum::<usize>();
     }
     assert!(ties > 0, "no seed migrated a Tie");

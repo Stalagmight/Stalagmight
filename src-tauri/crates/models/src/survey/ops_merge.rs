@@ -214,6 +214,19 @@ impl Project {
         self.merge_with(a, b, keep, Answers::RuleL)
     }
 
+    /// The merge the Merge Stations command runs until it carries the
+    /// dialog's keep and renames (RS-W): the stationary station (the one
+    /// the dialog says the other piece moves to join, the station a merge
+    /// kept before RS) is kept, and every collision is lettered by rule L.
+    pub fn merge_keeping_stationary(
+        &mut self,
+        a: StationId,
+        b: StationId,
+    ) -> Result<OpOutcome<MergeReport>, OpError> {
+        let keep = self.merge_direction(a, b).0;
+        self.merge_stations_auto(a, b, keep)
+    }
+
     fn merge_with(
         &mut self,
         a: StationId,

@@ -239,9 +239,8 @@ fn merge(
     // RS-W: the command carries the dialog's keep and renames (RS 4.1);
     // until then the stationary station is kept (the one the dialog says the
     // other piece moves to join) and every collision is lettered by rule L.
-    let keep = project.merge_direction(a.station, b.station).0;
     let outcome = project
-        .merge_stations_auto(a.station, b.station, keep)
+        .merge_keeping_stationary(a.station, b.station)
         .map_err(|e| {
         tracing::warn!(
             ?station_a,

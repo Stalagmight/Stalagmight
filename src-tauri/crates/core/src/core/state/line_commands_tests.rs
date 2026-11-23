@@ -401,7 +401,7 @@ fn reverse_line_warnings_name_a_junction_as_the_line_shows_it() {
         vec![heading_shot(90.0, 4.0), heading_shot(90.0, 4.0)],
     );
     let j = st(&p, side, 2);
-    p.merge_stations(st(&p, main, 1), j).unwrap();
+    p.merge_keeping_stationary(st(&p, main, 1), j).unwrap();
     assert_eq!(p.shown_name(j), Some("1"));
     assert_eq!(p.shown_name(j), Some("2"));
     let opened = open(&p);
@@ -937,7 +937,7 @@ fn undo_unmerge_restores_converted_closure_and_position() {
     assert_eq!(before.closures.len(), 1);
 
     let r = run_model(&state, "unmerge_station_pair", |p| {
-        p.unmerge_station_pair(StationRef::new(a, 2), StationRef::new(b, 0))
+        p.unmerge_station_pair(StationRef::new(a, 2), StationRef::new(b, 0), crate::models::survey::NameAnswers::RuleL, None)
             .map(|_| ())
             .map_err(|e| e.to_string())
     });
@@ -973,7 +973,7 @@ fn undo_unmerge_singular_restores_converted_closure_and_position() {
     let (a, b) = loop_through_a_closure(&state);
     let before = project(&state);
     let r = run_model(&state, "unmerge_stations", |p| {
-        p.unmerge_station(StationRef::new(b, 0))
+        p.unmerge_station(StationRef::new(b, 0), crate::models::survey::NameAnswers::RuleL, None)
             .map(|_| ())
             .map_err(|e| e.to_string())
     });
@@ -1006,7 +1006,7 @@ fn test_unmerge_removes_only_specific_merge() {
     assert_eq!(project(&state).merge_pairs().len(), 2);
 
     let r = run_model(&state, "unmerge_stations", |p| {
-        p.unmerge_station(StationRef::new(a, 1))
+        p.unmerge_station(StationRef::new(a, 1), crate::models::survey::NameAnswers::RuleL, None)
             .map(|_| ())
             .map_err(|e| e.to_string())
     });
@@ -1021,7 +1021,7 @@ fn test_unmerge_undo_restores_merge() {
     let state = new_state();
     let (a, _b) = joined_pair(&state);
     let r = run_model(&state, "unmerge_stations", |p| {
-        p.unmerge_station(StationRef::new(a, 1))
+        p.unmerge_station(StationRef::new(a, 1), crate::models::survey::NameAnswers::RuleL, None)
             .map(|_| ())
             .map_err(|e| e.to_string())
     });

@@ -1471,7 +1471,7 @@ pub(super) fn topology_signature(state: &AppState) -> String {
                 .filter(|s| s.comment.is_some())
                 .count()
         ),
-        bucket(project.stations.values().map(|s| s.aliases.len()).sum()),
+        bucket(project.stations.values().map(|s| s.archived.len()).sum()),
     )
 }
 

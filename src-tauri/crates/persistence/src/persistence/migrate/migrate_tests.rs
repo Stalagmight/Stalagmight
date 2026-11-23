@@ -150,24 +150,23 @@ fn a_merge_is_one_station_named_by_the_label_representative() {
     let id_of = |sr| ids[&legacy.project.key_for_ref(sr).unwrap()];
     assert_eq!(s.id, id_of(at(main, 2)));
     assert_eq!(s.name, "Junction");
-    assert_eq!(s.aliases.len(), 1);
-    assert_eq!(s.aliases[0].id, id_of(at(side, 0)));
-    assert_eq!(s.aliases[0].name.as_deref(), Some("0"));
+    assert_eq!(s.archived.len(), 1);
+    assert_eq!(s.archived[0].id, id_of(at(side, 0)));
+    assert_eq!(s.archived[0].name, "0");
+    // RS-F: 8.3 puts each member's own comment on its record.
     assert_eq!(s.comment.as_deref(), Some("sump\n\nlow air"));
     assert_eq!(out.report.merges_collapsed, 1);
     assert_eq!(out.report.aliases_created, 1);
     assert_eq!(out.report.comments_joined, 1);
 }
 
-/// Review findings D-migration-upgrade-8 and UX-3, and the real-app demo's
-/// I-3: Main:2 is named "2" and so is Side:2. Once Side:0 joins Main:2, the
-/// junction keeps its survivor's name "2" on Main and Side shows it by Side:0's
-/// alias "0", so Side reads 0, 1, 2 as in 0.6.0 and nothing changes name: the
-/// conversion notice has no name to list. Injection: build the station's
-/// aliases without names (or show the station's own name on every line) and
-/// Side reads 2, 1, 2.
+/// RS 8.3: Main:2 is named "2" and so is Side:2. Once Side:0 joins Main:2,
+/// the junction shows its kept name "2" on both lines and Side:0 is a
+/// record naming Side, so Side's own "2" takes the letter and the notice
+/// lists both slots whose name changed. RS-F: 8.3 keeps the member on the
+/// longest line and letters by rule L.
 #[test]
-fn a_junction_keeps_its_name_where_a_line_knows_it_by_an_alias() {
+fn a_junction_shows_its_kept_name_on_every_line() {
     let mut p = project();
     let main = line(&mut p, "Main", &[(90.0, 10.0), (80.0, 10.0), (70.0, 10.0)]);
     let side = line(&mut p, "Side", &[(180.0, 5.0), (190.0, 5.0), (200.0, 5.0)]);
@@ -176,29 +175,25 @@ fn a_junction_keeps_its_name_where_a_line_knows_it_by_an_alias() {
     let j = station(&out.project, main, 2);
     let s = &out.project.stations[&j];
     assert_eq!(s.name, "2");
-    assert_eq!(s.aliases.len(), 1);
-    assert_eq!(s.aliases[0].name.as_deref(), Some("0"));
-    assert_eq!(s.aliases[0].line, Some(side), "Side knew it as 0");
-    assert_eq!(out.project.shown_name(j), Some("0"));
+    assert_eq!(s.archived.len(), 1);
+    assert_eq!(s.archived[0].name, "0");
+    assert_eq!(s.archived[0].lines, vec![side], "Side's own station there");
     assert_eq!(out.project.shown_name(j), Some("2"));
     assert_eq!(
         out.project.stations[&station(&out.project, side, 2)].name,
-        "2"
+        "2a"
     );
-    assert_eq!(out.report.stations_renamed, 0);
     assert_eq!(out.project.validate(), Vec::new());
-    assert_eq!(out.extras.names_changed, Vec::new());
-    assert_eq!(out.report.names_changed, 0);
+    assert_eq!(out.report.names_changed, out.extras.names_changed.len());
+    assert!(out.report.names_changed >= 2, "Side:0 and Side:2");
 }
 
 /// A merged member whose Station ID is unusable (out of range: the frozen
-/// reader heals such ids, so the loaded project is edited here) still keeps
-/// its line's name for the junction: its alias gets a fresh id, minted after
-/// every station's, so the stations keep the ids they had (I-3). Injection:
-/// skip the members without an id (the old rule) and Side shows the
-/// junction's "2" twice.
+/// reader heals such ids, so the loaded project is edited here) is still
+/// archived: its record gets a fresh id, minted after every station's, so
+/// the stations keep the ids they had.
 #[test]
-fn a_member_without_a_usable_id_keeps_its_name_under_a_fresh_alias_id() {
+fn a_member_without_a_usable_id_is_archived_under_a_fresh_id() {
     let mut p = project();
     let main = line(&mut p, "Main", &[(90.0, 10.0), (80.0, 10.0), (70.0, 10.0)]);
     let side = line(&mut p, "Side", &[(180.0, 5.0), (190.0, 5.0), (200.0, 5.0)]);
@@ -217,16 +212,15 @@ fn a_member_without_a_usable_id_keeps_its_name_under_a_fresh_alias_id() {
     let s = &out.project.stations[&j];
     assert_eq!(out.report.station_ids_dropped, 1);
     assert_eq!(out.report.alias_ids_minted, 1);
-    assert_eq!(s.aliases.len(), 1);
-    assert_eq!(s.aliases[0].name.as_deref(), Some("0"));
-    assert_eq!(s.aliases[0].line, Some(side));
+    assert_eq!(s.archived.len(), 1);
+    assert_eq!(s.archived[0].name, "0");
+    assert_eq!(s.archived[0].lines, vec![side]);
     let highest_station = out.project.stations.keys().max().copied().unwrap();
     assert!(
-        s.aliases[0].id > highest_station,
+        s.archived[0].id > highest_station,
         "minted after every station"
     );
-    assert_eq!(out.project.shown_name(j), Some("0"));
-    assert_eq!(out.report.names_changed, 0);
+    assert_eq!(out.project.shown_name(j), Some("2"));
 }
 
 /// A true clash is still lettered, and the junction keeps its name. A
@@ -999,10 +993,10 @@ fn detaching_a_converted_merge_gives_the_line_its_own_station_back() {
     let side0_id = ids[&legacy.project.key_for_ref(at(side, 0)).unwrap()];
     let mut project = out.project;
     let j = station(&project, main, 2);
-    let naming = project.detach_naming(j, side).unwrap();
+    let naming = project.detach_naming(j, side, None).unwrap();
     assert_eq!((naming.id, naming.name.as_str()), (side0_id, "0"));
-    let detached = project.detach_line(j, side).unwrap();
-    assert!(detached.value.restored_alias);
+    let detached = project.detach_line_auto(j, side, None).unwrap();
+    assert!(detached.value.restored);
     assert_eq!(station(&project, side, 0), side0_id);
     assert_eq!(project.stations[&side0_id].name, "0");
     assert_eq!(station(&project, main, 2), j, "Main keeps the junction");
