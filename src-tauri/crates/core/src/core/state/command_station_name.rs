@@ -8,7 +8,7 @@
 use super::commands::{Applied, Record};
 use super::AppState;
 use crate::core::{Command, CommandResult};
-use crate::models::station_naming::name_characters_refusal;
+use crate::models::station_naming::user_station_name;
 use crate::models::survey::Project;
 use crate::models::{StationId, StationRef, LINE_GONE};
 
@@ -64,7 +64,8 @@ fn set_station_name(project: &mut Project, slot: StationRef, name: &str) -> Resu
     if !name.is_empty() && current == Some(name) {
         return Ok(());
     }
-    if let Some(refusal) = station_name_refusal(project, station, slot, name) {
+    let name = user_station_name(name)?;
+    if let Some(refusal) = station_name_clash(project, station, slot, name) {
         return Err(refusal);
     }
     project.set_shown_name(station, name.to_string());
@@ -88,22 +89,17 @@ fn named_station(project: &Project, slot: StationRef) -> Result<StationId, Strin
         .ok_or_else(|| "Station not found".to_string())
 }
 
-/// Why `station` (addressed at `slot`) cannot be named `name` (trimmed), in
+/// Why `station` (addressed at `slot`) cannot be named `name` (a name
+/// [`user_station_name`] passed) because another station holds it, in
 /// 0.6.0's words. A clash is reported on the slot's own line when the name is
 /// taken there, else on the first other line showing the renamed name that
 /// holds it.
-fn station_name_refusal(
+fn station_name_clash(
     project: &Project,
     station: StationId,
     slot: StationRef,
     name: &str,
 ) -> Option<String> {
-    if name.is_empty() {
-        return Some("A station name cannot be empty".to_string());
-    }
-    if let Some(refusal) = name_characters_refusal("station", name) {
-        return Some(refusal);
-    }
     let conflicts = project.conflicts_with_name(station, name);
     let clash = conflicts
         .iter()

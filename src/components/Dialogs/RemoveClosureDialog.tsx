@@ -17,6 +17,7 @@ import {
   answeredName,
   CollisionRows,
   renamesFromAnswers,
+  renamesProblem,
   StickyDialogFooter,
   useCollisionAnswers,
   useIdentityLabel,
@@ -162,12 +163,16 @@ export default function RemoveClosureDialog() {
     <StationBlob station={ref} withLine />
   );
 
+  // A name the command would refuse is never sent (RS-FX9).
+  const renameProblem = naming ? renamesProblem(renamesFromAnswers(naming.collisions, answers)) : null;
+
   const handleConfirm = async () => {
     if (!selectedClosure) return;
     if (isEditingBlockedNow()) {
       setError(t('dialogs.keptStations.editingDisabled'));
       return;
     }
+    if (renameProblem !== null) return;
 
     setIsLoading(true);
     setError(null);
@@ -287,7 +292,7 @@ export default function RemoveClosureDialog() {
           <Button
             variant="primary"
             onClick={handleConfirm}
-            disabled={isLoading || !selectedClosure || !previewSettled || editingBlocked}
+            disabled={isLoading || !selectedClosure || !previewSettled || editingBlocked || renameProblem !== null}
             data-testid="remove-closure-confirm"
           >
             {isLoading ? 'Removing...' : 'Remove'}

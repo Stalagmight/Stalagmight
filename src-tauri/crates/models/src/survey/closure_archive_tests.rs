@@ -586,3 +586,40 @@ fn crafted_archive_cycles_do_not_hang_the_dialogs() {
     assert_eq!(fixed.normalise_closure_archives(), vec![p.closures[1].id]);
     assert_valid(&fixed);
 }
+
+/// Pre-PR review (RS-FX9 item 1) on Remove Closure: its renames follow Set
+/// Station Name's rules and address only the stations of its own collision
+/// (the end that comes back, B3, and the B3 on B now, B1). Injection: on
+/// 3b6bdf77e the bidi override and the rename of A2 were applied.
+#[test]
+fn a_removal_rename_follows_the_station_name_rules() {
+    let (mut p, a, b) = loop_survey();
+    let (a2, b1, b3) = (at(&p, a, 2), at(&p, b, 1), at(&p, b, 3));
+    let id = close_b3_on_a4(&mut p, a, b);
+    p.station_mut(b1).unwrap().name = "B3".to_string();
+    let before = p.clone();
+    let refused = |renames: &[(StationId, String)]| {
+        let mut q = before.clone();
+        let error = q.remove_closure(id, renames).err().map(|e| e.to_string());
+        assert_eq!(q, before);
+        error
+    };
+    assert_eq!(
+        refused(&[(b3, "\u{202E}3B".to_string())]).as_deref(),
+        Some("A station name cannot contain control or invisible formatting characters (U+202E)")
+    );
+    assert_eq!(
+        refused(&[(b3, String::new())]).as_deref(),
+        Some("A station name cannot be empty")
+    );
+    assert_eq!(
+        refused(&[(a2, "A2x".to_string())]),
+        Some(format!(
+            "Station {a2} is in none of the name collisions this would make, so it cannot be \
+             renamed here"
+        ))
+    );
+    let mut answered = p.clone();
+    ok(answered.remove_closure(id, &[(b1, "B1".to_string())]));
+    assert_eq!(shown(&answered, b), ["A0", "B1", "B2", "B3"]);
+}

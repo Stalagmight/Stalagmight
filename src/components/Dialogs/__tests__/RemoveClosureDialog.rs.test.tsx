@@ -122,6 +122,34 @@ describe('Remove Closure under RS', () => {
     useUIStore.setState({ geometryMode: 'measured' } as never);
   });
 
+  // RS-FX9 item 1: the command refuses a rename Edit Station would refuse,
+  // so a dialog never sends one. Both answers letter a name that already held
+  // a bidi override (an import's): Remove waits and says why, as Edit Station
+  // does. Injection: on 3b6bdf77e Remove stayed enabled and sent the name.
+  it('does not send a name Edit Station would refuse', async () => {
+    const odd = '1\u202E7';
+    invokeIpc.mockResolvedValue({
+      ...NAMING,
+      collisions: [
+        {
+          line_id: SIDE,
+          name: odd,
+          letter: { station: { id: 17, name: odd, home_line: SIDE }, to: `${odd}a` },
+          alternative: { station: { id: 71, name: odd, home_line: SIDE }, to: `${odd}a` },
+        },
+      ],
+    });
+    render(<RemoveClosureDialog />);
+    expect(await screen.findByTestId('remove-closure-rename-problem')).toHaveTextContent(
+      'A name cannot contain control characters or invisible formatting characters.',
+    );
+    expect(screen.getByTestId('remove-closure-confirm')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('remove-closure-collision-0-alternative'));
+    expect(screen.getByTestId('remove-closure-confirm')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('remove-closure-confirm'));
+    expect(removeLoopClosure).not.toHaveBeenCalled();
+  });
+
   it('says no name changes for a closure that hides nothing', async () => {
     invokeIpc.mockResolvedValue({ closure_id: 5n, renamed_lines: [], collisions: [] });
     render(<RemoveClosureDialog />);

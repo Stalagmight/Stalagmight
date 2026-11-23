@@ -21,6 +21,7 @@ import {
   HiddenComments,
   HomeIdentityPill,
   renamesFromAnswers,
+  renamesProblem,
   recordIdentity,
   StickyDialogFooter,
   useCollisionAnswers,
@@ -362,12 +363,16 @@ export default function UnmergeStationsDialog() {
       labels.lineStationNames,
     );
 
+  // A name the command would refuse is never sent (RS-FX9).
+  const renameProblem = targetPreview ? renamesProblem(renamesFromAnswers(targetPreview.collisions, answers)) : null;
+
   const handleConfirm = async () => {
     if (!stationRef || !target) return;
     if (isEditingBlockedNow()) {
       setError(t('dialogs.keptStations.editingDisabled'));
       return;
     }
+    if (renameProblem !== null) return;
 
     setIsLoading(true);
     setError(null);
@@ -546,7 +551,7 @@ export default function UnmergeStationsDialog() {
           <Button
             variant="primary"
             onClick={handleConfirm}
-            disabled={isLoading || !target || waiting || pickPending || editingBlocked}
+            disabled={isLoading || !target || waiting || pickPending || editingBlocked || renameProblem !== null}
             data-testid="unmerge-stations-confirm"
           >
             {isLoading ? t('dialogs.detachLine.working') : t('dialogs.detachLine.confirm')}

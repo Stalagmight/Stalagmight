@@ -89,9 +89,10 @@ fn identities(r: &CommandResult) -> Vec<(StationId, String, String)> {
 /// is archived, and the history row says which ("Merge A / 2 into B / 0
 /// (keeps 0)"). A then shows B's 0 at its end with B's dot beside its own
 /// 0: a foreign slot counts for no uniqueness (RS-FX5), so the merge needs
-/// no answer with or without the dialog and letters nothing; the dialog's
-/// rename of the kept station still goes through, with no notice (the
-/// rename is the user's).
+/// no answer with or without the dialog and letters nothing. A rename the
+/// merge's collisions do not ask for (here of the kept station, with none)
+/// refuses and changes nothing (RS-FX9 item 1: a dialog answers only its
+/// collisions); Set Station Name renames the kept station on every line.
 #[test]
 fn a_merge_keeps_the_dialogs_station_and_answers_its_collisions() {
     let (p, a, b) = two_lines();
@@ -117,11 +118,27 @@ fn a_merge_keeps_the_dialogs_station_and_answers_its_collisions() {
     assert!(r.identities.is_none(), "{:?}", r.identities);
     assert!(state.undo().success);
 
-    let r = run(
+    let reason = refused(
         state,
         merge_keeping(slot(a, 2), slot(b, 0), b0, Some(vec![rename(b0, "J")])),
     );
+    assert!(
+        reason.contains("is in none of the name collisions"),
+        "{reason}"
+    );
+    assert_eq!(shown_name(state, slot(b, 0)), "0");
+    let r = run(
+        state,
+        merge_keeping(slot(a, 2), slot(b, 0), b0, Some(Vec::new())),
+    );
     assert!(r.identities.is_none(), "{:?}", r.identities);
+    run(
+        state,
+        Command::SetStationName {
+            station_ref: slot(b, 0),
+            name: "J".to_string(),
+        },
+    );
     for at in [slot(a, 2), slot(b, 0)] {
         assert_eq!(shown_name(state, at), "J");
     }
@@ -149,7 +166,7 @@ fn detach_brings_the_archived_station_back_with_the_dialogs_answers() {
     let state = &opened.state;
     run(
         state,
-        merge_keeping(slot(a, 2), slot(b, 0), b0, Some(vec![rename(b0, "J")])),
+        merge_keeping(slot(a, 2), slot(b, 0), b0, Some(Vec::new())),
     );
     // A's own 2 is archived: the name is free on A.
     run(

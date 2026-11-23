@@ -30,6 +30,7 @@ import {
   HiddenComments,
   IdentityPill,
   renamesFromAnswers,
+  renamesProblem,
   recordIdentity,
   StickyDialogFooter,
   useCollisionAnswers,
@@ -120,12 +121,16 @@ export default function MergeDialog() {
     closeDialog();
   };
 
+  // A name the command would refuse is never sent (RS-FX9).
+  const renameProblem = keepPreview ? renamesProblem(renamesFromAnswers(keepPreview.collisions, answers)) : null;
+
   const handleMerge = async () => {
     if (!stationA || !stationB) return;
     if (isEditingBlockedNow()) {
       setError(t('dialogs.keptStations.editingDisabled'));
       return;
     }
+    if (renameProblem !== null) return;
 
     setIsLoading(true);
     setError(null);
@@ -248,7 +253,7 @@ export default function MergeDialog() {
           <Button onClick={handleClose} disabled={isLoading} data-testid="merge-cancel">
             {t('dialogs.mergeStations.cancel')}
           </Button>
-          <Button variant="primary" onClick={handleMerge} disabled={isLoading || editingBlocked} data-testid="merge-confirm">
+          <Button variant="primary" onClick={handleMerge} disabled={isLoading || editingBlocked || renameProblem !== null} data-testid="merge-confirm">
             {isLoading ? t('dialogs.mergeStations.working') : t('dialogs.mergeStations.confirm')}
           </Button>
         </StickyDialogFooter>
