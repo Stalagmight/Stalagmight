@@ -4390,6 +4390,7 @@
     "nameInvalidChars": "A name cannot contain control characters or invisible formatting characters.",
     "loopEnd": "loop end",
     "loopEndLabel": "{{station}} (loop end on {{line}})",
+    "loopEndPinLabel": "{{station}} (loop end)",
     "foreignLabel": "{{station}} ({{home}})"
   },
   "notices": {
