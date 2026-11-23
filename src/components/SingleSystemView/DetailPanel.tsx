@@ -36,7 +36,8 @@ import { StationDatumDetail } from './StationDatumDetail';
 import { StationRecords } from './StationRecords';
 import { StationOtherLines } from './StationOtherLines';
 import { StationNameRows } from './StationNames';
-import { useIdentityLabel } from '../Dialogs/keptStationParts';
+import { useProse } from '../../hooks/useProse';
+import { Prose } from '../common/Prose';
 import { removeClosureAsking } from '../../utils/keptStationActions';
 import { StationOtherLineShots } from './StationOtherLineShots';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
@@ -779,7 +780,7 @@ function StationDetail({ station }: { station: Station }) {
 
           <StationOtherLines station={station} />
 
-          <StationRecords records={station.archived} lineName={labels.lineName} />
+          <StationRecords records={station.archived} />
 
           {station.closures_with && station.closures_with.length > 0 && (
             <ClosuresSection
@@ -1496,7 +1497,7 @@ function ClosuresSection({
 }: ClosuresSectionProps) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
-  const identityLabel = useIdentityLabel();
+  const prose = useProse();
   const editingBlocked = useEditingBlocked();
   const precision = useDecimalPrecision();
   const [expanded, setExpanded] = useState(true);
@@ -1682,10 +1683,12 @@ function ClosuresSection({
                 )}
                 {closure?.archived && (
                   <div className="text-xs text-text-secondary" data-testid={`closure-archive-${closureIdLabel}`}>
-                    {t('detailPanel.closures.archives', {
-                      hidden: identityLabel(closure.archived.station),
-                      shown: identityLabel(closure.archived.shown_as),
-                    })}
+                    <Prose
+                      text={t('detailPanel.closures.archives', {
+                        hidden: prose.identity(closure.archived.station),
+                        shown: prose.identity(closure.archived.shown_as),
+                      })}
+                    />
                   </div>
                 )}
               </div>

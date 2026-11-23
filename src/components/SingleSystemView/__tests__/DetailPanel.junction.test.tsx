@@ -13,6 +13,12 @@
  * "Also on" row fails "names the other lines only"; dropping the foreign
  * sentence fails "says whose station a foreign slot shows"; dropping the
  * loop-end lead fails the loop-end case.
+ *
+ * RS-PROSE: each sentence draws the stations and lines it names as prose
+ * pills, and reads (`accessibleText`) word for word what plain text wrote.
+ * Injections: the plain label back in a sentence fails its pill count; the
+ * slot's plain label ("3a (Main)") as the belongs sentence's words fails its
+ * accessible text; the Station ID on a record's pill fails "each fact once".
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -27,6 +33,11 @@ import { useSpeleoStore } from '../../../store/speleoStore';
 import { surveyDataFromLegacy } from '../../../types/survey-data';
 import type { Project, Line, Shot } from '../../../types/project';
 import type { Station } from '../../../types/ipc/Station';
+import { accessibleText } from '../../../test/accessibleText';
+
+/** The kinds of the prose pills in `el`, in order. */
+const pillKinds = (el: Element) =>
+  [...el.querySelectorAll('.sh-ppill')].map((pill) => pill.getAttribute('data-prose-kind'));
 
 function shot(id: number): Shot {
   return {
@@ -103,10 +114,21 @@ describe('a junction that shows its kept station on every line', () => {
     useUIStore.getState().setSelection({ type: 'station', stationRef: ref(SIDE, 0) });
     render(<DetailPanel />);
     expect(screen.getByTestId('station-detail-name')).toHaveTextContent(/^Name:3a$/);
-    expect(screen.getByTestId('station-detail-belongs')).toHaveTextContent('3a belongs to Main.');
+    const belongs = screen.getByTestId('station-detail-belongs');
+    expect(accessibleText(belongs)).toBe('3a belongs to Main.');
+    // The slot's pill (Side's colour, the bare name, Main's dot, its Station
+    // ID), then Main's.
+    expect(pillKinds(belongs)).toEqual(['station', 'line']);
+    const slotPill = belongs.querySelector('.sh-ppill')!;
+    expect(slotPill.querySelector('[aria-hidden="true"]')!.textContent).toBe('3a#11');
+    expect(slotPill.querySelector('[data-prose-mark="home"]')).not.toBeNull();
     expect(screen.getByTestId('station-detail-line')).toHaveTextContent(/^Line:Side$/);
     expect(screen.getByTestId('station-detail-id')).toHaveTextContent('11');
-    expect(screen.getByTestId('station-detail-record-20')).toHaveTextContent("0 (Station ID 20), Side's own station");
+    const record = screen.getByTestId('station-detail-record-20-text');
+    expect(accessibleText(record)).toBe("0 (Station ID 20), Side's own station");
+    expect(pillKinds(record)).toEqual(['station', 'line']);
+    // The sentence states the Station ID: the name's pill draws none.
+    expect(record.querySelector('[data-prose-sid]')).toBeNull();
   });
 
   it('names the other lines only, each with its detach button (RS 6)', () => {
@@ -117,6 +139,10 @@ describe('a junction that shows its kept station on every line', () => {
     expect(block).toHaveTextContent(/^Also on:Side$/);
     expect(screen.getByTestId(`station-${SIDE}-0-link`)).toHaveTextContent('Side');
     expect(screen.getByTestId(`detail-unmerge-${SIDE}-0`)).toHaveAccessibleName('Detach Side from this station');
+    // The other line's shot row is labelled by that line's pill.
+    const label = screen.getByTestId(`station-detail-other-shot-${SIDE}-0-label`);
+    expect(accessibleText(label)).toBe('On Side:');
+    expect(pillKinds(label)).toEqual(['line']);
   });
 
   it('says each fact once: no Junction row, the archived station listed once (N-3)', () => {
@@ -173,10 +199,15 @@ describe('a loop end in the station details (RS 6, U-P2-15)', () => {
     });
     useUIStore.getState().setSelection({ type: 'station', stationRef: ref(SIDE, 1) });
     render(<DetailPanel />);
-    expect(screen.getByTestId('station-detail-loop-end')).toHaveTextContent('Loop closure end, shown as Main / 4');
-    expect(screen.getByTestId('station-detail-loop-end-own')).toHaveTextContent(
-      'Its own station 1 (Station ID 22) is hidden. Removing the closure brings it back.',
-    );
+    const shownAs = screen.getByTestId('station-detail-loop-end-shown');
+    expect(accessibleText(shownAs)).toBe('Loop closure end, shown as Main / 4');
+    expect(pillKinds(shownAs)).toEqual(['station']);
+    expect(shownAs.querySelector('[aria-hidden="true"]')!.textContent).toBe('Main: 4#12');
+    const own = screen.getByTestId('station-detail-loop-end-own');
+    expect(accessibleText(own)).toBe('Its own station 1 (Station ID 22) is hidden. Removing the closure brings it back.');
+    // Its own name in Side's colour, without the Station ID the sentence states.
+    expect(pillKinds(own)).toEqual(['station']);
+    expect(own.querySelector('[aria-hidden="true"]')!.textContent).toBe('1');
     expect(screen.getByTestId('station-detail-id')).toHaveTextContent('12');
     expect(screen.queryByTestId('station-detail-belongs')).toBeNull();
     // RS-FX6, P3-14: Name and Station ID are Main / 4's, the position rows
@@ -240,8 +271,12 @@ describe('junction station details', () => {
     render(<DetailPanel />);
     const records = screen.getByTestId('station-detail-records');
     expect(records).toHaveTextContent('Archived here');
-    expect(screen.getByTestId('station-detail-record-20')).toHaveTextContent('0 (Station ID 20), no longer on any line');
-    expect(screen.getByTestId('station-detail-record-21')).toHaveTextContent('21 (Station ID 21), no longer on any line');
+    const record20 = screen.getByTestId('station-detail-record-20-text');
+    expect(accessibleText(record20)).toBe('0 (Station ID 20), no longer on any line');
+    expect(pillKinds(record20)).toEqual(['station']);
+    expect(accessibleText(screen.getByTestId('station-detail-record-21-text'))).toBe(
+      '21 (Station ID 21), no longer on any line',
+    );
   });
 
   /** RS-FX4: a record archived inside another (its `into`) is listed under
@@ -266,8 +301,8 @@ describe('junction station details', () => {
     const inside = screen.getByTestId('station-detail-record-20-inside');
     expect(inside).toContainElement(screen.getByTestId('station-detail-record-21'));
     expect(inside).toHaveAccessibleName('Archived inside X1');
-    expect(screen.getByTestId('station-detail-record-21')).toHaveTextContent("R0 (Station ID 21), Side's own station");
-    expect(screen.getByTestId('station-detail-record-20')).toHaveTextContent("X1 (Station ID 20), Main's own station");
+    expect(accessibleText(screen.getByTestId('station-detail-record-21-text'))).toBe("R0 (Station ID 21), Side's own station");
+    expect(accessibleText(screen.getByTestId('station-detail-record-20-text'))).toBe("X1 (Station ID 20), Main's own station");
     expect(inside).not.toContainElement(screen.getByTestId('station-detail-record-23'));
     expect(screen.getAllByTestId(/^station-detail-record-\d+$/)).toHaveLength(3);
   });

@@ -3,9 +3,11 @@ import { useShallow } from 'zustand/react/shallow';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useProse } from '../../hooks/useProse';
 import { setSource } from '../../utils/telemetry';
 import type { StationRef } from '../../types/project';
 import { DetailLink } from '../common/DetailLink';
+import { Prose } from '../common/Prose';
 
 /**
  * The Station details' "Connected" rows for the OTHER lines through a station.
@@ -14,12 +16,14 @@ import { DetailLink } from '../common/DetailLink';
  * (plan 9.3), so it has three or more incident shots, not just a previous and a
  * next one. The panel lists this slot's line's two as before; these are the
  * shots that meet the station on each other line (`mergedWith`, the station's
- * other slots), one row per shot, named by the line it is on.
+ * other slots), one row per shot, named by the line it is on ("On [Side]:",
+ * the line a prose pill, RS-PROSE).
  */
 export function StationOtherLineShots({ mergedWith }: { mergedWith: ReadonlyArray<StationRef> }) {
   const { t } = useTranslation();
   const lines = useProjectStore((s) => s.project?.lines);
   const labels = useIdentityLabels();
+  const prose = useProse();
   const { setSelection, announceSelection, setHoveredShot } = useUIStore(
     useShallow((s) => ({
       setSelection: s.setSelection,
@@ -45,8 +49,8 @@ export function StationOtherLineShots({ mergedWith }: { mergedWith: ReadonlyArra
           className="flex justify-between gap-2"
           data-testid={`station-detail-other-shot-${s.lineId}-${s.shotIndex}`}
         >
-          <span className="text-text-secondary truncate">
-            {t('detailPanel.station.otherLineShots', { line: labels.lineName(s.lineId) })}:
+          <span className="text-text-secondary truncate" data-testid={`station-detail-other-shot-${s.lineId}-${s.shotIndex}-label`}>
+            <Prose text={t('detailPanel.station.otherLineShots', { line: prose.line(s.lineId) })} />:
           </span>
           <DetailLink
             type="shot"
