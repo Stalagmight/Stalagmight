@@ -23,7 +23,8 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import RemoveClosureDialog from '../RemoveClosureDialog';
-import { said } from './proseSentence';
+import { pillDrawings, pillKinds, said } from './proseSentence';
+import { accessibleText } from '../../../test/accessibleText';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -95,6 +96,21 @@ describe('Remove Closure under RS', () => {
     expect(invokeIpc).toHaveBeenCalledWith('preview_remove_loop_closure', { closureId: 5 }, expect.anything());
   });
 
+  // RS-PROSE: the row's station that comes back is a pill by its bare name
+  // (its home line's colour, its Station ID), and the sentence's stations
+  // and line are pills; each reads as plain text wrote it. Injection: the
+  // plain `displayStationName` in the row fails its pill list.
+  it('draws the station that comes back and its lines as pills', async () => {
+    render(<RemoveClosureDialog />);
+    const sentence = await screen.findByTestId('remove-closure-comes-back');
+    const row = screen.getByTestId('remove-closure-option-5-back');
+    expect(accessibleText(row)).toBe('(17a comes back)');
+    expect(pillDrawings(row)).toEqual(['17a#17']);
+    const said17 = sentence.querySelector('p')!;
+    expect(accessibleText(said17)).toBe('Side / 17a comes back: Side shows it again instead of Main / 3.');
+    expect(pillKinds(said17)).toEqual(['station', 'line', 'station']);
+  });
+
   // RS-FX6, P1-1: both answers rename a station named 17; each says which,
   // by its role and Station ID. Injection: word them by `identityLabelOf`
   // alone and both read "Rename Side / 17 to 17a".
@@ -105,6 +121,10 @@ describe('Remove Closure under RS', () => {
     expect(said(screen.getByTestId('remove-closure-collision-0-alternative').parentElement)).toContain(
       "Rename the 17 that is on Side now (Station ID 71) to 17a",
     );
+    expect(screen.getByRole('radio', { name: "Rename the 17 that is on Side now (Station ID 71) to 17a" })).toBe(
+      screen.getByTestId('remove-closure-collision-0-alternative'),
+    );
+    expect(pillKinds(letter.parentElement!)).toEqual(['station']);
   });
 
   it('removes with the answers to the collisions', async () => {

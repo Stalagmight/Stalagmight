@@ -34,7 +34,8 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import UnmergeStationsDialog, { recordsInside } from '../UnmergeStationsDialog';
-import { said } from './proseSentence';
+import { pillDrawings, said } from './proseSentence';
+import { accessibleText } from '../../../test/accessibleText';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -263,6 +264,13 @@ describe('what stays archived inside the remaining junction (RS-FX8)', () => {
       'Side / 0 (Station ID 40) stays archived inside it, with Twig / 7 (Station ID 41) archived inside Side / 0: ' +
         'detach Side again to get it back.',
     );
+    // RS-PROSE: each station (its Station ID in words, none drawn) and the
+    // line are pills, the nested one inside its list too.
+    expect(accessibleText(screen.getByTestId('unmerge-stations-inside-40'))).toBe(
+      'Side / 0 (Station ID 40) stays archived inside it, with Twig / 7 (Station ID 41) archived inside Side / 0: ' +
+        'detach Side again to get it back.',
+    );
+    expect(pillDrawings(screen.getByTestId('unmerge-stations-inside-40'))).toEqual(['Side: 0', 'Twig: 7', 'Side: 0', 'Side']);
     expect(screen.queryByTestId('unmerge-stations-inside-41')).toBeNull();
     expect(screen.queryByTestId('unmerge-stations-inside-50')).toBeNull();
     expect(screen.queryByTestId('unmerge-stations-inside-60')).toBeNull();

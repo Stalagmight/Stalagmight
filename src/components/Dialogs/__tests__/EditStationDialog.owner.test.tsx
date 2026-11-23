@@ -23,7 +23,8 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import type { Project, Station } from '../../../types/project';
 import type { StationOwner } from '../../../types/ipc/StationOwner';
-import { said } from './proseSentence';
+import { pillDrawings, pillKinds, said } from './proseSentence';
+import { accessibleText } from '../../../test/accessibleText';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -134,6 +135,16 @@ describe('Edit Station asks whose station it is (RS 5.4)', () => {
     expect(said(screen.getByTestId('shown-identity-prompt-detach'))).toContain(
       'Detach Side to get back its own station 0',
     );
+    // RS-PROSE: the lead draws the slot (its bare name, the home-line dot)
+    // and the home line as pills and reads as plain text wrote it; the
+    // buttons are controls and stay plain.
+    const lead = screen.getByTestId('shown-identity-prompt-lead');
+    expect(accessibleText(lead)).toBe('12 belongs to Main.');
+    expect(pillKinds(lead)).toEqual(['station', 'line']);
+    expect(pillDrawings(lead)).toEqual(['12#11', 'Main']);
+    expect(lead.querySelector('[data-prose-mark="home"]')).not.toBeNull();
+    expect(pillKinds(screen.getByTestId('shown-identity-prompt-proceed'))).toEqual([]);
+    expect(pillKinds(screen.getByTestId('shown-identity-prompt-detach'))).toEqual([]);
     await act(async () => {
       fireEvent.click(screen.getByTestId('shown-identity-prompt-proceed'));
     });
@@ -175,6 +186,8 @@ describe('Edit Station asks whose station it is (RS 5.4)', () => {
       ),
     );
     expect(said(screen.getByTestId('shown-identity-prompt-proceed'))).toContain('Change the comment of Main / 3');
+    expect(accessibleText(screen.getByTestId('shown-identity-prompt-lead'))).toBe('Shown as Main / 3 through a loop closure.');
+    expect(pillDrawings(screen.getByTestId('shown-identity-prompt-lead'))).toEqual(['Main: 3#3']);
     expect(said(screen.getByTestId('shown-identity-prompt-remove-closure'))).toContain('Remove the closure');
     expect(screen.queryByTestId('shown-identity-prompt-detach')).toBeNull();
   });
@@ -186,6 +199,11 @@ describe('Edit Station asks whose station it is (RS 5.4)', () => {
     expect(said(screen.getByTestId('station-datum-loop-end'))).toContain(
       'This station is Main / 3 (loop end on Side): the datum goes on its own point.',
     );
+    // RS-PROSE: the loop end is a pill with its loop mark; the words stay.
+    const datum = screen.getByTestId('station-datum-loop-end');
+    expect(accessibleText(datum)).toBe('This station is Main / 3 (loop end on Side): the datum goes on its own point.');
+    expect(pillKinds(datum)).toEqual(['station']);
+    expect(datum.querySelector('[data-prose-mark="loop"]')).not.toBeNull();
   });
 
   it('saves a native slot at once', async () => {

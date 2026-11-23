@@ -26,7 +26,8 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import MergeDialog, { defaultKeepOf, groupDepthReadings } from '../MergeDialog';
-import { said } from './proseSentence';
+import { pillDrawings, pillKinds, said } from './proseSentence';
+import { accessibleText } from '../../../test/accessibleText';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -112,6 +113,28 @@ describe('Merge Stations keeps one station (RS 4.1)', () => {
     expect(said(screen.getByTestId('merge-preview-move'))).toContain("Side moves 24 m onto Main / 12's position.");
   });
 
+  // RS-PROSE: each sentence draws the lines and stations it names as prose
+  // pills (an identity by its home line, with its Station ID), and reads
+  // word for word as plain text wrote it. Injection: render a sentence's
+  // plain string fails the pill lists; render the token's words visibly
+  // fails the exact sentences.
+  it('draws the names of what the keep does as prose pills', () => {
+    open(preview());
+    const renamed = screen.getByTestId('merge-renamed-lines');
+    expect(accessibleText(renamed)).toBe('Side will show Main / 12.');
+    expect(pillKinds(renamed)).toEqual(['line', 'station']);
+    expect(pillDrawings(renamed)).toEqual(['Side', 'Main: 12#12']);
+    const hidden = screen.getByTestId('merge-hidden');
+    expect(accessibleText(hidden)).toBe('Side / 0 is archived with its comment.');
+    expect(pillDrawings(hidden)).toEqual(['Side: 0#40']);
+    const back = screen.getByTestId('merge-hidden-back');
+    expect(accessibleText(back)).toBe('Detach Line from Station brings Side / 0 back.');
+    expect(pillKinds(back)).toEqual(['station']);
+    const move = screen.getByTestId('merge-preview-move');
+    expect(accessibleText(move)).toBe("Side moves 24 m onto Main / 12's position.");
+    expect(pillKinds(move)).toEqual(['line', 'station']);
+  });
+
   it('follows the other keep: other lines, the other archived station, no comment', () => {
     open(preview());
     fireEvent.click(screen.getByTestId('merge-keep-40'));
@@ -135,6 +158,24 @@ describe('Merge Stations keeps one station (RS 4.1)', () => {
     expect(said(screen.getByTestId('merge-collision-0-alternative').parentElement)).toContain(
       'Rename the kept station (Main / 12, Station ID 12) to 12a',
     );
+  });
+
+  // RS-PROSE: the legend's line and each answer's station and line are
+  // pills; the answer says the Station ID in words, so its pill draws none.
+  // Each radio's accessible name is still the plain sentence. Injection: the
+  // plain `collisionAnswerText` in the label fails the pill lists.
+  it('draws a collision row\'s names as pills, its radios named by the plain sentence', () => {
+    open(preview());
+    const legend = screen.getByTestId('merge-collision-0').querySelector('legend')!;
+    expect(accessibleText(legend)).toBe('On Side, 12 would name two stations');
+    expect(pillKinds(legend)).toEqual(['line']);
+    const letter = screen.getByRole('radio', { name: 'Rename the 12 that is on Side now (Station ID 41) to 12a' });
+    expect(letter).toBe(screen.getByTestId('merge-collision-0-letter'));
+    expect(pillKinds(letter.parentElement!)).toEqual(['station', 'line']);
+    expect(pillDrawings(letter.parentElement!)).toEqual(['12', 'Side']);
+    const alternative = screen.getByRole('radio', { name: 'Rename the kept station (Main / 12, Station ID 12) to 12a' });
+    expect(alternative).toBe(screen.getByTestId('merge-collision-0-alternative'));
+    expect(pillDrawings(alternative.parentElement!)).toEqual(['Main: 12']);
   });
 
   it('merges keeping the station chosen, with the letter answer', async () => {
@@ -188,6 +229,7 @@ describe('Merge Stations keeps one station (RS 4.1)', () => {
       }),
     );
     expect(said(screen.getByTestId('merge-keep-40-shown-as'))).toContain('shown as Main / 3 through a loop closure');
+    expect(pillKinds(screen.getByTestId('merge-keep-40-shown-as'))).toEqual(['station']);
     // Its pill names its own station, not what the closure shows it as.
     expect(said(screen.getByTestId('merge-keep-40-pill'))).toContain('Side: 0');
   });
@@ -256,6 +298,12 @@ describe('Merge Stations names what else the keep hides (RS-FX1)', () => {
     expect(said(screen.getByTestId('merge-comments-hidden-28'))).toContain(
       'Main / 3\'s comment ("Low air") is hidden. Undo brings it back.',
     );
+    // RS-PROSE: the kept station and the hidden comment's station are pills.
+    expect(pillKinds(screen.getByTestId('merge-loop-end-shown'))).toEqual(['station']);
+    expect(accessibleText(screen.getByTestId('merge-comments-hidden-28'))).toBe(
+      'Main / 3\'s comment ("Low air") is hidden. Undo brings it back.',
+    );
+    expect(pillDrawings(screen.getByTestId('merge-comments-hidden-28'))).toEqual(['Main: 3#28']);
   });
 
   it('says none of it when the keep hides nothing else', () => {
@@ -303,6 +351,8 @@ describe('Merge Stations says the name repeats and what travels inside (RS-FX6)'
     expect(said(screen.getByTestId(`merge-repeat-${SIDE}-41`))).toContain(
       "Side already has a station 12 (Station ID 41); it keeps its name, and Side shows 12 twice, the junction with Main's dot.",
     );
+    // RS-PROSE: the lines are pills; the name it repeats stays a name.
+    expect(pillKinds(screen.getByTestId(`merge-repeat-${SIDE}-41`))).toEqual(['line', 'line', 'line']);
     // The other keep makes no repeat: nothing is said.
     fireEvent.click(screen.getByTestId('merge-keep-40'));
     expect(screen.queryByTestId('merge-repeats')).toBeNull();
@@ -328,6 +378,8 @@ describe('Merge Stations says the name repeats and what travels inside (RS-FX6)'
     expect(said(screen.getByTestId('merge-hidden-inside-46'))).toContain(
       'Main / 0 (Station ID 46), archived inside Side / 0 by an earlier merge, stays inside it: a second Detach brings it back.',
     );
+    // RS-PROSE: the station whose Station ID the words say draws none.
+    expect(pillDrawings(screen.getByTestId('merge-hidden-inside-46'))).toEqual(['Main: 0', 'Side: 0#40']);
     // RS-FX8, N4: Detach names the station it brings back and comes before
     // the inside sentence, so no "it" points at the station inside.
     const back = screen.getByTestId('merge-hidden-back');

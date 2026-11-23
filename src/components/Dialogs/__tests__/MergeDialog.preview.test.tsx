@@ -63,7 +63,8 @@ vi.mock('../DialogWrapper', () => ({
 
 import '../../../i18n';
 import MergeDialog from '../MergeDialog';
-import { said } from './proseSentence';
+import { pillKinds, said } from './proseSentence';
+import { accessibleText } from '../../../test/accessibleText';
 
 const A = { line_id: 1, station_index: 5 };
 const B = { line_id: 2, station_index: 5 };
@@ -127,6 +128,16 @@ describe('MergeDialog says what the merge does (I-4)', () => {
     expect(said(screen.getByTestId('merge-preview-junction-2-5'))).toContain(
       'Second entrance / B4 is already where Second entrance and Far room meet.'
     );
+    // RS-PROSE: every line and station named is a pill, the sentence read
+    // as plain text wrote it (the readings' lines inside their list too).
+    const depthsSaid = screen.getByTestId('merge-preview-depths');
+    expect(pillKinds(depthsSaid)).toEqual(['line', 'line', 'line']);
+    expect(accessibleText(depthsSaid)).toBe(
+      'Depths 4.0 m (Upstream), 12.5 m (Second entrance), 12.5 m (Far room) become 9.7 m: the joined station takes the mean of its depth readings.',
+    );
+    const junction = screen.getByTestId('merge-preview-junction-2-5');
+    expect(pillKinds(junction)).toEqual(['station', 'line', 'line']);
+    expect(accessibleText(junction)).toBe('Second entrance / B4 is already where Second entrance and Far room meet.');
   });
 
   it('says the depths when the two stations disagree', () => {
@@ -160,6 +171,8 @@ describe('MergeDialog says what the merge does (I-4)', () => {
     expect(said(screen.getByTestId('merge-preview-move'))).toContain(
       'Upstream, Side passage, Sump and 2 more move 4.3 m'
     );
+    // RS-PROSE: the lines listed are pills, the count words.
+    expect(pillKinds(screen.getByTestId('merge-preview-move'))).toEqual(['line', 'line', 'line', 'station']);
   });
 
   it('says no move for stations already on one point', () => {

@@ -31,7 +31,8 @@ import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import ClosureDialog from '../ClosureDialog';
 import RemoveClosureDialog from '../RemoveClosureDialog';
-import { said } from './proseSentence';
+import { pillKinds, said } from './proseSentence';
+import { accessibleText } from '../../../test/accessibleText';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -96,6 +97,13 @@ describe("Create Loop Closure: why rule K's end may not be kept", () => {
       'Main / 3 cannot be kept here: it would hide Side / 17, which another loop closure already shows as North / 9.',
     );
     expect(said(note)).not.toContain('longer line');
+    // RS-PROSE: the three stations are pills; the sentence reads as written.
+    expect(pillKinds(note)).toEqual(['station', 'station', 'station']);
+    expect(accessibleText(note)).toBe(
+      'Main / 3 cannot be kept here: it would hide Side / 17, which another loop closure already shows as North / 9.',
+    );
+    // The end shown as another says so beside its radio, as a pill too.
+    expect(pillKinds(screen.getByTestId('closure-keep-17-shown-as'))).toEqual(['station']);
   });
 
   it("C2: rule K's end is already shown as the other end", async () => {
@@ -115,6 +123,7 @@ describe("Create Loop Closure: why rule K's end may not be kept", () => {
     expect(said(note)).toContain(
       'Side / 17 cannot be kept here: a loop closure already shows it as Main / 3.',
     );
+    expect(pillKinds(note)).toEqual(['station', 'station']);
   });
 
   it('Keep both names says an end stays shown as another station', async () => {
@@ -137,6 +146,9 @@ describe("Create Loop Closure: why rule K's end may not be kept", () => {
     expect(said(outcome)).toContain(
       'No name changes. Side / 17 stays shown as North / 9 through another loop closure.',
     );
+    // RS-PROSE: the sentences joined in one paragraph keep their pills.
+    expect(accessibleText(outcome)).toBe('No name changes. Side / 17 stays shown as North / 9 through another loop closure.');
+    expect(pillKinds(outcome)).toEqual(['station', 'station']);
     expect(said(outcome)).not.toContain('Each end keeps its own name.');
     // Without an end shown as another, the old sentence is true.
     fireEvent.click(screen.getByTestId('closure-keep-17'));
@@ -215,6 +227,8 @@ describe('Remove Closure of a closure that hides nothing', () => {
     expect(said(note)).toContain(
       'No name changes. Side / 9 stays shown as Main / 2 through another loop closure.',
     );
+    expect(accessibleText(note)).toBe('No name changes. Side / 9 stays shown as Main / 2 through another loop closure.');
+    expect(pillKinds(note)).toEqual(['station', 'station']);
     expect(said(note)).not.toContain('Both ends already show their own names');
   });
 });

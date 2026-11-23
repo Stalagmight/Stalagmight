@@ -34,7 +34,8 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import UnmergeStationsDialog, { defaultDetachSlot } from '../UnmergeStationsDialog';
 import type { DetachLinePreview } from '../../../types/ipc.generated';
-import { said } from './proseSentence';
+import { pillKinds, said } from './proseSentence';
+import { accessibleText } from '../../../test/accessibleText';
 
 const MAIN = 0;
 const NORTH = 1;
@@ -120,10 +121,18 @@ describe('Detach dialog default (I-7)', () => {
         name: 'North Passage and Main Line B, together (Main Line, the line you clicked, keeps this station)',
       }),
     ).toBe(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
+    expect(pillKinds(screen.getByTestId(`unmerge-station-option-${MAIN}-3`).parentElement!)).toEqual(['line', 'line', 'line']);
     fireEvent.click(screen.getByTestId(`unmerge-station-option-${MAIN}-3`));
     expect(said(screen.getByTestId('unmerge-stations-naming'))).toContain(
       'Main Line keeps this station, and North Passage and Main Line B come off together: they stay joined.',
     );
+    // RS-PROSE: the three lines are pills; the sentences read as written.
+    const naming = screen.getByTestId('unmerge-stations-naming');
+    expect(accessibleText(naming)).toBe(
+      'Main Line keeps this station, and North Passage and Main Line B come off together: they stay joined.',
+    );
+    expect(pillKinds(naming)).toEqual(['line', 'line', 'line']);
+    expect(pillKinds(screen.getByTestId('unmerge-stations-explain'))).toEqual(['line', 'line', 'line']);
   });
 
   it('keeps the clicked slot when it is the merged line', async () => {

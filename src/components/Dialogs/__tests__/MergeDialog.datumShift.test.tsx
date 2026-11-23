@@ -48,7 +48,8 @@ vi.mock('../DialogWrapper', () => ({
 
 import '../../../i18n';
 import MergeDialog from '../MergeDialog';
-import { said } from './proseSentence';
+import { pillKinds, said } from './proseSentence';
+import { accessibleText } from '../../../test/accessibleText';
 
 const A = { line_id: 1, station_index: 5 };
 const B = { line_id: 2, station_index: 5 };
@@ -83,6 +84,12 @@ describe('MergeDialog datum shift (#741)', () => {
     expect(said(screen.getByTestId('merge-datum-shift'))).toContain(
       'Second entrance is placed by its own GPS. It moves 12 m to meet the other piece, and its zero datum at Second entrance / 0 becomes a GPS fix.'
     );
+    // RS-PROSE: the piece's line and the datum's station are pills.
+    const notice = screen.getByTestId('merge-datum-shift');
+    expect(pillKinds(notice)).toEqual(['line', 'station']);
+    expect(accessibleText(notice)).toBe(
+      'Second entrance is placed by its own GPS. It moves 12 m to meet the other piece, and its zero datum at Second entrance / 0 becomes a GPS fix.',
+    );
   });
 
   it('names the other lines of a moving piece (N-13)', () => {
@@ -99,5 +106,6 @@ describe('MergeDialog datum shift (#741)', () => {
     const notice = screen.getByTestId('merge-datum-shift');
     expect(said(notice)).toContain('The merge moves it to meet the other piece');
     expect(said(notice)).not.toContain('12 m');
+    expect(pillKinds(notice)).toEqual(['line', 'station']);
   });
 });

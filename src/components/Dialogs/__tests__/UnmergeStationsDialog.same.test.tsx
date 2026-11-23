@@ -29,7 +29,8 @@ import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import UnmergeStationsDialog, { sameDetachResult } from '../UnmergeStationsDialog';
 import type { DetachLinePreview } from '../../../types/ipc.generated';
-import { said } from './proseSentence';
+import { pillDrawings, pillKinds, said } from './proseSentence';
+import { accessibleText } from '../../../test/accessibleText';
 
 const MAIN = 0;
 const NORTH = 1;
@@ -95,6 +96,13 @@ describe('a detach whose result does not depend on the choice (N-2)', () => {
     );
     // No comment comes back: nothing to say about one.
     expect(screen.queryByTestId('unmerge-stations-comes-back-comment')).toBeNull();
+    // RS-PROSE: both lines and the keeper's slot are pills, the name that
+    // comes back words; the sentences read as written.
+    const naming = screen.getByTestId('unmerge-stations-naming');
+    expect(accessibleText(naming)).toBe(SENTENCE);
+    expect(pillKinds(naming)).toEqual(['line', 'line', 'station']);
+    expect(pillDrawings(naming)[2]).toBe('3#3');
+    expect(pillKinds(screen.getByTestId('unmerge-stations-explain'))).toEqual(['line']);
   });
 
   it('detaches the line that comes off, never the keeper the user clicked', async () => {

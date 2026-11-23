@@ -27,7 +27,8 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import UnmergeStationsDialog, { letterTakenEarlier } from '../UnmergeStationsDialog';
-import { said } from './proseSentence';
+import { pillDrawings, pillKinds, said } from './proseSentence';
+import { accessibleText } from '../../../test/accessibleText';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -124,6 +125,16 @@ describe('Detach Line from Station under RS', () => {
     expect(said(screen.getByTestId('unmerge-stations-together'))).toContain(
       'North comes off with Side: they were one station before the merge.',
     );
+    // RS-PROSE: the lines are pills; the sentence reads as written. The
+    // name a station archived now comes back by stays words.
+    expect(accessibleText(screen.getByTestId('unmerge-stations-together'))).toBe(
+      'North comes off with Side: they were one station before the merge.',
+    );
+    expect(pillKinds(screen.getByTestId('unmerge-stations-together'))).toEqual(['line', 'line']);
+    expect(pillKinds(screen.getByTestId('unmerge-stations-comes-back'))).toEqual([]);
+    // The lead names the junction's slot, the naming sentence the line.
+    expect(pillKinds(screen.getByTestId('unmerge-stations-lead'))).toEqual(['station']);
+    expect(pillKinds(screen.getByTestId('unmerge-stations-naming'))).toEqual(['line']);
     // No line shows a letter after 0: the note on earlier letters says
     // nothing true here (RS-FX6, P3-13).
     expect(screen.queryByTestId('unmerge-stations-letters-stay')).toBeNull();
@@ -202,6 +213,12 @@ describe('Detach Line from Station under RS', () => {
     expect(said(await screen.findByTestId('unmerge-stations-shown-before'))).toContain(
       'Side showed North / 8 here through a loop closure; it will show 3.',
     );
+    // RS-PROSE: the line and the station it showed are pills; the name it
+    // will show is said as a name.
+    expect(accessibleText(screen.getByTestId('unmerge-stations-shown-before'))).toBe(
+      'Side showed North / 8 here through a loop closure; it will show 3.',
+    );
+    expect(pillDrawings(screen.getByTestId('unmerge-stations-shown-before'))).toEqual(['Side', 'North: 8#8']);
     expect(screen.queryByTestId('unmerge-stations-comes-back')).toBeNull();
     expect(screen.queryByTestId('unmerge-stations-letters-stay')).toBeNull();
   });
@@ -240,6 +257,11 @@ describe('Detach Line from Station names what changes elsewhere (RS-FX1)', () =>
     expect(said(screen.getByTestId('unmerge-stations-comments-hidden-28'))).toContain(
       'North / 7\'s comment ("Low air") is hidden. Undo brings it back.',
     );
+    // RS-PROSE: the line and both stations are pills.
+    const elsewhere = screen.getByTestId(`unmerge-stations-shown-elsewhere-${NORTH}-2`);
+    expect(accessibleText(elsewhere)).toBe('North: Side / 0 where it showed Main / 3');
+    expect(pillKinds(elsewhere)).toEqual(['line', 'station', 'station']);
+    expect(pillKinds(screen.getByTestId('unmerge-stations-comments-hidden-28'))).toEqual(['station']);
   });
 
   it("says the junction's own name when the line keeps the junction", async () => {
@@ -302,6 +324,14 @@ describe('Detach Line from Station after the RS capture (RS-FX6)', () => {
     );
     expect(said(screen.getByTestId('unmerge-stations-comes-back'))).toContain('It gets back 0a (Station ID 40).');
     expect(said(screen.getByTestId(`unmerge-stations-result-${SIDE}`))).toContain('Side: 0a, Station ID 40 (comes off)');
+    // RS-PROSE: the answers' stations and line are pills without the
+    // Station ID the words say; each radio is named by the plain sentence.
+    expect(screen.getByRole('radio', { name: 'Rename the station that comes back (Side / 0, Station ID 40) to 0a' })).toBe(letter);
+    expect(pillDrawings(letter.parentElement!)).toEqual(['Side: 0']);
+    expect(pillDrawings(screen.getByTestId('unmerge-stations-collision-0-alternative').parentElement!)).toEqual(['0', 'Side']);
+    // After Detach: the line is a pill, the name it shows then is words.
+    expect(accessibleText(screen.getByTestId(`unmerge-stations-result-${SIDE}`))).toBe('Side: 0a, Station ID 40 (comes off)');
+    expect(pillKinds(screen.getByTestId(`unmerge-stations-result-${SIDE}`))).toEqual(['line']);
 
     fireEvent.click(screen.getByTestId('unmerge-stations-collision-0-alternative'));
     expect(said(screen.getByTestId('unmerge-stations-comes-back'))).toContain('It gets back 0 (Station ID 40).');
@@ -355,6 +385,11 @@ describe('Detach Line from Station after the RS capture (RS-FX6)', () => {
     expect(said(await screen.findByTestId('unmerge-stations-inside-46'))).toContain(
       'North / 0 (Station ID 46) stays archived inside it: detach North again to get it back.',
     );
+    // RS-PROSE: the station (its Station ID in words, none drawn) and the line.
+    expect(accessibleText(screen.getByTestId('unmerge-stations-inside-46'))).toBe(
+      'North / 0 (Station ID 46) stays archived inside it: detach North again to get it back.',
+    );
+    expect(pillDrawings(screen.getByTestId('unmerge-stations-inside-46'))).toEqual(['North: 0', 'North']);
   });
 });
 
