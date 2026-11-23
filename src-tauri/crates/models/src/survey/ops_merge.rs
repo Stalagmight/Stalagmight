@@ -86,11 +86,12 @@ impl Answers<'_> {
     /// Apply the renames and return the collisions still standing (the op's
     /// own, judged after the sweep, [`Project::refuse_unanswered`]); with
     /// rule L none: the epilogue letters them. `asked` gives the stations
-    /// the renames may address ([`Project::apply_renames`]).
+    /// the renames may address, with the letters offered each
+    /// ([`Project::apply_renames`]).
     pub(super) fn apply(
         self,
         p: &mut Project,
-        asked: impl FnOnce(&Project) -> std::collections::HashSet<StationId>,
+        asked: impl FnOnce(&Project) -> std::collections::HashMap<StationId, Vec<String>>,
     ) -> Result<Vec<(LineId, String)>, OpError> {
         match self {
             Self::Given(renames) => p.apply_renames(renames, asked),
