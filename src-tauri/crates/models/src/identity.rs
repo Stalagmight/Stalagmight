@@ -269,6 +269,7 @@ pub struct LetteredStationWire {
 /// A node that took back an archived identity because no native line was
 /// left on it (RS 4.3), for the action's notice.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(rename = "RestoredIdentity")]
 pub struct RestoredIdentityWire {
     /// The Station ID it showed before (now a history record's).
     pub old_id: StationId,

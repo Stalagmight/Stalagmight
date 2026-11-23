@@ -1,12 +1,13 @@
 import { useTranslation } from 'react-i18next';
 import { displayStationName } from '../../utils/formatters';
-import type { StationAlias } from '../../types/ipc/StationAlias';
+import type { ArchivedStation } from '../../types/ipc/ArchivedStation';
 
 /**
- * The Station details' "Also known as": the Station IDs and names merged into
- * this station (its aliases, oldest first) that the "Also on" rows do not
- * already show, each with the line that knew it by that name when one still
- * does.
+ * The Station details' "Also known as": the stations merges archived in this
+ * one (its records, RS 3, oldest first) that the "Also on" rows do not
+ * already show, each with the line whose own station it was when one still
+ * passes here (a history record names none). RS-UI redesigns this list
+ * ("Side / 0 is archived", RS 6 and 7).
  *
  * A merge makes ONE station with the survivor's Station ID (plan 5.1), and a
  * 0.6.0 file's merge group converts the same way; each line keeps showing the
@@ -19,13 +20,13 @@ import type { StationAlias } from '../../types/ipc/StationAlias';
  * Nothing is rendered when no alias is left to show.
  */
 export function StationAliases({
-  aliases,
+  records,
   lineName,
   shown,
   ownLine,
   ownName,
 }: {
-  aliases: ReadonlyArray<StationAlias> | undefined;
+  records: ReadonlyArray<ArchivedStation> | undefined;
   lineName: (lineId: number) => string;
   /** Alias ids the "Also on" rows already show. */
   shown: ReadonlySet<number>;
@@ -34,7 +35,11 @@ export function StationAliases({
   ownName: string;
 }) {
   const { t } = useTranslation();
-  const left = (aliases ?? []).filter((alias) => !shown.has(alias.id));
+  // One entry per line a record names (its first, in line order), or one
+  // with no line for a history record.
+  const left = (records ?? [])
+    .filter((record) => !shown.has(record.id))
+    .map((record) => ({ id: record.id, name: record.name, line: record.lines[0] }));
   if (left.length === 0) return null;
   return (
     <div className="pt-2 border-t border-border" data-testid="station-detail-aliases">
@@ -44,15 +49,15 @@ export function StationAliases({
       <ul className="mt-1 space-y-1 text-sm">
         {left.map((alias) => (
           <li key={alias.id} data-testid={`station-detail-alias-${alias.id}`}>
-            {alias.line === ownLine && (alias.name === null || alias.name === ownName)
+            {alias.line === ownLine && alias.name === ownName
               ? t('detailPanel.station.aliasIdOnLine', { line: lineName(alias.line), id: alias.id })
-              : alias.name && alias.line !== undefined
+              : alias.name !== '' && alias.line !== undefined
                 ? t('detailPanel.station.aliasOnLine', {
                     name: displayStationName(alias.name),
                     line: lineName(alias.line),
                     id: alias.id,
                   })
-                : alias.name
+                : alias.name !== ''
                   ? t('detailPanel.station.alias', { name: displayStationName(alias.name), id: alias.id })
                   : t('detailPanel.station.aliasNoName', { id: alias.id })}
           </li>

@@ -66,6 +66,9 @@ const preview = (extra: Partial<MergePreview> = {}): MergePreview => ({
   shift_m: 24.31,
   joins: B,
   junctions: [],
+  candidates: [],
+  default_keep: 0,
+  keeps: [],
   ...extra,
 });
 /** Two stations' depths and the readings their mean takes, A's line first. */

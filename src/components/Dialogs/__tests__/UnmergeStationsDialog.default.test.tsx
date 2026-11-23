@@ -42,10 +42,10 @@ const NORTH = 1;
 const SPLIT_B = 2;
 const slot = (line_id: number, station_index: number) => ({ line_id, station_index });
 
-const RESTORES: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: false, lines: [] };
-const MINTS: DetachLinePreview = { name: '3', station_id: 30, restored: false, kept: false, lines: [] };
+const RESTORES: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: false, lines: [], together: [], rest_choices: [], collisions: [] };
+const MINTS: DetachLinePreview = { name: '3', station_id: 30, restored: false, kept: false, lines: [], together: [], rest_choices: [], collisions: [] };
 // The owner keeps the junction; North Passage gets back 0 (Station ID 9).
-const KEEPS: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: true, lines: [] };
+const KEEPS: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: true, lines: [], together: [], rest_choices: [], collisions: [] };
 
 function project(comment: string) {
   useProjectStore.setState({
@@ -84,7 +84,7 @@ const HUB_OTHERS = [slot(NORTH, 0), slot(SPLIT_B, 0)];
 const KEEPS_HUB = new Map<number, DetachLinePreview>([
   [MAIN, KEEPS],
   [NORTH, RESTORES],
-  [SPLIT_B, { name: '0b', station_id: 12, restored: true, kept: false, lines: [] }],
+  [SPLIT_B, { name: '0b', station_id: 12, restored: true, kept: false, lines: [], together: [], rest_choices: [], collisions: [] }],
 ]);
 
 beforeEach(() => {
