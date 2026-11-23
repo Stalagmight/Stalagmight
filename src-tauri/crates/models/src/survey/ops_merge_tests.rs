@@ -204,11 +204,13 @@ fn a_merge_is_refused_for_one_station_unknown_stations_and_one_piece() {
 
 /// RS 4.1: the kept station is shown on every line and keeps its comment;
 /// the other one keeps its own comment in its record (nothing is joined).
-/// A:0 is named "0" like the kept B:0, which A now shows at its end: the
-/// merge with no answer refuses (N8), the dialog's answer (rule L's letter,
-/// the preview's suggestion) lets it through, and so does the no-dialog form.
+/// A:0 is named "0" like the kept B:0, which A now shows at its end with
+/// B's dot (a foreign slot): RS-FX5 ("dotted slots don't collide") lets the
+/// merge through with no answer and no letter, and A shows both "0"s.
+/// Before RS-FX5 it refused (`NameTaken`) and rule L lettered A:0.
 /// Injection: join the comments in `merge_ids` and the kept comment reads
-/// both notes.
+/// both notes; count foreign slots in `NativeSlots::is_native` and the
+/// merge refuses again.
 #[test]
 fn the_kept_station_is_shown_everywhere_and_comments_stay_apart() {
     let (mut p, a, b) = two_free_pieces();
@@ -217,19 +219,9 @@ fn the_kept_station_is_shown_everywhere_and_comments_stay_apart() {
     p.station_mut(a2).unwrap().comment = Some("archived note".to_string());
     assert_eq!(p.stations[&a0].name, p.stations[&b0].name);
     let before = p.clone();
-    assert_eq!(
-        p.merge_stations(a2, b0, b0, &[]),
-        Err(OpError::NameTaken {
-            line: a,
-            name: "0".to_string()
-        })
-    );
-    assert_eq!(p, before, "a refused merge changes nothing");
     let preview = p.merge_preview(a2, b0, b0).unwrap();
-    assert_eq!(preview.collisions.len(), 1);
-    let letter = &preview.collisions[0].suggestion;
-    assert_eq!((letter.station, letter.line), (a0, a));
-    assert_eq!((letter.from.as_str(), letter.to.as_str()), ("0", "0a"));
+    assert!(preview.collisions.is_empty(), "{:?}", preview.collisions);
+    assert!(preview.alternatives.is_empty());
     assert_eq!(
         preview.hidden,
         (a2, "2".to_string(), Some("archived note".to_string()))
@@ -239,12 +231,14 @@ fn the_kept_station_is_shown_everywhere_and_comments_stay_apart() {
         vec![a],
         "A shows the junction as 0 now"
     );
-    ok(p.merge_stations(a2, b0, b0, &[(a0, "0a".to_string())]));
+    let out = ok(p.merge_stations(a2, b0, b0, &[]));
+    assert!(out.identities.lettered.is_empty());
     assert_valid(&p);
     assert_eq!(p.stations[&b0].name, "0");
-    assert_eq!(p.stations[&a0].name, "0a");
+    assert_eq!(p.stations[&a0].name, "0", "A's own 0 keeps its name");
     assert!(!p.is_native(b0, a));
     assert!(p.is_native(b0, b));
+    assert!(p.is_foreign_slot(StationRef::new(a, 2)));
     assert_eq!(p.shown_name(b0), Some("0"));
     assert_eq!(p.stations[&b0].comment.as_deref(), Some("kept note"));
     assert_eq!(
@@ -252,14 +246,11 @@ fn the_kept_station_is_shown_everywhere_and_comments_stay_apart() {
         Some("archived note")
     );
 
-    // Without a dialog rule L letters A's own 0 (shown on one line), never
-    // the kept junction (shown on two).
+    // Without a dialog nothing is lettered either.
     let mut auto = before;
     let out = ok(auto.merge_stations_auto(a2, b0, b0));
-    assert_eq!(out.identities.lettered.len(), 1);
-    assert_eq!(out.identities.lettered[0].station, a0);
-    assert_eq!(auto.stations[&a0].name, "0a");
-    assert_eq!(auto, p, "the dialog's answer is rule L's");
+    assert!(out.identities.lettered.is_empty());
+    assert_eq!(auto, p, "the same merge");
 }
 
 #[test]

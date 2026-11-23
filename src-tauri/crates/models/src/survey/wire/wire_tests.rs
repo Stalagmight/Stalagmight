@@ -157,10 +157,12 @@ fn a_junction_shares_its_identity_and_lists_its_other_slots() {
 /// station it was) ride every slot of it, for the station details; a
 /// station without any sends none (H-frontend-wire-5). The slot whose line
 /// a record names is foreign (RS 6): it shows the kept Station ID with the
-/// kept station's home-line dot; the kept line's slot carries no `shown`. Every slot shows the kept station's name (RS 4.1):
-/// the moving line's slot reads `0` too, and the moving line's own `0`
-/// takes the letter (rule L). The Station ID is the junction's one id on
-/// both. Injection: send the slot's own record name and the moving line's
+/// kept station's home-line dot; the kept line's slot carries no `shown`.
+/// Every slot shows the kept station's name (RS 4.1): the moving line's slot
+/// reads `0` too, and the moving line's own `0` keeps its name beside it
+/// (RS-FX5: a foreign slot counts for no uniqueness), told apart by the
+/// foreign slot's `shown` and their Station IDs. The Station ID is the
+/// junction's one id on both of its slots. Injection: send the slot's own record name and the moving line's
 /// slot reads `2`.
 #[test]
 fn a_merged_stations_records_ride_every_slot() {
@@ -171,12 +173,13 @@ fn a_merged_stations_records_ride_every_slot() {
     let a2_name = p.stations[&a2].name.clone();
     let merged = p.merge_keeping_stationary(a2, b0).unwrap();
     assert_eq!((merged.value.kept, merged.value.archived), (b0, a2));
-    assert_eq!(merged.identities.lettered.len(), 1);
-    assert_eq!(merged.identities.lettered[0].station, a0);
+    assert!(merged.identities.lettered.is_empty());
     let stations = p.stations_wire(&p.raw_positions());
     assert_eq!(station_at(&stations, slot(a, 2)).name, "0");
     assert_eq!(station_at(&stations, slot(b, 0)).name, "0");
-    assert_eq!(station_at(&stations, slot(a, 0)).name, "0a");
+    assert_eq!(station_at(&stations, slot(a, 0)).name, "0");
+    assert_eq!(station_at(&stations, slot(a, 0)).id, a0);
+    assert_eq!(station_at(&stations, slot(a, 0)).shown, None, "native");
     assert_eq!(station_at(&stations, slot(a, 2)).id, b0);
     assert_eq!(station_at(&stations, slot(b, 0)).id, b0);
     let expected = Some(vec![crate::ArchivedStationWire {

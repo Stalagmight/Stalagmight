@@ -16,7 +16,7 @@
 //! | `rs-refusal` | a refused operation changed nothing |
 //! | `rs-stale-record` | no record is history (or names another line) while a shot next to the slot it named is still on a line: the node at that slot, wherever the shot went, is the record or holds it for that line (RS 4.3, U-P1-4, M-P1-4c) |
 //! | `rs-comment` | every comment shown before the step is shown after it, or its station is gone, or the step's preview (or, for a step without one, its report) names it as hidden or moved |
-//! | `rs-rule-l` | no letter the step reports went to an identity shown on more lines than the one it collided with (RS 2) |
+//! | `rs-rule-l` | every letter the step reports answered a collision of two native slots (RS-FX5: a foreign slot or a loop end never makes one), and none went to an identity shown on more lines than the one it collided with (RS 2) |
 //! | `rs-answers` | a merge, detach or closure given its preview's suggested renames is accepted, and one given no answers is refused only for a collision its preview listed |
 //! | `rs-preview` | a merge, closure or detach the preview refused went through (or the reverse) |
 //!
@@ -1405,10 +1405,25 @@ fn check_comments(
     Ok(())
 }
 
-/// `rs-rule-l` (RS 2): no reported letter went to an identity shown on more
-/// lines than the identity it collided with.
+/// `rs-rule-l` (RS 2, RS-FX5): every reported letter answered an N8
+/// collision of two native slots: both identities are native on the letter's
+/// line once the step is done (a foreign slot or a loop end counts for no
+/// uniqueness, so a letter given for one is the old N8's), and none went to
+/// an identity shown on more lines than the identity it collided with.
 fn check_rule_l(p: &Project, lettered: &[LetteredStation]) -> Result<(), Failure> {
     for letter in lettered {
+        for (role, id) in [("lettered", letter.station), ("kept", letter.other)] {
+            if !p.native_lines_of_identity(id).contains(&letter.line) {
+                return Err(fail(
+                    "rs-rule-l",
+                    format!(
+                        "{} ({:?} -> {:?}) was lettered on line {} though the {role} identity \
+                         {id} is not native there (a dotted collision)",
+                        letter.station, letter.from, letter.to, letter.line
+                    ),
+                ));
+            }
+        }
         let (mine, theirs) = (
             p.lines_shown_on(letter.station).len(),
             p.lines_shown_on(letter.other).len(),

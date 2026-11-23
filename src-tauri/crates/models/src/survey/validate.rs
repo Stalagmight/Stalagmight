@@ -340,9 +340,9 @@ pub enum Violation {
         station: StationId,
     },
     // 8. names
-    /// N8: a line shows two identities by one name (each slot by its node's
-    /// shown identity, `Project::shown`; `first` and `second` are the
-    /// identities' Station IDs).
+    /// N8: two native slots of a line show two identities by one name
+    /// (RS-FX5: a foreign slot or a loop end counts for no uniqueness,
+    /// `NativeSlots`; `first` and `second` are the identities' Station IDs).
     DuplicateStationName {
         line: LineId,
         name: String,
@@ -1069,11 +1069,13 @@ impl Project {
     }
 
     fn check_names(&self, topology: &Topology, out: &mut Vec<Violation>) {
-        // N8: each slot by its node's shown identity (the shown index never
-        // loops, so a broken C2 cannot hang this), reported in chain order.
-        let index = self.shown_index();
+        // N8: the native slots of each line (RS-FX5: a foreign slot or a
+        // loop end shows another station's identity and is exempt; the shown
+        // index never loops, so a broken C2 cannot hang this), reported in
+        // chain order.
+        let native = super::NativeSlots::of(self);
         for (position, line) in self.lines.iter().enumerate() {
-            for (name, first, second) in self.line_name_repeats(topology, &index, position) {
+            for (name, first, second) in self.line_name_repeats(topology, &native, position) {
                 out.push(Violation::DuplicateStationName {
                     line: line.id,
                     name: name.to_string(),
