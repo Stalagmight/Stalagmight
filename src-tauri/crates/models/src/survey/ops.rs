@@ -252,7 +252,12 @@ impl Project {
                 Sweep::Skip => SweepReport::default(),
             };
             let unarchived = self.normalise_closure_archives();
-            let lettered = self.letter_collisions(&backup);
+            // Every letter the command gave: the sweep's (it letters every
+            // collision standing when its promotions end, the command's own
+            // included) and the final pass's, so a preview lists them all
+            // and the notice names each.
+            let mut lettered = sweep.lettered.clone();
+            lettered.extend(self.letter_collisions(&backup));
             let violations = self.validate();
             if violations.is_empty() {
                 Ok(OpOutcome {

@@ -110,7 +110,8 @@ pub struct IdentityReport {
     /// Closures whose archive was dropped by the normalisation (RS 5.4), in
     /// list order.
     pub unarchived: Vec<ClosureId>,
-    /// Rule-L letters (RS 2), in the order given.
+    /// Rule-L letters (RS 2), in the order given: the orphan-closure
+    /// sweep's (also in `SweepReport::lettered`), then the epilogue's.
     pub lettered: Vec<LetteredStation>,
 }
 

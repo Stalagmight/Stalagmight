@@ -412,7 +412,10 @@ impl Project {
             Vec::new()
         };
         let unarchived = self.normalise_closure_archives();
-        let lettered = self.letter_collisions(original);
+        // The sweep's letters (every collision standing when its promotions
+        // end, the edit's own included) and the final pass's (see `run_op`).
+        let mut lettered = sweep.lettered.clone();
+        lettered.extend(self.letter_collisions(original));
         EditReport {
             anchors,
             stale,

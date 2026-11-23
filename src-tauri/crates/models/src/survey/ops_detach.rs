@@ -322,17 +322,30 @@ impl Project {
                 joined_with,
             });
         }
-        let identity = copy
-            .stations
-            .get(&report.new_station)
-            .ok_or(OpError::UnknownStation(report.new_station))?;
+        // The station the lines got, as the detach left it: a node, or, when
+        // the detach's sweep then promoted a closure that archived it (the
+        // lines it took off were bridged to the rest only by that closure),
+        // a record of the promoted node. The lines' outcomes say where they
+        // end up.
+        let (name, comment) = match copy.stations.get(&report.new_station) {
+            Some(identity) => (
+                copy.shown_name(report.new_station)
+                    .unwrap_or(&identity.name)
+                    .to_string(),
+                identity.comment.clone(),
+            ),
+            None => copy
+                .stations
+                .values()
+                .flat_map(|s| s.archived.iter())
+                .find(|r| r.id == report.new_station)
+                .map(|r| (r.name.clone(), r.comment.clone()))
+                .ok_or(OpError::UnknownStation(report.new_station))?,
+        };
         Ok(DetachNaming {
-            name: copy
-                .shown_name(report.new_station)
-                .unwrap_or(&identity.name)
-                .to_string(),
+            name,
             id: report.new_station,
-            comment: identity.comment.clone(),
+            comment,
             restored: report.restored,
             kept: report.kept,
             together: if report.kept {
