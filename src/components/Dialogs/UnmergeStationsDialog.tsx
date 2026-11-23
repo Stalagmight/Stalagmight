@@ -61,21 +61,67 @@ export function letterTakenEarlier(
   );
 }
 
-/** The records the station that comes back keeps inside it (RS-FX4), each
- *  of which a second Detach gives back: those the junction archived under
- *  it, and, when the detached line keeps the junction (RS 4.2 case 2), every
- *  other record directly under the junction's identity too, since they go
- *  with the lines that come off (RS-FX8, N7: picking Twig / 0 as the
- *  remaining junction's station left Lower / 3 archived in it unsaid).
- *  History records stay with the junction and are never listed. */
+/** A station that moves inside the one that comes back: shown directly
+ *  inside it, with the stations still archived inside `record` (any depth). */
+export interface InsideRow {
+  record: ArchivedStation;
+  inner: ArchivedStation[];
+}
+
+/** Every station the station that comes back (`id`) keeps inside it
+ *  (RS-FX4), each of which a second Detach gives back, as the backend moves
+ *  them: `id`'s whole subtree, and, when the detached line keeps the
+ *  junction (RS 4.2 case 2), every record but the junction's own history,
+ *  since they go with the lines that come off (RS-FX8, N7). One row per
+ *  station directly inside the one that comes back (a record directly under
+ *  `id` comes up to it), naming the stations nested inside it (RS-FX9: the
+ *  nested ones move too, and picking North / 9 left Side / 7, archived in
+ *  Side / 0, unsaid). History records are never named: nothing brings them
+ *  back. */
 export function recordsInside(
   records: readonly ArchivedStation[] | undefined,
   id: number,
   kept = false,
-): ArchivedStation[] {
-  return (records ?? []).filter(
-    (r) => r.lines.length > 0 && r.id !== id && (r.into === id || (kept && r.into === undefined)),
-  );
+): InsideRow[] {
+  const list = records ?? [];
+  const byId = new Map(list.map((r) => [r.id, r] as const));
+  // The record each one is under once `id` comes back: `id`'s own records
+  // come up to it (undefined), the others keep their owners.
+  const ownerOf = (r: ArchivedStation): number | undefined => (r.into === id ? undefined : r.into);
+  // Whether `r` is inside `id`'s subtree (bounded: a cycle is no member).
+  const underId = (r: ArchivedStation): boolean => {
+    let at: ArchivedStation | undefined = r;
+    for (let steps = 0; at && steps <= list.length; steps++) {
+      if (at.into === id) return true;
+      at = at.into === undefined ? undefined : byId.get(at.into);
+    }
+    return false;
+  };
+  const moves = (r: ArchivedStation): boolean =>
+    r.id !== id && (kept ? !(r.into === undefined && r.lines.length === 0) : underId(r));
+  const moved = list.filter(moves);
+  // The top of each moved record's chain among the moved, bounded.
+  const topOf = (r: ArchivedStation): ArchivedStation | undefined => {
+    let at = r;
+    for (let steps = 0; steps <= list.length; steps++) {
+      const owner = ownerOf(at);
+      if (owner === undefined) return at;
+      const next = byId.get(owner);
+      if (!next || !moves(next)) return at;
+      at = next;
+    }
+    return undefined;
+  };
+  const rows: InsideRow[] = moved
+    .filter((r) => ownerOf(r) === undefined && r.lines.length > 0)
+    .map((record) => ({ record, inner: [] }));
+  const rowOf = new Map(rows.map((row) => [row.record.id, row] as const));
+  for (const r of moved) {
+    if (ownerOf(r) === undefined || r.lines.length === 0) continue;
+    const top = topOf(r);
+    if (top) rowOf.get(top.id)?.inner.push(r);
+  }
+  return rows;
 }
 
 function stationRefKey(ref: StationRef): string {
@@ -654,7 +700,7 @@ function ComesBack({
   /** How many lines get the station back. */
   lines: number;
   nameOf: NameOf;
-  inside: readonly ArchivedStation[];
+  inside: readonly InsideRow[];
 }) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
@@ -678,13 +724,23 @@ function ComesBack({
               {t('dialogs.detachLine.comesBackComment', { comment })}
             </p>
           )}
-          {inside.map((record) => (
+          {inside.map(({ record, inner }) => (
             <p key={record.id} className="text-text-secondary" data-testid={`unmerge-stations-inside-${record.id}`}>
-              {t('dialogs.detachLine.staysInside', {
-                station: label(recordIdentity(record)),
-                id: record.id,
-                line: labels.lineName(record.lines[0]!),
-              })}
+              {inner.length === 0
+                ? t('dialogs.detachLine.staysInside', {
+                    station: label(recordIdentity(record)),
+                    id: record.id,
+                    line: labels.lineName(record.lines[0]!),
+                  })
+                : t('dialogs.detachLine.staysInsideWith', {
+                    station: label(recordIdentity(record)),
+                    id: record.id,
+                    inner: listNames(
+                      inner.map((r) => t('dialogs.detachLine.insideStation', { station: label(recordIdentity(r)), id: r.id })),
+                      t,
+                    ),
+                    line: labels.lineName(record.lines[0]!),
+                  })}
             </p>
           ))}
         </div>
