@@ -74,9 +74,8 @@ use stalagmight_lib::models::{
 use stalagmight_lib::models::{
     ArchivedStationWire, ClosureArchive, ClosureEndWire, ClosureKeepPreview, IdentityNotice,
     KeepCandidate, KeepRefusalReason, LetteredStationWire, LoopClosureNaming, MergeKeepPreview,
-    NameCollisionWire,
-    RemoveClosureNaming, RenameSuggestion, RestoredIdentityWire, ShownSlot, StationIdentity,
-    StationOwner, StationRename,
+    NameCollisionWire, RemoveClosureNaming, RenameSuggestion, RestoredIdentityWire, ShownSlot,
+    StationIdentity, StationOwner, StationRename,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};

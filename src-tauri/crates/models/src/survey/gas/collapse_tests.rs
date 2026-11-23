@@ -40,17 +40,13 @@ fn loop_survey(keep_a4: bool) -> (Project, LineId, LineId) {
     );
     let (a4, b3) = (at(&p, a, 4), at(&p, b, 3));
     let keep = keep_a4.then_some(a4);
-    ok(p.create_closure(
-        b3,
-        Some(b),
-        a4,
-        Some(a),
-        ClosureStrategy::Batch,
-        keep,
-        &[],
-    ));
+    ok(p.create_closure(b3, Some(b), a4, Some(a), ClosureStrategy::Batch, keep, &[]));
     assert_valid(&p);
-    assert_eq!(p.shown(b3) == a4, keep_a4, "B3 is a loop end only when A4 is kept");
+    assert_eq!(
+        p.shown(b3) == a4,
+        keep_a4,
+        "B3 is a loop end only when A4 is kept"
+    );
     (p, a, b)
 }
 
@@ -101,8 +97,16 @@ fn a_route_lists_a_loop_end_once() {
     let (p, a, b) = loop_survey(true);
     let (a3, a4, b2, b3) = (at(&p, a, 3), at(&p, a, 4), at(&p, b, 2), at(&p, b, 3));
     let reach = plan(&p, a3, b2, &[]);
-    assert_eq!(reach.route, vec![a3, a4, b2], "A4 and its loop end B3 are one station");
-    assert_eq!(reach.route_shots.len(), 2, "one leg per pair of route stations");
+    assert_eq!(
+        reach.route,
+        vec![a3, a4, b2],
+        "A4 and its loop end B3 are one station"
+    );
+    assert_eq!(
+        reach.route_shots.len(),
+        2,
+        "one leg per pair of route stations"
+    );
     assert!(
         reach.route_shots.iter().all(Option::is_some),
         "no closure tie leg is left between one station's two nodes: {:?}",
@@ -122,7 +126,10 @@ fn a_closure_keeping_both_names_lists_both_ends() {
     let reach = plan(&p, a3, b2, &[]);
     assert_eq!(reach.route, vec![a3, a4, b3, b2]);
     assert_eq!(reach.route_shots.iter().filter(|s| s.is_none()).count(), 1);
-    assert_eq!(reach.route_ends, vec![[a3, a3], [a4, a4], [b3, b3], [b2, b2]]);
+    assert_eq!(
+        reach.route_ends,
+        vec![[a3, a3], [a4, a4], [b3, b3], [b2, b2]]
+    );
 }
 
 /// RS 6 with X8: the dive profile has one point per station, so the
@@ -209,7 +216,11 @@ fn the_turn_frontier_lists_a_loop_end_once() {
         &[],
     );
     assert_eq!(reach.budget_litres, 0.0);
-    assert_eq!(reach.turn_frontier, vec![a4], "one entry for A4 and its loop end B3");
+    assert_eq!(
+        reach.turn_frontier,
+        vec![a4],
+        "one entry for A4 and its loop end B3"
+    );
     let field = reach.to_wire(&p, &[]);
     assert_eq!(field.turn_frontier, vec![slot(a, 4)]);
 
@@ -278,8 +289,14 @@ fn a_drop_pinned_on_the_loop_end_of_its_default_station_is_a_no_op() {
     for pin in [a4, b3] {
         let pinned = run(&[Some(pin)]);
         assert_eq!(pinned.budget_litres, plain.budget_litres, "pin on {pin}");
-        assert_eq!(pinned.stage_drop_bars, plain.stage_drop_bars, "pin on {pin}");
-        assert_eq!(pinned.stage_drop_over_reserve, plain.stage_drop_over_reserve);
+        assert_eq!(
+            pinned.stage_drop_bars, plain.stage_drop_bars,
+            "pin on {pin}"
+        );
+        assert_eq!(
+            pinned.stage_drop_over_reserve,
+            plain.stage_drop_over_reserve
+        );
         assert_eq!(pinned.route, plain.route);
     }
 }

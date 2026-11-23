@@ -72,8 +72,12 @@ fn representative(route: &[StationId], run: (usize, usize), last_run: bool) -> S
 /// The turn frontier with each shown station once (D18 under RS 6): of the
 /// frontier nodes that show one identity, the node holding it when it is one
 /// of them, else the lowest Station ID. Ascending, like the input.
-pub(super) fn one_per_shown(frontier: &[StationId], shown: impl Fn(StationId) -> StationId) -> Vec<StationId> {
-    let mut chosen: std::collections::BTreeMap<StationId, StationId> = std::collections::BTreeMap::new();
+pub(super) fn one_per_shown(
+    frontier: &[StationId],
+    shown: impl Fn(StationId) -> StationId,
+) -> Vec<StationId> {
+    let mut chosen: std::collections::BTreeMap<StationId, StationId> =
+        std::collections::BTreeMap::new();
     for &node in frontier {
         let identity = shown(node);
         chosen
@@ -155,7 +159,11 @@ fn collapse_profile(
     for p in points {
         let run = runs.collapsed(p.route_index);
         if !p.outbound && run == turn_run {
-            if let Some(turn) = out.iter_mut().rev().find(|q| q.outbound && q.route_index == run) {
+            if let Some(turn) = out
+                .iter_mut()
+                .rev()
+                .find(|q| q.outbound && q.route_index == run)
+            {
                 turn.depth_m = turn.depth_m.max(p.depth_m);
             }
             continue;
@@ -174,7 +182,11 @@ fn collapse_profile(
     }
     // A return point of a run takes the depth its outbound point settled on.
     let depth_of: Vec<Option<f64>> = (0..runs.runs.len())
-        .map(|r| out.iter().find(|q| q.outbound && q.route_index == r).map(|q| q.depth_m))
+        .map(|r| {
+            out.iter()
+                .find(|q| q.outbound && q.route_index == r)
+                .map(|q| q.depth_m)
+        })
         .collect();
     for q in out.iter_mut().filter(|q| !q.outbound) {
         if let Some(Some(depth)) = depth_of.get(q.route_index) {
