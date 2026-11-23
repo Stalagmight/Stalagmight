@@ -18,10 +18,11 @@
 //! and the kept end does not already show it (C2); `None` ("Keep both
 //! names") archives nothing. The dialog's default is rule K's end when it
 //! is allowed, else "Keep both names" ([`Project::closure_keep_choices`]).
-//! The user's renames answer the names the archive shows twice on a line
-//! (N8, on every line the kept identity will be shown on, closure subtrees
-//! included); an unanswered one refuses ([`OpError::NameTaken`]); the forms
-//! without a dialog letter it by rule L.
+//! A loop end shows the kept end with the loop mark and counts for no
+//! uniqueness (RS-FX5), so creating a closure repeats no name of its own;
+//! the command still takes renames (the dialog sends none), held to the
+//! op's own collisions like every other ([`Project::apply_renames`]), and a
+//! collision its epilogue makes is lettered by rule L.
 //!
 //! **Remove** (RS 5.3): removing a closure drops its archive with it; the
 //! archived end (and every node that showed it through the closure) shows

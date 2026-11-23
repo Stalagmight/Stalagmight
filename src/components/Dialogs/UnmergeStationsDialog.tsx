@@ -178,7 +178,7 @@ export interface SameDetachResult {
 
 /**
  * Demo finding N-2: on a junction of two lines where one line keeps the
- * station when detached (`kept`: every other line knew it by an alias) and
+ * station when detached (`kept`: an archived station names every other line) and
  * the other gets back exactly the station the keeper's preview names, both
  * choices give the same result: the keeper stays on the junction and the
  * other line comes off with its own station back. Then there is nothing to
@@ -211,27 +211,27 @@ export function sameDetachResult(
  * history, which names the lines that come off, names what the user picked),
  * and under it the dialog lists what every line ends up with, name and
  * Station ID, from the backend's per-line preview: lines that come off
- * together stay joined on ONE station, so a line among them that had its own
- * Station ID keeps it only as an alias, and the list says so.
+ * together stay joined on ONE station, so a line among them whose own station
+ * is another archived station keeps that one archived inside it, and the
+ * dialog says so.
  *
  * On the station graph a merge is ONE station that two or more lines pass. The
  * user picks which line leaves it: that line gets its own station at the same
  * place (no comment), and the datums and closures attached through it go
- * along; the other lines stay joined. A line that was merged there gets back
- * the Station ID and name it had (the junction's alias naming it); any other
- * gets the name it showed the junction by, under a new Station ID. When every
- * other line knew the junction by an alias, the chosen line keeps it and the
- * others get back the station they had (I-1). The dialog says which, from the
+ * along; the other lines stay joined. A line an archived station names gets
+ * that station back whole (RS 4.2: Station ID, name, comment, with the lines
+ * and the stations archived inside it); a native line beside another native
+ * line gets a new station with the junction's name. When archived stations
+ * name every other line, the chosen line keeps the junction and the others
+ * get back one archived station, the one the picker chooses (I-1). The dialog says which, from the
  * backend's `preview_detach_line` (review finding UX-4), asked for every line
  * when the dialog opens. The clicked slot's line is listed first. It is
  * preselected unless it is the junction's owner (detaching it would give it a
  * NEW Station ID, or keep the junction on it while the others come off) and
  * another line would come off alone with its own station back: that line is
  * then the likely intent and preselected (demo findings I-7, V-1). When the
- * chosen line gets its station back and the
- * others keep the junction, the comment stays with them; the dialog says so,
- * since a merge (or the 0.6.0 upgrade) may have joined that line's own
- * comment into it and the alias does not keep it. Its own line detaches with
+ * chosen line gets its station back, the dialog says which comment comes
+ * back with it (an archived station keeps its own). Its own line detaches with
  * `unmerge_stations(slot)`; another line with `unmerge_station_pair(slot,
  * other)`, which detaches the PARTNER's line. When the choice does not change
  * the result ({@link sameDetachResult}: two lines, one keeps the junction and
@@ -610,8 +610,8 @@ export default function UnmergeStationsDialog() {
 
 /** What every line ends up with after the chosen detach (V-1): its name and
  *  Station ID there, and whether it comes off (with which lines) or stays.
- *  Under RS a line shows its node's one identity, so no line keeps an alias
- *  of its own; what comes back and the lines that come off together are
+ *  Under RS a line shows its node's one identity, so no line keeps a name of
+ *  its own for it; what comes back and the lines that come off together are
  *  `ComesBack`'s, the collision rows `CollisionRows`' (RS 7). */
 function DetachResults({ preview, nameOf }: { preview: DetachLinePreview; nameOf: NameOf }) {
   const { t } = useTranslation();
