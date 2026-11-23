@@ -154,11 +154,15 @@ fn newer_revision(dir: &Path, endpoint: &str) -> Vec<u8> {
     );
     let text = std::fs::read_to_string(&path).expect("read the revision");
     assert!(
-        text.contains("\"requires\":[]"),
+        text.contains("\"requires\":[\"archived-stations\"]"),
         "the fixture names its requires"
     );
-    text.replacen("\"requires\":[]", "\"requires\":[\"x-from-the-future\"]", 1)
-        .into_bytes()
+    text.replacen(
+        "\"requires\":[\"archived-stations\"]",
+        "\"requires\":[\"archived-stations\",\"x-from-the-future\"]",
+        1,
+    )
+    .into_bytes()
 }
 
 #[expect(
@@ -277,7 +281,11 @@ fn a_push_whose_save_is_refused_says_why() {
         let text = std::fs::read_to_string(&path).expect("read");
         std::fs::write(
             &path,
-            text.replacen("\"requires\":[]", "\"requires\":[\"x-from-the-future\"]", 1),
+            text.replacen(
+                "\"requires\":[\"archived-stations\"]",
+                "\"requires\":[\"archived-stations\",\"x-from-the-future\"]",
+                1,
+            ),
         )
         .expect("write");
         let state = AppState::new().expect("state");

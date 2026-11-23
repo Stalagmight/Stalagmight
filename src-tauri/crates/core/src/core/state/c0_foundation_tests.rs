@@ -510,7 +510,11 @@ fn a_file_with_an_unknown_required_feature_opens_read_only() {
     let dir = TempDir::new().unwrap();
     let path = write_v2(dir.path(), &survey(), &Extras::default());
     let text = std::fs::read_to_string(&path).unwrap();
-    let patched = text.replacen("\"requires\":[]", "\"requires\":[\"x-from-the-future\"]", 1);
+    let patched = text.replacen(
+        "\"requires\":[\"archived-stations\"]",
+        "\"requires\":[\"archived-stations\",\"x-from-the-future\"]",
+        1,
+    );
     assert_ne!(patched, text);
     std::fs::write(&path, patched.as_bytes()).unwrap();
     let state = open(&path);
@@ -553,7 +557,11 @@ fn a_rule_broken_under_an_unknown_feature_is_refused_as_newer_not_corrupt() {
         )
     );
     assert!(broken.contains("\"Off line\""));
-    let newer = broken.replacen("\"requires\":[]", "\"requires\":[\"x-from-the-future\"]", 1);
+    let newer = broken.replacen(
+        "\"requires\":[\"archived-stations\"]",
+        "\"requires\":[\"archived-stations\",\"x-from-the-future\"]",
+        1,
+    );
 
     std::fs::write(&path, newer.as_bytes()).unwrap();
     let state = AppState::new().unwrap();

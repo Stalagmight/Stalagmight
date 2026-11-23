@@ -1389,7 +1389,11 @@ fn read_only_files_are_never_written() {
         let text =
             String::from_utf8(encode(&p, &Extras::default(), Mode::Normal).unwrap_or_default())
                 .unwrap_or_default();
-        let text = text.replacen("\"requires\":[]", "\"requires\":[\"zz-future\"]", 1);
+        let text = text.replacen(
+            "\"requires\":[\"archived-stations\"]",
+            "\"requires\":[\"archived-stations\",\"zz-future\"]",
+            1,
+        );
         std::fs::write(&path, &text).unwrap_or_else(|e| panic!("{e}"));
         let original = survey_members(text.as_bytes());
         let mut state = open(&path).unwrap_or_else(|e| panic!("seed {seed}: {e}"));

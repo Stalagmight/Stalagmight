@@ -1139,7 +1139,11 @@ fn a_read_only_target_refuses_an_add_before_reading_the_file() {
     let text = std::fs::read_to_string(&path).unwrap();
     std::fs::write(
         &path,
-        text.replacen("\"requires\":[]", "\"requires\":[\"x-from-the-future\"]", 1),
+        text.replacen(
+            "\"requires\":[\"archived-stations\"]",
+            "\"requires\":[\"archived-stations\",\"x-from-the-future\"]",
+            1,
+        ),
     )
     .unwrap();
     let state = open(&path);
@@ -1189,8 +1193,8 @@ fn a_source_that_cannot_be_copied_whole_is_refused() {
             patched(
                 "future.stalx",
                 &charlie,
-                "\"requires\":[]",
-                "\"requires\":[\"x-from-the-future\"]",
+                "\"requires\":[\"archived-stations\"]",
+                "\"requires\":[\"archived-stations\",\"x-from-the-future\"]",
             ),
             "'future.stalx' was made with a newer Stalagmight, so it cannot be added",
         ),

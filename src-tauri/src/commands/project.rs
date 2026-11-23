@@ -783,7 +783,11 @@ mod file_status_tests {
         let dir = TempDir::new().unwrap();
         let path = write_v2(dir.path());
         let text = std::fs::read_to_string(&path).unwrap();
-        let patched = text.replacen("\"requires\":[]", "\"requires\":[\"x-lofts\"]", 1);
+        let patched = text.replacen(
+            "\"requires\":[\"archived-stations\"]",
+            "\"requires\":[\"archived-stations\",\"x-lofts\"]",
+            1,
+        );
         assert_ne!(patched, text);
         std::fs::write(&path, patched.as_bytes()).unwrap();
         let state = open(&path);

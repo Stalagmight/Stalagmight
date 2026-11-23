@@ -503,7 +503,11 @@ fn a_file_opened_read_only_refuses_an_ignore() {
     let (p, _) = checked_line();
     let path = write(dir.path(), "newer.stalx", &p, &Extras::default());
     let text = std::fs::read_to_string(&path).unwrap();
-    let patched = text.replacen("\"requires\":[]", "\"requires\":[\"x-from-the-future\"]", 1);
+    let patched = text.replacen(
+        "\"requires\":[\"archived-stations\"]",
+        "\"requires\":[\"archived-stations\",\"x-from-the-future\"]",
+        1,
+    );
     assert_ne!(patched, text);
     std::fs::write(&path, patched.as_bytes()).unwrap();
     let state = open_file(&path);

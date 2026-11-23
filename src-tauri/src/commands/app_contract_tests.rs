@@ -348,7 +348,11 @@ fn the_file_status_commands_answer_what_the_frontend_acts_on() {
 
     // A file made with a newer Stalagmight: the banner's reason, and no save.
     let text = std::fs::read_to_string(&path).unwrap();
-    let newer = text.replacen("\"requires\":[]", "\"requires\":[\"x-future\"]", 1);
+    let newer = text.replacen(
+        "\"requires\":[\"archived-stations\"]",
+        "\"requires\":[\"archived-stations\",\"x-future\"]",
+        1,
+    );
     assert_ne!(newer, text);
     std::fs::write(&path, &newer).unwrap();
     let reopened = state().execute(Command::OpenProject { path: path.clone() });

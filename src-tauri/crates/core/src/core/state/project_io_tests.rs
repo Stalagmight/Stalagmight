@@ -776,7 +776,11 @@ fn a_display_toggle_keeps_a_history_this_build_did_not_load() {
         write_v2(&path, &survey("History"), &extras);
         if read_only {
             let text = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
-            let text = text.replacen("\"requires\":[]", "\"requires\":[\"zz-future\"]", 1);
+            let text = text.replacen(
+                "\"requires\":[\"archived-stations\"]",
+                "\"requires\":[\"archived-stations\",\"zz-future\"]",
+                1,
+            );
             assert!(
                 text.contains("zz-future"),
                 "the file now requires a future feature"
@@ -843,7 +847,11 @@ fn a_display_toggle_keeps_a_newer_builds_local_state() {
             )
             .replacen("\"base\":", "\"x-future-sync\":[2],\"base\":", 1);
         if read_only {
-            text = text.replacen("\"requires\":[]", "\"requires\":[\"zz-future\"]", 1);
+            text = text.replacen(
+                "\"requires\":[\"archived-stations\"]",
+                "\"requires\":[\"archived-stations\",\"zz-future\"]",
+                1,
+            );
         }
         assert_eq!(text.matches("x-future-").count(), 2);
         std::fs::write(&path, &text).unwrap();

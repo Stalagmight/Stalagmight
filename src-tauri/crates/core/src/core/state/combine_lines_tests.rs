@@ -317,7 +317,11 @@ fn a_refused_combine_changes_nothing_and_leaves_no_undo_entry() {
     let (p, k, o) = kos();
     let opened = open(&p);
     let text = std::fs::read_to_string(&opened.path).unwrap();
-    let patched = text.replacen("\"requires\":[]", "\"requires\":[\"x-from-the-future\"]", 1);
+    let patched = text.replacen(
+        "\"requires\":[\"archived-stations\"]",
+        "\"requires\":[\"archived-stations\",\"x-from-the-future\"]",
+        1,
+    );
     std::fs::write(&opened.path, patched.as_bytes()).unwrap();
     let state = AppState::new().unwrap();
     let r = state.execute(Command::OpenProject { path: opened.path });
