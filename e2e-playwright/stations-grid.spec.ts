@@ -396,4 +396,58 @@ test.describe('Stations grid at a junction', () => {
     expect(await getStationName(page, sideId, 0)).toBe('J');
     expect(await getStationName(page, sideId, 2)).toBe('S2');
   });
+
+  // RS 5.4: Side's slot shows Main Line's station (a foreign slot), so an
+  // edit there first says whose station it is; going on renames it on every
+  // line, Cancel sends nothing.
+  test("an edit through a foreign slot says whose station it is first", async ({ page }) => {
+    const [mainId, sideId] = await page.evaluate(() => {
+      const lines = (window as any).__E2E_TEST__.projectStore.getState().project.lines as Array<{ id: number }>;
+      return [lines[0]!.id, lines[1]!.id];
+    });
+    await page.evaluate(
+      async ({ mainId, sideId }) => {
+        const e2e = (window as any).__E2E_TEST__;
+        await e2e.projectStore
+          .getState()
+          .mergeStations({ line_id: mainId, station_index: 3 }, { line_id: sideId, station_index: 0 });
+        e2e.uiStore.getState().setSelection({ type: 'line', lineId: sideId });
+      },
+      { mainId, sideId },
+    );
+    // Side Line has three stations: open the view without the four-row check.
+    await page.keyboard.press('Control+3');
+    await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
+    await page.getByTestId('data-table-view-stations').click();
+    await expect(page.getByTestId('grid-row-2')).toBeVisible({ timeout: 5000 });
+    await page.getByTestId('data-table-columns-menu').click();
+    await page.getByTestId('data-table-columns-dropdown').getByTestId('col-vis-name').check();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('grid-cell-0-name')).toHaveText('3');
+
+    await page.getByTestId('grid-cell-0-name').dblclick();
+    await page.getByTestId('grid-cell-editor').fill('J');
+    await page.keyboard.press('Enter');
+    const prompt = page.getByTestId('shown-identity-edit-dialog');
+    await expect(prompt).toBeVisible();
+    await expect(page.getByTestId('shown-identity-prompt-lead')).toHaveText('3 belongs to Stations Test Line.');
+    await expect(page.getByTestId('shown-identity-prompt-detach')).toHaveText(
+      'Detach Side Line to get back its own station 0',
+    );
+    // Nothing is sent until going on.
+    expect(await getStationName(page, mainId, 3)).toBe('3');
+    await page.getByTestId('shown-identity-prompt-proceed').click();
+    await expect(prompt).toBeHidden();
+    await expect.poll(() => getStationName(page, mainId, 3)).toBe('J');
+    expect(await getStationName(page, sideId, 0)).toBe('J');
+
+    // A comment edit there, cancelled: nothing changes.
+    await page.getByTestId('grid-cell-0-comment').dblclick();
+    await page.getByTestId('grid-cell-editor').fill('Arch');
+    await page.keyboard.press('Enter');
+    await expect(prompt).toBeVisible();
+    await page.getByTestId('shown-identity-prompt-cancel').click();
+    await expect(prompt).toBeHidden();
+    expect(await getStationComment(page, sideId, 0)).toBeNull();
+  });
 });
