@@ -54,7 +54,7 @@ pub struct BackupInfo {
 }
 
 /// What a backup the recovery dialog offers is (`list_project_backups`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[ts(export, export_to = "../../bindings/")]
 #[serde(rename_all = "snake_case")]
 pub enum BackupKind {
