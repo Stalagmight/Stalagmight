@@ -188,6 +188,8 @@ impl SlotRelations {
     /// The wire stations with coordinates from `positions`.
     fn stations(self, project: &Project, positions: &impl StationPositions) -> Vec<crate::Station> {
         let topology = project.topology();
+        // One resolution of the closure archives for every slot.
+        let index = project.shown_index();
         let Self {
             slots,
             datum,
@@ -200,7 +202,7 @@ impl SlotRelations {
             .zip(closures)
             .map(|(((slot, station), datum), closures)| {
                 let identity = project.stations.get(&station);
-                let shown = project.shown_station(station);
+                let shown = project.stations.get(&index.shown(station));
                 let gps = datum.and_then(|d| project.datums.get(d)).map(|d| d.gps);
                 crate::Station {
                     station_ref: slot,
@@ -216,10 +218,7 @@ impl SlotRelations {
                     closures_with: (!closures.is_empty()).then_some(closures),
                     comment: shown.and_then(|s| s.comment.clone()),
                     id: station,
-                    name: project
-                        .shown_name(station)
-                        .map(str::to_string)
-                        .unwrap_or_default(),
+                    name: shown.map(|s| s.name.clone()).unwrap_or_default(),
                     aliases: identity
                         .filter(|s| !s.archived.is_empty())
                         .map(|s| s.archived.iter().flat_map(alias_wire).collect()),
