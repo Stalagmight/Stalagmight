@@ -26,6 +26,7 @@ vi.mock('../../../utils/ipc', async (importOriginal) => ({
 import '../../../i18n';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
+import { useSpeleoStore } from '../../../store/speleoStore';
 import UnmergeStationsDialog, { sameDetachResult } from '../UnmergeStationsDialog';
 import type { DetachLinePreview } from '../../../types/ipc.generated';
 
@@ -69,6 +70,8 @@ function openOn(clicked: ReturnType<typeof slot>, other: ReturnType<typeof slot>
 const SENTENCE = 'North Passage comes off: it gets back 0 (Station ID 9); Main Line keeps station 3.';
 
 beforeEach(() => {
+  // A local project: editing is not blocked (useEditingBlocked).
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
   vi.clearAllMocks();
   unmergeStations.mockResolvedValue({ success: true });
   unmergeStationPair.mockResolvedValue({ success: true });

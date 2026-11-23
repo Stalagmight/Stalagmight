@@ -1897,7 +1897,8 @@
       "collisionsLead_other": "{{count}} names would then repeat on a line. Choose which station takes a new name for each:",
       "collision": "On {{line}}, {{name}} would name two stations",
       "rename": "Rename {{station}} to {{to}}",
-      "shownAsThroughClosure": "shown as {{station}} through a loop closure"
+      "shownAsThroughClosure": "shown as {{station}} through a loop closure",
+      "editingDisabled": "Editing is disabled in the current view."
     },
     "closure": {
       "keepLead": "Both ends show:",

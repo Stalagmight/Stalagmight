@@ -25,6 +25,7 @@ vi.mock('../../../utils/ipc', async (importOriginal) => ({
 import '../../../i18n';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
+import { useSpeleoStore } from '../../../store/speleoStore';
 import UnmergeStationsDialog from '../UnmergeStationsDialog';
 
 const MAIN = 1;
@@ -73,6 +74,8 @@ const MAIN_KEEPS = base({
 });
 
 beforeEach(() => {
+  // A local project: editing is not blocked (useEditingBlocked).
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
   vi.clearAllMocks();
   unmergeStations.mockResolvedValue({ success: true });
   unmergeStationPair.mockResolvedValue({ success: true });

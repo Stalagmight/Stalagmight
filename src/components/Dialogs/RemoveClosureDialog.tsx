@@ -6,6 +6,7 @@ import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 import type { StationRef } from '../../types/project';
 import type { RemoveClosureNaming } from '../../types/ipc/RemoveClosureNaming';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { listNames } from '../../utils/listNames';
 import { displayStationName } from '../../utils/formatters';
 import { StationBlob } from '../common/EntityBlob';
@@ -37,6 +38,7 @@ export default function RemoveClosureDialog() {
   const { stations, removeLoopClosure, project } = useProjectStore();
   const labels = useIdentityLabels();
   const identityLabel = useIdentityLabel();
+  const editingBlocked = useEditingBlocked();
 
   const anchorStation = dialogData.anchorStation as StationRef | undefined;
   const closuresFromDialog = dialogData.closures as ClosureChoice[] | undefined;
@@ -118,6 +120,10 @@ export default function RemoveClosureDialog() {
 
   const handleConfirm = async () => {
     if (!selectedClosure) return;
+    if (isEditingBlockedNow()) {
+      setError(t('dialogs.keptStations.editingDisabled'));
+      return;
+    }
 
     setIsLoading(true);
     setError(null);
@@ -234,7 +240,7 @@ export default function RemoveClosureDialog() {
           <Button
             variant="primary"
             onClick={handleConfirm}
-            disabled={isLoading || !selectedClosure}
+            disabled={isLoading || !selectedClosure || editingBlocked}
             data-testid="remove-closure-confirm"
           >
             {isLoading ? 'Removing...' : 'Remove'}

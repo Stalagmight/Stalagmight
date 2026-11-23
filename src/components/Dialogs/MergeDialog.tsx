@@ -19,6 +19,7 @@ import type { MergeKeepPreview } from '../../types/ipc/MergeKeepPreview';
 import { formatDatumMetres } from '../../utils/zeroDatumPreview';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { CollisionRows, renamesFromAnswers, useCollisionAnswers, useIdentityLabel } from './keptStationParts';
 
 /** A move shorter than this (metres) is not worth a sentence: the two
@@ -37,6 +38,9 @@ export default function MergeDialog() {
   const { t } = useTranslation();
   const { closeDialog, dialogData, clearMergeStations } = useUIStore();
   const { mergeStations, executeBatch } = useProjectStore();
+  // A merge mutates: never from a read-only view (Plan, Export, the Closures
+  // Computed View, a read-only project).
+  const editingBlocked = useEditingBlocked();
 
   const stationA = dialogData.stationA as StationRef | undefined;
   const stationB = dialogData.stationB as StationRef | undefined;
@@ -75,6 +79,10 @@ export default function MergeDialog() {
 
   const handleMerge = async () => {
     if (!stationA || !stationB) return;
+    if (isEditingBlockedNow()) {
+      setError(t('dialogs.keptStations.editingDisabled'));
+      return;
+    }
 
     setIsLoading(true);
     setError(null);
@@ -186,7 +194,7 @@ export default function MergeDialog() {
           <Button onClick={handleClose} disabled={isLoading} data-testid="merge-cancel">
             {t('dialogs.mergeStations.cancel')}
           </Button>
-          <Button variant="primary" onClick={handleMerge} disabled={isLoading} data-testid="merge-confirm">
+          <Button variant="primary" onClick={handleMerge} disabled={isLoading || editingBlocked} data-testid="merge-confirm">
             {isLoading ? t('dialogs.mergeStations.working') : t('dialogs.mergeStations.confirm')}
           </Button>
         </div>

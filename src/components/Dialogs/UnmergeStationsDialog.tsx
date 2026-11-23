@@ -6,6 +6,7 @@ import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 import type { StationRef } from '../../types/project';
 import type { DetachLinePreview, DetachLineResult } from '../../types/ipc.generated';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { listNames } from '../../utils/listNames';
 import { EntityBlob } from '../common/EntityBlob';
 import { Button } from '../common/Button';
@@ -136,6 +137,7 @@ export default function UnmergeStationsDialog() {
   const { closeDialog, dialogData } = useUIStore();
   const { stations, unmergeStations, unmergeStationPair } = useProjectStore();
   const labels = useIdentityLabels();
+  const editingBlocked = useEditingBlocked();
 
   const stationRef = dialogData.stationRef as StationRef | undefined;
   const mergedStationsFromDialog = dialogData.mergedStations as StationRef[] | undefined;
@@ -258,6 +260,10 @@ export default function UnmergeStationsDialog() {
 
   const handleConfirm = async () => {
     if (!stationRef || !target) return;
+    if (isEditingBlockedNow()) {
+      setError(t('dialogs.keptStations.editingDisabled'));
+      return;
+    }
 
     setIsLoading(true);
     setError(null);
@@ -411,7 +417,7 @@ export default function UnmergeStationsDialog() {
           <Button
             variant="primary"
             onClick={handleConfirm}
-            disabled={isLoading || !target || waiting}
+            disabled={isLoading || !target || waiting || editingBlocked}
             data-testid="unmerge-stations-confirm"
           >
             {isLoading ? t('dialogs.detachLine.working') : t('dialogs.detachLine.confirm')}

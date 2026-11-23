@@ -9,6 +9,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '../../../i18n';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
+import { useSpeleoStore } from '../../../store/speleoStore';
 import UnmergeStationsDialog from '../UnmergeStationsDialog';
 
 const MAIN = 3;
@@ -21,6 +22,8 @@ const closeDialog = vi.fn();
 const slot = (line_id: number, station_index: number) => ({ line_id, station_index });
 
 beforeEach(() => {
+  // A local project: editing is not blocked (useEditingBlocked).
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
   vi.clearAllMocks();
   unmergeStations.mockResolvedValue({ success: true });
   unmergeStationPair.mockResolvedValue({ success: true });

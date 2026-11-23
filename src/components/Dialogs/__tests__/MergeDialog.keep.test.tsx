@@ -24,6 +24,7 @@ vi.mock('../DialogWrapper', () => ({
 import '../../../i18n';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
+import { useSpeleoStore } from '../../../store/speleoStore';
 import MergeDialog, { defaultKeepOf } from '../MergeDialog';
 
 const MAIN = 1;
@@ -74,6 +75,8 @@ function open(mergePreview: MergePreview, extra: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  // A local project: editing is not blocked (useEditingBlocked).
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
   vi.clearAllMocks();
   mergeStations.mockResolvedValue({ success: true, warnings: [], line_ids: [] });
   executeBatch.mockResolvedValue({ success: true, warnings: [], line_ids: [] });
@@ -185,6 +188,15 @@ describe('Merge Stations keeps one station (RS 4.1)', () => {
     fireEvent.click(screen.getByTestId('merge-confirm'));
     await waitFor(() => expect(mergeStations).toHaveBeenCalled());
     expect(mergeStations).toHaveBeenCalledWith(A, B, {});
+  });
+});
+
+describe('Merge Stations in a read-only view', () => {
+  it('offers no Merge in Plan mode', () => {
+    useUIStore.setState({ appMode: 'plan' } as never);
+    open(preview());
+    expect(screen.getByTestId('merge-confirm')).toBeDisabled();
+    useUIStore.setState({ appMode: 'survey' } as never);
   });
 });
 

@@ -52,6 +52,11 @@ vi.mock('../../../store/projectStore', () => ({
   ),
 }));
 
+vi.mock('../../../hooks/useEditingBlocked', () => ({
+  useEditingBlocked: () => false,
+  isEditingBlockedNow: () => false,
+}));
+
 vi.mock('../DialogWrapper', () => ({
   DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));

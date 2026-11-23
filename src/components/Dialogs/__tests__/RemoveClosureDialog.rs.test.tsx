@@ -21,6 +21,7 @@ vi.mock('../../../utils/ipc', async (importOriginal) => ({
 import '../../../i18n';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
+import { useSpeleoStore } from '../../../store/speleoStore';
 import RemoveClosureDialog from '../RemoveClosureDialog';
 
 const MAIN = 1;
@@ -47,6 +48,8 @@ const NAMING: RemoveClosureNaming = {
 };
 
 beforeEach(() => {
+  // A local project: editing is not blocked (useEditingBlocked).
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
   vi.clearAllMocks();
   removeLoopClosure.mockResolvedValue({ success: true });
   invokeIpc.mockResolvedValue(NAMING);
@@ -96,6 +99,13 @@ describe('Remove Closure under RS', () => {
     fireEvent.click(screen.getByTestId('remove-closure-confirm'));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
     expect(removeLoopClosure).toHaveBeenCalledWith(5n, { renames: [{ station_id: 71, name: '17a' }] });
+  });
+
+  it('offers no Remove in the Closures Computed View', () => {
+    useUIStore.setState({ geometryMode: 'closureAdjusted' } as never);
+    render(<RemoveClosureDialog />);
+    expect(screen.getByTestId('remove-closure-confirm')).toBeDisabled();
+    useUIStore.setState({ geometryMode: 'measured' } as never);
   });
 
   it('says no name changes for a closure that hides nothing', async () => {

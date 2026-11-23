@@ -23,6 +23,7 @@ vi.mock('../../../utils/ipc', async (importOriginal) => ({
 import '../../../i18n';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
+import { useSpeleoStore } from '../../../store/speleoStore';
 import ClosureDialog, { defaultClosureChoice } from '../ClosureDialog';
 
 const MAIN = 1;
@@ -83,6 +84,8 @@ function open(answer: LoopClosureNaming, extra: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  // A local project: editing is not blocked (useEditingBlocked).
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
   vi.clearAllMocks();
   createLoopClosure.mockResolvedValue({ success: true, warnings: [], line_ids: [] });
   executeBatch.mockResolvedValue({ success: true, warnings: [], line_ids: [] });

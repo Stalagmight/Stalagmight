@@ -15,6 +15,7 @@ import type { ClosurePreview, BatchCommand } from '../../types/commands';
 import type { LoopClosureNaming } from '../../types/ipc/LoopClosureNaming';
 import type { ClosureKeepPreview } from '../../types/ipc/ClosureKeepPreview';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { listNames } from '../../utils/listNames';
 import { CollisionRows, renamesFromAnswers, useCollisionAnswers, useIdentityLabel } from './keptStationParts';
 
@@ -32,6 +33,7 @@ export default function ClosureDialog() {
   const precision = useDecimalPrecision();
   const { closeDialog, dialogData, clearMergeStations } = useUIStore();
   const { createLoopClosure, executeBatch } = useProjectStore();
+  const editingBlocked = useEditingBlocked();
 
   const stationA = dialogData.stationA as StationRef | undefined;
   const stationB = dialogData.stationB as StationRef | undefined;
@@ -97,6 +99,10 @@ export default function ClosureDialog() {
 
   const handleCreate = async () => {
     if (!stationA || !stationB) return;
+    if (isEditingBlockedNow()) {
+      setError(t('dialogs.keptStations.editingDisabled'));
+      return;
+    }
 
     setIsLoading(true);
     setError(null);
@@ -237,7 +243,7 @@ export default function ClosureDialog() {
           <Button
             variant="primary"
             onClick={handleCreate}
-            disabled={isLoading || !!closureRefusal}
+            disabled={isLoading || !!closureRefusal || editingBlocked}
             title={closureRefusal}
             data-testid="closure-create"
           >
