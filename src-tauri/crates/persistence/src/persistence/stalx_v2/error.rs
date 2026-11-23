@@ -58,6 +58,8 @@ pub enum DecodeError {
         features: Vec<String>,
         violations: Vec<Violation>,
     },
+    /// [`super::DecodeOptions::deadline`] passed before the decode ended.
+    DeadlinePassed,
 }
 
 impl fmt::Display for DecodeError {
@@ -113,6 +115,7 @@ impl fmt::Display for DecodeError {
                 "the file has no end marker: it is incomplete or was not written by Stalagmight",
             ),
             Self::DuplicateStation { id } => write!(f, "two stations have id {id}"),
+            Self::DeadlinePassed => f.write_str("reading the file took longer than allowed"),
             Self::Invalid { violations } => {
                 write!(f, "the survey is inconsistent")?;
                 for (i, violation) in violations.iter().take(5).enumerate() {

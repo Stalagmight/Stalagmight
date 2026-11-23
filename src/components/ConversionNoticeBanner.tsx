@@ -8,6 +8,7 @@ const SAVE_SENTENCE = {
   saved: 'banners.conversion.saved',
   saved_as_new_file: 'banners.conversion.savedAsNewFile',
   downloaded: 'banners.conversion.downloaded',
+  read_only: 'banners.conversion.readOnly',
 } as const;
 
 /** The banner's lead, by which older file was converted (`ConversionSource`). */
@@ -32,7 +33,8 @@ function changesSentence(changes: readonly string[]): string {
  * Line from Station or Remove Closure brings each back, then ONE sentence on
  * saving that is true for the file now: before the converting save it says
  * the next save writes the new format; after it (the store follows
- * `CommandResult.legacy_converted`) it says it was saved. A long list sits
+ * `CommandResult.legacy_converted`) it says it was saved; a file open
+ * read-only is never saved, so it says the file stays as it is. A long list sits
  * behind Details, grouped by line. Stays until dismissed.
  */
 export function ConversionNoticeBanner({

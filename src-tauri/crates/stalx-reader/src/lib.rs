@@ -42,7 +42,9 @@
 //! mid-run; every other step (the SQLite load's post-load normalisation, the
 //! conversion to the station-graph model, the JSON decode, optional station
 //! positions) is plain Rust, and the deadline is checked between them, so a
-//! step that has started runs to completion. How long such a step can run is
+//! step that has started runs to completion. The JSON decode also checks it
+//! between its own phases (the parse, the file's invariants, the steps of
+//! the upgrade of a file an earlier build of version 2 wrote). How long such a step can run is
 //! set by the app code it calls; the known super-linear one left is the
 //! 0.6.0 offset cascade in an SQLite file's load normalisation (#602). Station
 //! positions come from the station-graph solver, linear in the station count.

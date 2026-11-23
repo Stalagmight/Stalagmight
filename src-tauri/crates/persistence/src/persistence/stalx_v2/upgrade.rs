@@ -27,6 +27,8 @@
 //!    every letter and every closure left with no archive.
 
 use crate::models::survey::{Project, Violation};
+
+use super::DecodeError;
 use crate::models::StationId;
 
 use crate::persistence::kept::{self, Before, Comments, IdentityChanges};
@@ -78,17 +80,22 @@ pub(super) fn settles(violation: &Violation) -> bool {
 }
 
 /// Run the upgrade on `project` (an earlier version 2 file as decoded, whose
-/// only violations are ones [`settles`] lists).
-pub(super) fn run(project: &mut Project) -> UpgradeReport {
+/// only violations are ones [`settles`] lists). `in_time` is asked between
+/// its steps (a reader's deadline, [`super::DecodeOptions::deadline`]).
+pub(super) fn run(
+    project: &mut Project,
+    in_time: &dyn Fn() -> Result<(), DecodeError>,
+) -> Result<UpgradeReport, DecodeError> {
     let records = project.stations.values().map(|s| s.archived.len()).sum();
     let before = Before::of(project, Comments::Shared);
     let swapped = kept::keep_longest(project, Comments::Shared);
+    in_time()?;
     let settled = kept::settle(project, &before);
-    UpgradeReport {
+    Ok(UpgradeReport {
         records,
         swapped,
         closures_archived: settled.closures_archived,
         lettered: settled.lettered.len(),
         changes: settled.changes,
-    }
+    })
 }

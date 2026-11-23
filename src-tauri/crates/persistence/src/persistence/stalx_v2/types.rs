@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 
@@ -415,6 +416,12 @@ pub struct DecodeOptions {
     /// Inputs larger than this are refused before parsing.
     pub max_file_bytes: u64,
     pub limits: CountLimits,
+    /// When set, the decode stops with [`super::DecodeError::DeadlinePassed`]
+    /// once this instant has passed, checked between its phases (the parse,
+    /// the file's own invariants, the steps of an earlier file's upgrade,
+    /// the final check), so a phase that has started runs to completion: for
+    /// a reader with a time budget (stalx-reader). The app sets none.
+    pub deadline: Option<Instant>,
 }
 
 impl Default for DecodeOptions {
@@ -422,6 +429,18 @@ impl Default for DecodeOptions {
         Self {
             max_file_bytes: MAX_V2_FILE_BYTES,
             limits: CountLimits::default(),
+            deadline: None,
+        }
+    }
+}
+
+impl DecodeOptions {
+    /// [`super::DecodeError::DeadlinePassed`] once [`Self::deadline`] has
+    /// passed.
+    pub(super) fn in_time(&self) -> Result<(), super::DecodeError> {
+        match self.deadline {
+            Some(deadline) if Instant::now() >= deadline => Err(super::DecodeError::DeadlinePassed),
+            _ => Ok(()),
         }
     }
 }

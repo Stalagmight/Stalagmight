@@ -10,7 +10,9 @@ use crate::{ShotKind, StationRef};
 use super::changeset::testkit::{persisted, same_state};
 use super::changeset::{capture, redo, undo};
 use super::ops_detach::DetachMode;
-use super::ops_test_helpers::{assert_valid, free_line, gps_at, ok, origin, run, xy_all, z_all};
+use super::ops_test_helpers::{
+    assert_valid, branch, free_line, gps_at, ok, origin, run, xy_all, z_all,
+};
 use super::test_helpers::{at, project};
 use super::{
     ArchivedStation, ClosureEnd, ClosureStrategy, LineId, Project, RangeDeleteMode, StationId,
@@ -355,6 +357,73 @@ fn rule_l_never_letters_an_identity_shown_on_more_lines() {
     }
 }
 
+/// Rule L's letter is the first letter of the name free on every line the
+/// lettered station is shown on (`5` -> `5b` past a `5a`), found from
+/// per-line cursors (data review finding data-2). When its lines take more
+/// than 64 letters in a row between them, it is the first letter no slot of
+/// the survey shows, free on its lines too, so a crafted survey whose lines
+/// take letters in turn cannot make each search walk every letter: here
+/// `5cs` (suffix number 96) is free on both of X's lines but shown on a
+/// third line, so X gets `5ct`.
+#[test]
+fn rule_l_letters_free_on_every_line_and_bounds_its_search() {
+    use crate::station_naming::letter_candidate;
+    let rename = |p: &mut Project, line: LineId, index: usize, name: String| {
+        let id = at(p, line, index);
+        if let Some(s) = p.stations.get_mut(&id) {
+            s.name = name;
+        }
+    };
+    // Exact: Main shows 5, 5, 5a; the later 5 (newer id, tie) takes 5b.
+    let mut p = project();
+    let main = free_line(&mut p, [0.0, 0.0], run(10.0, 3, 5.0));
+    for (i, name) in ["0", "5", "5", "5a"].iter().enumerate() {
+        rename(&mut p, main, i, (*name).to_string());
+    }
+    let letters = p.letter_collisions_with(std::collections::BTreeSet::new);
+    assert_eq!(letters.len(), 1);
+    assert_eq!(
+        (letters[0].station, letters[0].to.as_str()),
+        (at(&p, main, 2), "5b")
+    );
+    assert!(p.name_collisions().is_empty());
+
+    // Bounded: X (on A and B) collides with Y (on A and two more lines) by
+    // 5 on A; A shows the even suffix numbers 0 to 94 (5a, 5c, ..) and B
+    // the odd ones 1 to 95, so 96 probes would be needed; C shows 96.
+    let mut p = project();
+    let a = free_line(&mut p, [0.0, 0.0], run(10.0, 50, 5.0));
+    let (x, y) = (at(&p, a, 1), at(&p, a, 2));
+    let b = branch(&mut p, x, run(100.0, 48, 5.0));
+    let y1 = branch(&mut p, y, run(200.0, 1, 5.0));
+    let y2 = branch(&mut p, y, run(300.0, 1, 5.0));
+    let c = free_line(&mut p, [5000.0, 0.0], run(10.0, 1, 5.0));
+    rename(&mut p, a, 0, "start".to_string());
+    rename(&mut p, a, 1, "5".to_string());
+    rename(&mut p, a, 2, "5".to_string());
+    for i in 3..=50_u64 {
+        rename(&mut p, a, i as usize, letter_candidate("5", 2 * (i - 3)));
+    }
+    for i in 1..=48_u64 {
+        rename(
+            &mut p,
+            b,
+            i as usize,
+            letter_candidate("5", 2 * (i - 1) + 1),
+        );
+    }
+    rename(&mut p, y1, 1, "y1".to_string());
+    rename(&mut p, y2, 1, "y2".to_string());
+    rename(&mut p, c, 0, letter_candidate("5", 96));
+    rename(&mut p, c, 1, "c1".to_string());
+    assert_eq!(letter_candidate("5", 96), "5cs");
+    let letters = p.letter_collisions_with(std::collections::BTreeSet::new);
+    assert_eq!(letters.len(), 1);
+    assert_eq!((letters[0].station, letters[0].other), (x, y));
+    assert_eq!(letters[0].to, "5ct");
+    assert!(p.name_collisions().is_empty());
+}
+
 // ----- the epilogue: restores (RS 4.3) -------------------------------------
 
 /// RS 4.3: deleting Far Room's last shot leaves its end on Upstream alone,
@@ -449,7 +518,7 @@ fn the_epilogue_restores_every_node_without_a_native_line() {
     let mut p = project();
     let a = free_line(&mut p, [0.0, 0.0], run(90.0, 2, 10.0));
     let j = at(&p, a, 2);
-    let b = super::ops_test_helpers::branch(&mut p, j, run(0.0, 1, 5.0));
+    let b = branch(&mut p, j, run(0.0, 1, 5.0));
     let (r1, r2) = (p.mint_station_id().unwrap(), p.mint_station_id().unwrap());
     let station = p.station_mut(j).unwrap();
     station.archived = vec![record(r1, "A's", vec![a]), record(r2, "B's", vec![b])];

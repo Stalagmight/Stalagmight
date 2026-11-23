@@ -234,7 +234,8 @@ struct Case<'a> {
     /// Stations tied by `Tie` closures, grouped (a demoted merge's two
     /// stations are in one group).
     tie_group: BTreeMap<StationId, StationId>,
-    /// Slots whose legacy comment is the empty string (no comment now).
+    /// Slots whose legacy comment is the empty string (no comment now, even
+    /// where the slot shows another station's).
     empty_comments: BTreeSet<StationRef>,
     /// Closure ids the legacy file did not have (`Tie`s the migration made
     /// from demoted merges, reminted ids).
@@ -553,6 +554,13 @@ impl<'a> Case<'a> {
             return;
         }
         let junction = self.junction(slot);
+        // An empty 0.6.0 comment is no comment, whatever the slot shows now:
+        // a loop end a closure archives shows its kept end's comment (RS
+        // 5.1), and the end's own comment, none, is what a delete takes (farm
+        // finding dbf19ed85330).
+        if o.get("comment") == Some(&Value::String(String::new())) {
+            self.empty_comments.insert(slot);
+        }
         // RS 8.3: a slot shows its node's identity (a junction's kept station,
         // on every line) or, at an end a loop closure archives, the kept
         // end's. So an id differs only at a junction; a name differs only
@@ -568,7 +576,6 @@ impl<'a> Case<'a> {
                 && o.get(key) == Some(&Value::String(String::new()))
                 && n.get(key).is_none()
             {
-                self.empty_comments.insert(slot);
                 self.tally
                     .note("identity: an empty legacy comment is no comment");
             } else if key == "id" && junction {

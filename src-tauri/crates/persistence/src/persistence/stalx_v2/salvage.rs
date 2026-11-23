@@ -64,6 +64,13 @@ pub enum Repair {
         archived: StationId,
         line: LineId,
     },
+    /// An archived station whose last line a repair took (a stale line, or
+    /// A3's) names no line any more: it is history (A5), so nothing brings
+    /// its name and comment back (data review finding data-7).
+    ArchivedBecameHistory {
+        station: StationId,
+        archived: StationId,
+    },
     /// A4: a station with no native line took back the archived identity
     /// naming its lines (RS 4.3); its own became history.
     RestoredArchived {
@@ -169,6 +176,11 @@ impl fmt::Display for Repair {
                 f,
                 "archived station {archived} of station {station} no longer names line {line}"
             ),
+            Self::ArchivedBecameHistory { station, archived } => write!(
+                f,
+                "archived station {archived} of station {station} names no line any more (its \
+                 name and comment can no longer be brought back)"
+            ),
             Self::RestoredArchived { from, to } => write!(
                 f,
                 "station {from} shows its archived station {to} again (its own is kept as history)"
@@ -269,7 +281,8 @@ pub(super) fn run(bytes: &[u8]) -> (Option<Project>, SalvageReport) {
             violations.retain(|v| !super::upgrade::settles(v));
             if violations.is_empty() {
                 earlier = false;
-                report.upgrade = Some(super::upgrade::run(&mut project));
+                // Salvage has no deadline, so the upgrade runs to its end.
+                report.upgrade = super::upgrade::run(&mut project, &|| Ok(())).ok();
                 continue;
             }
         }
@@ -599,6 +612,12 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                                 archived: *second,
                                 line: *line,
                             });
+                            if record.lines.is_empty() {
+                                repairs.push(Repair::ArchivedBecameHistory {
+                                    station: *station,
+                                    archived: *second,
+                                });
+                            }
                         }
                     }
                 }
@@ -736,6 +755,23 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                 + dropped.archived_lines.len(),
             hand_moves: dropped.hand_moves.len(),
         });
+        // A record that lost its last line is history now: say so per
+        // record, as a dropped one is said.
+        let cleared: BTreeSet<(StationId, StationId)> = dropped
+            .archived_lines
+            .iter()
+            .map(|&(station, record, _)| (station, record))
+            .collect();
+        for (station, archived) in cleared {
+            let emptied = p.stations.get(&station).is_some_and(|s| {
+                s.archived
+                    .iter()
+                    .any(|r| r.id == archived && r.lines.is_empty())
+            });
+            if emptied {
+                repairs.push(Repair::ArchivedBecameHistory { station, archived });
+            }
+        }
     }
     for index in drop_datums.into_iter().rev() {
         if index < p.datums.len() {

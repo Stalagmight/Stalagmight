@@ -776,10 +776,14 @@ The deviations each package made from the plan are in the plan's "Deviations
   `letter_collisions_with`): of the identities sharing a name on a line, all
   but the strongest take a letter suffix free on every line they are shown
   on; strongest is shown on the most lines, then already shown on that line
-  before the op, then the lowest Station ID. Every automatic path uses it;
+  before the op, then the lowest Station ID. The letter is the first one
+  free on every line the station is shown on, unless its lines take more
+  than 64 letters in a row between them: then the first letter no slot
+  shows. A pass works out the lines and names it needs once, so a crafted
+  file settles in time linear in its slots. Every automatic path uses it;
   `uniquify_station_name` is the letter-suffix rule
   (`crate::station_naming::name_with_free_letter`). `uniquify_line_names`
-  (chain order) is left only to Combine until RS-M2.
+  (chain order) is used by no operation.
 - `is_shot_uuid_taken`, `shot_by_uuid`, `duplicate_shot_uuids`, `mint_shot_uuid`.
 
 ## Tests

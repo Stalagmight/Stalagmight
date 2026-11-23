@@ -188,3 +188,51 @@ fn a_valid_file_salvages_unchanged() {
         assert!(project.unwrap() == expected);
     }
 }
+
+/// Data review finding data-7: when salvage clears an archived station's
+/// stale line and that was the last line it named, the record is history
+/// (A5): nothing can bring its name and comment back any more. The repair
+/// says so per record, as a dropped record's does; a record that keeps a
+/// line gets no such repair. Here station 1's record 10 names only line 1,
+/// which does not pass station 1, and station 2's record 11 names line 1
+/// and line 5, which does not exist. Injection: on 333e24ac5 both clears fold into the
+/// stale-attachment count only.
+#[test]
+fn a_record_left_with_no_line_is_reported_as_lost() {
+    let text = "{\"format\":\"stalx\",\"version\":2,\"solver\":1,\"requires\":[\"archived-stations\"],\n\
+         \"conventions\":{\"length\":\"m\",\"angles\":\"deg\",\"azimuth\":\"cw-from-north\",\
+         \"inclination\":\"+down\",\"depth\":\"+down\",\"local\":\"enu-m\",\"gps\":\"wgs84-deg\",\
+         \"temperature\":\"degC\"},\n\
+         \"project\":{\"name\":\"x\",\"created\":\"2025-01-01T00:00:00Z\",\
+         \"modified\":\"2025-01-01T00:00:00Z\"},\n\
+         \"counters\":{\"station\":12,\"closure\":1,\"section\":0},\n\
+         \"stations\":[\n[0,\"0\"],\n\
+         [1,\"1\",{\"archived\":[{\"id\":10,\"name\":\"Old\",\"comment\":\"low air\",\"lines\":[1]}]}],\n\
+         [2,\"2\",{\"archived\":[{\"id\":11,\"name\":\"S0\",\"lines\":[1,5]}]}],\n\
+         [3,\"3\"],\n[4,\"s1\"]\n],\n\
+         \"lines\":[\n{\"id\":0,\"color\":\"#000\",\"start\":0},\n\
+         [\"u0\",1,1.0,0.0,0.0,0.0,0.0],\n[\"u1\",2,1.0,0.0,0.0,0.0,0.0],\n\
+         [\"u2\",3,1.0,0.0,0.0,0.0,0.0],\n\
+         {\"id\":1,\"color\":\"#000\",\"start\":2},\n[\"s0\",4,1.0,90.0,0.0,0.0,0.0]\n],\n\
+         \"placements\":[{\"station\":0,\"x\":0.0,\"y\":0.0}],\n\"end\":true}\n";
+    let (project, repairs) = salvaged(text);
+    let lost: Vec<&Repair> = repairs
+        .iter()
+        .filter(|r| matches!(r, Repair::ArchivedBecameHistory { .. }))
+        .collect();
+    assert_eq!(
+        lost,
+        [&Repair::ArchivedBecameHistory {
+            station: 1,
+            archived: 10
+        }],
+        "{repairs:?}"
+    );
+    assert_eq!(
+        lost[0].to_string(),
+        "archived station 10 of station 1 names no line any more (its name and comment can no \
+         longer be brought back)"
+    );
+    let kept = &project.stations[&2].archived;
+    assert_eq!(kept[0].lines, [1], "record 11 keeps line 1");
+}

@@ -68,6 +68,7 @@ describe('ConversionNoticeBanner', () => {
     ['saved', 'Saved in the new format; the original file is kept and can be restored from Recent Projects'],
     ['saved_as_new_file', 'Saved in the new format as a new file; the original file is unchanged.'],
     ['downloaded', 'the original revision is unchanged on SpeleoDB'],
+    ['read_only', 'It is only shown converted: the file is open read-only, so nothing is saved'],
   ] as const)('says the truth about saving once the file is %s', (file, text) => {
     render(<ConversionNoticeBanner notice={notice({ file })} onDismiss={() => {}} />);
     const save = screen.getByTestId('conversion-notice-save');

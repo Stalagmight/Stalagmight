@@ -642,6 +642,64 @@ fn an_imported_closure_that_hides_a_project_station_warns() {
     assert_valid(&p);
 }
 
+/// Data review finding data-3: a closure an import makes that archives a
+/// station with a comment hides that comment on every slot (the slot shows
+/// the kept end's), and the receipt says so (U-P1-2), even when the names
+/// match: a warning for a station the project already held, in the note for
+/// one the file brought. A comment the kept end shows too is not hidden.
+/// Injection: on 333e24ac5 the entries name the station only.
+#[test]
+fn an_imported_closure_that_hides_a_comment_says_so() {
+    let state = new_state();
+    let mut old = line(0, "Old", &[1.0, 1.0], ImportPlacement::Origin);
+    old.station_comments = pairs(&[(1, "tie-off")]);
+    import(&state, vec![old], Vec::new());
+    let old = line_id(&project(&state), "Old");
+    let result = import(
+        &state,
+        vec![
+            line(0, "J", &[1.0], onto(old, 1, 0)),
+            line(1, "L", &[10.0, 10.0, 10.0, 10.0], onto(old, 0, 0)),
+        ],
+        vec![closure((0, 0), (1, 3))],
+    );
+    let p = project(&state);
+    assert_eq!(
+        p.closures[0].archive().map(|a| a.0),
+        Some(node(&p, "Old", 1))
+    );
+    assert_eq!(
+        receipt(&result).warnings,
+        vec![
+            "Loop closure: station \"Old / 1\", already in the project, is now shown as \
+             \"L / 3\", and its comment is hidden: Remove Closure brings its name and comment \
+             back"
+                .to_string()
+        ]
+    );
+
+    // A file station with its own comment, and one whose comment the kept
+    // end shows too.
+    for (kept, hidden) in [("sump", true), ("tie-off", false)] {
+        let state = new_state();
+        let mut main = line(0, "Main", &[10.0, 10.0, 10.0], ImportPlacement::Origin);
+        main.station_comments = pairs(&[(2, kept)]);
+        let mut side = line(1, "Side", &[3.0], onto_imported(0, 0));
+        side.station_comments = pairs(&[(1, "tie-off")]);
+        let result = import(&state, vec![main, side], vec![closure((1, 1), (0, 2))]);
+        let note = if hidden {
+            "Loop closure: station \"Side / 1\" is shown as \"Main / 2\", and its comment is \
+             hidden: Remove Closure brings its own name and comment back"
+        } else {
+            "Loop closure: station \"Side / 1\" is shown as \"Main / 2\": Remove Closure brings \
+             its own name back"
+        };
+        let receipt = receipt(&result);
+        assert_eq!(receipt.info, vec![note.to_string()], "kept {kept}");
+        assert!(receipt.warnings.is_empty(), "{:?}", receipt.warnings);
+    }
+}
+
 /// The notes are capped like the warnings: a file can make one per join.
 #[test]
 fn receipt_notes_are_capped_like_warnings() {

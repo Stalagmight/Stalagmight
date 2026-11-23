@@ -17,12 +17,17 @@
 //! an identity shown on more lines than the one it collides with is never
 //! lettered, and chain order never decides.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
-use crate::station_naming::name_with_free_letter;
+use crate::station_naming::{letter_candidate, name_with_free_letter};
 use crate::{LineId, StationId, StationRef};
 
 use super::{Project, ShotLocation, ShownIndex, Topology};
+
+/// Letters a search tries from its cursors before it takes the first letter
+/// free on every line instead ([`Lettering::free_letter`]).
+const LETTER_PROBES: u64 = 64;
 
 /// Another station holding the same name on a shared line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -248,6 +253,10 @@ impl Project {
             return Vec::new();
         }
         let mut seen: BTreeMap<&str, StationId> = BTreeMap::new();
+        // Each pair once (a same-line closure shows one identity at two
+        // slots), by a set: a crafted line of one name repeated by every
+        // station must not cost a scan of the repeats per slot.
+        let mut reported: HashSet<(StationId, StationId)> = HashSet::new();
         let mut out: Vec<(&str, StationId, StationId)> = Vec::new();
         for node in chain {
             let Some((name, identity)) = named(node) else {
@@ -255,7 +264,7 @@ impl Project {
             };
             match seen.get(name) {
                 Some(&first) if first != identity => {
-                    if !out.contains(&(name, first, identity)) {
+                    if reported.insert((first, identity)) {
                         out.push((name, first, identity));
                     }
                 }
@@ -279,19 +288,21 @@ impl Project {
         let Some(line) = self.lines.get(position) else {
             return Vec::new();
         };
+        // A name's repeats all name the identity that showed it first and
+        // each later identity once (`line_name_repeats`), so the collision of
+        // a name is found by a map and its identities need no repeat check.
         let mut out: Vec<NameCollision> = Vec::new();
+        let mut of_name: HashMap<&str, usize> = HashMap::new();
         for (name, first, second) in self.line_name_repeats(topology, index, position) {
-            match out.iter_mut().find(|c| c.name == name) {
-                Some(collision) => {
-                    if !collision.identities.contains(&second) {
-                        collision.identities.push(second);
-                    }
-                }
-                None => out.push(NameCollision {
+            if let Some(&at) = of_name.get(name) {
+                out[at].identities.push(second);
+            } else {
+                of_name.insert(name, out.len());
+                out.push(NameCollision {
                     line: line.id,
                     name: name.to_string(),
                     identities: vec![first, second],
-                }),
+                });
             }
         }
         out
@@ -321,6 +332,12 @@ impl Project {
     /// computed only once a collision is found: for an upgrade whose state
     /// before is not a model of this kind (a 0.6.0 file's slots, an earlier
     /// version 2 file's per-line names, plan 2026-11-23 RS 8.2 and 8.3).
+    ///
+    /// A pass costs about the slots of the lines its collisions touch, so a
+    /// crafted file (a line of 99,999 stations sharing one name, an upgrade
+    /// that archives 50,000 closures) settles instead of hanging: the lines
+    /// each identity is shown on and the names each line shows are worked
+    /// out once per pass and kept current as it letters ([`Lettering`]).
     pub fn letter_collisions_with(
         &mut self,
         before: impl FnOnce() -> BTreeSet<(StationId, LineId)>,
@@ -339,32 +356,39 @@ impl Project {
             let Some(pairs) = before_pairs.as_ref() else {
                 break;
             };
+            let mut letters = Lettering::new(self);
             let mut changed = false;
             for collision in collisions {
-                // An earlier letter of this pass may have settled it.
+                // An earlier letter of this pass may have settled it. Each
+                // identity is a shown one, so its name is its own record's.
                 let holders: Vec<StationId> = collision
                     .identities
                     .iter()
                     .copied()
-                    .filter(|&id| self.shown_name(id) == Some(collision.name.as_str()))
+                    .filter(|id| {
+                        self.stations
+                            .get(id)
+                            .is_some_and(|s| s.name == collision.name)
+                    })
                     .collect();
                 if holders.len() < 2 {
                     continue;
                 }
-                let rank = |id: StationId| {
+                let Some(keeper) = holders.iter().copied().max_by_key(|&id| {
                     (
-                        self.lines_shown_on(id).len(),
+                        letters.lines_of(id).len(),
                         pairs.contains(&(id, collision.line)),
                         std::cmp::Reverse(id),
                     )
-                };
-                let Some(keeper) = holders.iter().copied().max_by_key(|&id| rank(id)) else {
+                }) else {
                     continue;
                 };
                 for identity in holders.into_iter().filter(|&id| id != keeper) {
-                    let taken = self.names_around(identity);
-                    let fresh = name_with_free_letter(&collision.name, &|n| taken.contains(n));
-                    self.set_shown_name(identity, fresh.clone());
+                    let fresh = letters.free_letter(self, identity, &collision.name);
+                    letters.rename(identity, &collision.name, &fresh);
+                    if let Some(s) = self.stations.get_mut(&identity) {
+                        s.name.clone_from(&fresh);
+                    }
                     changed = true;
                     out.push(LetteredStation {
                         station: identity,
@@ -442,4 +466,176 @@ impl Project {
             }
         }
     }
+}
+
+/// One rule L pass's view of what the lines show (RS 2), worked out once per
+/// pass and kept current as the pass letters: the lines each identity is
+/// shown on and how many slots of each line show each name. A letter is the
+/// first suffix free on every line the identity is shown on, as
+/// [`Project::names_around`] and [`name_with_free_letter`] give it, found
+/// from per-line cursors instead of a fresh taken set per lettered station
+/// (data review finding data-2).
+struct Lettering {
+    topology: Arc<Topology>,
+    index: ShownIndex,
+    /// The closure-archived nodes that show each identity (besides the
+    /// identity's own node, [`Project::nodes_showing`]).
+    archived_showing: HashMap<StationId, Vec<StationId>>,
+    /// Per identity: each line it is shown on, in the model's line order,
+    /// with how many of that line's slots show it.
+    lines: HashMap<StationId, Vec<(LineId, usize)>>,
+    /// Per line: how many of its slots show each name.
+    names: HashMap<LineId, HashMap<String, usize>>,
+    /// Per `(line, base)`: no letter of `base` below this suffix number is
+    /// free on the line (advanced as letters are taken).
+    cursors: HashMap<(LineId, String), u64>,
+    /// How many slots of the whole project show each name, once a search
+    /// needs it.
+    everywhere: Option<HashMap<String, usize>>,
+    /// Per base: no letter of it below this suffix number is free anywhere.
+    everywhere_cursors: HashMap<String, u64>,
+}
+
+impl Lettering {
+    fn new(project: &Project) -> Self {
+        let index = project.shown_index();
+        let mut archived_showing: HashMap<StationId, Vec<StationId>> = HashMap::new();
+        for node in index.archived_nodes() {
+            let shown = index.shown(node);
+            if shown != node {
+                archived_showing.entry(shown).or_default().push(node);
+            }
+        }
+        Self {
+            topology: project.topology_arc(),
+            index,
+            archived_showing,
+            lines: HashMap::new(),
+            names: HashMap::new(),
+            cursors: HashMap::new(),
+            everywhere: None,
+            everywhere_cursors: HashMap::new(),
+        }
+    }
+
+    /// The lines `identity` is shown on ([`Project::lines_shown_on`]), with
+    /// its slots on each.
+    fn lines_of(&mut self, identity: StationId) -> &[(LineId, usize)] {
+        let topology = &self.topology;
+        let archived = &self.archived_showing;
+        self.lines.entry(identity).or_insert_with(|| {
+            let mut by_position: BTreeMap<usize, (LineId, usize)> = BTreeMap::new();
+            let nodes = std::iter::once(identity)
+                .chain(archived.get(&identity).into_iter().flatten().copied());
+            for node in nodes {
+                for slot in topology.slots_of(node) {
+                    if let Some(position) = topology.line_position(slot.line_id) {
+                        by_position.entry(position).or_insert((slot.line_id, 0)).1 += 1;
+                    }
+                }
+            }
+            by_position.into_values().collect()
+        })
+    }
+
+    /// How many slots of each line show each name, for `lines`.
+    fn count_lines(&mut self, project: &Project, lines: &[(LineId, usize)]) {
+        for &(line, _) in lines {
+            if self.names.contains_key(&line) {
+                continue;
+            }
+            let mut names: HashMap<String, usize> = HashMap::new();
+            for &node in self.topology.chain(line).unwrap_or(&[]) {
+                if let Some(s) = project.stations.get(&self.index.shown(node)) {
+                    *names.entry(s.name.clone()).or_default() += 1;
+                }
+            }
+            self.names.insert(line, names);
+        }
+    }
+
+    fn taken_on(&self, line: LineId, name: &str) -> bool {
+        self.names
+            .get(&line)
+            .and_then(|names| names.get(name))
+            .is_some_and(|&n| n > 0)
+    }
+
+    /// The first suffix number of `base` not taken on `line`.
+    fn line_cursor(&mut self, line: LineId, base: &str) -> u64 {
+        let names = self.names.get(&line);
+        let cursor = self.cursors.entry((line, base.to_string())).or_insert(0);
+        while names
+            .and_then(|names| names.get(&letter_candidate(base, *cursor)))
+            .is_some_and(|&n| n > 0)
+        {
+            *cursor += 1;
+        }
+        *cursor
+    }
+
+    /// The letter rule L gives `identity` (shown by `base`): the first
+    /// letter of `base` free on every line it is shown on. The search starts
+    /// at the furthest of those lines' cursors (every letter below it is
+    /// taken on that line); past [`LETTER_PROBES`] taken letters it takes the
+    /// first letter of `base` no slot of the project shows, which is free on
+    /// those lines too, so a crafted file whose lines take letters in turn
+    /// cannot make each search walk them all.
+    fn free_letter(&mut self, project: &Project, identity: StationId, base: &str) -> String {
+        let lines = self.lines_of(identity).to_vec();
+        self.count_lines(project, &lines);
+        let start = lines
+            .iter()
+            .map(|&(line, _)| self.line_cursor(line, base))
+            .max()
+            .unwrap_or(0);
+        for suffix in start..start.saturating_add(LETTER_PROBES) {
+            let name = letter_candidate(base, suffix);
+            if lines.iter().all(|&(line, _)| !self.taken_on(line, &name)) {
+                return name;
+            }
+        }
+        let everywhere = self.everywhere.get_or_insert_with(|| {
+            let mut names: HashMap<String, usize> = HashMap::new();
+            for position in 0..project.lines.len() {
+                for &node in self.topology.chain_at(position).unwrap_or(&[]) {
+                    if let Some(s) = project.stations.get(&self.index.shown(node)) {
+                        *names.entry(s.name.clone()).or_default() += 1;
+                    }
+                }
+            }
+            names
+        });
+        let cursor = self.everywhere_cursors.entry(base.to_string()).or_insert(0);
+        loop {
+            let name = letter_candidate(base, *cursor);
+            if everywhere.get(&name).is_none_or(|&n| n == 0) {
+                return name;
+            }
+            *cursor += 1;
+        }
+    }
+
+    /// `identity` is now shown by `to` instead of `from`.
+    fn rename(&mut self, identity: StationId, from: &str, to: &str) {
+        let lines = self.lines_of(identity).to_vec();
+        let mut total = 0;
+        for (line, slots) in lines {
+            total += slots;
+            if let Some(names) = self.names.get_mut(&line) {
+                shift(names, from, to, slots);
+            }
+        }
+        if let Some(everywhere) = self.everywhere.as_mut() {
+            shift(everywhere, from, to, total);
+        }
+    }
+}
+
+/// Move `slots` slots of `counts` from name `from` to name `to`.
+fn shift(counts: &mut HashMap<String, usize>, from: &str, to: &str, slots: usize) {
+    if let Some(n) = counts.get_mut(from) {
+        *n = n.saturating_sub(slots);
+    }
+    *counts.entry(to.to_string()).or_default() += slots;
 }

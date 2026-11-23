@@ -311,6 +311,34 @@ test.describe('.stalx v2 file status', () => {
     await expect(page.getByTestId('conversion-notice-save')).toContainText('Saved in the new format');
   });
 
+  // A read-only earlier file (it also requires a feature this build does not
+  // know) is only shown upgraded and is never saved, so its banner promises
+  // no save (data review finding data-4).
+  test('a read-only earlier version 2 file promises no save', async ({ page }) => {
+    await page.evaluate(() => {
+      const w = window as unknown as MockWindow;
+      w.__MOCK_SET_READ_ONLY_REASON__(
+        'made with a newer Stalagmight; it requires features this version does not know: lofts'
+      );
+      w.__MOCK_SET_CONVERSION_NOTICE__({
+        source: 'earlier_version_2',
+        changes: ['Main / M2 is now shown as Side / S0'],
+        details: [],
+        brings_back: true,
+        file: 'read_only',
+      });
+      w.__MOCK_SET_LEGACY_ORIGIN__(true);
+    });
+    await createProject(page, 'Earlier And Newer');
+
+    await expect(page.getByTestId('conversion-notice-lead')).toHaveText('Upgraded from an earlier version 2 file.');
+    await expect(page.getByTestId('conversion-notice-save')).toHaveText(
+      'It is only shown converted: the file is open read-only, so nothing is saved and the file stays as it is.'
+    );
+    await expect(page.getByTestId('conversion-notice-banner')).not.toContainText('next time you save');
+    await expect(page.getByTestId('save-status')).toHaveAttribute('data-save-state', 'read-only');
+  });
+
   test('the converting save with the banner dismissed confirms with a toast', async ({ page }) => {
     await page.evaluate(() =>
       (window as unknown as MockWindow).__MOCK_SET_CONVERSION_NOTICE__({

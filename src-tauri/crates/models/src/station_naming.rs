@@ -145,16 +145,19 @@ pub fn name_with_free_letter_from(
     from: &mut u64,
     taken: &dyn Fn(&str) -> bool,
 ) -> String {
+    first_free(from, |index| letter_candidate(base, index), taken)
+}
+
+/// The candidate [`name_with_free_letter`] tries at suffix number `index`:
+/// `base` with the `index`-th letter suffix (`5`, 0 -> `5a`; `Junction`, 1
+/// -> `Junction-b`). For a search that keeps its own cursors.
+pub fn letter_candidate(base: &str, index: u64) -> String {
     let separator = if base.bytes().any(|b| b.is_ascii_digit()) {
         ""
     } else {
         "-"
     };
-    first_free(
-        from,
-        |index| format!("{base}{separator}{}", letter_suffix(index)),
-        taken,
-    )
+    format!("{base}{separator}{}", letter_suffix(index))
 }
 
 /// The first `candidate(n)`, `n >= *from`, that is not taken, leaving `*from`
