@@ -906,6 +906,8 @@ fn test_execute_merge_stations_command() {
     let r = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 1),
         station_b: StationRef::new(b, 0),
+        keep: None,
+        renames: None,
     });
     assert!(r.success, "{:?}", r.error);
     let p = project(&state);
@@ -968,6 +970,8 @@ fn test_undo_set_zero_datum_restores_line_offsets() {
             .execute(Command::MergeStations {
                 station_a: StationRef::new(a, 1),
                 station_b: StationRef::new(b, 0),
+                keep: None,
+                renames: None,
             })
             .success
     );
@@ -1417,6 +1421,8 @@ fn test_undo_merge_stations() {
             .execute(Command::MergeStations {
                 station_a: StationRef::new(a, 1),
                 station_b: StationRef::new(b, 0),
+                keep: None,
+                renames: None,
             })
             .success
     );
@@ -2341,6 +2347,8 @@ fn test_batch_partial_failure_rolls_back() {
             Command::MergeStations {
                 station_a: StationRef::new(9999, 0),
                 station_b: StationRef::new(9998, 0),
+                keep: None,
+                renames: None,
             },
         ],
         label: None,

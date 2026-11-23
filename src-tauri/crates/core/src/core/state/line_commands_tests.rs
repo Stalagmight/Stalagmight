@@ -468,6 +468,8 @@ fn joined_pair(state: &AppState) -> (LineId, LineId) {
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 1),
         station_b: StationRef::new(b, 0),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "{:?}", merged.error);
     (a, b)
@@ -890,6 +892,8 @@ fn merge_allowed_across_inert_closure_but_rejected_when_connected() {
     let r = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 1),
         station_b: StationRef::new(b, 0),
+        keep: None,
+        renames: None,
     });
     assert!(r.success, "merge across an inert closure: {:?}", r.error);
     assert!(project(&state).validate().is_empty());
@@ -899,6 +903,8 @@ fn merge_allowed_across_inert_closure_but_rejected_when_connected() {
     let r = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 0),
         station_b: StationRef::new(b, 1),
+        keep: None,
+        renames: None,
     });
     assert!(!r.success, "stations already connected must be refused");
 }
@@ -914,6 +920,8 @@ fn loop_through_a_closure(state: &AppState) -> (LineId, LineId) {
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 2),
         station_b: StationRef::new(b, 0),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "{:?}", merged.error);
     edit(state, |p| {
@@ -1014,6 +1022,8 @@ fn test_unmerge_removes_only_specific_merge() {
         let r = state.execute(Command::MergeStations {
             station_a: x,
             station_b: y,
+            keep: None,
+            renames: None,
         });
         assert!(r.success, "{:?}", r.error);
     }
@@ -1094,6 +1104,8 @@ fn split_converts_orphaned_bridge_closure_immediately() {
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 3),
         station_b: StationRef::new(b, 0),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "{:?}", merged.error);
     edit(&state, |p| {
@@ -1152,6 +1164,8 @@ fn split_line_does_not_promote_a_bridge_closure_across_two_anchored_components()
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 3),
         station_b: StationRef::new(b, 3),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "{:?}", merged.error);
     // C is a second, independently anchored survey, tied by a closure only.
@@ -1211,6 +1225,8 @@ fn redo_insert_shot_keeps_merged_stations_aligned() {
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 2),
         station_b: StationRef::new(b, 0),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "{:?}", merged.error);
     let original = project(&state);

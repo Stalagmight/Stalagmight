@@ -471,6 +471,8 @@ fn summaries_name_what_a_batch_did_together() {
         Command::MergeStations {
             station_a: b,
             station_b: a,
+            keep: None,
+            renames: None,
         },
     ];
     assert_eq!(summary(&snapped), "Merge stations Side / 0 and Main / 1");
@@ -604,7 +606,10 @@ fn a_removed_closure_names_its_stations_alone_on_the_stack() {
     let path = write(dir.path(), &p);
     let state = open(&path);
     let closure_id = project(&state).closures[0].id;
-    let cmd = Command::RemoveLoopClosure { closure_id };
+    let cmd = Command::RemoveLoopClosure {
+        closure_id,
+        renames: None,
+    };
     let r = state.run_recorded(
         |p| Record::of(p, &cmd),
         |p, _| {

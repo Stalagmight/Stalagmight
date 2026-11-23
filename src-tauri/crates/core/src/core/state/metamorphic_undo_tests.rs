@@ -1727,6 +1727,8 @@ fn build_project(state: &AppState, rng: &mut Rng, closures: bool) {
                 state.execute(Command::MergeStations {
                     station_a: StationRef::new(id, 0),
                     station_b: StationRef::new(parent, at),
+                    keep: None,
+                    renames: None,
                 });
             }
         }
@@ -1762,6 +1764,8 @@ fn build_project(state: &AppState, rng: &mut Rng, closures: bool) {
                 station_a: a,
                 station_b: b,
                 closure_strategy: strategy,
+                keep: None,
+                renames: None,
             });
         }
     }
@@ -1856,6 +1860,8 @@ fn prelude_command(state: &AppState, rng: &mut Rng) {
             state.execute(Command::MergeStations {
                 station_a: a,
                 station_b: b,
+                keep: None,
+                renames: None,
             });
         }
     }

@@ -150,33 +150,70 @@ impl Project {
                 .closure_metrics_via((station_a, Some(a.line_id)), (station_b, Some(b.line_id)));
         }
         if result.can_merge {
-            // RS-W: the dialog's keep and the preview's identities,
-            // collisions and hidden station ride the wire; the default keep
-            // until then.
-            let keep = self.merge_default_keep(station_a, station_b);
-            result.merge_preview = self.merge_preview(station_a, station_b, keep).map(|m| {
-                let [a_m, b_m] = m.depths_m;
-                let depths = ((a_m - b_m).abs() > crate::JUNCTION_DEPTH_SPREAD_M).then(|| {
-                    crate::MergeDepths {
-                        a_m,
-                        b_m,
-                        joined_m: m.joined_depth_m,
-                        readings: self.merge_readings_in_pick_order(a, station_a, b, &m.readings),
-                    }
-                });
-                crate::MergePreview {
-                    moving_line_ids: m.moving_lines,
-                    shift_m: m.shift_m,
-                    joins: if m.stationary == station_a { a } else { b },
-                    depths,
-                    junctions: [(a, station_a), (b, station_b)]
-                        .into_iter()
-                        .filter_map(|(slot, station)| self.merge_junction(slot, station))
-                        .collect(),
-                }
-            });
+            result.merge_preview = self.merge_preview_wire(a, station_a, b, station_b);
         }
         Ok(result)
+    }
+
+    /// The Merge dialog's preview of slots `a` and `b` (demo issue I-4, RS
+    /// 4.1 and 7): the geometry (the piece that moves, how far, onto which
+    /// station, the depths), the two stations it may keep, the default keep,
+    /// and what each keep the dialog offers does to names. The geometry is
+    /// the same for either keep; it is read on the default keep's run.
+    fn merge_preview_wire(
+        &self,
+        a: StationRef,
+        station_a: StationId,
+        b: StationRef,
+        station_b: StationId,
+    ) -> Option<crate::MergePreview> {
+        let default_keep = self.merge_default_keep(station_a, station_b);
+        let m = self.merge_preview(station_a, station_b, default_keep)?;
+        let keep_forced_by = m.keep_forced_by.or_else(|| {
+            self.forced_merge_keep(station_a, station_b)
+                .map(|(closure, _)| closure)
+        });
+        let offered: Vec<StationId> = if keep_forced_by.is_some() {
+            vec![m.kept]
+        } else {
+            vec![station_a, station_b]
+        };
+        let keeps = offered
+            .into_iter()
+            .filter_map(|keep| {
+                if keep == m.kept {
+                    Some(self.merge_keep_wire(&m))
+                } else {
+                    let other = self.merge_preview(station_a, station_b, keep)?;
+                    Some(self.merge_keep_wire(&other))
+                }
+            })
+            .collect();
+        let [a_m, b_m] = m.depths_m;
+        let depths =
+            ((a_m - b_m).abs() > crate::JUNCTION_DEPTH_SPREAD_M).then(|| crate::MergeDepths {
+                a_m,
+                b_m,
+                joined_m: m.joined_depth_m,
+                readings: self.merge_readings_in_pick_order(a, station_a, b, &m.readings),
+            });
+        Some(crate::MergePreview {
+            moving_line_ids: m.moving_lines,
+            shift_m: m.shift_m,
+            joins: if m.stationary == station_a { a } else { b },
+            depths,
+            junctions: [(a, station_a), (b, station_b)]
+                .into_iter()
+                .filter_map(|(slot, station)| self.merge_junction(slot, station))
+                .collect(),
+            candidates: [(a, station_a), (b, station_b)]
+                .into_iter()
+                .filter_map(|(slot, station)| self.keep_candidate(slot, station))
+                .collect(),
+            default_keep,
+            keep_forced_by,
+            keeps,
+        })
     }
 
     /// The merge's depth readings (`MergeMove::readings`, by slot) by line,

@@ -578,7 +578,9 @@ fn test_merge_nonexistent_station_fails() {
     create_line_cmd(&state, "A", vec![create_shot_data(0.0, 10.0, 5.0, 5.0)]);
     let result = state.execute(Command::MergeStations {
         station_a: StationRef::new(0, 0),
-        station_b: StationRef::new(99, 0), // doesn't exist
+        station_b: StationRef::new(99, 0), // doesn't exist,
+        keep: None,
+        renames: None,
     });
     assert!(!result.success);
 }
@@ -949,11 +951,15 @@ fn test_comprehensive_undo_types() {
         Command::MergeStations {
             station_a: StationRef::new(a, 2),
             station_b: StationRef::new(b, 0),
+            keep: None,
+            renames: None,
         },
         Command::CreateLoopClosure {
             station_a: StationRef::new(a, 0),
             station_b: StationRef::new(b, 1),
             closure_strategy: ClosureStrategy::Batch,
+            keep: None,
+            renames: None,
         },
         Command::SetShotKind {
             line_id: b,

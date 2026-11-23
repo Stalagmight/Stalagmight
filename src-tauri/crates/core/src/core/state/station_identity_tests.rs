@@ -561,6 +561,8 @@ fn a_detach_mints_a_station_named_as_the_junction_and_redo_gives_it_back() {
         state,
         Command::UnmergeStations {
             station_ref: slot(b, 0),
+            renames: None,
+            rest_keep: None,
         },
     );
     let p = project(state);

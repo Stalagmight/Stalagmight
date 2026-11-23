@@ -370,24 +370,6 @@ fn closures_absent_or_empty(closures: &Option<Vec<ClosureRef>>) -> bool {
     closures.as_ref().is_none_or(Vec::is_empty)
 }
 
-/// A Station ID, and the name it had, that was merged into a station (plan
-/// 5.1; a migration's merge group too): the station's details show it as
-/// "Also known as", so a surveyor can still find a retired name from the
-/// field notes. The wire form of [`crate::survey::StationAlias`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(rename = "StationAlias")]
-pub struct StationAliasWire {
-    /// The retired Station ID.
-    pub id: StationId,
-    /// The name the station had then (`None` when it had none).
-    pub name: Option<String>,
-    /// The line that knew the station by this alias and still shows it by
-    /// its name (`None`: no line does any more; the alias is history only).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub line: Option<LineId>,
-}
-
 /// A computed station in the cave survey
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Station {
@@ -429,26 +411,35 @@ pub struct Station {
     /// User comment for this station
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
-    /// The station's project-unique Station ID ([`StationId`]).
+    /// The node's Station ID ([`StationId`]): every grouping, command,
+    /// move, datum and selection keys on it. A display of the Station ID
+    /// reads the shown one ([`Self::shown_id`]).
     #[serde(default)]
     pub id: StationId,
-    /// The name this slot's line shows the station by, unique within the
-    /// line (e.g. `"17"`, `"A3"`, or the MNemo station number a DMP import
-    /// recorded). A junction's slots may differ: each line shows it by the
-    /// name that line knows it by (its own name before a merge), while the
-    /// `id` is the junction's one Station ID. Every station has one once the
-    /// project is normalized; empty only for a station the normalization
-    /// could not key (a shot without a uuid), which a loaded project never
-    /// has.
+    /// The name the slot shows: its node's shown identity's (RS 5.1: the
+    /// node's own, or the kept end's when a loop closure archives the node),
+    /// unique among the names its line shows other identities by (N8). A
+    /// junction shows one name on every line. Every station has one once
+    /// the project is normalized; empty only for a station the
+    /// normalization could not key (a shot without a uuid), which a loaded
+    /// project never has.
     #[serde(default)]
     pub name: String,
-    /// The ids and names merged into this station, oldest first; `None` when
-    /// it has none (most stations), so the key stays off the wire and costs
-    /// nothing per station (the `closures_with` reasoning). Every slot of a
-    /// junction carries them, as it carries the shared id.
+    /// The records merges archived in the node (RS 3), oldest first; `None`
+    /// when it has none (most stations), so the key stays off the wire and
+    /// costs nothing per station (the `closures_with` reasoning). Every slot
+    /// of a junction carries them, as it carries the shared id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub aliases: Option<Vec<StationAliasWire>>,
+    pub archived: Option<Vec<crate::ArchivedStationWire>>,
+    /// How the slot shows its node when that is not the node's own identity
+    /// on one of its native lines (RS 6): the Station ID shown, the home-line
+    /// dot of a foreign slot and the loop mark of a loop end. `None` on every
+    /// other slot (the slot shows `id`, natively), so the key costs nothing
+    /// there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub shown: Option<crate::ShownSlot>,
 }
 
 impl Station {
@@ -463,7 +454,8 @@ impl Station {
             comment: None,
             id: 0,
             name: String::new(),
-            aliases: None,
+            archived: None,
+            shown: None,
         }
     }
 
@@ -478,8 +470,25 @@ impl Station {
             comment: None,
             id: 0,
             name: String::new(),
-            aliases: None,
+            archived: None,
+            shown: None,
         }
+    }
+
+    /// The Station ID the slot shows (RS 6): the shown identity's, which is
+    /// the node's own unless a loop closure archives the node.
+    pub fn shown_id(&self) -> StationId {
+        self.shown.as_ref().map_or(self.id, |shown| shown.id)
+    }
+
+    /// Whether the slot is foreign (RS 2): it carries a home-line dot.
+    pub fn is_foreign(&self) -> bool {
+        self.shown.as_ref().is_some_and(|shown| shown.foreign)
+    }
+
+    /// Whether a loop closure archives the slot's node (RS 6: the loop mark).
+    pub fn is_loop_end(&self) -> bool {
+        self.shown.as_ref().is_some_and(|shown| shown.loop_end)
     }
 
     /// The loop closures involving this station; empty when the field is absent.
@@ -708,44 +717,58 @@ mod tests {
         );
     }
 
-    /// A station's aliases leave the wire when it has none (most stations,
-    /// paid per station on every refresh) and are declared optional.
+    /// A station's records and its shown slot leave the wire when it has
+    /// none (most stations, paid per station on every refresh) and are
+    /// declared optional (RS 6).
     #[test]
-    fn aliases_are_omitted_when_absent_and_declared_optional() {
+    fn records_and_shown_are_omitted_when_absent_and_declared_optional() {
         use ts_rs::TS;
 
         let plain = serde_json::to_value(Station::new(StationRef::new(1, 0))).unwrap();
+        let keys = plain.as_object().unwrap();
         assert!(
-            !plain.as_object().unwrap().contains_key("aliases"),
-            "a station with no aliases must omit the key: {plain}"
+            !keys.contains_key("archived") && !keys.contains_key("shown"),
+            "a native station with no records must omit both keys: {plain}"
         );
         let mut junction = Station::new(StationRef::new(1, 0));
-        junction.aliases = Some(vec![
-            StationAliasWire {
+        junction.archived = Some(vec![
+            crate::ArchivedStationWire {
                 id: 7,
-                name: Some("0".into()),
-                line: Some(2),
+                name: "0".into(),
+                comment: Some("rope".into()),
+                lines: vec![2],
             },
-            StationAliasWire {
+            crate::ArchivedStationWire {
                 id: 8,
-                name: Some("5".into()),
-                line: None,
+                name: "5".into(),
+                comment: None,
+                lines: Vec::new(),
             },
         ]);
+        junction.shown = Some(crate::ShownSlot {
+            id: 3,
+            home_line: Some(4),
+            foreign: true,
+            loop_end: false,
+            loop_closure: None,
+        });
         let junction = serde_json::to_value(junction).unwrap();
         assert_eq!(
-            junction["aliases"],
-            serde_json::json!([{ "id": 7, "name": "0", "line": 2 }, { "id": 8, "name": "5" }])
+            junction["archived"],
+            serde_json::json!([
+                { "id": 7, "name": "0", "comment": "rope", "lines": [2] },
+                { "id": 8, "name": "5", "lines": [] }
+            ])
+        );
+        assert_eq!(
+            junction["shown"],
+            serde_json::json!({ "id": 3, "home_line": 4, "foreign": true, "loop_end": false })
         );
         let decl = Station::decl();
         assert!(
-            decl.contains("aliases?: Array<StationAlias>"),
-            "aliases leave the wire when absent, so the declaration carries the `?`: {decl}"
-        );
-        let alias = StationAliasWire::decl();
-        assert!(
-            alias.contains("line?: number"),
-            "an alias's line leaves the wire when it has none: {alias}"
+            decl.contains("archived?: Array<ArchivedStation>")
+                && decl.contains("shown?: ShownSlot"),
+            "both leave the wire when absent, so the declaration carries the `?`: {decl}"
         );
     }
 
@@ -913,6 +936,11 @@ pub struct LoopClosureWire {
     pub strategy: ClosureStrategy,
     #[serde(default)]
     pub is_aligned: bool,
+    /// The end the closure archives (RS 5), with its own identity and the
+    /// one it is shown as; absent when the closure keeps both names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub archived: Option<crate::ClosureArchive>,
 }
 
 /// Reference to a loop closure from a station's perspective

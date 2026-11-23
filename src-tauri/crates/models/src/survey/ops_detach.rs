@@ -157,6 +157,9 @@ pub struct DetachNaming {
     pub shown_before: Option<StationId>,
     /// The names the detach would show twice, with rule L's answers.
     pub collisions: Vec<LetteredStation>,
+    /// The dialog's other answer to each collision, in the same order
+    /// ([`Project::alternative_letters`]).
+    pub alternatives: Vec<LetteredStation>,
     /// Every line through the junction, in slot order: the station it is on
     /// there after the detach (demo finding V-1: the dialog says what each
     /// line ends up with, not one Station ID for all).
@@ -346,6 +349,7 @@ impl Project {
             rest_default,
             shown_before: (!report.restored && !report.kept && shown != station).then_some(shown),
             collisions: outcome.identities.lettered.clone(),
+            alternatives: copy.alternative_letters(&outcome.identities.lettered),
             lines,
         })
     }

@@ -69,6 +69,8 @@ fn merge(state: &AppState, a: StationRef, b: StationRef) {
     let merged = state.execute(Command::MergeStations {
         station_a: a,
         station_b: b,
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "{:?}", merged.error);
 }

@@ -205,6 +205,8 @@ fn a_combine_undone_after_a_reopen_keeps_every_shot_uuid() {
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(k, 2),
         station_b: StationRef::new(o, 0),
+        keep: None,
+        renames: None,
     });
     assert!(merged.success, "{:?}", merged.error);
     save_close_reopen(&state, &path);
@@ -226,11 +228,15 @@ fn a_combine_across_a_closure_undone_after_a_reopen_keeps_every_shot_uuid() {
         Command::MergeStations {
             station_a: StationRef::new(k, 0),
             station_b: StationRef::new(o, 1),
+            keep: None,
+            renames: None,
         },
         Command::CreateLoopClosure {
             station_a: StationRef::new(k, 1),
             station_b: StationRef::new(o, 0),
             closure_strategy: ClosureStrategy::Batch,
+            keep: None,
+            renames: None,
         },
     ] {
         let result = state.execute(command);
@@ -386,6 +392,8 @@ fn both_stacks_survive_a_reopen_in_order_and_step_exactly() {
     let r = state.execute(Command::MergeStations {
         station_a: StationRef::new(side, 0),
         station_b: StationRef::new(main, 2),
+        keep: None,
+        renames: None,
     });
     assert!(r.success, "{:?}", r.error);
     states.push(survey(&state));

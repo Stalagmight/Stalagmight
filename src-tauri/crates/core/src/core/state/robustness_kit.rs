@@ -93,6 +93,8 @@ pub(super) fn build_project(state: &AppState, rng: &mut Rng, closures: bool) -> 
             &state.execute(Command::MergeStations {
                 station_a: StationRef::new(ids[left], index_of(SHAPE[left])),
                 station_b: StationRef::new(ids[right], 0),
+                keep: None,
+                renames: None,
             }),
             "MergeStations",
         );
@@ -102,6 +104,8 @@ pub(super) fn build_project(state: &AppState, rng: &mut Rng, closures: bool) -> 
             station_a: StationRef::new(ids[0], 0),
             station_b: StationRef::new(ids[4], index_of(SHAPE[4])),
             closure_strategy: ClosureStrategy::Move,
+            keep: None,
+            renames: None,
         }),
         "CreateLoopClosure",
     );

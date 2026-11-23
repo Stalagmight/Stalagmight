@@ -333,6 +333,8 @@ fn move_line_moves_the_whole_merged_group_and_sticks() {
     ok(state.execute(Command::MergeStations {
         station_a: at(a, 0),
         station_b: at(b, 0),
+        keep: None,
+        renames: None,
     }));
     assert_eq!(station(&state, a, 0), station(&state, b, 0), "one station");
     let (a1, b1) = (position(&state, a, 1), position(&state, b, 1));
@@ -774,6 +776,8 @@ fn two_joined_lines(state: &AppState) -> (LineId, LineId) {
     ok(state.execute(Command::MergeStations {
         station_a: at(a, 1),
         station_b: at(b, 0),
+        keep: None,
+        renames: None,
     }));
     (a, b)
 }

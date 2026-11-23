@@ -6,8 +6,8 @@ use ts_rs::TS;
 
 use crate::models::{
     shot_display_position, ClosureStrategy, Coordinates, CreditEdit, CreditTargets, GpsCoordinates,
-    LineId, LineUpdates, SectionId, ShotData, ShotId, ShotKind, ShotUpdates, StationRef,
-    SurveyDirection,
+    LineId, LineUpdates, SectionId, ShotData, ShotId, ShotKind, ShotUpdates, StationId, StationRef,
+    StationRename, SurveyDirection,
 };
 
 /// Identifies either a station or a shot as a comment holder
@@ -131,24 +131,64 @@ pub enum Command {
     },
 
     // Station commands
+    //
+    // The kept-station answers (RS 4.1, 4.2, 5.2, 5.3) ride the topology
+    // commands. `renames` are the dialog's answers to the name collisions
+    // the command makes (each renames the identity with that Station ID in
+    // the same step); a collision they leave unanswered refuses the
+    // command. Absent `renames` means no dialog asked: rule L letters every
+    // collision and the result's `identities` notice names each letter.
+    // Every field is `serde(default)`, so undo history and batches written
+    // before them still read.
+    /// Merge two stations (RS 4.1). `keep` is the Station ID of the station
+    /// kept (one of the two slots' stations): its identity is shown on every
+    /// line through the merged node and the other is archived. Absent: the
+    /// station whose piece stays put is kept. A loop closure between the two
+    /// that archives one forces its kept end (4.1 step 4).
     MergeStations {
         station_a: StationRef,
         station_b: StationRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        keep: Option<StationId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        renames: Option<Vec<StationRename>>,
     },
+    /// Detach the slot's line from its junction (RS 4.2). `rest_keep` picks
+    /// the record the other lines take when the line keeps the junction and
+    /// several records name them (default: rule K).
     UnmergeStations {
         station_ref: StationRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        renames: Option<Vec<StationRename>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rest_keep: Option<StationId>,
     },
     UnmergeStationPair {
         station_a: StationRef,
         station_b: StationRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        renames: Option<Vec<StationRename>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rest_keep: Option<StationId>,
     },
+    /// Create a loop closure (RS 5.2). `keep` is the Station ID of the end
+    /// kept (the other end is archived: it shows the kept end's identity);
+    /// absent: "Keep both names" (the closure archives nothing).
     CreateLoopClosure {
         station_a: StationRef,
         station_b: StationRef,
         closure_strategy: ClosureStrategy,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        keep: Option<StationId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        renames: Option<Vec<StationRename>>,
     },
+    /// Remove a loop closure (RS 5.3): the end it archived shows its own
+    /// identity again.
     RemoveLoopClosure {
         closure_id: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        renames: Option<Vec<StationRename>>,
     },
     SetZeroDatum {
         station_ref: StationRef,
@@ -597,6 +637,16 @@ pub struct CommandResult {
     /// optional fields above.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub legacy_converted: Option<crate::core::state::ConversionFile>,
+    /// What the command did to station identities on its own (plan
+    /// 2026-11-23, RS 7 "Notices"): the stations rule L gave a letter, the
+    /// archived stations it brought back because a junction lost its own
+    /// lines, and the loop closures whose hidden end shows its own name
+    /// again. The frontend raises one notice per action from it. Absent when
+    /// the command did none of these (the dialogs' own renames are the
+    /// user's, not reported). Same wire contract as the optional fields
+    /// above.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub identities: Option<crate::models::IdentityNotice>,
 }
 
 /// What one holder-checked release of the open project's lock came to (see
@@ -644,6 +694,7 @@ impl CommandResult {
             lock_release: None,
             cave_section_id: None,
             legacy_converted: None,
+            identities: None,
         }
     }
 
@@ -663,12 +714,20 @@ impl CommandResult {
             lock_release: None,
             cave_section_id: None,
             legacy_converted: None,
+            identities: None,
         }
     }
 
     /// Attach validation warnings to this result.
     pub fn with_warnings(mut self, warnings: Vec<ValidationWarning>) -> Self {
         self.warnings = warnings;
+        self
+    }
+
+    /// Attach what the command did to identities on its own (RS 7
+    /// "Notices"); an empty notice leaves the field absent.
+    pub fn with_identities(mut self, notice: crate::models::IdentityNotice) -> Self {
+        self.identities = (!notice.is_empty()).then_some(notice);
         self
     }
 
@@ -1011,12 +1070,13 @@ impl Command {
                 station_b,
                 ..
             } => format!("Merge stations {station_a} and {station_b}"),
-            Command::UnmergeStations { station_ref } => {
+            Command::UnmergeStations { station_ref, .. } => {
                 format!("Detach line at {station_ref} from its station")
             }
             Command::UnmergeStationPair {
                 station_a,
                 station_b,
+                ..
             } => {
                 format!("Detach line at {station_b} from station {station_a}")
             }
@@ -1025,7 +1085,7 @@ impl Command {
                 station_b,
                 ..
             } => format!("Create loop closure between {station_a} and {station_b}"),
-            Command::RemoveLoopClosure { closure_id } => {
+            Command::RemoveLoopClosure { closure_id, .. } => {
                 format!("Remove loop closure #{closure_id}")
             }
             Command::SetZeroDatum { station_ref, .. } => {
@@ -1283,12 +1343,16 @@ mod tests {
                 Command::MergeStations {
                     station_a,
                     station_b,
+                    keep: None,
+                    renames: None,
                 },
                 true,
             ),
             (
                 Command::UnmergeStations {
                     station_ref: station_a,
+                    renames: None,
+                    rest_keep: None,
                 },
                 true,
             ),
@@ -1296,6 +1360,8 @@ mod tests {
                 Command::UnmergeStationPair {
                     station_a,
                     station_b,
+                    renames: None,
+                    rest_keep: None,
                 },
                 true,
             ),
@@ -1304,10 +1370,18 @@ mod tests {
                     station_a,
                     station_b,
                     closure_strategy: ClosureStrategy::ProportionalByLength,
+                    keep: None,
+                    renames: None,
                 },
                 true,
             ),
-            (Command::RemoveLoopClosure { closure_id: 1 }, true),
+            (
+                Command::RemoveLoopClosure {
+                    closure_id: 1,
+                    renames: None,
+                },
+                true,
+            ),
             (
                 Command::SetZeroDatum {
                     station_ref: station_a,
@@ -1776,6 +1850,8 @@ mod tests {
                 Command::MergeStations {
                     station_a,
                     station_b,
+                    keep: None,
+                    renames: None,
                 },
                 "Merge stations 1:0 and 1:1",
             ),
@@ -1784,12 +1860,16 @@ mod tests {
                     station_a,
                     station_b,
                     closure_strategy: ClosureStrategy::ProportionalByLength,
+                    keep: None,
+                    renames: None,
                 },
                 "Create loop closure between 1:0 and 1:1",
             ),
             (
                 Command::UnmergeStations {
                     station_ref: station_a,
+                    renames: None,
+                    rest_keep: None,
                 },
                 "Detach line at 1:0 from its station",
             ),
@@ -1797,11 +1877,16 @@ mod tests {
                 Command::UnmergeStationPair {
                     station_a,
                     station_b,
+                    renames: None,
+                    rest_keep: None,
                 },
                 "Detach line at 1:1 from station 1:0",
             ),
             (
-                Command::RemoveLoopClosure { closure_id: 42 },
+                Command::RemoveLoopClosure {
+                    closure_id: 42,
+                    renames: None,
+                },
                 "Remove loop closure #42",
             ),
             (

@@ -450,6 +450,8 @@ pub(super) fn build_project(state: &AppState, rng: &mut Rng, closures: bool) -> 
         &state.execute(Command::MergeStations {
             station_a: StationRef::new(ids[3], 2),
             station_b: StationRef::new(ids[6], 0),
+            keep: None,
+            renames: None,
         }),
     );
     if !closures {
@@ -463,6 +465,8 @@ pub(super) fn build_project(state: &AppState, rng: &mut Rng, closures: bool) -> 
             &state.execute(Command::MergeStations {
                 station_a: StationRef::new(ids[left], shape[left] as u32),
                 station_b: StationRef::new(ids[right], 0),
+                keep: None,
+                renames: None,
             }),
         );
     }
@@ -472,6 +476,8 @@ pub(super) fn build_project(state: &AppState, rng: &mut Rng, closures: bool) -> 
             station_a: StationRef::new(ids[0], 0),
             station_b: StationRef::new(ids[4], shape[4] as u32),
             closure_strategy: ClosureStrategy::Move,
+            keep: None,
+            renames: None,
         }),
     );
     ids
@@ -3262,6 +3268,8 @@ impl Fuzzer {
                 self.state.execute(Command::MergeStations {
                     station_a,
                     station_b,
+                    keep: None,
+                    renames: None,
                 })
             }
             Op::Detach { a, b } => {
@@ -3273,6 +3281,8 @@ impl Fuzzer {
                 self.state.execute(Command::UnmergeStationPair {
                     station_a,
                     station_b,
+                    renames: None,
+                    rest_keep: None,
                 })
             }
             Op::CreateClosure { a, b, strategy } => {
@@ -3285,14 +3295,18 @@ impl Fuzzer {
                     station_a,
                     station_b,
                     closure_strategy: *strategy,
+                    keep: None,
+                    renames: None,
                 })
             }
             Op::RemoveClosure { closure } => {
                 let Some(closure_id) = refs.closure(*closure, targets) else {
                     return refs.skip(&label);
                 };
-                self.state
-                    .execute(Command::RemoveLoopClosure { closure_id })
+                self.state.execute(Command::RemoveLoopClosure {
+                    closure_id,
+                    renames: None,
+                })
             }
             Op::SetZeroDatum {
                 station,
@@ -4745,6 +4759,8 @@ fn measure_adjusted_solve_determinism() {
             station_a: StationRef::new(a.0, a.1),
             station_b: StationRef::new(b.0, b.1),
             closure_strategy: strategy,
+            keep: None,
+            renames: None,
         });
         println!("closure {a:?} - {b:?} ({strategy:?}): {:?}", r.error);
     }

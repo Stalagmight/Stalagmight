@@ -248,11 +248,15 @@ fn actions() -> Vec<(&'static str, Action)> {
             g.state.execute(Command::MergeStations {
                 station_a: StationRef::new(g.island, 0),
                 station_b: StationRef::new(g.mid(), 10),
+                keep: None,
+                renames: None,
             })
         }),
         ("unmerge stations", |g| {
             g.state.execute(Command::UnmergeStations {
                 station_ref: StationRef::new(g.mid(), 0),
+                renames: None,
+                rest_keep: None,
             })
         }),
         ("unmerge station pair", |g| {
@@ -261,6 +265,8 @@ fn actions() -> Vec<(&'static str, Action)> {
             g.state.execute(Command::UnmergeStationPair {
                 station_a: StationRef::new(g.mid(), 0),
                 station_b: StationRef::new(parent, at),
+                renames: None,
+                rest_keep: None,
             })
         }),
         ("create loop closure", |g| {
@@ -268,11 +274,14 @@ fn actions() -> Vec<(&'static str, Action)> {
                 station_a: StationRef::new(g.mid(), SHOTS_PER_LINE as u32),
                 station_b: StationRef::new(g.lines[g.mid_index() + 1], 4),
                 closure_strategy: ClosureStrategy::Move,
+                keep: None,
+                renames: None,
             })
         }),
         ("remove loop closure", |g| {
             g.state.execute(Command::RemoveLoopClosure {
                 closure_id: g.closure_id(),
+                renames: None,
             })
         }),
         ("set zero datum (GPS fix)", |g| {

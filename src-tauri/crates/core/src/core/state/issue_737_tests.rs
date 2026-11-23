@@ -674,6 +674,8 @@ fn the_connectivity_check_carries_the_backend_refusal() {
         station_a: slot(a, 1),
         station_b: slot(a, 2),
         closure_strategy: crate::models::ClosureStrategy::Batch,
+        keep: None,
+        renames: None,
     });
     assert!(!created.success);
     assert_eq!(created.error.as_deref(), Some(refusal.as_str()));
@@ -718,6 +720,8 @@ fn a_tie_onto_a_closed_junction_is_the_closure_already_there() {
         station_a: slot(c, 0),
         station_b: slot(a, 2),
         closure_strategy: crate::models::ClosureStrategy::Batch,
+        keep: None,
+        renames: None,
     });
     assert!(!created.success);
     assert_eq!(created.error.as_deref(), Some(duplicate));

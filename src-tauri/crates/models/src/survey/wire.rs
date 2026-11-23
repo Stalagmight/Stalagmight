@@ -36,6 +36,7 @@
 
 mod combine;
 mod envelope;
+mod identity;
 mod previews;
 mod project;
 mod refs;
@@ -57,5 +58,6 @@ mod ts_tests;
 mod wire_tests;
 
 pub use envelope::LoadEnvelopeInput;
+pub use identity::lettered_wire;
 pub use project::{LineWire, ProjectStateWire, ProjectWire};
 pub use refs::{wire_strategy, SlotTarget};

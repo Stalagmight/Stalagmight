@@ -125,6 +125,7 @@ impl Project {
                     vertical_misclosure: metrics.vertical_misclosure,
                     strategy: wire_strategy(closure.strategy),
                     is_aligned: aligned.get(index).copied().unwrap_or(false),
+                    archived: self.closure_archive_wire(closure),
                 })
             })
             .collect()

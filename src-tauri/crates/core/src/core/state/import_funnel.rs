@@ -1461,6 +1461,8 @@ pub(super) fn import_preview(steps: &[ImportStep], project: &Project) -> Recorde
                     Command::MergeStations {
                         station_a: *slot,
                         station_b: *target,
+                        keep: None,
+                        renames: None,
                     },
                     format!("{} \u{2194} {}", station(*slot), station(*target)),
                 ),

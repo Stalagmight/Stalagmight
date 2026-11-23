@@ -135,6 +135,12 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.plan_refs_for_anchors",
     "command.preview_delete_shot",
     "command.preview_detach_line",
+    // Kept and archived stations (plan 2026-11-23, RS 7): the Create Loop
+    // Closure and Remove Closure dialogs' naming previews, and "whose
+    // station is this" before a rename or comment edit.
+    "command.preview_loop_closure",
+    "command.preview_remove_loop_closure",
+    "command.preview_station_identity",
     "command.preview_zero_datum",
     "command.pull_mnemo",
     "command.push_frontend_log",
@@ -1240,7 +1246,10 @@ mod tests {
         //   + 1 the save prompt's reopen check (pre-PR review finding 1),
         //       made the reload itself, one operation (pre-PR delta review
         //       finding 2): command.reload_project_full_binary = 753.
-        assert_eq!(EVENT_NAMES.len(), 753);
+        //   + 3 kept and archived stations (RS 7): command.preview_loop_closure,
+        //       command.preview_remove_loop_closure,
+        //       command.preview_station_identity = 756.
+        assert_eq!(EVENT_NAMES.len(), 756);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

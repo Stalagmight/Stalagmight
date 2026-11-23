@@ -195,6 +195,8 @@ fn a_merge_resolves_slots_and_undoes() {
     let r = state.execute(Command::MergeStations {
         station_a: crate::models::StationRef::new(free, 0),
         station_b: crate::models::StationRef::new(main, 3),
+        keep: None,
+        renames: None,
     });
     assert!(r.success, "{:?}", r.error);
     let merged = project_of(&state);
@@ -206,6 +208,8 @@ fn a_merge_resolves_slots_and_undoes() {
     let r = state.execute(Command::MergeStations {
         station_a: crate::models::StationRef::new(free, 7),
         station_b: crate::models::StationRef::new(main, 3),
+        keep: None,
+        renames: None,
     });
     assert!(!r.success);
     assert_eq!(canonical(&project_of(&state)), canonical(&original));
@@ -591,6 +595,8 @@ fn a_closure_past_the_id_space_is_refused_and_saves_keep_working() {
         station_a: crate::models::StationRef::new(main, 3),
         station_b: crate::models::StationRef::new(branch, 2),
         closure_strategy: crate::models::ClosureStrategy::Batch,
+        keep: None,
+        renames: None,
     });
     assert!(!r.success, "a closure id past the bound was minted");
     assert!(project_of(&state).closures.is_empty());
