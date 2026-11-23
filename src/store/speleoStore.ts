@@ -19,6 +19,8 @@ import type {
 import { invokeIpc } from '../utils/ipc';
 import { emailsMatch } from '../utils/email';
 import { endpointsMatch } from '../utils/speleoEndpoint';
+import { speleoLockLostMessage } from '../utils/speleoLockLost';
+import { showSpeleoReadOnlyNotice } from '../utils/autoAcquireSpeleoLock';
 import { useProjectStore } from './projectStore';
 
 /**
@@ -924,7 +926,12 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // newer one that already landed.
         if (seq < linkStatusApplied) return;
         linkStatusApplied = seq;
+        // sdbdemo2 issue 4: a refresh that ends an edit session because SpeleoDB
+        // no longer gives this account the lock (another session of the account
+        // handed it back, someone else holds it, access changed) says so.
+        const lost = speleoLockLostMessage(requestedLink, status, get().session?.userEmail ?? null);
         get().seedFromStatus(status);
+        if (lost) showSpeleoReadOnlyNotice(lost, 'lockLost');
       } catch {
         // Best-effort - leave the prior link state (the backend gate is the
         // real enforcement; the shell just can't refresh its indicator).

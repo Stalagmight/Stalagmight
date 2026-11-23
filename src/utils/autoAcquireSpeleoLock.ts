@@ -12,9 +12,11 @@ import type { StartEditingResult } from '../types/ipc.generated';
  * What the notice reports, which picks its title: a project that just OPENED
  * read-only (the automatic Start Editing after an open did not get the lock), or
  * a Start Editing on a project already open that left it read-only (Resume
- * editing, Start editing; demo item 7: that one is not an open).
+ * editing, Start editing; demo item 7: that one is not an open), or an edit
+ * session a status refresh found over because SpeleoDB no longer gives this
+ * account the lock (sdbdemo2 issue 4).
  */
-export type ReadOnlyNoticeKind = 'opened' | 'stillReadOnly';
+export type ReadOnlyNoticeKind = 'opened' | 'stillReadOnly' | 'lockLost';
 
 interface ReadOnlyNotice {
   path: string;

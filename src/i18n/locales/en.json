@@ -4157,6 +4157,10 @@
     "readOnlyNotice": {
       "title": "Project opened read-only",
       "stillReadOnlyTitle": "Still read-only",
+      "lockLostTitle": "Editing stopped",
+      "lockLostReleased": "SpeleoDB no longer holds the write lock for your account: it was handed back elsewhere, for example by Stalagmight open on another computer with this account. This project is read-only now, and your changes are kept on this computer. Resume editing takes the lock again.",
+      "lockLostTaken": "{{email}} holds the write lock now, so this project is read-only. Your changes are kept on this computer, and you can upload them once {{email}} has finished.",
+      "lockLostPermission": "Your SpeleoDB access no longer allows editing this project, so it is read-only now. Your changes are kept on this computer.",
       "lockMayBeHeld": "The lock request may have reached SpeleoDB; if it did, Stalagmight hands the lock back when you close the project, or you can try again.",
       "lockedBy": "{{email}} is currently editing this project. You can view it, but you cannot make changes.",
       "unavailable": "The editing lock could not be acquired. You can view this project, but you cannot make changes.",
