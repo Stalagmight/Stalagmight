@@ -166,6 +166,13 @@ mod datum_entrance_tests;
 mod datum_ui_tests;
 #[cfg(test)]
 #[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod earlier_version2_tests;
+#[cfg(test)]
+#[expect(
     clippy::expect_used,
     clippy::panic,
     clippy::print_stderr,
@@ -544,7 +551,7 @@ mod tests_support;
 
 pub use app_state::AppState;
 pub use command_import::VirtualShotMode;
-pub use conversion_notice::{ConversionFile, ConversionNoticeView};
+pub use conversion_notice::{ConversionFile, ConversionNoticeView, ConversionSource};
 pub use open_file::{
     EXTERNALLY_MODIFIED_CODE, FILE_EXISTS_MARKER, FILE_MISSING_MARKER, READ_ONLY_FILE_CODE,
 };

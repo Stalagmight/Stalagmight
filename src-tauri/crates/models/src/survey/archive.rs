@@ -333,8 +333,9 @@ impl Project {
     /// Give node `old` the id `new` everywhere: its key in `stations` and its
     /// own `id`, line starts, shot ends, hand-move keys, datums, closure ends
     /// and placements. `new` must be free (not a live id). Identity fields
-    /// are the caller's.
-    pub(super) fn rekey_node(&mut self, old: StationId, new: StationId) {
+    /// are the caller's. Public for the load-time upgrade of an earlier
+    /// version 2 file (RS 8.2), which swaps a node's id with a record's.
+    pub fn rekey_node(&mut self, old: StationId, new: StationId) {
         if old == new {
             return;
         }
@@ -388,8 +389,9 @@ impl Project {
     /// follow the new id. Run after stale record lines are cleared (so a
     /// line that left is no reason). Returns what it restored, in old-id
     /// order; `(old, new)` pairs feed the anchor algorithm
-    /// ([`super::EditContext::reidentified`]).
-    pub(super) fn restore_archived_identities(&mut self) -> Vec<RestoredIdentity> {
+    /// ([`super::EditContext::reidentified`]). Public for salvage, which
+    /// repairs a file's A4 violations with it.
+    pub fn restore_archived_identities(&mut self) -> Vec<RestoredIdentity> {
         let topology = self.topology_arc();
         let lacking: Vec<StationId> = self
             .stations

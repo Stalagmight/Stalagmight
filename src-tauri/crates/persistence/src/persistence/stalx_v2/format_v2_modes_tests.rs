@@ -3,7 +3,7 @@
 
 use chrono::Utc;
 
-use super::test_helpers::{generate, history, text_of, Rng, SMALL};
+use super::test_helpers::{generate, history, text_of, Rng, REQUIRES, SMALL};
 use super::types::{LocalSync, SpeleoDbLink};
 use super::{
     decode, encode, encode_with_report, probe_bytes, rename_project, rewrite_local, DecodeOptions,
@@ -213,7 +213,8 @@ fn renaming_a_closed_file_changes_two_lines() {
         .count();
     assert_eq!(changed, 2);
     // Refused on an unknown required feature.
-    let future = text_of(&bytes).replacen("\"requires\":[]", "\"requires\":[\"zz\"]", 1);
+    let future =
+        text_of(&bytes).replacen(REQUIRES, "\"requires\":[\"archived-stations\",\"zz\"]", 1);
     assert!(matches!(
         rename_project(future.as_bytes(), "x"),
         Err(EncodeError::UnknownFeature { .. })
@@ -266,7 +267,11 @@ fn a_push_honours_the_stored_watermark_and_undo_mode() {
 fn rename_refuses_a_malformed_requires_list() {
     let (p, extras) = generate(11, SMALL);
     let bytes = encode(&p, &extras, Mode::Normal).unwrap();
-    let malformed = text_of(&bytes).replacen("\"requires\":[]", "\"requires\":[\"future\",1]", 1);
+    let malformed = text_of(&bytes).replacen(
+        REQUIRES,
+        "\"requires\":[\"archived-stations\",\"future\",1]",
+        1,
+    );
     assert!(matches!(
         rename_project(malformed.as_bytes(), "x"),
         Err(EncodeError::Original(_))

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use crate::models::survey::{ArchivedStation, CounterKind, LineMeta, Project, StartAt, Violation};
 use crate::models::{Person, ShotData, SurveyCredit};
 
-use super::test_helpers::{generate, text_of, SMALL};
+use super::test_helpers::{generate, text_of, REQUIRES, SMALL};
 use super::types::Limit;
 use super::{
     decode, decode_salvage, encode, DecodeError, DecodeOptions, EncodeError, Extras, Mode,
@@ -121,8 +121,8 @@ fn string_lists_are_counted_as_they_arrive() {
         })
     ));
     let requires = base.replacen(
-        "\"requires\":[]",
-        &format!("\"requires\":[{}]", many(500)),
+        REQUIRES,
+        &format!("\"requires\":[\"archived-stations\",{}]", many(500)),
         1,
     );
     let mut options = DecodeOptions::default();

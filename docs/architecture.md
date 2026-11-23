@@ -60,8 +60,11 @@ decisions only; every position, misclosure, alignment flag and datum role is
 derived from it by a deterministic solver.
 
 - **Stations** are entities keyed by `StationId`, the user-visible Station ID:
-  a name, an optional comment, the aliases of stations merged into it, an
-  optional external (imported) id.
+  a name, an optional comment, the stations merged into it and archived there
+  (each with its own id, name, comment and the lines it was the station of:
+  [kept stations](plans/2026-11-23_kept-stations.md)), an optional external
+  (imported) id. A junction shows its own identity on every line, and a loop
+  closure may show one end as the other.
 - **Lines** are simple chains: `start`, then each shot's `to`. A station on two
   or more lines is a **junction** (what a merge was). Line metadata: name,
   colour, direction, quality, azimuth reference, Section, legacy surveyor and

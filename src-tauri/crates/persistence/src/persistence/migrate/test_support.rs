@@ -649,44 +649,8 @@ pub(super) fn check(legacy: &LegacySurvey, migrated: &Migrated) -> Result<(), St
     }
     let at = |sr: StationRef| station_of.get(&(sr.line_id, sr.station_index)).copied();
 
-    // Every line shows each of its stations by the name 0.6.0 showed there
-    // (its stored name, else its index), or the change is declared in the
-    // conversion notice's list (RS 8.3: a junction shows its kept station on
-    // every line, and a repeat takes a letter). RS-F: the 8.3 oracle (rule K,
-    // rule L never lettering an identity shown on two or more lines, hidden
-    // comments).
-    let declared: BTreeSet<(String, String, String)> = migrated
-        .extras
-        .names_changed
-        .iter()
-        .map(|c| (c.line.clone(), c.from.clone(), c.to.clone()))
-        .collect();
-    if r.names_changed != migrated.extras.names_changed.len() {
-        return Err(format!(
-            "names changed: {} reported, {} listed",
-            r.names_changed,
-            migrated.extras.names_changed.len()
-        ));
-    }
-    for line in &lp.lines {
-        for index in 0..=line.shots.len() {
-            let sr = StationRef::new(line.id, index as u32);
-            let Some(station) = at(sr) else {
-                continue;
-            };
-            let was = lp
-                .station_name_at(sr)
-                .map_or_else(|| index.to_string(), str::to_string);
-            let now = p.shown_name(station).unwrap_or_default();
-            let label = p.line_label_of(line.id);
-            if now != was && !declared.contains(&(label, was.clone(), now.to_string())) {
-                return Err(format!(
-                    "slot {}:{index} reads {now:?}, 0.6.0 showed {was:?}, undeclared",
-                    line.id
-                ));
-            }
-        }
-    }
+    // Kept stations (plan 2026-11-23 RS 8.3).
+    kept_stations(lp, p, r, &migrated.extras.changes, &at)?;
 
     // Merged members are one station, or tied by a Tie closure.
     let ties: BTreeSet<(u32, u32)> = p
@@ -1068,4 +1032,260 @@ fn same_measurements(a: &m::Shot, b: &crate::models::survey::Shot) -> bool {
         && super::convert::shot_kind(a.kind) == b.kind
         && a.marker_index == b.marker_index
         && credit_a == credit_b
+}
+
+/// The kept-stations rules of a migration (plan 2026-11-23 RS 8.3), checked
+/// against what 0.6.0 showed at each slot (its stored name, else its index;
+/// its own comment):
+///
+/// 1. every merge member keeps its own identity: the identity the slot's
+///    line knew it by (a record naming the line, else the station) holds the
+///    slot's own comment, never a joined one, and a record its 0.6.0 name;
+/// 2. each junction shows the member on its longest line (rule K over own
+///    lines, ties to the lowest Station ID);
+/// 3. every slot whose shown name or shown comment differs from 0.6.0's is
+///    listed in the conversion notice, and the counts match the lists;
+/// 4. rule L: a station only ever takes a letter suffix of its own name, a
+///    closure-archived station never does, and one shown on two or more lines
+///    only when it yields to a station with its name shown on at least as
+///    many lines (so no junction is lettered for a station of one line, and
+///    chain order never decides);
+/// 5. each closure archives the end rule K does not keep, in list order,
+///    unless C1 or C2 refuse it, and then nothing, listed as keeping both
+///    names.
+fn kept_stations(
+    lp: &m::Project,
+    p: &crate::models::survey::Project,
+    r: &super::MigrationReport,
+    changes: &super::IdentityChanges,
+    at: &dyn Fn(StationRef) -> Option<u32>,
+) -> Result<(), String> {
+    use crate::models::survey::ClosureEnd;
+
+    let was_name = |sr: StationRef| {
+        lp.station_name_at(sr)
+            .map_or_else(|| sr.station_index.to_string(), str::to_string)
+    };
+    let was_comment = |sr: StationRef| {
+        lp.key_for_ref(sr)
+            .and_then(|key| lp.station_comments.get(&key))
+            .filter(|text| !text.is_empty())
+            .cloned()
+    };
+    let index = p.shown_index();
+    let names: BTreeSet<(String, String, String)> = changes
+        .names
+        .iter()
+        .map(|c| (c.line.clone(), c.from.clone(), c.to.clone()))
+        .collect();
+    let hidden: BTreeSet<(String, String)> = changes
+        .comments_hidden
+        .iter()
+        .map(|c| (c.line.clone(), c.station.clone()))
+        .collect();
+    let mut original_name: BTreeMap<u32, String> = BTreeMap::new();
+    let (mut renamed_slots, mut hidden_slots) = (0, 0);
+    for line in &lp.lines {
+        let label = p.line_label_of(line.id);
+        for i in 0..=line.shots.len() {
+            let sr = StationRef::new(line.id, i as u32);
+            let Some(node) = at(sr) else {
+                continue;
+            };
+            let Some(station) = p.stations.get(&node) else {
+                continue;
+            };
+            // 1. The member's own identity.
+            let (own, comment) = match p.record_naming(node, line.id) {
+                Some(record) => {
+                    if record.name != was_name(sr) {
+                        return Err(format!("slot {}:{i}: its archived name changed", line.id));
+                    }
+                    (record.id, &record.comment)
+                }
+                None => (node, &station.comment),
+            };
+            if *comment != was_comment(sr) {
+                return Err(format!(
+                    "slot {}:{i}: its station's comment is not its own (joined or lost)",
+                    line.id
+                ));
+            }
+            if original_name.insert(own, was_name(sr)).is_some() {
+                return Err(format!(
+                    "slot {}:{i}: identity {own} is two members",
+                    line.id
+                ));
+            }
+            // 3. What the slot shows now, declared when it differs.
+            let shown = index.shown(node);
+            let Some(now) = p.stations.get(&shown) else {
+                return Err(format!("slot {}:{i}: its shown station is gone", line.id));
+            };
+            let was = was_name(sr);
+            if now.name != was {
+                renamed_slots += 1;
+                if !names.contains(&(label.clone(), was.clone(), now.name.clone())) {
+                    return Err(format!(
+                        "slot {}:{i} reads {:?}, 0.6.0 showed {was:?}, undeclared",
+                        line.id, now.name
+                    ));
+                }
+            }
+            if let Some(text) = was_comment(sr) {
+                if now.comment.as_ref() != Some(&text) {
+                    hidden_slots += 1;
+                    if !hidden.contains(&(label.clone(), was.clone())) {
+                        return Err(format!(
+                            "slot {}:{i}: its comment is hidden, undeclared",
+                            line.id
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    if renamed_slots != changes.names.len() || r.names_changed != changes.names.len() {
+        return Err(format!(
+            "names changed: {renamed_slots} slots, {} listed, {} reported",
+            changes.names.len(),
+            r.names_changed
+        ));
+    }
+    if hidden_slots != changes.comments_hidden.len()
+        || r.comments_hidden != changes.comments_hidden.len()
+    {
+        return Err(format!(
+            "comments hidden: {hidden_slots} slots, {} listed, {} reported",
+            changes.comments_hidden.len(),
+            r.comments_hidden
+        ));
+    }
+    if r.shown_as_other != changes.shown_as_other() {
+        return Err("shown as another station: report and list differ".to_string());
+    }
+
+    // 2. Rule K per junction.
+    for (&node, station) in &p.stations {
+        if station
+            .archived
+            .iter()
+            .all(crate::models::survey::ArchivedStation::is_history)
+        {
+            continue;
+        }
+        let candidates = std::iter::once((node, p.native_lines(node))).chain(
+            station
+                .archived
+                .iter()
+                .filter(|a| !a.is_history())
+                .map(|a| (a.id, a.lines.clone())),
+        );
+        if p.rule_k(candidates) != Some(node) {
+            return Err(format!(
+                "junction {node} does not keep its member on the longest line"
+            ));
+        }
+    }
+
+    // 4. Rule L.
+    let topology = p.topology();
+    let shown_on = |line: LineId| -> Vec<u32> {
+        p.lines()
+            .iter()
+            .position(|l| l.id == line)
+            .and_then(|position| topology.chain_at(position))
+            .unwrap_or(&[])
+            .iter()
+            .map(|&n| index.shown(n))
+            .collect()
+    };
+    for (&id, original) in &original_name {
+        let Some(station) = p.stations.get(&id) else {
+            continue;
+        };
+        if station.name == *original {
+            continue;
+        }
+        if index.is_archived(id) || !station.name.starts_with(original.as_str()) {
+            return Err(format!("station {id} renamed, not lettered by rule L"));
+        }
+        let lines = p.lines_shown_on(id);
+        if lines.len() < 2 {
+            continue;
+        }
+        let yielded = lines.iter().any(|&line| {
+            shown_on(line).into_iter().any(|other| {
+                other != id
+                    && original_name.get(&other) == Some(original)
+                    && p.lines_shown_on(other).len() >= lines.len()
+            })
+        });
+        if !yielded {
+            return Err(format!(
+                "station {id}, shown on {} lines, was lettered for one shown on fewer",
+                lines.len()
+            ));
+        }
+    }
+
+    // 5. Closures: rule K, list order, C1 and C2.
+    let mut kept_of: BTreeMap<u32, u32> = BTreeMap::new();
+    let reaches = |kept_of: &BTreeMap<u32, u32>, from: u32, target: u32| {
+        let mut current = from;
+        for _ in 0..=kept_of.len() {
+            if current == target {
+                return true;
+            }
+            match kept_of.get(&current) {
+                Some(&next) => current = next,
+                None => return false,
+            }
+        }
+        false
+    };
+    let (mut archived, mut both) = (0, 0);
+    for c in &p.closures {
+        let pick = (c.a != c.b)
+            .then(|| p.rule_k([(c.a, topology.lines_of(c.a)), (c.b, topology.lines_of(c.b))]))
+            .flatten();
+        let Some(kept) = pick else {
+            if c.archived.is_some() {
+                return Err(format!(
+                    "closure {} archives an end rule K has none for",
+                    c.id
+                ));
+            }
+            continue;
+        };
+        let (gone, end) = if kept == c.a {
+            (c.b, ClosureEnd::B)
+        } else {
+            (c.a, ClosureEnd::A)
+        };
+        if kept_of.contains_key(&gone) || reaches(&kept_of, kept, gone) {
+            if c.archived.is_some() {
+                return Err(format!("closure {} archives an end C1 or C2 refuse", c.id));
+            }
+            both += 1;
+        } else {
+            if c.archived != Some(end) {
+                return Err(format!("closure {} does not archive rule K's end", c.id));
+            }
+            kept_of.insert(gone, kept);
+            archived += 1;
+        }
+    }
+    if r.closures_archived != archived
+        || r.closures_keep_both != both
+        || changes.closures_keep_both.len() != both
+    {
+        return Err(format!(
+            "closures: {archived} archived and {both} keeping both, reported {} and {} ({} listed)",
+            r.closures_archived,
+            r.closures_keep_both,
+            changes.closures_keep_both.len()
+        ));
+    }
+    Ok(())
 }

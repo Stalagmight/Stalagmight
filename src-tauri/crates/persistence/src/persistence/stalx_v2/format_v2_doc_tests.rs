@@ -6,7 +6,7 @@ use std::sync::Arc;
 use chrono::{TimeZone, Utc};
 
 use crate::models::survey::{
-    ArchivedStation, ClosureStrategy, LineMeta, Placement, Project, StartAt, ZeroDatum,
+    ArchivedStation, ClosureEnd, ClosureStrategy, LineMeta, Placement, Project, StartAt, ZeroDatum,
 };
 use crate::models::{
     AzimuthReference, CorrectionSource, GpsCoordinates, NorthReference, Person, Section, ShotData,
@@ -18,8 +18,9 @@ use super::{decode, encode, DecodeOptions, Extras, Mode};
 
 const DOC: &str = include_str!("../../../../../../docs/file-format.md");
 
-/// Two lines meeting at a junction (station 2), a datum, a second free piece
-/// with a placement, a closure, a Section, credits, an alias.
+/// Two lines meeting at a junction (station 2) that keeps an archived
+/// station, a datum, a second free piece with a placement, a closure that
+/// shows one end as the other, a Section, credits.
 pub(super) fn example() -> (Project, Extras) {
     let at = |s: i64, n: u32| Utc.timestamp_opt(s, n).single().unwrap();
     let mut p = Project::new_at(
@@ -133,12 +134,11 @@ pub(super) fn example() -> (Project, Extras) {
     {
         let s = p.station_mut(junction).unwrap();
         s.comment = Some("tie-off on a rock".to_string());
-        // RS 8.1: Side's own station there, archived by the merge. RS-F:
-        // the example's prose in docs/file-format.md.
+        // RS 8.1: Side's own station there, archived by the merge.
         s.archived.push(ArchivedStation {
             id: alias,
             name: "B0".to_string(),
-            comment: None,
+            comment: Some("Side's tie-off".to_string()),
             external: None,
             lines: vec![side],
         });
@@ -165,6 +165,10 @@ pub(super) fn example() -> (Project, Extras) {
     let side_end = p.line_stations(side).unwrap()[1];
     let main_end = p.line_stations(main).unwrap()[3];
     p.push_closure(side_end, Some(side), main_end, None, ClosureStrategy::Batch);
+    // B1 is shown as A3 (the end on the longer line, kept).
+    if let Some(closure) = p.closures.last_mut() {
+        closure.archived = Some(ClosureEnd::A);
+    }
     p.imported_file_hashes.push("9f86d081884c7d65".to_string());
     assert!(p.validate().is_empty(), "{:?}", p.validate());
 

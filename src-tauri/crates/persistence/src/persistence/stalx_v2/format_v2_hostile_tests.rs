@@ -195,13 +195,14 @@ fn a_finite_but_absurd_distance_is_refused() {
 /// Archived records (RS 8.1) are objects `{id, name, comment?, external?,
 /// lines?}`: a missing id or name refuses, an unknown key opens read-only, and
 /// a line that does not pass the station is a stale record line (A2). The
-/// U1 alias rows of an earlier #827 build still read, naively, as records
-/// (RS-F: the 8.2 upgrade).
+/// U1 alias rows of an earlier build of version 2 read as records naming
+/// their lines, the form the load-time upgrade (RS 8.2) starts from.
 #[test]
 fn archived_rows_are_checked() {
     let (p, extras) = super::format_v2_doc_tests::example();
     let original = String::from_utf8(encode(&p, &extras, Mode::Normal).unwrap()).unwrap();
-    let record = "\"archived\":[{\"id\":7,\"name\":\"B0\",\"lines\":[1]}]";
+    let record =
+        "\"archived\":[{\"id\":7,\"name\":\"B0\",\"comment\":\"Side's tie-off\",\"lines\":[1]}]";
     assert!(original.contains(record), "the example names Side");
     for (row, ok) in [
         ("\"archived\":[{\"id\":7,\"name\":\"B0\"}]", true),

@@ -372,11 +372,12 @@ impl<'de> Visitor<'de> for StationExtrasSeed<'_, '_> {
             match index {
                 0 => self.station.comment = Some(value(&mut map, ctx, "comment")?),
                 1 => {
-                    // RS-F: an earlier #827 file's U1 alias rows go to the
-                    // load-time upgrade (RS 8.2) through a private form;
-                    // here each becomes a record naming its line (the latest
-                    // naming a line wins, the others are history; a null
-                    // name takes the station's own).
+                    // An earlier version 2 file's U1 alias rows, read in
+                    // the form the load-time upgrade consumes (RS 8.2 step
+                    // 1, `super::upgrade`): each a record naming its line
+                    // (the latest naming a line names it, the earlier ones
+                    // are history; a nameless one takes the name the line
+                    // showed, the station's own).
                     ctx.field = "aliases";
                     let mut aliases = Vec::new();
                     map.next_value_seed(AliasesSeed {
@@ -408,10 +409,12 @@ struct U1Alias {
     line: Option<LineId>,
 }
 
-/// RS-F: the naive reading of U1 aliases the 8.2 upgrade replaces. Each
-/// alias becomes a record (its name, or the station's own when it has none)
-/// naming its line; of several naming one line the latest names it and the
-/// earlier ones are history (A3).
+/// U1 alias rows as records (RS 8.2 step 1, U-P2-13a/b): each alias becomes
+/// a record with its name (the station's own when it has none: the line
+/// showed that) naming its line; of several naming one line the latest
+/// names it and the earlier ones are history (A3). No comment and no
+/// external id: U1 joined comments into the station and kept no external
+/// id on an alias.
 fn u1_aliases_to_records(station: &mut Station, aliases: Vec<U1Alias>) {
     let mut named: BTreeSet<LineId> = BTreeSet::new();
     let mut records: Vec<ArchivedStation> = Vec::with_capacity(aliases.len());
@@ -434,7 +437,7 @@ fn u1_aliases_to_records(station: &mut Station, aliases: Vec<U1Alias>) {
 
 /// A station's `archived` array (RS 8.1): records `{id, name, comment?,
 /// external?, lines?}`. Each record and each of its lines counts against the
-/// archived-record cap.
+/// archived-station cap.
 struct ArchivedSeed<'c, 'l> {
     ctx: &'c mut Ctx<'l>,
     out: &'c mut Vec<ArchivedStation>,
@@ -459,7 +462,7 @@ impl<'de> Visitor<'de> for ArchivedSeed<'_, '_> {
         while let Some(record) = seq.next_element_seed(ArchivedRecordSeed {
             ctx: &mut *self.ctx,
         })? {
-            self.ctx.count(Limit::Aliases, 1 + record.lines.len())?;
+            self.ctx.count(Limit::Archived, 1 + record.lines.len())?;
             self.out.push(record);
         }
         Ok(())
@@ -545,7 +548,7 @@ impl<'de> Visitor<'de> for AliasesSeed<'_, '_> {
         while let Some(alias) = seq.next_element_seed(AliasSeed {
             ctx: &mut *self.ctx,
         })? {
-            self.ctx.count(Limit::Aliases, 1)?;
+            self.ctx.count(Limit::Archived, 1)?;
             self.out.push(alias);
         }
         Ok(())

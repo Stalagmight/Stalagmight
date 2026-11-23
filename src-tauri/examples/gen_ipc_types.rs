@@ -38,8 +38,8 @@ use stalagmight_lib::core::loading::{
     SpeleoManagedFile,
 };
 use stalagmight_lib::core::state::{
-    ConversionFile, ConversionNoticeView, SpeleoCacheOwnership, SpeleoCachedProject,
-    SpeleoPurgeReport, VirtualShotMode,
+    ConversionFile, ConversionNoticeView, ConversionSource, SpeleoCacheOwnership,
+    SpeleoCachedProject, SpeleoPurgeReport, VirtualShotMode,
 };
 use stalagmight_lib::export::color_scale::{
     ExportColorScale, ExportLevels, ExportValueKind, ValueHistogram,
@@ -209,6 +209,7 @@ fn main() {
     export::<LockReleaseOutcome>(&out_dir);
     export::<ConversionFile>(&out_dir);
     export::<ConversionNoticeView>(&out_dir);
+    export::<ConversionSource>(&out_dir);
     export::<ReversedLine>(&out_dir);
     export::<ImportReceipt>(&out_dir);
     export::<CommentHolder>(&out_dir);
@@ -550,6 +551,7 @@ fn main() {
         "LockReleaseOutcome",
         "ConversionFile",
         "ConversionNoticeView",
+        "ConversionSource",
         "ReversedLine",
         "ImportReceipt",
         "CommentHolder",

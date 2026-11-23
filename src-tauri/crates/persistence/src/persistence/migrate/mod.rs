@@ -5,22 +5,27 @@
 //! ([`stalagmight_legacy`]): exactly what the 0.6.0 app did on open, load
 //! heal included. [`migrate`] converts that settled state:
 //!
-//! 1. **Stations** (7.2.1): a union-find over the legacy merges, taken in the
-//!    order the old load cascade aligned them, then list order. Each group is
-//!    one station. Self-merges and repeats are dropped; same-line merges and
-//!    merges that would close a cycle become `Tie` closures at the FRONT of
-//!    the closure list. The survivor is the member the map labelled (not a
-//!    line's first station, then not its last, then line order, then index):
-//!    its Station ID and name are kept, the others become aliases with their
-//!    names; distinct non-empty comments are joined in member order with a
-//!    blank line; names are made unique on every line of a junction.
+//! 1. **Stations** (7.2.1; kept stations, plan 2026-11-23 RS 8.3): a
+//!    union-find over the legacy merges, taken in the order the old load
+//!    cascade aligned them, then list order. Each group is one station.
+//!    Self-merges and repeats are dropped; same-line merges and merges that
+//!    would close a cycle become `Tie` closures at the FRONT of the closure
+//!    list. Every member keeps its own identity (Station ID, the name 0.6.0
+//!    showed, its own comment): the station shows the member on the longest
+//!    line (rule K over own lines, ties to the lowest Station ID), the others
+//!    are archived in it as records naming their lines, which Detach Line
+//!    from Station brings back. No comment is joined.
 //! 2. **Lines** (7.2.2): shots in order with their uuids (missing, overlong
 //!    or repeated ones minted deterministically from line id and index),
 //!    chains through the stations; ids, metadata and measurements as loaded.
 //! 3. **Hand moves** (7.2.3): every legacy station offset, on its own line.
 //! 4. **Closures** (7.2.4): ids, ends and strategies kept; a legacy aligned
 //!    non-`Move` closure becomes a `Tie`. Every closure end and datum gets
-//!    the `via` hint of the legacy member that held it.
+//!    the `via` hint of the legacy member that held it. Each closure, the
+//!    demoted merges included, shows one end as the other: the end rule K
+//!    keeps, in list order, when C1 and C2 allow it, else neither (RS 8.3).
+//!    Then names are made unique on every line by rule L (a station shown on
+//!    more lines is never lettered for one shown on fewer).
 //! 5. **Anchors** (7.2.5): a component holding a datum is placed by its first
 //!    one, with a correction holding its station at its legacy position;
 //!    any other component gets a `Placement` at its legacy gauge station
@@ -117,6 +122,7 @@ use crate::models::{LineId, SpeleoLink};
 
 use super::stalx_v2::IgnoredWarning;
 
+pub use super::kept::{ClosureKeepsBoth, CommentHidden, IdentityChanges, NameChange};
 pub use report::{
     AdjustedCheck, AdjustedVerification, Axis, ClassStats, ExpectedClass, MigrationReport,
     Mismatch, Verification,
@@ -156,30 +162,18 @@ pub struct MigratedExtras {
     /// not, `project.settings.validation` is the 0.6.0 default and the app
     /// should seed the user's global thresholds instead (as 0.6.0 did).
     pub validation_stored: bool,
-    /// Every slot whose station now goes by another name than 0.6.0 gave it
-    /// there, in slot order. Every line keeps the names 0.6.0 showed on it (a
-    /// merge member is an alias naming its line, I-3), so only a name a 0.6.0
-    /// line showed twice is here, lettered. Survey content for the conversion
-    /// notice only, never logged (review findings D-migration-upgrade-8,
-    /// UX-3, UX-1).
-    pub names_changed: Vec<NameChange>,
+    /// What lines show differently than 0.6.0 showed (plan 2026-11-23 RS
+    /// 8.3), grouped by line: slots now shown under another station's name (a
+    /// junction's kept member, a closure's kept end), letters, comments now
+    /// hidden, closures left showing both ends. Survey content for the
+    /// conversion notice only, never logged (review findings
+    /// D-migration-upgrade-8, UX-3, UX-1, U-P1-2).
+    pub changes: IdentityChanges,
     /// Record-orientation parity the legacy model kept for `.plnx` dive-plan
     /// pins (a single-neighbour pin reads which end of its shot it sits on).
     /// The station-graph model has no such field; carried so the dive-plan
     /// resolver can still read old pins.
     pub legacy_parity: LegacyParity,
-}
-
-/// One slot whose station's name changed in the conversion
-/// ([`MigratedExtras::names_changed`]).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct NameChange {
-    /// The slot's line, by the name the converted project gives it.
-    pub line: String,
-    /// The name 0.6.0 showed at that slot.
-    pub from: String,
-    /// The station's name now.
-    pub to: String,
 }
 
 /// See [`MigratedExtras::legacy_parity`].
@@ -366,7 +360,7 @@ pub fn migrate(
         ignored_warnings,
         unrecognised_shot_kinds: unrecognised_shot_kinds(legacy, &built.project),
         validation_stored: legacy.load.validation_stored,
-        names_changed: built.names_changed.clone(),
+        changes: built.changes.clone(),
         legacy_parity: LegacyParity {
             reversed_lines: lp
                 .lines

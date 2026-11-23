@@ -299,7 +299,11 @@ fn renaming_a_closed_file_this_build_cannot_write_changes_nothing() {
     )
     .unwrap();
     let newer = text.replacen("\"version\":2,", "\"version\":3,", 1);
-    let requires = text.replacen("\"requires\":[]", "\"requires\":[\"future\"]", 1);
+    let requires = text.replacen(
+        "\"requires\":[\"archived-stations\"]",
+        "\"requires\":[\"archived-stations\",\"future\"]",
+        1,
+    );
     assert_ne!(requires, text, "the requires member is written");
     for (name, content) in [("newer.stalx", newer), ("requires.stalx", requires)] {
         let path = dir.path().join(name);

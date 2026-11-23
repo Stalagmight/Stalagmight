@@ -37,6 +37,7 @@ mod scan;
 mod summary;
 mod tokens;
 mod types;
+mod upgrade;
 mod write;
 
 #[cfg(test)]
@@ -135,6 +136,14 @@ mod format_v2_doc_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod format_v2_upgrade_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod format_v2_limits_tests;
@@ -164,10 +173,11 @@ pub use probe::{probe_bytes, probe_path, probe_path_listing, sniff, Format, Head
 pub use salvage::{Repair, SalvageReport};
 pub use summary::Summary;
 pub use types::{
-    CountLimits, DecodeNote, DecodeOptions, Decoded, Extras, History, IgnoredWarning, Limit,
-    LocalState, LocalSync, Mode, Preserved, PushOptions, RawJson, ReadOnly, SpeleoDbLink,
+    CountLimits, DecodeNote, DecodeOptions, Decoded, Earlier, Extras, History, IgnoredWarning,
+    Limit, LocalState, LocalSync, Mode, Preserved, PushOptions, RawJson, ReadOnly, SpeleoDbLink,
     MAX_PROJECT_FILE_BYTES, MAX_V2_FILE_BYTES,
 };
+pub use upgrade::UpgradeReport;
 /// The format's date rule (0001-01-01 ..= 9999-12-31, F10), which the
 /// migration applies so a migrated model is what its file will hold.
 pub(crate) use write::normalized_date;
@@ -185,9 +195,18 @@ pub const VERSION: u64 = 2;
 /// The solver version this build derives positions with (plan section 3).
 pub const SOLVER: u64 = 1;
 
+/// The `requires` feature of kept and archived stations (plan 2026-11-23
+/// RS 8.1): station records' `archived` objects, a closure's `archived`
+/// end, and the shown-identity rule (a closure-archived station shows its
+/// kept end's name). Every file this build writes lists it, whatever it
+/// holds: a version 2 file without it was written by an earlier build of
+/// version 2 (U1 per-line aliases) and takes the load-time upgrade
+/// ([`Decoded::upgrade`], RS 8.2).
+pub const ARCHIVED_STATIONS: &str = "archived-stations";
+
 /// The `requires` feature names this build understands. A file that names
-/// any other opens read-only. Version 2.0 defines none.
-pub const KNOWN_FEATURES: &[&str] = &[];
+/// any other opens read-only.
+pub const KNOWN_FEATURES: &[&str] = &[ARCHIVED_STATIONS];
 
 /// The generator written when [`Extras::generator`] is empty.
 pub const DEFAULT_GENERATOR: &str = "Stalagmight";
