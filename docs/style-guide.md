@@ -15,6 +15,7 @@ This guide captures the current UI conventions and design tokens for Stalagmight
 - Depth ramp direction is load-bearing: `getDepthColor` walks the shortest HSL hue path, so a shallow anchor at hue >= 180 inverts the theme. Anchors sit below 180; `SHALLOW_HUE.max` is 178.
 - Light canvases hold a 2:1 ramp contrast floor, not 3:1 - the yellow midpoint is the ramp's brightest sample, and 3:1 on near-white reads olive-brown.
 - Outstanding measurements: [#380](https://github.com/Stalagmight/Stalagmight/issues/380).
+- Line pills (`DetailLink`, `EntityBlob`, at the Full highlighting level) take every colour from `src/theme/pillColors.ts`: a tint of the line's hue in OKLCH with lightness and chroma clamped to one band per theme, the line colour itself as the dot (ringed when it alone falls under 3:1 on the fill), and the theme's text tokens. Its sweep in `__tests__/pillColors.test.ts` holds main text at 7:1, the muted context and Station ID at 4.5:1 and a visible border, on every theme, at rest, on hover and for a missing target. Do not colour a pill by hand.
 
 ## Typography
 - Defaults are inherited from the app shell. Use consistent size tiers:

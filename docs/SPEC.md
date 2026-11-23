@@ -1048,9 +1048,19 @@ the test ids) but are never shown:
 - Shot: its two station names, `4 → 5`; with line context `Main Line: 4 → 5`
   (aria-labels and selection announcements always carry the line).
 - Line: its name (`Unnamed line` only for a line that somehow has none).
-- At the default `full` syntactic-highlighting level a link renders as a pill:
-  entity symbol, the label, then (for a station or shot on another line) the
-  line name dimmed after a divider.
+- At the default `full` syntactic-highlighting level a link renders as a line
+  pill (`LinePill.tsx`), coloured by the line it belongs to (a line its own, a
+  station or shot the line of its context): a dot in the line's colour, then
+  (for a station or shot on another line) the line name, smaller and muted,
+  with a colon, then the label at the surrounding text size, and for a station
+  its Station ID as a muted superscript (`Main Line: 17` with a raised `42`). The aria-label
+  and the selection announcement carry the ID too (`Select station Main Line
+  / 17, Station ID 42`). The fill, border, hover, dot and dot ring come from
+  `src/theme/pillColors.ts`, which holds main text at 7:1 and the muted parts
+  at 4.5:1 for any line colour on every theme. The Station detail's "Also on"
+  rows name the other line only, without the ID. The data table's gutter and
+  line picker, and the dialogs that name stations or lines, use the same pill
+  (`EntityBlob`). Below `full`, links are plain underlined text.
 
 **Shot Detail - Connected Line:**
 ```
