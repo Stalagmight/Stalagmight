@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -14,15 +14,27 @@ import { listNames } from '../../utils/listNames';
 import type { BatchCommand } from '../../types/commands';
 import type { MergeDatumShift } from '../../types/ipc/MergeDatumShift';
 import type { MergePreview } from '../../types/ipc/MergePreview';
+import type { KeepCandidate } from '../../types/ipc/KeepCandidate';
+import type { MergeKeepPreview } from '../../types/ipc/MergeKeepPreview';
 import { formatDatumMetres } from '../../utils/zeroDatumPreview';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { CollisionRows, renamesFromAnswers, useCollisionAnswers, useIdentityLabel } from './keptStationParts';
 
 /** A move shorter than this (metres) is not worth a sentence: the two
  *  stations already sit on one point, as after a snap. */
 const MOVE_SAID_FROM_M = 0.01;
 
+/** The keep the dialog starts on: the backend's default (a datum holder, else
+ *  rule K, RS 4.1) when it offers it, else the one it offers; null without a
+ *  preview of the keep. */
+export function defaultKeepOf(preview: MergePreview | undefined): number | null {
+  if (!preview || preview.keeps.length === 0) return null;
+  return preview.keeps.find((k) => k.keep === preview.default_keep)?.keep ?? preview.keeps[0]!.keep;
+}
+
 export default function MergeDialog() {
+  const { t } = useTranslation();
   const { closeDialog, dialogData, clearMergeStations } = useUIStore();
   const { mergeStations, executeBatch } = useProjectStore();
 
@@ -44,6 +56,17 @@ export default function MergeDialog() {
   // the depths when the two stations disagree, from check_merge_connectivity.
   const mergePreview = dialogData.mergePreview as MergePreview | undefined;
 
+  // Which station is kept (RS 4.1, 7): one radio per station the preview
+  // offers, the backend's default first chosen. Without a preview (an older
+  // check) the merge keeps the stationary station and letters collisions.
+  const candidates = mergePreview?.candidates ?? [];
+  const [keep, setKeep] = useState<number | null>(() => defaultKeepOf(mergePreview));
+  useEffect(() => {
+    setKeep(defaultKeepOf(mergePreview));
+  }, [mergePreview]);
+  const keepPreview = mergePreview?.keeps.find((k) => k.keep === keep) ?? null;
+  const [answers, setAnswer] = useCollisionAnswers(keepPreview?.collisions);
+
   const handleClose = () => {
     onCancel?.();
     clearMergeStations();
@@ -58,13 +81,19 @@ export default function MergeDialog() {
 
     try {
       if (onBeforeConfirm) await onBeforeConfirm();
+      // The dialog's answers (RS 4.1): the station kept, and every collision
+      // answered, so the merge refuses rather than letter what the user saw
+      // differently. Without a preview, neither (the backend's defaults).
+      const answered = keepPreview
+        ? { keep: keepPreview.keep, renames: renamesFromAnswers(keepPreview.collisions, answers) }
+        : {};
       // When preCommands exist (snap-to-merge), batch move + merge as single undo operation
-      const mergeCmd: BatchCommand = { type: 'merge_stations', station_a: stationA, station_b: stationB };
+      const mergeCmd: BatchCommand = { type: 'merge_stations', station_a: stationA, station_b: stationB, ...answered };
       // The store's mergeStations toasts a closure the merge removed (#738/#741);
       // the batch reports it the same way, so toast it here too.
       const result = preCommands
         ? notifyRemovedClosures(await executeBatch([...preCommands, mergeCmd]))
-        : await mergeStations(stationA, stationB);
+        : await mergeStations(stationA, stationB, answered);
       if (result.success) {
         clearMergeStations();
         trackDialogComplete('merge');
@@ -90,21 +119,49 @@ export default function MergeDialog() {
           <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">{error}</div>
         )}
 
-        {/* Station details */}
-        <div className="space-y-2">
-          <div className="flex justify-between items-center py-2 border-b border-border">
-            <span className="text-text-secondary">Station A:</span>
-            <span className="inline-flex items-center gap-1.5">
-              <StationBlob station={stationA} withLine />
-            </span>
+        {mergePreview && keepPreview && candidates.length > 0 ? (
+          <KeepPicker
+            candidates={candidates}
+            keeps={mergePreview.keeps}
+            keep={keep}
+            onKeep={setKeep}
+            forced={mergePreview.keep_forced_by !== undefined}
+            disabled={isLoading}
+          />
+        ) : (
+          /* Station details */
+          <div className="space-y-2">
+            <div className="flex justify-between items-center py-2 border-b border-border">
+              <span className="text-text-secondary">{t('dialogs.mergeStations.stationA')}</span>
+              <span className="inline-flex items-center gap-1.5">
+                <StationBlob station={stationA} withLine />
+              </span>
+            </div>
+            <div className="flex justify-between items-center py-2 border-b border-border">
+              <span className="text-text-secondary">{t('dialogs.mergeStations.stationB')}</span>
+              <span className="inline-flex items-center gap-1.5">
+                <StationBlob station={stationB} withLine />
+              </span>
+            </div>
           </div>
-          <div className="flex justify-between items-center py-2 border-b border-border">
-            <span className="text-text-secondary">Station B:</span>
-            <span className="inline-flex items-center gap-1.5">
-              <StationBlob station={stationB} withLine />
-            </span>
-          </div>
-        </div>
+        )}
+
+        {keepPreview && (
+          <KeepOutcome
+            preview={keepPreview}
+            kept={candidates.find((c) => c.identity.id === keepPreview.keep) ?? null}
+          />
+        )}
+
+        {keepPreview && (
+          <CollisionRows
+            collisions={keepPreview.collisions}
+            answers={answers}
+            onAnswer={setAnswer}
+            testIdPrefix="merge"
+            disabled={isLoading}
+          />
+        )}
 
         {datumShift && (
           <DatumShiftNotice
@@ -127,14 +184,115 @@ export default function MergeDialog() {
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={handleClose} disabled={isLoading} data-testid="merge-cancel">
-            Cancel
+            {t('dialogs.mergeStations.cancel')}
           </Button>
           <Button variant="primary" onClick={handleMerge} disabled={isLoading} data-testid="merge-confirm">
-            {isLoading ? 'Merging...' : 'Merge'}
+            {isLoading ? t('dialogs.mergeStations.working') : t('dialogs.mergeStations.confirm')}
           </Button>
         </div>
       </div>
     </DialogWrapper>
+  );
+}
+
+/**
+ * "Keep": one radio per station the merge may keep (RS 4.1, 7), each its pill
+ * (line, own name, Station ID), a station holding a datum says so, and a
+ * station a loop closure shows as another says "shown as K through a loop
+ * closure". When a loop closure between the two forces the keep (RS 4.1 step
+ * 4), the one station offered is checked and the dialog says why.
+ */
+function KeepPicker({
+  candidates,
+  keeps,
+  keep,
+  onKeep,
+  forced,
+  disabled,
+}: {
+  candidates: readonly KeepCandidate[];
+  keeps: readonly MergeKeepPreview[];
+  keep: number | null;
+  onKeep: (id: number) => void;
+  forced: boolean;
+  disabled: boolean;
+}) {
+  const { t } = useTranslation();
+  const label = useIdentityLabel();
+  const offered = new Set(keeps.map((k) => k.keep));
+  return (
+    <fieldset className="space-y-1" data-testid="merge-keep">
+      <legend className="text-sm text-text-primary">{t('dialogs.mergeStations.keepLead')}</legend>
+      {candidates.map((candidate) => {
+        const id = candidate.identity.id;
+        return (
+          <label
+            key={`${candidate.station.line_id}:${candidate.station.station_index}`}
+            className="flex flex-wrap items-center gap-2 p-1 rounded text-sm hover:bg-background-50"
+          >
+            <input
+              type="radio"
+              name="merge-keep"
+              value={id}
+              checked={keep === id}
+              disabled={disabled || !offered.has(id)}
+              onChange={() => onKeep(id)}
+              data-testid={`merge-keep-${id}`}
+            />
+            <StationBlob station={candidate.station} withLine />
+            {candidate.holds_datum && (
+              <span className="text-text-secondary" data-testid={`merge-keep-${id}-datum`}>
+                {t('dialogs.mergeStations.holdsDatum')}
+              </span>
+            )}
+            {candidate.shown_as && (
+              <span className="text-text-secondary" data-testid={`merge-keep-${id}-shown-as`}>
+                {t('dialogs.keptStations.shownAsThroughClosure', { station: label(candidate.shown_as) })}
+              </span>
+            )}
+          </label>
+        );
+      })}
+      {forced && (
+        <p className="text-xs text-text-secondary" data-testid="merge-keep-forced">
+          {t('dialogs.mergeStations.keepForced')}
+        </p>
+      )}
+    </fieldset>
+  );
+}
+
+/**
+ * What the chosen keep does to names (RS 7): the lines that will show the kept
+ * name, the station archived ("with its comment" only when it has one), and
+ * that Detach Line from Station brings it back.
+ */
+function KeepOutcome({ preview, kept }: { preview: MergeKeepPreview; kept: KeepCandidate | null }) {
+  const { t } = useTranslation();
+  const labels = useIdentityLabels();
+  const label = useIdentityLabel();
+  const keptName = kept ? label(kept.shown_as ?? kept.identity) : null;
+  const hasComment = (preview.hidden.comment ?? '').trim() !== '';
+  return (
+    <div className="space-y-1 text-sm">
+      {preview.renamed_lines.length > 0 && keptName !== null && (
+        <p className="text-text-primary" data-testid="merge-renamed-lines">
+          {t('dialogs.mergeStations.renamedLines', {
+            count: preview.renamed_lines.length,
+            lines: listNames(preview.renamed_lines.map(labels.lineName), t),
+            station: keptName,
+          })}
+        </p>
+      )}
+      <p className="text-text-primary" data-testid="merge-hidden">
+        {t(hasComment ? 'dialogs.mergeStations.archivedWithComment' : 'dialogs.mergeStations.archived', {
+          station: label(preview.hidden),
+        })}
+      </p>
+      <p className="text-xs text-text-secondary" data-testid="merge-hidden-back">
+        {t('dialogs.mergeStations.detachBringsBack')}
+      </p>
+    </div>
   );
 }
 
