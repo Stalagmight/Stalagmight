@@ -443,6 +443,18 @@ impl<'a> Case<'a> {
         })
     }
 
+    /// Whether `slot` shows another station's comment and has none of its
+    /// own (RS 5.1): it is foreign and its node's own comment is empty.
+    fn shows_anothers_comment(&self, slot: StationRef) -> bool {
+        self.foreign(slot)
+            && self.station(slot).is_some_and(|node| {
+                self.p
+                    .stations
+                    .get(&node)
+                    .is_none_or(|s| s.comment.as_deref().is_none_or(str::is_empty))
+            })
+    }
+
     /// Whether the name change of `slot` from `o`'s to `n`'s is one the
     /// conversion notice lists for the slot's line.
     fn declared_name(&self, slot: StationRef, o: &Value, n: &Value) -> bool {
@@ -1350,6 +1362,17 @@ impl<'a> Case<'a> {
                 if o.len() != before {
                     self.tally
                         .note("range delete: an empty legacy comment is not listed");
+                }
+                // RS 5.1 (farm dbf19ed85330): a slot showing another station
+                // (a loop end a closure archives, or a record's line) shows
+                // that station's comment, which the delete does not remove;
+                // the slot's node lists only a comment of its own.
+                let before = o.len();
+                o.retain(|&s| n.contains(&s) || !self.shows_anothers_comment(s));
+                if o.len() != before {
+                    self.tally.note(
+                        "range delete: a slot showing another station keeps that station's comment",
+                    );
                 }
             }
             let at_junction = o.symmetric_difference(&n).all(|&s| self.junction(s));
