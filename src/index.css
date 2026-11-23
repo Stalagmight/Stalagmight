@@ -1783,38 +1783,39 @@ button.sh-apill {
    pill inline in running text, with the link pill's colours (the same custom
    properties from pillColors.ts), dot, context, marks and Station ID. It
    must leave the paragraph's line pitch exactly as plain text has it:
-   - the pill is `display: inline` with no vertical padding and its border an
-     inset shadow: an inline box's background, border and padding never take
-     part in the line box's height (CSS 2.1 10.8.1), so the fill covers the
-     text's own content area and nothing grows;
+   - the painted part (`.sh-ppill-vis`) is `display: inline` with no vertical
+     padding and its border an inset shadow: an inline box's background,
+     border and padding never take part in the line box's height (CSS 2.1
+     10.8.1), so the fill covers the text's own content area and nothing
+     grows;
    - every text part inside has line-height 0 (a smaller font with the
      paragraph's line-height would sit lower and push the line box down);
    - the dots and the loop mark are inline-blocks whose negative top margin
      cancels their height, so their margin box is zero tall;
    - the Station ID is lifted by a relative offset, never `vertical-align`.
    `box-decoration-break: clone` gives each line's fragment of a wrapped pill
-   its own rounded ends and padding. The drawing is not selectable: a copy
-   takes the sr-only plain words beside it. */
+   its own rounded ends and padding; `.sh-ppill-nw` keeps the dot with the
+   first word, the arrow with the shot's far end and the marks with the last
+   word. `.sh-ppill` itself paints nothing: it holds the colours and the
+   sr-only words, which a copy and a screen reader take. */
 .sh-ppill {
-  display: inline;
+  color: var(--pill-text);
+}
+.sh-ppill-vis {
   padding: 0 0.34em 0 0.3em;
   border-radius: 0.6em;
   background: var(--pill-bg);
   box-shadow: inset 0 0 0 1px var(--pill-border);
-  color: var(--pill-text);
+  line-height: 0;
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
-}
-.sh-ppill-vis {
-  line-height: 0;
   -webkit-user-select: none;
   user-select: none;
 }
 .sh-ppill-vis * {
   line-height: 0;
 }
-.sh-ppill-head,
-.sh-ppill-name {
+.sh-ppill-nw {
   white-space: nowrap;
 }
 .sh-ppill-dot,
@@ -1831,7 +1832,6 @@ button.sh-apill {
   box-shadow: 0 0 0 1px var(--pill-ring, transparent);
 }
 .sh-ppill-ctx {
-  margin-right: 0.04em;
   font-size: 0.857em;
   color: var(--pill-muted);
 }

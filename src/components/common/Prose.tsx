@@ -22,12 +22,11 @@
  * - `<ProseParts parts>`: a parts list as the backend sends it;
  * - `<BackendProse text parts>`: a backend text with its optional parts.
  */
-import { Fragment, useMemo, type CSSProperties } from 'react';
+import { Fragment, useMemo, type CSSProperties, type ReactNode } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { SHOT_ARROW } from '../../utils/formatters';
 import { isNamePart, proseParts, type ProsePart } from '../../utils/prose';
-import type { ProseShotEnd } from '../../types/ipc/ProseShotEnd';
 import i18n from '../../i18n';
 import { LoopGlyph, markOf, pillStyle, usePillColors, type HomeMark, type ResolvedPill } from './LinePill';
 
@@ -54,24 +53,72 @@ function ProseLoop() {
   );
 }
 
-/** A name with its marks, kept on one line. */
-function NameWithMarks({
-  name,
-  pill,
-  homeLine,
-  loopEnd,
-  stationId,
+/**
+ * `text` as three runs: its first word, what lies between, its last word
+ * (`['Upper', ' Sump ', 'Passage']`; one word: `['12', '', '']`), so the
+ * dot can stay with the first word and the marks with the last while a long
+ * name still wraps between its words.
+ */
+export function splitWords(text: string): [string, string, string] {
+  const first = /^\S*/.exec(text)?.[0] ?? '';
+  if (first.length === text.length) return [text, '', ''];
+  const last = /\S*$/.exec(text)?.[0] ?? '';
+  return [first, text.slice(first.length, text.length - last.length), last];
+}
+
+/**
+ * `text` with `before` glued to its first word and `after` to its last (no
+ * line break between), the words in `textClass` when given (the muted
+ * context), `before` and `after` outside it.
+ */
+function Glued({
+  before,
+  text,
+  after,
+  textClass,
 }: {
-  name: string;
-  pill: ResolvedPill;
-  homeLine?: number | undefined;
-  loopEnd?: boolean | undefined;
-  stationId?: number | undefined;
+  before?: ReactNode;
+  text: string;
+  after?: ReactNode;
+  textClass?: string;
 }) {
-  const mark = markOf(pill, homeLine);
+  const words = (w: string) => (textClass && w !== '' ? <span className={textClass}>{w}</span> : w);
+  const [first, middle, last] = splitWords(text);
+  if (middle === '' && last === '') {
+    return (
+      <span className="sh-ppill-nw">
+        {before}
+        {words(first)}
+        {after}
+      </span>
+    );
+  }
   return (
-    <span className="sh-ppill-name">
-      {name}
+    <>
+      <span className="sh-ppill-nw">
+        {before}
+        {words(first)}
+      </span>
+      {words(middle)}
+      <span className="sh-ppill-nw">
+        {words(last)}
+        {after}
+      </span>
+    </>
+  );
+}
+
+/** A name's marks: the home-line dot, the loop mark, the Station ID. */
+function marksOf(
+  pill: ResolvedPill,
+  homeLine: number | undefined,
+  loopEnd: boolean | undefined,
+  stationId?: number | undefined,
+): ReactNode {
+  const mark = markOf(pill, homeLine);
+  if (!mark && !loopEnd && stationId === undefined) return null;
+  return (
+    <>
       {mark && <ProseMark mark={mark} />}
       {loopEnd && <ProseLoop />}
       {stationId !== undefined && (
@@ -79,69 +126,61 @@ function NameWithMarks({
           #{stationId}
         </span>
       )}
-    </span>
+    </>
   );
 }
 
-function ShotEnd({ end, pill }: { end: ProseShotEnd; pill: ResolvedPill }) {
-  return <NameWithMarks name={end.name} pill={pill} homeLine={end.home_line} loopEnd={end.loop_end} />;
-}
+const DOT = <span className="sh-ppill-dot" />;
 
-/** The dot and the muted context (`Side:`), kept together. */
+/** The dot and the muted context (`Side:`), then a space; or the dot alone when there is none. */
 function Head({ context }: { context?: string | undefined }) {
+  if (!context) return null;
   return (
-    <span className="sh-ppill-head">
-      <span className="sh-ppill-dot" />
-      {context ? <span className="sh-ppill-ctx">{context}:</span> : null}
-    </span>
+    <>
+      <Glued before={DOT} text={`${context}:`} textClass="sh-ppill-ctx" />{' '}
+    </>
   );
 }
 
-/** One name of a sentence as an inline pill (see the module doc). */
+/** What the pill draws for `part` (aria-hidden: the sr-only words say it). */
+function Drawing({ part, pill }: { part: NamePart; pill: ResolvedPill }) {
+  const dot = part.kind !== 'line' && part.context ? null : DOT;
+  if (part.kind === 'station') {
+    return (
+      <>
+        <Head context={part.context} />
+        <Glued before={dot} text={part.name} after={marksOf(pill, part.home_line, part.loop_end, part.station_id)} />
+      </>
+    );
+  }
+  if (part.kind === 'shot') {
+    // A break may fall before the arrow, never after it.
+    return (
+      <>
+        <Head context={part.context} />
+        <Glued before={dot} text={part.from.name} after={marksOf(pill, part.from.home_line, part.from.loop_end)} />{' '}
+        <Glued before={`${SHOT_ARROW} `} text={part.to.name} after={marksOf(pill, part.to.home_line, part.to.loop_end)} />
+      </>
+    );
+  }
+  return <Glued before={DOT} text={part.name} />;
+}
+
+/**
+ * One name of a sentence as an inline pill (see the module doc). The outer
+ * span carries the colours and the test hooks and paints nothing; the
+ * drawing inside it is the painted pill, so the sr-only words beside it
+ * (absolutely positioned) never open an empty painted fragment where the
+ * pill wraps.
+ */
 export function ProsePill({ part, testId }: { part: NamePart; testId?: string | undefined }) {
   const level = useUIStore((s) => s.syntacticLevel);
   const pill = usePillColors(part.line_id ?? null);
   if (!syntacticLevelAtLeast(level, 'full')) return <>{part.text}</>;
-  let drawing;
-  if (part.kind === 'station') {
-    drawing = (
-      <>
-        <Head context={part.context} />{part.context ? ' ' : null}
-        <NameWithMarks
-          name={part.name}
-          pill={pill}
-          homeLine={part.home_line}
-          loopEnd={part.loop_end}
-          stationId={part.station_id}
-        />
-      </>
-    );
-  } else if (part.kind === 'shot') {
-    drawing = (
-      <>
-        <Head context={part.context} />{part.context ? ' ' : null}
-        <ShotEnd end={part.from} pill={pill} />
-        {` ${SHOT_ARROW} `}
-        <ShotEnd end={part.to} pill={pill} />
-      </>
-    );
-  } else {
-    drawing = (
-      <>
-        <Head />
-        {part.name}
-      </>
-    );
-  }
   return (
-    <span
-      className="sh-ppill"
-      style={pillStyle(pill.colors)}
-      data-prose-kind={part.kind}
-      data-testid={testId}
-    >
+    <span className="sh-ppill" style={pillStyle(pill.colors)} data-prose-kind={part.kind} data-testid={testId}>
       <span className="sh-ppill-vis" aria-hidden="true">
-        {drawing}
+        <Drawing part={part} pill={pill} />
       </span>
       <span className="sr-only">{part.text}</span>
     </span>
