@@ -13,12 +13,12 @@ use crate::{
     ArchivedStationWire, ClosureArchive, ClosureEndWire, ClosureKeepPreview, DetachLinePreview,
     DetachLineResult, IdentityNotice, KeepCandidate, LetteredStationWire, LineId,
     LoopClosureNaming, MergeKeepPreview, NameCollisionWire, RemoveClosureNaming, RenameSuggestion,
-    RestoredIdentityWire, StationId, StationIdentity, StationOwner, StationRef,
+    RestoredIdentityWire, ShownElsewhereWire, StationId, StationIdentity, StationOwner, StationRef,
 };
 
 use super::super::{
-    ClosureEnd, ClosureId, ClosureStrategy, IdentityReport, LetteredStation, LoopClosure,
-    MergeMove, OpError, Project,
+    ClosureEnd, ClosureId, ClosureStrategy, HiddenComment, IdentityReport, LetteredStation,
+    LoopClosure, MergeMove, OpError, Project,
 };
 
 impl Project {
@@ -115,6 +115,7 @@ impl Project {
                 })
                 .collect(),
             unarchived: report.unarchived.clone(),
+            hidden: report.hidden.iter().map(hidden_wire).collect(),
         }
     }
 
@@ -163,6 +164,9 @@ impl Project {
                 comment,
                 home_line: self.home_line(id),
             },
+            unarchived: m.unarchived,
+            comments_hidden: m.comments_hidden.iter().map(hidden_wire).collect(),
+            not_given_back: m.not_given_back.clone(),
         }
     }
 
@@ -309,6 +313,16 @@ impl Project {
             rest_default: naming.rest_default,
             shown_before: naming.shown_before.and_then(|id| self.station_identity(id)),
             collisions: self.collisions_wire(&naming.collisions, &naming.alternatives),
+            shown_elsewhere: naming
+                .shown_elsewhere
+                .iter()
+                .map(|e| ShownElsewhereWire {
+                    station: e.slot,
+                    before: self.identity_named(e.before.0, &e.before.1),
+                    after: self.identity_named(e.after.0, &e.after.1),
+                })
+                .collect(),
+            comments_hidden: naming.comments_hidden.iter().map(hidden_wire).collect(),
         })
     }
 
@@ -320,6 +334,17 @@ impl Project {
                 .map(|r| super::stations::record_wire(self, r))
                 .collect()
         })
+    }
+}
+
+/// A hidden comment on the wire: the identity as it showed the comment
+/// before the op, with the comment.
+pub(super) fn hidden_wire(hidden: &HiddenComment) -> StationIdentity {
+    StationIdentity {
+        id: hidden.station,
+        name: hidden.name.clone(),
+        comment: Some(hidden.comment.clone()),
+        home_line: hidden.home_line,
     }
 }
 

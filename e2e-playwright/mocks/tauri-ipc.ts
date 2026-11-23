@@ -1126,6 +1126,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             renamed_lines: renamed,
             collisions: mockCollisions(junctions, closures, kept, renamed, unionKeys, false),
             hidden: other,
+            // The mock's merges run no promotion and keep no record lines:
+            // nothing else is hidden, Detach gives every line back.
+            comments_hidden: [],
+            not_given_back: [],
           };
         };
         return {
@@ -4798,6 +4802,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               rest_choices: kept && others.length > 1 ? others.map(record) : [],
               ...(kept && others.length > 1 ? { rest_default: record(others[0]!).id } : {}),
               collisions,
+              // No promotion and no closure end moves in the mock.
+              shown_elsewhere: [],
+              comments_hidden: [],
             };
           }
 

@@ -2124,3 +2124,18 @@ fn farm_seeds_keep_the_computed_view_within_its_misclosures() {
         }
     }
 }
+
+/// Farm dbf19ed85330 (sg-migration, "wire-unexplained | removed_comments",
+/// seed 35006357): a range delete over a migrated loop end (a 0.6.0
+/// closure's end, archived by the migration, RS 8.3) whose node has no
+/// comment of its own: the slot showed its kept end's comment, which the
+/// delete does not remove, so the port lists none where 0.6.0 listed the
+/// slot's copy. The wire-equivalence oracle now explains it (RS 5.1).
+/// Injection: drop the `shows_anothers_comment` retain in
+/// `wire_equivalence_tests::range_impact`.
+#[test]
+fn farm_seed_range_delete_over_a_loop_end_lists_no_comment() {
+    if let Err(f) = run_seed(35_006_357) {
+        panic!("seed 35006357: {} {}", f.class, f.detail);
+    }
+}

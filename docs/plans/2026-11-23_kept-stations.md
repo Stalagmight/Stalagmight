@@ -1183,3 +1183,119 @@ reason.
   produce them by node), and RS-T did not take it. Collapsing consecutive
   nodes that share a shown identity across a closure edge (section 6) needs
   the gas engine's and the ruler's outputs to change, which is a follow-up.
+
+## Deviations (package RS-FX1)
+
+Decisions the model fixes after the farm's first round and the model
+review took where this page is silent or the code disagreed, each with its
+reason.
+
+- **The kept station is shown, also over a loop end (model review 1).**
+  4.1 step 5 holds only when the closure-archived candidate is the one
+  kept. When the merge keeps the other station, the closure that archived
+  the one not kept drops its archive before the fold
+  (`Project::unarchive_for_keep`), so the merged node shows the kept
+  station on every line. Without it the node stayed archived and showed
+  that closure's kept end, so the station the user kept, and its comment,
+  were shown nowhere while `MergeReport::kept` named it: against section
+  1, item 3 ("the kept station is the one shown everywhere"). The review's
+  other answer (keep step 5 and name the kept station as hidden behind the
+  closure) would leave that contradiction. Every merge path does the same:
+  a sweep promotion (`Promotion::unarchived`) and Combine's join. Each drop
+  is reported (`MergeReport::unarchived`, `MergeMove::unarchived`, first in
+  `identities.unarchived`), and the Merge dialog says the closure stays.
+  Two closure-archived candidates: the kept one's archive stays and the
+  other's goes, so the normalisation's list order no longer overrides the
+  keep. Geometry is untouched (an archive is identity only).
+- **Every comment an op hides is reported (farm rs-comment on merge,
+  detach, range delete, delete shot, delete line).** `IdentityReport::
+  hidden` (`HiddenComment`) compares the comments shown before the op with
+  those shown after it, in `run_op`, the edit epilogue and Combine, so
+  promotions, restores and moved loop ends inside an op are named, also a
+  comment a restore moved to a record that a promotion then archived
+  (`held_by`). Left out: the dialog's own hidden station (a merge's
+  archived station, a closure's archived end, which have their own field)
+  and a restore's `comment_hidden`. A comment another identity shows
+  afterwards (moved by a restore, taken or joined by Combine's pick) or one
+  that is gone (its station deleted, its text replaced) is not hidden. A
+  diff rather than per-path bookkeeping, so a path added later cannot hide
+  a comment silently. The previews carry it (`MergeMove::comments_hidden`,
+  `DetachNaming::comments_hidden`, the delete previews' `identities`); on
+  the wire `IdentityNotice.hidden`, `MergeKeepPreview.comments_hidden`,
+  `DetachLinePreview.comments_hidden`; the notice, the Merge and Detach
+  dialogs and the delete panel say each.
+- **The range preview runs Split too (farm 7a5ed348b262).** For an
+  interior range whose gap-close is offered, `DeleteRangePreview::
+  split_weld` is the split run on a copy (`SplitWeld` gains `identities`),
+  so the Split choice names what its promotions hide; the wire's
+  `split_identities` on both delete previews. The delete panel did not show
+  the previews' identities at all; it now says them in the notice's words.
+- **A dialog's renames are judged after the sweep (farm e546f002311b).**
+  They still apply right after the mutation, but a collision of the op's
+  own that they leave unanswered refuses only when it still stands after
+  the sweep and the normalisation, or the sweep lettered it
+  (`Project::run_op_answered`). A collision a promotion merges away
+  (the restored station folded into another) is no collision, which is
+  what the preview, the op run with rule L, says; before, the dialog's
+  empty answer was refused for it. A collision the epilogue itself makes is
+  lettered by rule L as before.
+- **The sweep normalises before rule L (farm c36d3c33f104).** A promotion
+  keeping a loop end whose closure's kept end is shown through the other
+  end makes the archives cycle; in that state every node of the cycle shows
+  itself, so rule L measured the wrong lines and lettered the identity
+  shown on more. The sweep now normalises after its promotions
+  (`SweepReport::unarchived`, then in the op's `identities.unarchived`) and
+  letters after that. The farm seed's own promotion no longer cycles (the
+  kept-station rule above settles it); the hand-built test keeps the loop
+  end.
+- **A tear of a several-line record stays as RS-M1 made it; the property
+  was wrong (farm f953c8f1b475, decided for the product).** The torn line's
+  fresh node takes the record (4.4: "the fresh node takes that record's
+  identity"), and the record's other lines show the junction natively. An
+  id is one node or one record (A1), and the tear exists to separate the
+  two lines (both still reach the other join station, so taking them off
+  together would close the loop again), so one of the record's lines must
+  do without it; the torn side is the one Remove Closure can give it back
+  to. `rs-stale-record` now excuses a record that a tear closure ties back
+  to its junction, as it excused a tear of a line through one junction
+  twice.
+- **Detach names what changes elsewhere (model review 2).**
+  `DetachNaming::shown_elsewhere` (wire `shown_elsewhere`, type
+  `ShownElsewhere`) compares every slot away from the junction before and
+  after the detach (a detach adds and removes no slot, so slots match by
+  line and index): a loop end whose closure's kept end came off with the
+  lines, a station a promotion merged. `shown_before` is set in every case
+  when the detached line showed a loop closure's station and shows another
+  afterwards (it was only in case 3), and the dialog names what the line
+  shows from the line's own result (in case 2 the junction's name, not the
+  one the other lines get back).
+- **Combine names a join station that stays a record (model review 3).**
+  When the other join station is also native on a third line, it stays a
+  record naming that line (4.4), its comment with it, and the comment pick
+  does not apply. `CombineReport::join_archived` (wire `CombinePlan.
+  join_archived`) names it; its hidden comment is in `identities.hidden`;
+  the dialog explains instead of offering the pick. The RS property's
+  Combine exemption is narrowed to the case where the pick applies.
+- **The merge preview's renamed lines include every slot shown
+  differently.** Besides the slots of the two merged identities, a line on
+  which any slot shows another identity after the merge is listed (a merge
+  adds and removes no slot, so slots match by line and index): a safety net
+  for a promotion the merge's sweep makes, which merges rarely do (a merge
+  joins pieces, so its closures become loops), and the same check the
+  Detach preview's `shown_elsewhere` makes.
+- **Records still carry no owner link (model review 4).** An owner link
+  would change the file format (records gain an owner), the undo changeset
+  and the wire; it is left for a follow-up. Until then the merge preview
+  names the lines Detach will not give back (`MergeMove::not_given_back`,
+  the archived station's own records' lines), and the dialog says "brings
+  it back on its own lines; Side keeps showing Main / 12" instead of
+  promising every line.
+- **The migration oracle explains a loop end's comment (farm
+  dbf19ed85330).** A range delete over a migrated loop end whose node has
+  no comment of its own lists no removed comment: the slot showed its kept
+  end's comment (5.1), which the delete keeps. 0.6.0 listed the slot's
+  copy. The wire-equivalence oracle classes it; not a product change.
+- **The farm seeds are pinned.** `rs_properties_hold_on_the_farm_seeds`
+  replays the nine RS property seeds at the farm's step counts (about a
+  second), `farm_seed_range_delete_over_a_loop_end_lists_no_comment` the
+  migration seed; `kept_report_tests` pins each mechanism by hand.

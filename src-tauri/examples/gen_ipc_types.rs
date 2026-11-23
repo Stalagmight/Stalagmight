@@ -74,8 +74,8 @@ use stalagmight_lib::models::{
 use stalagmight_lib::models::{
     ArchivedStationWire, ClosureArchive, ClosureEndWire, ClosureKeepPreview, IdentityNotice,
     KeepCandidate, LetteredStationWire, LoopClosureNaming, MergeKeepPreview, NameCollisionWire,
-    RemoveClosureNaming, RenameSuggestion, RestoredIdentityWire, ShownSlot, StationIdentity,
-    StationOwner, StationRename,
+    RemoveClosureNaming, RenameSuggestion, RestoredIdentityWire, ShownElsewhereWire, ShownSlot,
+    StationIdentity, StationOwner, StationRename,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -330,6 +330,7 @@ fn main() {
     export::<LetteredStationWire>(&out_dir);
     export::<RestoredIdentityWire>(&out_dir);
     export::<IdentityNotice>(&out_dir);
+    export::<ShownElsewhereWire>(&out_dir);
     export::<StationRef>(&out_dir);
     export::<StationMergeWire>(&out_dir);
     export::<ZeroDatumWire>(&out_dir);
@@ -677,6 +678,7 @@ fn main() {
         "LetteredStation",
         "RestoredIdentity",
         "IdentityNotice",
+        "ShownElsewhere",
         "StationRef",
         "StationMerge",
         "ZeroDatum",

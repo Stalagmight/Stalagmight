@@ -59,6 +59,10 @@ impl Project {
                 .unwrap_or_default(),
             split_max_move_m: preview.split_weld.as_ref().map_or(0.0, |w| w.max_move_m),
             identities: self.preview_identities(&preview.identities),
+            split_identities: preview
+                .split_weld
+                .as_ref()
+                .and_then(|w| self.preview_identities(&w.identities)),
         }
     }
 
@@ -109,6 +113,10 @@ impl Project {
                 .as_ref()
                 .map(|closures| self.closure_pairs(closures)),
             identities: self.preview_identities(&preview.identities),
+            split_identities: preview
+                .split_weld
+                .as_ref()
+                .and_then(|w| self.preview_identities(&w.identities)),
         }
     }
 

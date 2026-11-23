@@ -24,7 +24,14 @@
 //! lines and the retired end's would not. When the identity kept is the
 //! retired end's, the merged node is re-identified (RS 4.1 step 3, its
 //! pre-edit id told to the anchor algorithm), so the layout is the same
-//! either way. Names a promotion makes repeat are lettered by rule L.
+//! either way. When the end not kept is a loop end another closure
+//! archives, that closure's archive is dropped, so the kept station is
+//! shown on every line through the merged node (RS 1.3; otherwise the node
+//! would stay archived and show that closure's kept end, and the kept
+//! station would be shown nowhere). After the last promotion the closure
+//! archives are normalised (C1, C2, RS 5.4: two merged loop ends may make
+//! a chain cycle), and then the names the promotions made repeat are
+//! lettered by rule L, on what each identity is shown on once that settled.
 //!
 //! A promotion only joins pieces that were apart, so a closure the pass kept
 //! as a loop can never become one station later in the pass, and one pass
@@ -52,6 +59,9 @@ pub struct SweepReport {
     /// The names the promotions made repeat, lettered by rule L (RS 5.3: a
     /// path without a dialog).
     pub lettered: Vec<LetteredStation>,
+    /// Closures whose archive the promotions dropped (each [`Promotion`]'s
+    /// `unarchived`, then the normalisation after them), in that order.
+    pub unarchived: Vec<ClosureId>,
 }
 
 impl SweepReport {
@@ -77,6 +87,9 @@ pub struct Promotion {
     pub kept: StationId,
     /// The other one, archived in the merged node (a record).
     pub archived: StationId,
+    /// The closure that archived `archived` as a loop end, whose archive the
+    /// promotion dropped so `kept` is shown on every line (RS 1.3).
+    pub unarchived: Option<ClosureId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,12 +161,17 @@ impl Project {
             let before = self.anchor_snapshot();
             let pre = before_promotions.is_none().then(|| self.clone());
             let survivor_native = self.native_lines(survivor);
+            let other = if keep == retired { survivor } else { retired };
+            let held = self.closures.clone();
+            let unarchived = self.unarchive_for_keep(keep, other);
             if self.merge_ids(survivor, retired).is_err() {
+                self.closures = held;
                 continue;
             }
             if pre.is_some() {
                 before_promotions = pre;
             }
+            report.unarchived.extend(unarchived);
             let mut ctx = EditContext::merge(survivor, retired).with_renamed(retired, survivor);
             if keep == retired {
                 // Geometry first, then the identity (RS 4.1 step 3).
@@ -170,9 +188,14 @@ impl Project {
                 retired,
                 kept: keep,
                 archived,
+                unarchived,
             });
         }
         if let Some(before) = &before_promotions {
+            // Rule L judges what each identity is shown on, which a chain
+            // cycle the merges made would misstate (every node of a cycle
+            // shows itself until the normalisation breaks it).
+            report.unarchived.extend(self.normalise_closure_archives());
             report.lettered = self.letter_collisions(before);
         }
         if fates.iter().any(|fate| *fate != Fate::Keep) {

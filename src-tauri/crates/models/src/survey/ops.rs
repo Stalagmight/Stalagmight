@@ -10,8 +10,13 @@
 //! command is a topology edit (plan 5.5), normalise the closure archives
 //! (C1, C2, RS 5.4), settle the name collisions the epilogue made by rule L
 //! (`Project::letter_collisions`), then [`Project::validate`]. A command that
-//! carries the user's renames (merge, detach) checks its own collisions
-//! before the epilogue and refuses an unanswered one ([`OpError::NameTaken`]).
+//! carries the user's renames (merge, detach, closures) applies them right
+//! after its mutation ([`Project::run_op_answered`]) and refuses a collision
+//! of its own that they leave unanswered ([`OpError::NameTaken`]), judged
+//! once the sweep ran: a collision a promotion merges away is no collision
+//! (its preview, the op run with rule L, lists none), and one the sweep
+//! letters is unanswered too. Collisions the epilogue itself makes (a
+//! restore, a promotion, a dropped archive) are lettered by rule L.
 //! A refusal or a violation restores the project as it was (the rollback is a
 //! clone taken before the mutation), so a failed command never leaves a
 //! trace.
@@ -238,9 +243,26 @@ impl Project {
         sweep: Sweep,
         op: impl FnOnce(&mut Project) -> Result<(T, EditContext), OpError>,
     ) -> Result<OpOutcome<T>, OpError> {
+        self.run_op_answered(sweep, super::ops_merge::Answers::RuleL, op)
+    }
+
+    /// [`Self::run_op`] for a command that carries a dialog's `answers`: the
+    /// renames apply right after `op`'s mutation, and a collision `op` made
+    /// that they leave unanswered refuses ([`OpError::NameTaken`]) when it
+    /// still stands once the sweep and the normalisation ran, or when the
+    /// sweep lettered it (rule-L answers letter it instead, as without a
+    /// dialog). A collision a promotion merged away refuses nothing: the
+    /// preview, which runs the op with rule L, lists none for it.
+    pub(super) fn run_op_answered<T>(
+        &mut self,
+        sweep: Sweep,
+        answers: super::ops_merge::Answers<'_>,
+        op: impl FnOnce(&mut Project) -> Result<(T, EditContext), OpError>,
+    ) -> Result<OpOutcome<T>, OpError> {
         let backup = self.clone();
         let before = self.anchor_snapshot();
         let result = op(self).and_then(|(value, ctx)| {
+            let own_collisions = answers.apply(self)?;
             self.drop_stale_attachments();
             let restored = self.restore_archived_identities();
             let pairs: Vec<(StationId, StationId)> =
@@ -251,7 +273,9 @@ impl Project {
                 Sweep::Run => self.sweep_orphan_closures(),
                 Sweep::Skip => SweepReport::default(),
             };
-            let unarchived = self.normalise_closure_archives();
+            let mut unarchived = sweep.unarchived.clone();
+            unarchived.extend(self.normalise_closure_archives());
+            self.refuse_unanswered(&own_collisions, &sweep)?;
             // Every letter the command gave: the sweep's (it letters every
             // collision standing when its promotions end, the command's own
             // included) and the final pass's, so a preview lists them all
@@ -260,16 +284,19 @@ impl Project {
             lettered.extend(self.letter_collisions(&backup));
             let violations = self.validate();
             if violations.is_empty() {
+                let identities = IdentityReport {
+                    restored,
+                    unarchived,
+                    lettered,
+                    hidden: Vec::new(),
+                }
+                .with_hidden(&backup, self);
                 Ok(OpOutcome {
                     value,
                     anchors,
                     sweep,
                     reidentified: ctx.reidentified,
-                    identities: IdentityReport {
-                        restored,
-                        unarchived,
-                        lettered,
-                    },
+                    identities,
                 })
             } else {
                 Err(OpError::Invalid(violations))
@@ -287,10 +314,14 @@ impl Project {
     }
 
     /// Apply the user's `renames` (each renames the identity whose Station ID
-    /// it names), then refuse with [`OpError::NameTaken`] when a line still
-    /// shows two identities by one name: what a command that carries renames
-    /// runs right after its mutation, before the epilogue.
-    pub(super) fn apply_renames(&mut self, renames: &[(StationId, String)]) -> Result<(), OpError> {
+    /// it names) and return the collisions still standing, by line and name:
+    /// what a command that carries renames runs right after its mutation,
+    /// before the epilogue ([`Self::refuse_unanswered`] judges them once the
+    /// sweep ran).
+    pub(super) fn apply_renames(
+        &mut self,
+        renames: &[(StationId, String)],
+    ) -> Result<Vec<(LineId, String)>, OpError> {
         for (id, name) in renames {
             let station = self
                 .stations
@@ -298,11 +329,37 @@ impl Project {
                 .ok_or(OpError::UnknownStation(*id))?;
             station.name.clone_from(name);
         }
-        match self.name_collisions().into_iter().next() {
-            Some(collision) => Err(OpError::NameTaken {
-                line: collision.line,
-                name: collision.name,
-            }),
+        Ok(self
+            .name_collisions()
+            .into_iter()
+            .map(|c| (c.line, c.name))
+            .collect())
+    }
+
+    /// Refuse with [`OpError::NameTaken`] when one of `own` (the collisions
+    /// an op with a dialog's renames left right after its mutation) still
+    /// stands, or the sweep lettered it ([`Self::run_op_answered`]).
+    pub(super) fn refuse_unanswered(
+        &self,
+        own: &[(LineId, String)],
+        sweep: &SweepReport,
+    ) -> Result<(), OpError> {
+        if own.is_empty() {
+            return Ok(());
+        }
+        let lettered = sweep
+            .lettered
+            .iter()
+            .map(|l| (l.line, l.from.clone()))
+            .find(|pair| own.contains(pair));
+        let standing = || {
+            self.name_collisions()
+                .into_iter()
+                .map(|c| (c.line, c.name))
+                .find(|pair| own.contains(pair))
+        };
+        match lettered.or_else(standing) {
+            Some((line, name)) => Err(OpError::NameTaken { line, name }),
             None => Ok(()),
         }
     }

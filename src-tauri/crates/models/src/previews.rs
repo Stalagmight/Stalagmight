@@ -81,6 +81,16 @@ pub struct DetachLinePreview {
     /// An earlier letter given because of the junction stays.
     #[serde(default)]
     pub collisions: Vec<crate::NameCollisionWire>,
+    /// The slots away from the junction that show another station after
+    /// the detach (RS 4.2, M-P2-8): a loop end whose closure's kept end
+    /// comes off with the lines, or a station a promotion the detach makes
+    /// merges. In line order, then chain order.
+    #[serde(default)]
+    pub shown_elsewhere: Vec<crate::ShownElsewhereWire>,
+    /// The comments the detach hides (RS 12): each identity as it showed it,
+    /// with the comment. Undo brings them back.
+    #[serde(default)]
+    pub comments_hidden: Vec<crate::StationIdentity>,
 }
 
 /// One line's result in a [`DetachLinePreview`]: the name it shows its
@@ -131,6 +141,12 @@ pub struct DeleteShotImpact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub identities: Option<crate::IdentityNotice>,
+    /// The same, if the user picks Split instead (an interior delete whose
+    /// gap-close is offered): a promotion the split makes may hide a
+    /// comment. Absent when Split is not offered or does none of these.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub split_identities: Option<crate::IdentityNotice>,
 }
 
 /// Which structural case a contiguous shot-range deletion falls into. Computed
@@ -204,6 +220,12 @@ pub struct DeleteShotRangeImpact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub identities: Option<crate::IdentityNotice>,
+    /// The same, if the user picks Split instead (an interior delete whose
+    /// gap-close is offered): a promotion the split makes may hide a
+    /// comment. Absent when Split is not offered or does none of these.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub split_identities: Option<crate::IdentityNotice>,
 }
 
 /// Fixed part of the gap warning threshold, in metres (#741 decision 4).

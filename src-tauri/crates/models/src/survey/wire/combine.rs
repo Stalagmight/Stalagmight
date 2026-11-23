@@ -203,6 +203,10 @@ impl<'p> Before<'p> {
                 .as_ref()
                 .and_then(|joined| self.joined_move(joined, report)),
             station_renames: report.station_renames.clone(),
+            join_archived: report
+                .join_archived
+                .as_ref()
+                .map(|record| super::stations::record_wire(self.project, record)),
         }
     }
 }

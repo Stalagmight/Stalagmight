@@ -62,8 +62,8 @@ use crate::{
 use super::ops_test_helpers::gps_at;
 use super::test_helpers::{meta, project, shot};
 use super::{
-    ClosureId, ClosureStrategy, EditError, IdentityReport, LetteredStation, OpError, OpOutcome,
-    Project, RangeDeleteMode, SplitOptions, StartAt, SweepReport,
+    ClosureId, ClosureStrategy, EditError, HiddenComment, IdentityReport, LetteredStation, OpError,
+    OpOutcome, Project, RangeDeleteMode, SplitOptions, StartAt, SweepReport,
 };
 
 /// Seeds the CI gate runs.
@@ -207,6 +207,12 @@ impl StepCtx {
                 self.hidden_named.insert(restored.old);
             }
         }
+        self.absorb_hidden(&report.hidden);
+    }
+
+    /// The comments a preview or report names as hidden (RS 12).
+    fn absorb_hidden(&mut self, hidden: &[HiddenComment]) {
+        self.hidden_named.extend(hidden.iter().map(|h| h.station));
     }
 
     /// A promotion archives its other end (RS 5.4); the step's report names
@@ -510,10 +516,11 @@ impl Fuzz {
                     );
                 };
                 let mut ctx = StepCtx::default();
-                // Strict: only what the Merge dialog names is hidden (its
-                // preview has no field for a promotion the merge's sweep
-                // makes; the farm reports one that hides a comment).
+                // Strict: only what the Merge dialog names is hidden: the
+                // archived station, and the comments a promotion the merge's
+                // sweep makes or a loop end it moves hides.
                 ctx.hidden_named.insert(preview.hidden.0);
+                ctx.absorb_hidden(&preview.comments_hidden);
                 ctx.lettered.extend(out.identities.lettered.iter().cloned());
                 let no_renames = renames.as_ref().is_none_or(Vec::is_empty);
                 match merge_then_detach(&before, &self.p, &out, no_renames) {
@@ -626,10 +633,12 @@ impl Fuzz {
                     format!("{label}: the detach went through, its preview was refused ({e})"),
                 )),
             ),
-            (Ok(out), Ok(_)) => {
-                // Strict, as for a merge: the Detach dialog names nothing
-                // hidden, so nothing shown may become hidden.
+            (Ok(out), Ok(naming)) => {
+                // Strict, as for a merge: only what the Detach dialog names
+                // (the comments its sweep's promotions or a moved loop end
+                // hide) may become hidden.
                 let mut ctx = StepCtx::default();
+                ctx.absorb_hidden(&naming.comments_hidden);
                 ctx.lettered.extend(out.identities.lettered.iter().cloned());
                 (label, Ok(Some(ctx)))
             }
@@ -832,11 +841,19 @@ impl Fuzz {
         };
         let label = format!("delete range {line}/{index}..={last_index} {mode:?}");
         let preview = self.p.preview_delete_shot_range(line, first, last);
+        let split = matches!(mode, RangeDeleteMode::Split { .. });
         match self.p.delete_shot_range(line, first, last, &mode) {
             Err(_) => (label, Ok(None)),
             Ok(edited) => {
                 let mut ctx = StepCtx::default();
                 match preview {
+                    // The dialog's Split choice of a range whose gap-close is
+                    // offered: what the split would do (RS 12).
+                    Ok(preview) if split && preview.split_weld.is_some() => {
+                        if let Some(weld) = &preview.split_weld {
+                            ctx.absorb_restores(&weld.identities);
+                        }
+                    }
                     Ok(preview) => {
                         ctx.absorb_restores(&preview.identities);
                         for promotion in &preview.promoted_closures {
@@ -988,9 +1005,15 @@ impl Fuzz {
             Ok(edited) => {
                 let mut ctx = StepCtx::default();
                 ctx.skip_record_nodes.extend(joins);
-                // The user picks the joined station's comment (RS 4.4).
-                ctx.edited.extend(joins);
-                ctx.joined = pick == CombinePick::Both;
+                // The user picks the joined station's comment (RS 4.4) when
+                // the join station not kept becomes history; when it stays
+                // archived for a third line the pick does not apply, and its
+                // hidden comment must be in the report (model review
+                // finding 3).
+                if edited.value.join_archived.is_none() {
+                    ctx.edited.extend(joins);
+                    ctx.joined = pick == CombinePick::Both;
+                }
                 ctx.absorb_report(&edited.value.identities, &edited.report.sweep);
                 ctx.absorb_report(&edited.report.identities, &SweepReport::default());
                 (label, Ok(Some(ctx)))
@@ -1277,7 +1300,19 @@ fn check_records(
                     .iter()
                     .any(|rec| rec.id == r.record && rec.lines.contains(&line))
             });
-        if !candidates.iter().any(|&c| holds(c)) && !elsewhere_on_line {
+        // A tear of one line of a several-line record (deviation RS-M1, "a
+        // tear with a several-line record", kept by RS-FX1): the record went
+        // with the torn line onto its fresh node, which the tear closure ties
+        // to the junction, so the record's other lines show the junction
+        // natively there. An id is one node or one record (A1), and the tear
+        // must separate the lines (they would close the loop again), so one
+        // side has to do without it; the record is not history.
+        let torn_off = after.stations.contains_key(&r.record)
+            && after.closures.iter().any(|c| {
+                (c.a == r.record && candidates.contains(&c.b))
+                    || (c.b == r.record && candidates.contains(&c.a))
+            });
+        if !candidates.iter().any(|&c| holds(c)) && !elsewhere_on_line && !torn_off {
             let now = if after.stations.contains_key(&r.record) {
                 format!("a node on {:?}", after.topology().lines_of(r.record))
             } else {
@@ -1591,6 +1626,46 @@ fn rs_properties_hold_on_the_default_seeds() {
     }
 }
 
+/// The farm's first round on the RS integration (package RS-FX1): each seed
+/// failed with the signature in its comment, at the steps the farm ran it
+/// with (`rs-props` 50, `rs-props-long` 200). Pinned so they stay fixed;
+/// the hand-built tests in `kept_report_tests` pin each mechanism.
+const FARM_SEEDS: [(u32, usize); 9] = [
+    // 4909b48e2ea4 rs-comment, merge: a loop end merged keeping the other
+    // station hid the kept one (model review finding 1).
+    (480_000_039, 200),
+    // 647783847b78 rs-comment, detach line: a promotion its sweep made.
+    (480_000_033, 200),
+    // 7a5ed348b262 rs-comment, delete range: the Split choice's promotion.
+    (480_000_143, 200),
+    // 56ce8638669d rs-comment, delete shot: a promotion kept a loop end's
+    // partner and hid it (model review finding 1, sweep path).
+    (400_002_693, 50),
+    // 4f602aeda8e9 rs-comment, delete line: a restore moved a comment that
+    // a promotion then archived.
+    (480_000_296, 200),
+    // e546f002311b rs-answers, detach line: renames judged before the sweep.
+    (400_000_326, 50),
+    (400_002_173, 50),
+    // c36d3c33f104 rs-rule-l, delete line: the sweep lettered in a cycle.
+    (400_010_005, 50),
+    // f953c8f1b475 rs-stale-record, combine keep: a tear of a several-line
+    // record (the oracle's excuse, deviation RS-M1 kept by RS-FX1).
+    (480_000_089, 200),
+];
+
+#[test]
+fn rs_properties_hold_on_the_farm_seeds() {
+    for (seed, steps) in FARM_SEEDS {
+        if let Err((step, failure, log)) = run_seed(seed, steps, false) {
+            panic!(
+                "seed {seed} step {step}: {}: {}\nsteps: {log:#?}",
+                failure.property, failure.detail
+            );
+        }
+    }
+}
+
 #[test]
 fn the_rs_fuzzer_is_deterministic() {
     let a = run_seed(3, 20, false).map(|c| c.len());
@@ -1728,4 +1803,73 @@ fn a_collision_the_sweep_letters_is_in_the_preview_and_the_notice() {
     assert!(!out.sweep.promoted.is_empty());
     assert_eq!(out.identities.lettered, out.sweep.lettered);
     let _ = x;
+}
+
+/// Farm f953c8f1b475 (seed 480000089, "combine keep"), decided on the
+/// oracle's side: junction J of line T holds the record S of a split
+/// junction merged away (S names L1 and L2). Combining K (from L1's Q) with
+/// L2 joined by the closure from L2's end to Q tears L2 off J (the two join
+/// stations are one piece through J). The tear's fresh node takes S (RS
+/// 4.4), so L1 shows J natively there: an id is one node or one record
+/// (A1), and the tear must separate L1 and L2 (both reach Q, they would
+/// close the loop again), so one of them does without S. The property
+/// excused only a tear of a line through J twice; it now excuses the
+/// record a tear closure ties back to the junction. Injection: drop
+/// `torn_off` from `check_records`.
+#[test]
+fn a_tear_of_a_several_line_record_is_not_a_stale_record() {
+    use super::ops_test_helpers::{branch, free_line, ok, run};
+    use super::test_helpers::at;
+    use crate::{CombineJoinEnds, CombinePick, LineEnd};
+    let mut p = project();
+    let t = free_line(&mut p, [0.0, 0.0], run(90.0, 2, 10.0));
+    let l1 = free_line(&mut p, [50.0, 50.0], run(0.0, 2, 10.0));
+    let (j, s, q) = (at(&p, t, 2), at(&p, l1, 0), at(&p, l1, 1));
+    let l2 = branch(&mut p, s, run(90.0, 3, 10.0));
+    ok(p.merge_stations_auto(s, j, j));
+    let k = branch(&mut p, q, run(0.0, 2, 10.0));
+    let r3 = at(&p, l2, 3);
+    for (i, (_, station)) in p.stations.iter_mut().enumerate() {
+        station.name = format!("N{i}");
+    }
+    ok(p.create_closure(
+        r3,
+        Some(l2),
+        q,
+        Some(k),
+        ClosureStrategy::Batch,
+        Some(q),
+        &[],
+    ));
+    assert!(p.validate().is_empty(), "{:?}", p.validate());
+    assert_eq!(p.record_naming(j, l1).map(|r| r.id), Some(s));
+    assert_eq!(p.record_naming(j, l2).map(|r| r.id), Some(s));
+    let records = record_slots(&p);
+    let uuids: BTreeSet<String> = p
+        .lines()
+        .iter()
+        .flat_map(|l| l.shots.iter().map(|s| s.uuid.clone()))
+        .collect();
+    let options = CombineLinesOptions {
+        name: "C".to_string(),
+        color: "#123456".to_string(),
+        swap_lr: false,
+        comment_pick: CombinePick::Kept,
+        name_pick: CombinePick::Kept,
+        join: Some(CombineJoinEnds {
+            kept: LineEnd::Start,
+            other: LineEnd::End,
+        }),
+    };
+    let edited = p.combine_lines(k, l2, &options).unwrap();
+    assert!(p.validate().is_empty(), "{:?}", p.validate());
+    assert!(
+        edited.value.torn_ties.iter().any(|tie| tie.station == j),
+        "L2 is torn off J: {:?}",
+        edited.value.torn_ties
+    );
+    assert!(p.stations.contains_key(&s), "the fresh node takes S");
+    assert!(p.is_native(j, l1), "L1 shows J natively");
+    let skip: BTreeSet<StationId> = [q, r3].into_iter().collect();
+    check_records(&records, &uuids, &p, &skip).unwrap();
 }

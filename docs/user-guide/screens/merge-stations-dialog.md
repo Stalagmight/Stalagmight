@@ -27,10 +27,18 @@ its name and comment ("Side / 0 is archived with its comment"), and
 **Detach Line from Station** brings it back. The dialog preselects the
 station that holds a zero datum or GPS fix, else the one on the longest
 line. If a loop closure joins the two stations and hides one of them, the
-dialog keeps the one it shows and says why. If the kept name is already used
+dialog keeps the one it shows and says why. A station another loop closure
+hides (its choice says "shown as ... through a loop closure") keeps showing
+that closure's station when you keep it; when you keep the other station
+instead, the closure stays but stops hiding its end, so the station you kept
+is shown there too, and the dialog says so. If the kept name is already used
 by another station on a line it will be shown on, a row asks how to settle
 it: rename the other station (for example `12` to `12a`) or rename the kept
-one.
+one. When the archived station was itself a junction of earlier merges,
+**Detach Line from Station** gives it back on its own lines only, and the
+dialog names the lines that keep showing the kept station. A comment the
+merge hides in another way (a loop closure the merge turns into a junction)
+is named too; **Undo** brings it back.
 
 When both pieces are already placed by their own
 [zero datum](../concepts/zero-datums-and-gps-fixes.md), a note under the

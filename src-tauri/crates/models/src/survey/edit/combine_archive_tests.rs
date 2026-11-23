@@ -382,3 +382,71 @@ fn a_join_of_two_archived_ends_keeps_the_earlier_archive() {
         .any(|c| c.id == first && c.archive() == Some((k2, k0))));
     assert_eq!(shown(&p, k), ["K0", "K1", "K0", "O1", "O2"]);
 }
+
+/// Model review finding 3: at a co-located join whose other join station
+/// O1 is also on a third line T, the join archives O1 with T (RS 4.4: its
+/// native lines but the absorbed one), so T shows K2 from then on and O1's
+/// comment is hidden with it; the comment pick (here Other) does not apply,
+/// since O1 does not become history. Nothing said so. The report now names
+/// O1's record (`join_archived`, on the wire too) and its hidden comment.
+/// Injection: set `join_archived` to `None` in `run_combine`.
+#[test]
+fn a_join_station_kept_for_a_third_line_is_reported() {
+    let mut p = empty();
+    let k = line_at(&mut p, "K", [0.0, 0.0], run("k", 90.0, 10.0, 2));
+    let o = line_at(&mut p, "O", [30.0, 0.0], run("o", 270.0, 10.0, 1));
+    name_line(&mut p, k, "K", 0);
+    name_line(&mut p, o, "O", 0);
+    let (k2, o1) = (st(&p, k, 2), st(&p, o, 1));
+    let t = line_from(&mut p, "T", o1, run("t", 0.0, 5.0, 1));
+    name_line(&mut p, t, "T", 1);
+    p.station_mut(k2).unwrap().comment = Some("kept note".to_string());
+    p.station_mut(o1).unwrap().comment = Some("other note".to_string());
+    assert_valid(&p);
+    let before = p.clone();
+    let report = ok(p.combine_lines(k, o, &opts(CombinePick::Other, LineEnd::End, LineEnd::End)));
+    assert_valid(&p);
+    let archived = report.join_archived.clone().unwrap();
+    assert_eq!((archived.id, archived.lines.clone()), (o1, vec![t]));
+    assert_eq!(archived.comment.as_deref(), Some("other note"));
+    assert_eq!(
+        p.stations[&k2].comment.as_deref(),
+        Some("kept note"),
+        "the pick does not apply"
+    );
+    assert_eq!(shown(&p, t)[0], "K2");
+    let hidden: Vec<(u32, &str)> = report
+        .identities
+        .hidden
+        .iter()
+        .map(|h| (h.station, h.comment.as_str()))
+        .collect();
+    assert_eq!(hidden, [(o1, "other note")]);
+    let plan = before.combine_plan_wire(&report);
+    assert_eq!(plan.join_archived.map(|r| r.lines), Some(vec![t]));
+}
+
+/// Model review finding 1 at a Combine join: the other line's join station
+/// O2 is a loop end (its closure shows O0), and the kept K2 is kept. The
+/// fold moved the closure's archive onto the joined node, which then showed
+/// O0 on both lines, so K2 was shown nowhere. The closure now drops its
+/// archive (RS 1.3) and the report names it. Injection: drop the
+/// `unarchive_for_keep` call in `run_combine`.
+#[test]
+fn a_join_shows_the_kept_join_station_over_a_loop_end() {
+    let mut p = empty();
+    let k = line_at(&mut p, "K", [0.0, 0.0], run("k", 90.0, 10.0, 2));
+    let o = line_at(&mut p, "O", [40.0, 0.0], run("o", 270.0, 10.0, 2));
+    name_line(&mut p, k, "K", 0);
+    name_line(&mut p, o, "O", 0);
+    let (k2, o0, o2) = (st(&p, k, 2), st(&p, o, 0), st(&p, o, 2));
+    let id = p.push_closure(o2, Some(o), o0, Some(o), ClosureStrategy::Batch);
+    p.closures[0].archived = Some(ClosureEnd::A);
+    assert_valid(&p);
+    assert_eq!(p.shown(o2), o0);
+    let report = ok(p.combine_lines(k, o, &opts(CombinePick::Kept, LineEnd::End, LineEnd::End)));
+    assert_valid(&p);
+    assert_eq!(p.shown(k2), k2, "the kept join station is shown");
+    assert!(report.identities.unarchived.contains(&id));
+    assert!(p.closures.iter().all(|c| c.archived.is_none()));
+}

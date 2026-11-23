@@ -336,6 +336,8 @@ impl Project {
         // geometry is settled ([`Self::keep_other_join`]).
         let mut folded: Option<(StationId, StationId)> = None;
         let mut join_forced: Option<(ClosureId, Option<String>, Option<String>)> = None;
+        let mut join_unarchived: Option<ClosureId> = None;
+        let mut archived_join: Option<StationId> = None;
         if jo != jk {
             let forced = self
                 .forced_merge_keep(jk, jo)
@@ -343,6 +345,11 @@ impl Project {
                 .map(|(closure, _)| closure);
             let comment = |s: StationId| self.stations.get(&s).and_then(|s| s.comment.clone());
             let comments = (comment(jk), comment(jo));
+            // The join station kept is shown on every line (RS 1.3): a loop
+            // end's closure archive on the other one goes.
+            let (kept_join, other_join) = if forced.is_some() { (jo, jk) } else { (jk, jo) };
+            join_unarchived = self.unarchive_for_keep(kept_join, other_join);
+            archived_join = Some(other_join);
             self.merge_ids(jk, jo)?;
             match forced {
                 None => self.pick_join_comment(jk, jo, o, options.comment_pick),
@@ -526,13 +533,25 @@ impl Project {
 
         let replaced = self.dedupe_closures_on(k);
         let removed = self.remove_closures_newly_across_one_shot(&skipped_before);
-        let unarchived = self.normalise_closure_archives();
+        let mut unarchived: Vec<ClosureId> = join_unarchived.into_iter().collect();
+        unarchived.extend(self.normalise_closure_archives());
         // Rule L (RS 4.4: collisions on the combined and third lines).
         let lettered = self.letter_collisions(&pre);
         let violations = self.validate();
         if !violations.is_empty() {
             return Err(EditError::Invalid(violations));
         }
+        // The join station not kept, when it stays a record naming lines of
+        // its own (a third line it was native on): those lines show the kept
+        // join station now, its comment is hidden with it, and the comment
+        // pick did not apply (RS 4.4; model review finding 3).
+        let join_archived = archived_join.and_then(|id| {
+            self.stations
+                .values()
+                .flat_map(|s| &s.archived)
+                .find(|r| r.id == id && !r.lines.is_empty())
+                .cloned()
+        });
 
         // The facts, read off the result.
         let after = self.raw_positions();
@@ -628,11 +647,14 @@ impl Project {
             moved_with_joined_station,
             station_renames: renames,
             join_keep_forced_by: join_forced.map(|(closure, _, _)| closure),
+            join_archived,
             identities: IdentityReport {
                 restored,
                 unarchived,
                 lettered,
-            },
+                hidden: Vec::new(),
+            }
+            .with_hidden(&pre, self),
             reidentified,
         })
     }

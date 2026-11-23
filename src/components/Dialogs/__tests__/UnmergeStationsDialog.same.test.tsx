@@ -35,8 +35,8 @@ const NORTH = 1;
 const slot = (line_id: number, station_index: number) => ({ line_id, station_index });
 
 // Main Line keeps 3; North Passage gets back 0 (Station ID 9), whichever is chosen.
-const KEEPS: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: true, lines: [], together: [], rest_choices: [], collisions: [] };
-const RESTORES: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: false, lines: [], together: [], rest_choices: [], collisions: [] };
+const KEEPS: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: true, lines: [], together: [], rest_choices: [], collisions: [], shown_elsewhere: [], comments_hidden: [] };
+const RESTORES: DetachLinePreview = { name: '0', station_id: 9, restored: true, kept: false, lines: [], together: [], rest_choices: [], collisions: [], shown_elsewhere: [], comments_hidden: [] };
 
 const unmergeStations = vi.fn();
 const unmergeStationPair = vi.fn();
@@ -188,7 +188,7 @@ describe('sameDetachResult', () => {
     expect(sameDetachResult([a, b], new Map())).toBeNull();
     expect(sameDetachResult([a, b], new Map([[MAIN, KEEPS]]))).toBeNull();
     // A new station for the other line: the keeper does not keep it then.
-    const mints: DetachLinePreview = { name: '3', station_id: 30, restored: false, kept: false, lines: [], together: [], rest_choices: [], collisions: [] };
+    const mints: DetachLinePreview = { name: '3', station_id: 30, restored: false, kept: false, lines: [], together: [], rest_choices: [], collisions: [], shown_elsewhere: [], comments_hidden: [] };
     expect(sameDetachResult([a, b], new Map([[MAIN, mints], [NORTH, RESTORES]]))).toBeNull();
     // A hub: the other lines would come off together, so the choice matters.
     const c = slot(2, 0);

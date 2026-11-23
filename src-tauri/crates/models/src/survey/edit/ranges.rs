@@ -98,6 +98,10 @@ pub struct DeleteRangePreview {
     /// identity it restores (with the comment that moves or becomes hidden),
     /// and the letters rule L gives (the wire's `identities`).
     pub identities: super::super::IdentityReport,
+    /// For an interior range where the gap-close is offered (the preview's
+    /// own run): what choosing Split instead would weld and do to
+    /// identities. `None` otherwise (a split-only range's run is the split).
+    pub split_weld: Option<SplitWeld>,
 }
 
 /// A normalized range.
@@ -139,6 +143,9 @@ pub struct SplitWeld {
     pub promoted: Vec<Promotion>,
     /// The largest raw (measured) horizontal move of any station, metres.
     pub max_move_m: f64,
+    /// What the split does to identities (RS 4.3, 12): its restores, letters
+    /// and the comments its promotions hide, for the dialog's Split choice.
+    pub identities: super::super::IdentityReport,
 }
 
 impl Project {
@@ -152,6 +159,16 @@ impl Project {
         }
         let shot = shots[index].id;
         let range = self.range_of(line, shot, shot).ok()?;
+        self.split_range_weld(line, range)
+    }
+
+    /// What Delete + Split of the interior `range` of `line` would weld and
+    /// do to identities ([`SplitWeld`]), from the split run on a copy; `None`
+    /// for a split the edit refuses.
+    fn split_range_weld(&self, line: LineId, range: Range) -> Option<SplitWeld> {
+        if range.kind != RangeDeleteKind::Interior {
+            return None;
+        }
         let before = self.raw_positions();
         let mut copy = self.clone();
         let edited = copy
@@ -168,6 +185,7 @@ impl Project {
         Some(SplitWeld {
             promoted: edited.report.sweep.promoted,
             max_move_m,
+            identities: edited.report.identities,
         })
     }
 
@@ -568,6 +586,11 @@ impl Project {
             shift_blocked_reasons: reasons,
             closures_removed_across_one_shot: gap_close_offered.then_some(across),
             identities,
+            split_weld: if split_only {
+                None
+            } else {
+                self.split_range_weld(line, range)
+            },
         })
     }
 }

@@ -4,4 +4,4 @@ import type { IdentityNotice } from "./IdentityNotice";
 import type { StationPair } from "./StationPair";
 import type { StationRef } from "./StationRef";
 
-export interface DeleteShotImpact { removed_station: StationRef, removed_merges: Array<StationPair>, removed_closures: Array<ClosurePair>, closure_to_merge: Array<StationPair>, shift_blocked: boolean, shift_blocked_reasons: Array<string>, split_closure_to_merge: Array<StationPair>, split_max_move_m: number, identities?: IdentityNotice, }
+export interface DeleteShotImpact { removed_station: StationRef, removed_merges: Array<StationPair>, removed_closures: Array<ClosurePair>, closure_to_merge: Array<StationPair>, shift_blocked: boolean, shift_blocked_reasons: Array<string>, split_closure_to_merge: Array<StationPair>, split_max_move_m: number, identities?: IdentityNotice, split_identities?: IdentityNotice, }

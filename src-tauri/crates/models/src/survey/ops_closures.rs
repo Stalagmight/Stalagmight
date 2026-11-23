@@ -175,7 +175,12 @@ impl Project {
             Some(k) => return Err(OpError::InvalidKeep(k)),
         };
         let metrics = self.closure_metrics_via((a, a_via), (b, b_via));
-        self.run_op(Sweep::Skip, |p| {
+        let hidden_end = match archived {
+            Some(ClosureEnd::A) => Some(a),
+            Some(ClosureEnd::B) => Some(b),
+            None => None,
+        };
+        let mut outcome = self.run_op_answered(Sweep::Skip, answers, |p| {
             let id = p.push_closure(a, a_via, b, b_via, strategy);
             let closure = p
                 .closures
@@ -184,9 +189,11 @@ impl Project {
                 .ok_or(OpError::UnknownClosure(id))?;
             closure.archived = archived;
             let closure = *closure;
-            answers.apply(p)?;
             Ok((ClosureCreated { closure, metrics }, EditContext::none()))
-        })
+        })?;
+        // The archived end's comment is the dialog's own `hidden`.
+        outcome.identities = std::mem::take(&mut outcome.identities).without_hidden(hidden_end);
+        Ok(outcome)
     }
 
     /// Whether a closure between `a` and `b` may keep `keep` (RS 5.2): it is
@@ -275,9 +282,8 @@ impl Project {
             .iter()
             .position(|c| c.id == id)
             .ok_or(OpError::UnknownClosure(id))?;
-        self.run_op(Sweep::Skip, |p| {
+        self.run_op_answered(Sweep::Skip, answers, |p| {
             let removed = p.closures.remove(position);
-            answers.apply(p)?;
             Ok((removed, EditContext::none()))
         })
     }

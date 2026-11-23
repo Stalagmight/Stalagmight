@@ -20,7 +20,14 @@ import { formatDatumMetres } from '../../utils/zeroDatumPreview';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
-import { CollisionRows, IdentityPill, renamesFromAnswers, useCollisionAnswers, useIdentityLabel } from './keptStationParts';
+import {
+  CollisionRows,
+  HiddenComments,
+  IdentityPill,
+  renamesFromAnswers,
+  useCollisionAnswers,
+  useIdentityLabel,
+} from './keptStationParts';
 
 /** A move shorter than this (metres) is not worth a sentence: the two
  *  stations already sit on one point, as after a snap. */
@@ -272,8 +279,12 @@ function KeepPicker({
 
 /**
  * What the chosen keep does to names (RS 7): the lines that will show the kept
- * name, the station archived ("with its comment" only when it has one), and
- * that Detach Line from Station brings it back.
+ * name, the station archived ("with its comment" only when it has one), that
+ * it was a loop closure's hidden end (the closure then hides nothing, so the
+ * kept station is shown there, RS 1.3), and that Detach Line from Station
+ * brings it back, on its own lines only when lines its earlier merges named
+ * keep showing the kept station. Then every other comment the merge hides
+ * (a promotion it makes, RS 12).
  */
 function KeepOutcome({ preview, kept }: { preview: MergeKeepPreview; kept: KeepCandidate | null }) {
   const { t } = useTranslation();
@@ -297,9 +308,21 @@ function KeepOutcome({ preview, kept }: { preview: MergeKeepPreview; kept: KeepC
           station: label(preview.hidden),
         })}
       </p>
+      {preview.unarchived !== undefined && keptName !== null && (
+        <p className="text-xs text-text-secondary" data-testid="merge-loop-end-shown">
+          {t('dialogs.mergeStations.loopEndShown', { station: keptName })}
+        </p>
+      )}
       <p className="text-xs text-text-secondary" data-testid="merge-hidden-back">
-        {t('dialogs.mergeStations.detachBringsBack')}
+        {preview.not_given_back.length > 0 && keptName !== null
+          ? t('dialogs.mergeStations.detachBringsBackExcept', {
+              count: preview.not_given_back.length,
+              lines: listNames(preview.not_given_back.map(labels.lineName), t),
+              station: keptName,
+            })
+          : t('dialogs.mergeStations.detachBringsBack')}
       </p>
+      <HiddenComments hidden={preview.comments_hidden} testId="merge-comments-hidden" />
     </div>
   );
 }

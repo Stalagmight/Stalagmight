@@ -13,7 +13,13 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { displayStationName } from '../../utils/formatters';
-import { CollisionRows, renamesFromAnswers, useCollisionAnswers, useIdentityLabel } from './keptStationParts';
+import {
+  CollisionRows,
+  HiddenComments,
+  renamesFromAnswers,
+  useCollisionAnswers,
+  useIdentityLabel,
+} from './keptStationParts';
 
 function stationRefKey(ref: StationRef): string {
   return `${ref.line_id}:${ref.station_index}`;
@@ -375,6 +381,10 @@ export default function UnmergeStationsDialog() {
 
             {naming && naming.lines.length > 0 && <DetachResults preview={naming} />}
 
+            {naming && <ShownElsewhere preview={naming} />}
+
+            {naming && <HiddenComments hidden={naming.comments_hidden} testId="unmerge-stations-comments-hidden" />}
+
             {naming && (naming.rest_choices ?? []).length > 1 && (
               <RestPicker
                 preview={naming}
@@ -469,16 +479,51 @@ function DetachResults({ preview }: { preview: DetachLinePreview }) {
 }
 
 /**
+ * The stations away from the junction that show another station after the
+ * detach (RS 4.2, M-P2-8): a loop end whose closure's kept end comes off with
+ * the lines, or a station a promotion the detach makes merges. Nothing when
+ * there are none.
+ */
+function ShownElsewhere({ preview }: { preview: DetachLinePreview }) {
+  const { t } = useTranslation();
+  const labels = useIdentityLabels();
+  const label = useIdentityLabel();
+  const entries = preview.shown_elsewhere ?? [];
+  if (entries.length === 0) return null;
+  return (
+    <div className="text-sm text-text-primary" data-testid="unmerge-stations-shown-elsewhere">
+      <p className="text-text-secondary">{t('dialogs.detachLine.shownElsewhereLead')}</p>
+      <ul className="mt-1 space-y-1 list-disc pl-5">
+        {entries.map((e) => (
+          <li
+            key={`${e.station.line_id}:${e.station.station_index}`}
+            data-testid={`unmerge-stations-shown-elsewhere-${e.station.line_id}-${e.station.station_index}`}
+          >
+            {t('dialogs.detachLine.shownElsewhere', {
+              line: labels.lineName(e.station.line_id),
+              before: label(e.before),
+              after: label(e.after),
+            })}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
  * What comes back on the detached line (RS 4.2, 7): the station's name, its
  * comment when it has one, and its Station ID; the lines that come off with
  * it because they were one station; and, when a loop closure made the line
- * show another station, that it will show its own again.
+ * show another station, the name it shows instead afterwards (its own, the
+ * one that comes back, or the junction's when it keeps the junction).
  */
 function ComesBack({ preview, line }: { preview: DetachLinePreview; line: number }) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
   const label = useIdentityLabel();
   const comment = (preview.comment ?? '').trim();
+  const shownAfter = preview.lines.find((r) => r.line_id === line)?.name ?? preview.name;
   return (
     <>
       {preview.restored && (
@@ -507,7 +552,7 @@ function ComesBack({ preview, line }: { preview: DetachLinePreview; line: number
           {t('dialogs.detachLine.shownBefore', {
             line: labels.lineName(line),
             station: label(preview.shown_before),
-            name: displayStationName(preview.name),
+            name: displayStationName(shownAfter),
           })}
         </p>
       )}
