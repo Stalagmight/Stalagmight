@@ -943,10 +943,10 @@ fn a_combine_removes_a_closure_its_join_puts_across_one_shot() {
         &[(slot(k, 1), slot(o, 0), CombineRemovedKind::LoopClosure)],
     );
     // By the names before the combine: K is "Joined" now, O is gone. The
-    // junction on K's start is kept, so O shows it as "0" too, and O's own
-    // start took the letter (rule L, RS 2).
+    // junction on K's start is kept, so O shows it as "0" too (dotted), and
+    // O's own start keeps its name beside it (RS-FX5).
     let o0 = p.stations.get(&st(&p, o, 0)).unwrap().name.clone();
-    assert_eq!(o0, "0a");
+    assert_eq!(o0, "0");
     assert_eq!(
         warnings,
         vec![format!(

@@ -87,14 +87,15 @@ fn identities(r: &CommandResult) -> Vec<(StationId, String, String)> {
 
 /// RS 4.1: the dialog's keep is the station shown on every line, the other
 /// is archived, and the history row says which ("Merge A / 2 into B / 0
-/// (keeps 0)"). Without renames (no dialog) rule L letters A's own 0 and the
-/// result's notice names it; with renames an unanswered collision refuses
-/// and changes nothing; the dialog's answer merges with no notice (the
+/// (keeps 0)"). A then shows B's 0 at its end with B's dot beside its own
+/// 0: a foreign slot counts for no uniqueness (RS-FX5), so the merge needs
+/// no answer with or without the dialog and letters nothing; the dialog's
+/// rename of the kept station still goes through, with no notice (the
 /// rename is the user's).
 #[test]
 fn a_merge_keeps_the_dialogs_station_and_answers_its_collisions() {
     let (p, a, b) = two_lines();
-    let (a0, b0) = (st(&p, a, 0), st(&p, b, 0));
+    let b0 = st(&p, b, 0);
     let opened = open(&p);
     let state = &opened.state;
 
@@ -104,16 +105,17 @@ fn a_merge_keeps_the_dialogs_station_and_answers_its_collisions() {
         "Merge A / 2 into B / 0 (keeps 0)",
         "the row names the kept station"
     );
-    assert_eq!(identities(&r), [(a0, "0".to_string(), "0a".to_string())]);
+    assert!(identities(&r).is_empty(), "{:?}", r.identities);
     assert_eq!(shown_name(state, slot(a, 2)), "0");
-    assert_eq!(shown_name(state, slot(a, 0)), "0a");
+    assert_eq!(shown_name(state, slot(a, 0)), "0", "A's own 0 stays");
     assert!(state.undo().success);
 
-    let error = refused(
+    let r = run(
         state,
         merge_keeping(slot(a, 2), slot(b, 0), b0, Some(Vec::new())),
     );
-    assert!(error.contains("\"0\""), "{error}");
+    assert!(r.identities.is_none(), "{:?}", r.identities);
+    assert!(state.undo().success);
 
     let r = run(
         state,

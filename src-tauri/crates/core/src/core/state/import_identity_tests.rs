@@ -369,9 +369,10 @@ fn a_join_record_that_finds_no_station_id_is_dropped_and_reported() {
 }
 
 /// A join onto a loop end a closure archives: the new line shows the kept
-/// end's name there (RS 5.1), so a new station named like it takes the
-/// letter, while the archived end's own name is free on the new line. The
-/// file gives the joined station nothing of its own: nothing is archived.
+/// end's name there (RS 5.1) with the loop mark, which counts for no
+/// uniqueness (RS-FX5), so a new station named like it keeps its name, and
+/// the archived end's own name is free on the new line too. The file gives
+/// the joined station nothing of its own: nothing is archived.
 #[test]
 fn a_join_onto_a_closure_archived_station_shows_its_kept_end() {
     let state = new_state();
@@ -404,14 +405,9 @@ fn a_join_onto_a_closure_archived_station_shows_its_kept_end() {
     let p = project(&state);
     assert_eq!(node(&p, "Branch", 0), side_end);
     assert!(p.station(side_end).unwrap().archived.is_empty());
-    assert_eq!(shown(&p, "Branch"), ["2", "2a", "1"]);
-    assert_eq!(
-        receipt(&result).warnings,
-        vec![
-            "Line \"Branch\" joins station \"2\", so its own station \"2\" was renamed \"2a\""
-                .to_string()
-        ]
-    );
+    assert_eq!(shown(&p, "Branch"), ["2", "2", "1"]);
+    assert!(!p.is_native_slot_of(side_end, line_id(&p, "Branch")));
+    assert!(receipt(&result).warnings.is_empty());
     assert_valid(&p);
 }
 
@@ -572,10 +568,13 @@ fn an_imported_closure_falls_back_to_the_allowed_end_then_to_none() {
 }
 
 /// A closure whose kept end's name is the name of another station on the
-/// archived end's line: that station (shown on one line, the kept end on
-/// two) takes the letter by rule L, and the receipt warns.
+/// archived end's line: the loop end shows the kept end with the loop mark
+/// and counts for no uniqueness (RS-FX5), so that station keeps its name
+/// and nothing is lettered or warned. (Before RS-FX5 it took the letter by
+/// rule L, and the funnel ran rule L against a copy of the project taken
+/// before the import; both are gone.)
 #[test]
-fn an_imported_closure_letters_a_collision_by_rule_l() {
+fn an_imported_closure_letters_nothing() {
     let state = new_state();
     let mut side = line(1, "Side", &[3.0, 3.0], onto_imported(0, 0));
     side.station_names = pairs(&[(1, "s1"), (2, "2")]);
@@ -588,19 +587,16 @@ fn an_imported_closure_letters_a_collision_by_rule_l() {
         vec![closure((1, 1), (0, 2))],
     );
     let p = project(&state);
-    assert_eq!(shown(&p, "Side"), ["0", "2", "2a"]);
+    assert_eq!(shown(&p, "Side"), ["0", "2", "2"]);
     assert_eq!(
         shown(&p, "Main"),
         ["0", "1", "2", "3"],
         "Main keeps its names"
     );
-    assert_eq!(
-        receipt(&result).warnings,
-        vec![
-            "Station \"Side / 2\" was renamed \"2a\": after a loop closure, line \"Side\" shows \
-             another station named \"2\""
-                .to_string()
-        ]
+    assert!(
+        receipt(&result).warnings.is_empty(),
+        "{:?}",
+        receipt(&result).warnings
     );
     assert_valid(&p);
 }

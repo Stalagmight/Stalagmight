@@ -31,20 +31,25 @@
 //!   the line's stations; when no Station ID is left for it the record is
 //!   dropped (never the line), and the receipt says what was not kept.
 //! - The new line's own stations keep the file's names (settled around the
-//!   file's own name for the junction, so the file's numbering stays); one
-//!   whose name is the junction's shown name takes a letter suffix (rule L:
-//!   it is shown on this line only, the junction on two or more), and the
-//!   receipt says so.
+//!   file's own name for the junction, so the file's numbering stays). When
+//!   the junction's slot on the new line is native (no record names the
+//!   line there and no closure archives the target), one whose name is the
+//!   junction's shown name takes a letter suffix (rule L: it is shown on
+//!   this line only, the junction on two or more), and the receipt says so.
+//!   When a record names the line (the file's own station is archived) the
+//!   slot is foreign, and a loop end shows another station too: either
+//!   shows the junction with its dot or loop mark and counts for no
+//!   uniqueness (RS-FX5), so the file's own station of that name keeps it.
 //! - The file's loop closures archive an end (RS 9), decided in list order
 //!   once the lines are classified: rule K's end is kept (node candidates:
 //!   the end whose shown identity is shown on the longest line) when the
 //!   closure may keep it (invariants C1, C2), else the other end when it
-//!   may, else the closure archives nothing. The names a kept end then
-//!   repeats on a line are lettered by rule L.
+//!   may, else the closure archives nothing. An archive only makes loop
+//!   ends, which count for no uniqueness (RS-FX5), so it letters nothing.
 //! - The receipt names every file station archived at a join and every
 //!   closure archive (notes, `ImportReceipt::info`), and as warnings every
 //!   file station not kept, every station the project held that a closure
-//!   now shows as another, and every letter.
+//!   now shows as another, and every letter a join gave.
 //!
 //! One line that cannot be imported costs the user that line, never the file
 //! (#814): a line the project refuses is left out, a line whose placement
@@ -325,11 +330,26 @@ impl LineBuilder {
             Plan::Free { .. } | Plan::Datum { .. } => None,
         };
 
+        // The name a record of the file's own junction station takes when
+        // the file names it not but gives it a comment or an external id of
+        // its own ([`archive_file_station`]): the target's own.
+        let nameless_record = junction.and_then(|j| {
+            let target = project.stations.get(&j.station)?;
+            let comment = file_comment_at(config, n, j.index);
+            let external = file_external_at(config, n, j.index);
+            let differs = comment
+                .as_ref()
+                .is_some_and(|c| target.comment.as_ref() != Some(c))
+                || external
+                    .as_ref()
+                    .is_some_and(|e| target.external.as_ref() != Some(e));
+            differs.then(|| target.name.clone())
+        });
         let StationNames {
             names,
             junction_file_name,
-            renamed,
-        } = station_names(project, config, n, junction);
+            file_names,
+        } = station_names(project, config, n, junction, nameless_record.as_deref());
         let mut chain = Vec::with_capacity(n + 1);
         for (index, name) in names.into_iter().enumerate() {
             match junction {
@@ -394,6 +414,25 @@ impl LineBuilder {
             };
             archive_file_station(project, j.station, file, id)
         });
+        // Rule L once the junction's slot on the new line is known: native
+        // (no record names the line, no closure archives the target), a new
+        // station named like the junction repeats it; foreign or a loop end,
+        // it counts for no uniqueness (RS-FX5).
+        // (Read off the record and the closures: the topology is rebuilt
+        // once per import, not per line.)
+        let native = |j: &Junction| {
+            project
+                .stations
+                .get(&j.station)
+                .is_some_and(|s| s.record_for(id).is_none())
+                && !project.is_closure_archived(j.station)
+        };
+        let renamed = match junction {
+            Some(j) if native(&j) => {
+                letter_like_junction(project, &chain, j.index, j.station, &file_names)
+            }
+            _ => Vec::new(),
+        };
         steps.push(ImportStep::CreateLine { line: id });
         match plan {
             Plan::Free { offset } => {
@@ -742,9 +781,9 @@ struct StationNames {
     /// no junction): the name of the file's station a record keeps
     /// ([`archive_file_station`]).
     junction_file_name: Option<String>,
-    /// Stations whose file name is the junction's shown name, `(file name,
-    /// name now)`.
-    renamed: Vec<(String, String)>,
+    /// The file's own name per chain position (trimmed; `None` where it
+    /// gives none), for the receipt of [`letter_like_junction`].
+    file_names: Vec<Option<String>>,
 }
 
 /// The names of the new line's stations, in chain order: the file's names
@@ -752,14 +791,14 @@ struct StationNames {
 /// seed rule (each station's index). The names are settled around the file's
 /// own name for the junction (so the file's numbering stays); the line then
 /// shows the junction by the target's shown identity (RS 4.1: the target is
-/// kept), and a new station that would repeat that name takes a letter
-/// suffix (rule L: it is shown on this line only, the junction on two or
-/// more lines).
+/// kept). A new station that repeats that name is lettered once the slot is
+/// known to be native ([`letter_like_junction`]).
 fn station_names(
     project: &Project,
     config: &ImportLineConfig,
     n: usize,
     junction: Option<Junction>,
+    nameless_record: Option<&str>,
 ) -> StationNames {
     let mut names: Vec<Option<String>> = vec![None; n + 1];
     // Whether the file names a station of its own (the junction's name is
@@ -802,38 +841,25 @@ fn station_names(
     if named {
         fill_line_station_names(&mut names);
     }
+    // A junction the file gives no name of its own took the shown name for
+    // the fill (the numbering continues around it). For the settle it holds
+    // the name the line's own station there will have: the record's (the
+    // target's own name) when the file's comment or external id makes one,
+    // else none, as the shown name is then the junction's alone; whether a
+    // station repeating that is lettered depends on the slot, native or
+    // dotted, which the join decides ([`letter_like_junction`], RS-FX5).
+    if file_junction.is_none() {
+        if let Some(slot) = shown.as_ref().and_then(|(index, _)| names.get_mut(*index)) {
+            *slot = nameless_record.map(str::to_string);
+        }
+    }
     settle_line_station_names(&mut names);
     let mut names: Vec<String> = names.into_iter().map(Option::unwrap_or_default).collect();
-    let mut renamed = Vec::new();
     let mut junction_file_name = None;
     if let Some((index, name)) = shown {
         if file_junction.is_some() {
             // The file's name for the junction, as the settle left it.
             junction_file_name = names.get(index).cloned();
-        }
-        // Rule L: a new station named like the junction takes the letter.
-        // The junction's own slot is replaced below, so its settled name
-        // takes nothing.
-        let mut taken: HashSet<String> = names
-            .iter()
-            .enumerate()
-            .filter(|&(i, _)| i != index)
-            .map(|(_, n)| n.clone())
-            .collect();
-        taken.insert(name.clone());
-        for (i, slot) in names.iter_mut().enumerate() {
-            if i != index && *slot == name {
-                let fresh = name_with_free_letter(&name, &|c| taken.contains(c));
-                taken.insert(fresh.clone());
-                *slot = fresh;
-            }
-        }
-        for (i, (file, now)) in file_names.iter().zip(&names).enumerate() {
-            if let Some(file) = file.as_ref().filter(|file| **file == name) {
-                if i != index && now != file {
-                    renamed.push((file.clone(), now.clone()));
-                }
-            }
         }
         if let Some(slot) = names.get_mut(index) {
             *slot = name;
@@ -842,8 +868,55 @@ fn station_names(
     StationNames {
         names,
         junction_file_name,
-        renamed,
+        file_names,
     }
+}
+
+/// Rule L at a join whose slot on the new line is native (RS 4.1, RS-FX5):
+/// each new station of `chain` named like the junction (`station`, at chain
+/// `index`) takes the first letter free on the new line (it is shown on that
+/// line only, the junction on two or more). Returns the stations whose
+/// file name was lettered, `(file name, name now)`, in chain order; a
+/// seeded name the file did not give is not reported.
+fn letter_like_junction(
+    project: &mut Project,
+    chain: &[StationId],
+    index: usize,
+    station: StationId,
+    file_names: &[Option<String>],
+) -> Vec<(String, String)> {
+    let Some(name) = project.shown_name(station).map(str::to_string) else {
+        return Vec::new();
+    };
+    let mut taken: HashSet<String> = chain
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| i != index)
+        .filter_map(|(_, s)| project.stations.get(s).map(|st| st.name.clone()))
+        .collect();
+    taken.insert(name.clone());
+    let mut renamed = Vec::new();
+    for (i, s) in chain.iter().enumerate() {
+        if i == index {
+            continue;
+        }
+        let Some(own) = project.stations.get_mut(s) else {
+            continue;
+        };
+        if own.name != name {
+            continue;
+        }
+        let fresh = name_with_free_letter(&name, &|c| taken.contains(c));
+        taken.insert(fresh.clone());
+        own.name.clone_from(&fresh);
+        if file_names
+            .get(i)
+            .is_some_and(|file| file.as_deref() == Some(name.as_str()))
+        {
+            renamed.push((name.clone(), fresh));
+        }
+    }
+    renamed
 }
 
 /// The identity the file gives its own station at a junction.
@@ -1058,11 +1131,6 @@ pub(super) fn import_lines(
     request: &ImportRequest<'_>,
 ) -> Result<ImportOutcome, String> {
     check_line_budget(project, request.lines.len())?;
-    // Rule L's "new on the line" is judged against the project before the
-    // import; only the closures' archives can repeat a name across lines
-    // (the joins letter their own lines), so only a file with closures
-    // pays for the copy.
-    let identities_before = (!request.closures.is_empty()).then(|| project.clone());
     let first_new_station = project.counters.next_station_id;
     let mut outcome = ImportOutcome {
         doubly_anchored_shots: super::import_overlap::apply_overlap_updates(
@@ -1204,9 +1272,7 @@ pub(super) fn import_lines(
     }
     // After the classification: rule K reads the lines' measured lengths,
     // which count Jumps and not References.
-    if let Some(before) = &identities_before {
-        archive_import_closures(project, before, first_new_station, &mut outcome);
-    }
+    archive_import_closures(project, first_new_station, &mut outcome);
     outcome.surface_elevation_warning = merge_surface_elevation(project, request.surface_elevation);
     // Block corruption at the source with 0.6.0's words (the pipeline
     // validates again and would refuse in its own).
@@ -1565,16 +1631,15 @@ fn file_station_entry(line_name: &str, joined: &str, file: &FileStation) -> Entr
 /// order (each seeing the archives before it) once the lines are classified:
 /// rule K's end is kept when a closure may keep it, else the other end when
 /// that one may be kept, else the closure archives nothing
-/// ([`import_closure_keep`]). The names a kept end then repeats on a line
-/// are settled by rule L against `before` (the project before the import).
-/// The receipt names every archive (a note; a warning when the hidden end
-/// is a station the project held before the import, `first_new_station`
-/// being the first Station ID the import minted), with the hidden end's
-/// comment when the kept end does not show it, every closure that keeps
-/// both names, and every letter.
+/// ([`import_closure_keep`]). An archive makes loop ends only, which count
+/// for no name uniqueness (RS-FX5), and the keeps hold C1 and C2 in list
+/// order, so no name repeats and nothing is lettered. The receipt names
+/// every archive (a note; a warning when the hidden end is a station the
+/// project held before the import, `first_new_station` being the first
+/// Station ID the import minted), with the hidden end's comment when the
+/// kept end does not show it, and every closure that keeps both names.
 fn archive_import_closures(
     project: &mut Project,
-    before: &Project,
     first_new_station: StationId,
     outcome: &mut ImportOutcome,
 ) {
@@ -1597,7 +1662,9 @@ fn archive_import_closures(
         project.closures[position].archived = archived;
     }
     // The keeps above already hold C1 and C2; the normalisation every
-    // upgrade and merge runs is the safety net.
+    // upgrade and merge runs is the safety net. A dropped archive gives the
+    // node back the identity it showed before this pass, so it repeats no
+    // name either; the final validation stands behind both.
     let unarchived = project.normalise_closure_archives();
     if !unarchived.is_empty() {
         tracing::warn!(
@@ -1606,7 +1673,6 @@ fn archive_import_closures(
             "The closure normalisation dropped imported archives"
         );
     }
-    let lettered = project.letter_collisions(before);
 
     for closure in project.closures.iter().filter(|c| made.contains(&c.id)) {
         // An end is named by its identity's home line (the line the user
@@ -1669,20 +1735,6 @@ fn archive_import_closures(
                  Closure brings its own name{back} back"
             ));
         }
-    }
-    for letter in lettered {
-        let station = station_label(project, project.home_line(letter.station), &letter.from);
-        let line = project
-            .line(letter.line)
-            .and_then(|l| l.name.as_deref())
-            .unwrap_or("?");
-        outcome.identity_warnings.push(format!(
-            "Station \"{station}\" was renamed \"{}\": after a loop closure, line \"{}\" shows \
-             another station named \"{}\"",
-            receipt_reason(&letter.to),
-            receipt_reason(line),
-            receipt_reason(&letter.from),
-        ));
     }
 }
 

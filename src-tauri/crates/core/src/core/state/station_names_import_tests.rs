@@ -183,8 +183,10 @@ fn a_placement_onto_a_station_archives_the_files_station_and_its_comment() {
         .stations()
         .map(|s| project.shown_name(s).unwrap().to_string())
         .collect();
-    // The branch shows the kept junction "1", so its own "1" takes the letter.
-    assert_eq!(branch_names, named(&["1", "1a", "2", "3"]));
+    // The branch shows the kept junction "1" with main's dot (the file's
+    // station is archived, so the slot is foreign), and its own "1" keeps
+    // its name beside it (RS-FX5).
+    assert_eq!(branch_names, named(&["1", "1", "2", "3"]));
     let archived = &project.station(junction).unwrap().archived;
     assert_eq!(archived.len(), 1);
     assert_eq!(archived[0].name, "Z9", "the file's name");
@@ -197,7 +199,7 @@ fn a_placement_onto_a_station_archives_the_files_station_and_its_comment() {
     );
     assert!(project.validate().is_empty());
     let receipt = result.import_receipt.unwrap();
-    // "1a" is a seed, not a name the file gave: nothing to warn about.
+    // Nothing was lettered: nothing to warn about.
     assert_eq!(receipt.warnings, Vec::<String>::new());
     assert_eq!(
         receipt.info,
@@ -354,12 +356,13 @@ fn line_names(project: &Project, position: usize) -> Vec<String> {
 
 /// The file names the joined station "0": that station is archived in the
 /// junction (a record naming the branch, under a retired id, RS 4.1), the
-/// branch shows the kept junction "12", so its own station "12" takes the
-/// letter and the receipt says so. Detaching the branch gives it back the
-/// file's "0". Undo takes the record away with the import; a save and
-/// reopen keeps it.
+/// branch shows the kept junction "12" with main's dot, and its own station
+/// "12" keeps its surveyed name beside it (RS-FX5, the user's example: a
+/// foreign slot counts for no uniqueness), so the receipt warns of nothing.
+/// Detaching the branch gives it back the file's "0". Undo takes the record
+/// away with the import; a save and reopen keeps it.
 #[test]
-fn a_join_archives_the_files_station_and_letters_a_clash() {
+fn a_join_archives_the_files_station_and_keeps_its_own_name() {
     let (state, result) = main_and_branch_onto_12();
     let project = state.get_project_state().unwrap();
     let junction = project.lines()[0].station(12).unwrap();
@@ -367,13 +370,13 @@ fn a_join_archives_the_files_station_and_letters_a_clash() {
     assert_eq!(project.lines()[1].start, junction);
     let mut expected: Vec<String> = (0..=14).map(|i| i.to_string()).collect();
     expected[0] = "12".to_string();
-    expected[12] = "12a".to_string();
     assert_eq!(line_names(&project, 1), expected, "the branch");
     assert_eq!(
         project.station(junction).unwrap().name,
         "12",
         "main keeps its name"
     );
+    assert!(project.is_foreign_slot(crate::models::StationRef::new(branch, 0)));
     let aliases = project.station(junction).unwrap().archived.clone();
     assert_eq!(aliases.len(), 1);
     assert_eq!(aliases[0].name, "0", "the file's name is kept");
@@ -382,10 +385,7 @@ fn a_join_archives_the_files_station_and_letters_a_clash() {
     assert!(project.validate().is_empty());
     assert_eq!(
         result.import_receipt.unwrap().warnings,
-        vec![
-            "Line \"B01\" joins station \"12\", so its own station \"12\" was renamed \"12a\""
-                .to_string()
-        ]
+        Vec::<String>::new()
     );
     let naming = project.detach_naming(junction, branch, None).unwrap();
     assert_eq!(
@@ -417,9 +417,11 @@ fn a_join_archives_the_files_station_and_letters_a_clash() {
     assert_eq!(project.station(junction).unwrap().archived, aliases);
 }
 
-/// Where the branch keeps no alias (the file gives the joined station no
-/// name of its own), the junction's name is the branch's too, so the
-/// branch's own station "12" takes a letter and the receipt says so.
+/// Where the branch keeps no record (the file gives the joined station no
+/// name, comment or external id of its own), the junction's slot on the
+/// branch is native: the junction's name is the branch's own too, so the
+/// branch's own station "12" repeats it there and takes a letter, and the
+/// receipt says so (N8 on native slots, RS-FX5).
 #[test]
 fn a_join_without_a_file_name_for_the_junction_letters_and_reports_a_clash() {
     let mut main = config(false, &[], &[]);
@@ -468,8 +470,8 @@ fn a_join_without_a_file_name_for_the_junction_letters_and_reports_a_clash() {
 /// "12". The station graph has one name per station; opening that 0.6.0 file
 /// (the migration) and importing (the funnel) both archive the file's "0" in
 /// the junction (a record naming the branch), the branch shows the kept
-/// "12", and its own "12" takes the letter: the two give the same names, and
-/// neither renames main's "12".
+/// "12" with main's dot, and its own "12" keeps its name (RS-FX5): the two
+/// give the same names, and neither renames main's "12".
 #[test]
 fn a_join_keeps_what_the_equivalent_0_6_0_survey_keeps() {
     use super::legacy_fixture_kit::{
@@ -552,14 +554,8 @@ fn a_join_keeps_what_the_equivalent_0_6_0_survey_keeps() {
     );
     let imported_branch = line_names(&imported, 1);
     assert_eq!(imported_branch, migrated_branch);
-    // Every station but the junction and the lettered one keeps the name
-    // 0.6.0 showed for it.
+    // Every station but the junction keeps the name 0.6.0 showed for it.
     for (i, name) in imported_branch.iter().enumerate().skip(1) {
-        let expected = if i == 12 {
-            "12a".to_string()
-        } else {
-            i.to_string()
-        };
-        assert_eq!(*name, expected);
+        assert_eq!(*name, i.to_string());
     }
 }

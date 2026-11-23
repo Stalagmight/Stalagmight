@@ -3628,7 +3628,8 @@ fn a_closure_the_single_deletes_promote_on_the_way_leaves_only_its_traces() {
 /// and the singles' survey is compared as it is (farm seed 17523769, where
 /// the one-station adoption showed line 2 two stations named "2" and the
 /// encoder's refusal was a panic). Here the adoption gives a station the
-/// name its neighbour on the same line shows.
+/// name its neighbour on the same line shows natively (a dotted neighbour,
+/// a foreign slot or a loop end, counts for no uniqueness, RS-FX5).
 #[test]
 fn an_adopted_survey_the_encoder_refuses_is_a_reported_divergence() {
     let _config = crate::test_helpers::isolated_config();
@@ -3641,10 +3642,14 @@ fn an_adopted_survey_the_encoder_refuses_is_a_reported_divergence() {
         .iter()
         .find_map(|l| {
             let chain: Vec<StationId> = l.stations().collect();
-            let taken = p.shown_name(*chain.get(2)?)?.to_string();
-            Some((l.id, chain[1], taken))
+            let (first, second) = (*chain.get(1)?, *chain.get(2)?);
+            if !p.is_native_slot_of(second, l.id) || p.is_closure_archived(first) {
+                return None;
+            }
+            let taken = p.stations.get(&second)?.name.clone();
+            Some((l.id, first, taken))
         })
-        .expect("a line of three stations");
+        .expect("a line of three stations, the third native");
     let mut record = p.stations.get(&station).cloned().expect("the station");
     record.name = taken;
     record.archived.clear();
