@@ -852,7 +852,8 @@ fn crafted_hub(sides: usize, history: usize) -> (Project, StationId, Vec<LineId>
 /// (`detach_keeps`, every command label and preview of a detach) and the
 /// epilogue's A4 restore (every command) each walked the hub's records once
 /// per line: about 4e9 record visits apiece. Each now builds the hub's
-/// named lines once. Injection: on 3b6bdf77e this test runs for minutes.
+/// named lines once. Injection: on 3b6bdf77e this test takes about 220 s
+/// here against its 10 s bound; it takes about 4 s, mostly building the hub.
 #[test]
 fn record_lookups_at_a_hub_cost_its_lines_plus_its_records() {
     let (mut p, hub, lines) = crafted_hub(4_000, 1_000_000);
