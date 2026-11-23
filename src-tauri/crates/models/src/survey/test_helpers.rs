@@ -164,3 +164,18 @@ pub(super) fn three_line_junction() -> (Project, [LineId; 3]) {
     }
     (p, [l0, l1, l2])
 }
+
+impl Project {
+    /// Merge `a` with `b` keeping the stationary station (the station whose
+    /// piece stays put, the one a merge kept before RS) and answering every
+    /// name collision by rule L: what the tests written before RS mean by a
+    /// merge.
+    pub(crate) fn merge_keeping_stationary(
+        &mut self,
+        a: StationId,
+        b: StationId,
+    ) -> Result<super::OpOutcome<super::MergeReport>, super::OpError> {
+        let keep = self.merge_direction(a, b).0;
+        self.merge_stations_auto(a, b, keep)
+    }
+}

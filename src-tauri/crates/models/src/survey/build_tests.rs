@@ -4,7 +4,7 @@
 use crate::{ShotData, StationRef, FEATURE_ID_STRIDE};
 
 use super::test_helpers::{add, add_on, at, flat, meta, project, three_line_junction, try_add};
-use super::{BuildError, ClosureStrategy, Line, NameConflict, StartAt, Station, StationAlias};
+use super::{ArchivedStation, BuildError, ClosureStrategy, Line, NameConflict, StartAt, Station};
 
 #[test]
 fn add_line_mints_one_station_per_shot_and_names_them_by_index() {
@@ -120,13 +120,15 @@ fn the_line_id_is_one_above_the_highest_and_insert_line_refuses_a_taken_id() {
 }
 
 #[test]
-fn inserting_a_station_raises_the_counter_past_it_and_its_aliases() {
+fn inserting_a_station_raises_the_counter_past_it_and_its_records() {
     let mut p = project();
     let mut station = Station::new(10, "ten");
-    station.aliases.push(StationAlias {
+    station.archived.push(ArchivedStation {
         id: 25,
-        name: Some("old".to_string()),
-        line: None,
+        name: "old".to_string(),
+        comment: None,
+        external: None,
+        lines: Vec::new(),
     });
     p.insert_station(station).unwrap();
     assert_eq!(p.counters.next_station_id, 26);
@@ -135,7 +137,7 @@ fn inserting_a_station_raises_the_counter_past_it_and_its_aliases() {
         Err(BuildError::StationIdTaken(10))
     );
     assert_eq!(
-        p.insert_station(Station::new(25, "alias")),
+        p.insert_station(Station::new(25, "archived")),
         Err(BuildError::StationIdTaken(25))
     );
     assert_eq!(p.mint_station("next"), Ok(26));

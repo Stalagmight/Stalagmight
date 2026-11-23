@@ -153,26 +153,29 @@ fn a_junction_shares_its_identity_and_lists_its_other_slots() {
     }
 }
 
-/// A merged station's retired ids and names (its aliases, each with the
-/// line that knew it by it) ride every slot of it, for the station details'
-/// "Also known as"; a station without any sends none (H-frontend-wire-5).
-/// Each slot carries the name its own line shows the junction by (I-3): the
-/// moving line its old name, the other line the survivor's; the Station ID
-/// is the junction's one id on both. Injection: send the station's own name
-/// on every slot (`s.name` in `stations_wire`) and the moving line's slot
-/// reads `0`.
+/// A merged station's archived records (each with the lines whose own
+/// station it was) ride every slot of it, for the station details (RS-W
+/// replaces them with a records DTO); a station without any sends none
+/// (H-frontend-wire-5). Every slot shows the kept station's name (RS 4.1):
+/// the moving line's slot reads `0` too, and the moving line's own `0`
+/// takes the letter (rule L). The Station ID is the junction's one id on
+/// both. Injection: send the slot's own record name and the moving line's
+/// slot reads `2`.
 #[test]
-fn a_merged_stations_aliases_ride_every_slot() {
+fn a_merged_stations_records_ride_every_slot() {
     let mut p = project();
     let a = free_line(&mut p, [0.0, 0.0], run(90.0, 2, 10.0));
     let b = free_line(&mut p, [100.0, 50.0], run(0.0, 2, 5.0));
-    let (a2, b0) = (at(&p, a, 2), at(&p, b, 0));
+    let (a0, a2, b0) = (at(&p, a, 0), at(&p, a, 2), at(&p, b, 0));
     let a2_name = p.stations[&a2].name.clone();
-    let merged = p.merge_stations(a2, b0).unwrap();
-    assert_eq!((merged.value.survivor, merged.value.retired), (b0, a2));
+    let merged = p.merge_keeping_stationary(a2, b0).unwrap();
+    assert_eq!((merged.value.kept, merged.value.archived), (b0, a2));
+    assert_eq!(merged.identities.lettered.len(), 1);
+    assert_eq!(merged.identities.lettered[0].station, a0);
     let stations = p.stations_wire(&p.raw_positions());
-    assert_eq!(station_at(&stations, slot(a, 2)).name, "2");
+    assert_eq!(station_at(&stations, slot(a, 2)).name, "0");
     assert_eq!(station_at(&stations, slot(b, 0)).name, "0");
+    assert_eq!(station_at(&stations, slot(a, 0)).name, "0a");
     assert_eq!(station_at(&stations, slot(a, 2)).id, b0);
     assert_eq!(station_at(&stations, slot(b, 0)).id, b0);
     let expected = Some(vec![crate::StationAliasWire {

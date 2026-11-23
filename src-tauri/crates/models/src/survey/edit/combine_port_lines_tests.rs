@@ -580,10 +580,11 @@ fn the_join_station_is_settled_per_the_choices() {
         let joined = p.station(join_k).unwrap();
         assert_eq!(joined.comment.as_deref(), Some(comment), "{pick:?}");
         assert_eq!(joined.name, "S9");
-        // The other one's id and name are an alias of the joined station.
-        assert_eq!(joined.aliases.len(), 1);
-        assert_eq!(joined.aliases[0].id, join_o);
-        assert_eq!(joined.aliases[0].name.as_deref(), Some("S9"));
+        // The other one is archived in the joined station (history: its
+        // only line was absorbed).
+        assert_eq!(joined.archived.len(), 1);
+        assert_eq!(joined.archived[0].id, join_o);
+        assert_eq!(joined.archived[0].name, "S9");
         assert!(p.station(join_o).is_none());
         assert_eq!(p.line(k).unwrap().hand(join_k), [0.0004, 0.0, 0.0]);
         let hands: usize = p.lines().iter().map(|l| l.hand_moves.len()).sum();
@@ -957,6 +958,7 @@ fn a_second_migrated_rigid_tie_becomes_a_loop_closure() {
                 b,
                 b_via: None,
                 strategy: ClosureStrategy::Tie,
+                archived: None,
             },
         );
         assert_valid(&p);

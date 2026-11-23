@@ -204,16 +204,16 @@ impl Project {
         renamed
     }
 
-    /// The N8 collisions of the line at list `position`: each name its slots
-    /// show more than one identity by, with those identities.
-    fn line_collisions(
-        &self,
-        topology: &Topology,
+    /// The N8 repeats of the line at list `position`, in chain order: each
+    /// `(name, first, second)` where a slot shows identity `second` by the
+    /// name identity `first` showed at an earlier slot (each pair once).
+    pub(super) fn line_name_repeats<'a>(
+        &'a self,
+        topology: &'a Topology,
         index: &ShownIndex,
         position: usize,
-    ) -> Vec<NameCollision> {
-        let (Some(chain), Some(line)) = (topology.chain_at(position), self.lines.get(position))
-        else {
+    ) -> Vec<(&'a str, StationId, StationId)> {
+        let Some(chain) = topology.chain_at(position) else {
             return Vec::new();
         };
         let named = |node: &StationId| {
@@ -231,31 +231,54 @@ impl Project {
         {
             return Vec::new();
         }
-        let mut by_name: BTreeMap<&str, Vec<StationId>> = BTreeMap::new();
-        let mut order: Vec<&str> = Vec::new();
+        let mut seen: BTreeMap<&str, StationId> = BTreeMap::new();
+        let mut out: Vec<(&str, StationId, StationId)> = Vec::new();
         for node in chain {
             let Some((name, identity)) = named(node) else {
                 continue;
             };
-            let holders = by_name.entry(name).or_insert_with(|| {
-                order.push(name);
-                Vec::new()
-            });
-            if !holders.contains(&identity) {
-                holders.push(identity);
+            match seen.get(name) {
+                Some(&first) if first != identity => {
+                    if !out.contains(&(name, first, identity)) {
+                        out.push((name, first, identity));
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    seen.insert(name, identity);
+                }
             }
         }
-        order
-            .into_iter()
-            .filter_map(|name| {
-                let identities = by_name.remove(name)?;
-                (identities.len() > 1).then(|| NameCollision {
+        out
+    }
+
+    /// The N8 collisions of the line at list `position`: each name its slots
+    /// show more than one identity by, with those identities.
+    fn line_collisions(
+        &self,
+        topology: &Topology,
+        index: &ShownIndex,
+        position: usize,
+    ) -> Vec<NameCollision> {
+        let Some(line) = self.lines.get(position) else {
+            return Vec::new();
+        };
+        let mut out: Vec<NameCollision> = Vec::new();
+        for (name, first, second) in self.line_name_repeats(topology, index, position) {
+            match out.iter_mut().find(|c| c.name == name) {
+                Some(collision) => {
+                    if !collision.identities.contains(&second) {
+                        collision.identities.push(second);
+                    }
+                }
+                None => out.push(NameCollision {
                     line: line.id,
                     name: name.to_string(),
-                    identities,
-                })
-            })
-            .collect()
+                    identities: vec![first, second],
+                }),
+            }
+        }
+        out
     }
 
     /// Every N8 collision (RS 3), by line (list order), then chain order.

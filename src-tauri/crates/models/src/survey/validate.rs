@@ -602,7 +602,7 @@ impl Project {
         self.check_forest(topology, &mut out);
         self.check_anchors(topology, &mut out);
         self.check_closures(topology, &mut out);
-        self.check_names(&mut out);
+        self.check_names(topology, &mut out);
         self.check_counters(&mut out);
         self.check_numbers(&mut out);
         out
@@ -1009,18 +1009,15 @@ impl Project {
         }
     }
 
-    fn check_names(&self, out: &mut Vec<Violation>) {
+    fn check_names(&self, topology: &Topology, out: &mut Vec<Violation>) {
         // N8: each slot by its node's shown identity (the shown index never
-        // loops, so a broken C2 cannot hang this).
-        for collision in self.name_collisions() {
-            let mut holders = collision.identities.iter().copied();
-            let Some(first) = holders.next() else {
-                continue;
-            };
-            for second in holders {
+        // loops, so a broken C2 cannot hang this), reported in chain order.
+        let index = self.shown_index();
+        for (position, line) in self.lines.iter().enumerate() {
+            for (name, first, second) in self.line_name_repeats(topology, &index, position) {
                 out.push(Violation::DuplicateStationName {
-                    line: collision.line,
-                    name: collision.name.clone(),
+                    line: line.id,
+                    name: name.to_string(),
                     first,
                     second,
                 });

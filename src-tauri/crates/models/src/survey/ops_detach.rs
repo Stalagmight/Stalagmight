@@ -93,6 +93,11 @@ pub struct DetachReport {
     /// by records, got back an archived station (`new_station`): RS 4.2
     /// case 2.
     pub kept: bool,
+    /// A Combine tear of the junction's only native line made this record
+    /// history so the junction keeps a native line (A4): its lines show the
+    /// junction natively now (nothing visible changes). RS-M2 replaces this
+    /// with the case-2 distribution and the tear closure's archive (RS 4.4).
+    pub record_made_history: Option<StationId>,
 }
 
 /// What detaching a line would give it, for the Detach dialog: the station
@@ -152,7 +157,9 @@ pub(super) enum DetachMode {
     Restore { rest_keep: Option<StationId> },
     /// Combine Lines' tear of one line (RS 4.3 "a slot moves to a new
     /// node"): the fresh station takes the record naming the line, if any;
-    /// never the case-2 distribution (RS-M2).
+    /// never the case-2 distribution (RS-M2): when the torn line is the
+    /// junction's only native line, the record rule K picks among those
+    /// naming the other lines becomes history instead.
     Tear,
 }
 
@@ -398,8 +405,24 @@ impl Project {
                 let others: Vec<LineId> = lines.iter().copied().filter(|&l| l != line).collect();
                 self.detach_others(station, line, &others, rest_keep)
             }
-            (None, _) => {
+            (None, mode) => {
                 let name = junction.name.clone();
+                let record_made_history = if mode == DetachMode::Tear
+                    && self.detach_keeps(station, line)
+                {
+                    let candidates = self.rest_candidates(station, line);
+                    let chosen = self.rule_k(candidates.iter().map(|r| (r.id, r.lines.clone())));
+                    if let (Some(id), Some(junction)) = (chosen, self.stations.get_mut(&station)) {
+                        for record in &mut junction.archived {
+                            if record.id == id {
+                                record.lines.clear();
+                            }
+                        }
+                    }
+                    chosen
+                } else {
+                    None
+                };
                 let new_station = self.mint_station_id()?;
                 self.stations
                     .insert(new_station, Station::new(new_station, name));
@@ -416,6 +439,7 @@ impl Project {
                     moved_hand_move,
                     restored: false,
                     kept: false,
+                    record_made_history,
                 })
             }
         }
@@ -448,6 +472,7 @@ impl Project {
             moved_hand_move,
             restored: true,
             kept: false,
+            record_made_history: None,
         }
     }
 
@@ -510,6 +535,7 @@ impl Project {
             moved_hand_move,
             restored: true,
             kept: true,
+            record_made_history: None,
         })
     }
 

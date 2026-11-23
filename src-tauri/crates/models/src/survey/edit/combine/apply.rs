@@ -407,6 +407,20 @@ impl Project {
             }
         }
         self.drop_stale_attachments();
+        // RS-M2: Combine runs the whole epilogue (RS 3) and keeps every shown
+        // identity through its tears (RS 4.4); here only A4 is restored, so a
+        // tear of a junction's only native line leaves a valid model.
+        let restored: Vec<(StationId, StationId)> = self
+            .restore_archived_identities()
+            .iter()
+            .map(|r| (r.old, r.new))
+            .collect();
+        for &(old, new) in &restored {
+            if ctx.placed.contains(&old) {
+                ctx.placed.push(new);
+            }
+        }
+        ctx = ctx.with_reidentified(&restored);
         self.settle_anchors(&before, &ctx);
 
         // Snaps (and legacy ties) the move pulled apart become ordinary, as
@@ -451,6 +465,9 @@ impl Project {
 
         let replaced = self.dedupe_closures_on(k);
         let removed = self.remove_closures_newly_across_one_shot(&skipped_before);
+        // RS-M2: the epilogue's rule L (RS 4.4: collisions on third lines),
+        // with Combine's own notice; here the letters only.
+        self.letter_collisions(&pre);
         let violations = self.validate();
         if !violations.is_empty() {
             return Err(EditError::Invalid(violations));
@@ -467,6 +484,9 @@ impl Project {
                     if now == from {
                         now = to;
                     }
+                }
+                if let Some(&(_, new)) = restored.iter().find(|(old, _)| *old == now) {
+                    now = new;
                 }
                 let (Some(a), Some(b)) = (p0.xy(s), after.xy(now)) else {
                     return None;

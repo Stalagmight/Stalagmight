@@ -87,9 +87,9 @@ fn side_by_side_free_pieces_join_and_the_other_side_moves_by_the_residual() {
     near(xy(&after, st(&p, a, 0)), [0.0, 0.0], TOL, "A stays");
     assert_eq!(p.placements.len(), 1);
     assert_eq!(p.placements[0].station, st(&p, a, 0));
-    // The other join station is an alias of the kept one now.
+    // The other join station is archived in the kept one now.
     let joined = st(&p, a, 2);
-    assert_eq!(p.station(joined).unwrap().aliases.len(), 1);
+    assert_eq!(p.station(joined).unwrap().archived.len(), 1);
     assert_valid(&p);
 }
 

@@ -390,7 +390,7 @@ fn a_junction_merge_and_detach_round_trip() {
         before.line_stations(line).unwrap()[3],
     );
     let mut merged = before.clone();
-    merged.merge_stations(a, b).unwrap();
+    merged.merge_keeping_stationary(a, b).unwrap();
     let changes = capture(&before, &merged);
     assert_eq!(
         changes.digest().stations_deleted.len(),
@@ -400,7 +400,7 @@ fn a_junction_merge_and_detach_round_trip() {
     round_trip(&before, &merged, &changes);
     let mut detached = merged.clone();
     let junction = detached.station_at(StationRef::new(other, 0)).unwrap();
-    detached.detach_line(junction, other).unwrap();
+    detached.detach_line_auto(junction, other, None).unwrap();
     let changes = capture(&merged, &detached);
     assert_eq!(
         changes.digest().stations_created.len(),

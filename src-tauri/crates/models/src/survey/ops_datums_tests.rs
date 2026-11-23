@@ -377,7 +377,7 @@ fn no_placement_datum_is_left_off_its_gps_by_a_promotion() {
 
     // Unmerge: the fix's piece becomes a piece of its own.
     let (mut p, a, b, _c) = frame_fix_and_separate_piece();
-    ok(p.unmerge_station_pair(StationRef::new(a, 5), StationRef::new(b, 0)));
+    ok(p.unmerge_station_pair(StationRef::new(a, 5), StationRef::new(b, 0), crate::survey::NameAnswers::RuleL, None));
     assert_valid(&p);
     assert_eq!(p.placement_datums().into_iter().flatten().count(), 3);
     assert_placements_on_their_gps(&p, "unmerge");
