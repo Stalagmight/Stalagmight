@@ -1889,3 +1889,62 @@ the row's gutter pill" where it says the Name column stays plain text.
   displayed value; `formatFixed` writes a value that rounds to zero without
   a sign (every caller, not Station details only). The closure dialog's red
   error next to a refused Create is left as the capture noted.
+
+## Deviations (package RS-FX7)
+
+Decisions the second farm round's fixes took where this page is silent or
+the code disagreed, each with its reason. The first bullet refines RS-FX1's
+"Every comment an op hides is reported" (which comment counts as moved);
+the others refine RS-T's "T5 under RS".
+
+- **A comment moved only when its new holder did not hold it before (farm
+  647783847b78 on 51b5191db, product).** `Project::hidden_comments` left
+  out a comment "another identity shows now and did not before", by text.
+  A Detach gave back a record whose own comment had the same text as a
+  station the detach's sweep then archived by a promotion (two notes "sump",
+  or a survey added twice with Add .stalx), so the restored station's own
+  comment passed for the hidden one moved there, and the Detach preview, the
+  notice and the report named nothing. The test now reads what the other
+  identity stored before the op (a node's or a record's comment), not what
+  it showed: a restore that moves a comment to a record with none, and
+  Combine's Other and Both picks, still count as moves. A comment is a
+  user's words, so the same text on two stations is two comments; the
+  preview names the hidden one, which is the design's "previews tell the
+  truth". No wire change: the dialogs and notices already show
+  `comments_hidden` and `IdentityNotice.hidden`.
+- **The metamorphic oracle compares a placement at twelve significant digits
+  of the survey (farm d14345c9943b, seed 580006372, oracle).** Not an RS
+  case: a range of two shots that removes no junction, with no closure.
+  `settle_placements` walks the piece from its still point to the placement
+  station once per edit, so the range (one walk) and the single deletes
+  (two) leave the placement a few ulps of the walk's 20 m sums apart, and on
+  a placement near the origin that is its own twelfth significant digit
+  (`-1.74799425406e-4` against `...404` m). No view can show it (the
+  Computed View agrees within 1e-6 m) and the model stores a placement as
+  computed, as the move pair's docs already say. The stored survey's
+  placements are compared on the projects' values within 1e-11 times the
+  largest raw coordinate of either route; another station, another order or
+  a real move is still reported.
+- **A cut-loose piece placed on a promotion that kept its retired end
+  (seeds 580002106, 580004294, oracle).** RS 5.4's name test may keep the
+  retired end, so the merged node at the survivor's position carries the
+  retired end's Station ID. The oracle measured the cut-loose piece's
+  placement station by that id, where the retired end was (16 m and 11.6 m
+  away); it now measures it as the range promotion's survivor. The
+  geometry is RS 4.1 step 3's: identity and position are independent.
+- **The singles' mirrored junction after a later restore (seed 580002296,
+  oracle).** The singles promote a closure the other way and keep 4; the
+  next single delete takes 4 off its last native line, so rule K gives back
+  10 with 4 inside the junction (RS 4.3, named in that delete's notice).
+  The oracle required the singles' junction to be their promotion's kept
+  station, against RS-T's own trace "a restore gave it back"; it now accepts
+  the record a later single delete gave back with the kept station still
+  inside it. The atomic route's junction is still held to its promotion's
+  kept station. This is the documented class (a promotion's kept station
+  depends on its direction), now followed through a restore.
+- **Pinned.** `rs_properties_hold_on_the_farm_seeds` replays the five
+  rs-comment detach seeds the farm found on 51b5191db (400146250,
+  400167128 at 50 steps; 480010813, 480011346, 480011587 at 200); the
+  metamorphic module pins 580006372 and the three seeds above, each with
+  its injection, and `a_placement_past_the_surveys_digits_is_reported`
+  shows the tolerance is not vacuous.
