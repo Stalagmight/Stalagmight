@@ -1033,3 +1033,41 @@ fn records_follow_a2_to_a4_and_their_names_count_nowhere() {
     assert_eq!(p.validate(), Vec::new(), "a record with no line is history");
     assert!(p.stations[&s0].archived[0].is_history());
 }
+
+/// Pre-PR review (RS-FX9 item 4): the three owner-fault messages (A6) read
+/// as one sentence each. Injection: on 3b6bdf77e each held an 18-space gap
+/// mid-sentence (a lost `\` line continuation), and this test fails there.
+#[test]
+fn the_owner_fault_messages_read_as_one_sentence() {
+    let cases = [
+        (
+            Violation::DanglingArchivedOwner {
+                station: 7,
+                archived: 40,
+                into: 99,
+            },
+            "archived station 40 of station 7 is archived under 99, which is no other \
+             archived station of it",
+        ),
+        (
+            Violation::ArchivedUnderHistory {
+                station: 7,
+                archived: 40,
+                into: 41,
+            },
+            "archived station 40 of station 7 is archived under 41, which names no line",
+        ),
+        (
+            Violation::ArchivedOwnerCycle {
+                station: 7,
+                archived: 40,
+            },
+            "archived station 40 of station 7 is archived under itself through other \
+             archived stations",
+        ),
+    ];
+    for (violation, text) in cases {
+        assert_eq!(violation.to_string(), text);
+        assert!(!text.contains("  "), "{text:?}");
+    }
+}

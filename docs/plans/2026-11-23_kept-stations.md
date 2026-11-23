@@ -1996,3 +1996,47 @@ took where this page is silent or the code disagreed, each with its reason.
   archived station with them, inside the one they get back (RS-FX4); the
   dialog names them all for either pick, not only those under the picked
   one. History records stay with the junction and are not named.
+
+## Deviations (package RS-FX9)
+
+Decisions the fixes of the pre-PR review took where this page is silent,
+each with its reason.
+
+- **A dialog's renames follow Set Station Name's rules.** Every rename a
+  Merge, Detach or loop closure command carries is trimmed and refused when
+  empty or holding a control or invisible formatting character, in Set
+  Station Name's words, through the one helper both use
+  (`station_naming::user_station_name`). A collision's answers are the
+  backend's letters of the stations' own names, so only a name that already
+  held such a character (an import's) trips it; the dialogs run Edit
+  Station's check (`stationRenameProblem`) on what they would send, disable
+  their action and say why, and the user renames that station first.
+- **A rename answers the op's own collisions only.** A command accepts a
+  rename only of a station its own collisions name, worked out as its
+  preview lists them: the epilogue run with rule L on a copy of the state
+  right after the mutation (both answers of each collision). Anything else
+  refuses (`RenameNotAsked`) and changes nothing. The copy runs only when
+  there are renames. A merge or closure that makes no collision therefore
+  takes no rename at all; renaming its kept station is Set Station Name's
+  job (the core test that renamed it through a merge now does so).
+- **Records are looked up per line once.** Every pass that names many
+  slots or lines of one station reads a record index built once
+  (`RecordIndex`, a station's named lines, a home line per identity,
+  `SlotTexts` for the warnings' texts), so a hub costs its lines plus its
+  records. An earlier file's upgrade also asks a reader's deadline per line
+  and per junction inside its steps.
+- **Salvage settles an archived line named twice in one walk per station**,
+  reporting each repeat in the order validation found it.
+- **Detach names every station that moves.** Its lead gives a row per
+  station directly inside the one that comes back, naming the stations
+  still archived inside it ("Side / 0 stays archived inside it, with Twig /
+  7 archived inside Side / 0"); history records are never named.
+- **Records stay per slot on the wire (review nit 9, left).** Every slot of
+  a junction still carries the station's record list. Sending it once per
+  station means keying station-level data by Station ID instead of by slot
+  in `SurveyData` (the binary envelope, the JSON `Station` that
+  `get_adjusted_stations` and the dialogs read, the mock, the hidden-line
+  filter that remaps slot keys), which is not cheap. It only weighs at a
+  crafted hub, where each slot's `merged_with` (every other slot of the
+  junction, a shape older than this plan) is quadratic too; both belong to
+  one wire change, not to this package.

@@ -47,8 +47,10 @@ pub const MAX_SHOTS_PER_LINE: usize = (FEATURE_ID_STRIDE - 1) as usize;
 pub struct Station {
     /// The Station ID the user sees. A junction has one id.
     pub id: StationId,
-    /// The name every line through the station shows it by; unique among the
-    /// names shown on each of those lines (invariant N8).
+    /// The name every line through the station shows it by (unless a loop
+    /// closure archives it); unique among the names the native slots of each
+    /// of its native lines show (invariant N8, RS-FX5: a foreign slot or a
+    /// loop end counts for no uniqueness).
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,

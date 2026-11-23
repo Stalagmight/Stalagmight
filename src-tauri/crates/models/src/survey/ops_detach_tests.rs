@@ -481,3 +481,98 @@ fn the_detach_preview_says_what_every_line_of_a_hub_ends_up_with() {
     assert_eq!(at(&q, up, 0), up0);
     assert_eq!((at(&q, main, 2), at(&q, far, 0)), (hub, hub));
 }
+
+/// Pre-PR review (RS-FX9 item 1): a dialog's renames follow Set Station
+/// Name's rules (trimmed; an empty name or one with a control or invisible
+/// formatting character refused, in its words) and may rename only a station
+/// the detach's own collisions name (its preview's, both answers). Each
+/// refusal changes nothing; the letter, the other answer and a padded name
+/// still work. Injection: on 3b6bdf77e `apply_renames` stored every name as
+/// given for any live Station ID, so the three refusals were accepted.
+#[test]
+fn a_detach_rename_follows_the_station_name_rules() {
+    let mut p = project();
+    let a = free_line(&mut p, [0.0, 0.0], run(90.0, 2, 10.0));
+    let b = free_line(&mut p, [100.0, 50.0], run(0.0, 2, 5.0));
+    let (a1, a2, b0, b2) = (at(&p, a, 1), at(&p, a, 2), at(&p, b, 0), at(&p, b, 2));
+    ok(p.merge_keeping_stationary(a2, b0));
+    p.station_mut(a1).unwrap().name = "2".to_string();
+    assert_valid(&p);
+    let before = p.clone();
+    let refused = |renames: &[(crate::StationId, String)]| {
+        let mut q = before.clone();
+        let error = q.detach_line(b0, a, renames, None).err();
+        assert_eq!(q, before, "{renames:?}: a refusal changes nothing");
+        error.map(|e| e.to_string())
+    };
+    assert_eq!(
+        refused(&[(a2, "  ".to_string())]).as_deref(),
+        Some("A station name cannot be empty")
+    );
+    assert_eq!(
+        refused(&[(a2, "2\u{202E}b".to_string())]).as_deref(),
+        Some("A station name cannot contain control or invisible formatting characters (U+202E)")
+    );
+    assert_eq!(
+        refused(&[(b2, "x".to_string())]),
+        Some(format!(
+            "Station {b2} is in none of the name collisions this would make, so it cannot be \
+             renamed here"
+        ))
+    );
+    assert_eq!(
+        refused(&[(a2, "2b".to_string()), (b2, "x".to_string())]),
+        refused(&[(b2, "x".to_string())]),
+        "one rename outside the collisions refuses the lot"
+    );
+
+    let mut letter = before.clone();
+    ok(letter.detach_line(b0, a, &[(a2, " 2b ".to_string())], None));
+    assert_valid(&letter);
+    assert_eq!(letter.stations[&a2].name, "2b", "trimmed");
+    let mut other = before.clone();
+    ok(other.detach_line(b0, a, &[(a1, "2c".to_string())], None));
+    assert_valid(&other);
+    assert_eq!(
+        (
+            other.stations[&a1].name.as_str(),
+            other.stations[&a2].name.as_str()
+        ),
+        ("2c", "2")
+    );
+}
+
+/// RS-FX9 item 1 on the commands that make no collision of their own: a
+/// merge of two plain stations and a loop closure (creating one repeats no
+/// name, RS-FX5) refuse any rename, so a dialog cannot rename an unrelated
+/// station through them. Injection: on 3b6bdf77e both renamed it.
+#[test]
+fn a_command_without_collisions_takes_no_rename() {
+    let mut p = project();
+    let a = free_line(&mut p, [0.0, 0.0], run(90.0, 2, 10.0));
+    let b = free_line(&mut p, [100.0, 50.0], run(0.0, 2, 5.0));
+    let (a0, a2, b0, b2) = (at(&p, a, 0), at(&p, a, 2), at(&p, b, 0), at(&p, b, 2));
+    let renames = [(b2, "elsewhere".to_string())];
+    let not_asked = Some(format!(
+        "Station {b2} is in none of the name collisions this would make, so it cannot be \
+         renamed here"
+    ));
+    let before = p.clone();
+    assert_eq!(
+        p.merge_stations(a2, b0, b0, &renames)
+            .err()
+            .map(|e| e.to_string()),
+        not_asked
+    );
+    assert_eq!(p, before);
+    ok(p.merge_stations(a2, b0, b0, &[]));
+    let merged = p.clone();
+    let strategy = super::ClosureStrategy::Batch;
+    assert_eq!(
+        p.create_closure(a0, Some(a), b2, Some(b), strategy, None, &renames)
+            .err()
+            .map(|e| e.to_string()),
+        not_asked
+    );
+    assert_eq!(p, merged);
+}

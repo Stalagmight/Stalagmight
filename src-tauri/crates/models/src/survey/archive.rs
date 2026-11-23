@@ -284,6 +284,69 @@ pub struct SlotOwner {
     pub own_station: Option<StationId>,
 }
 
+/// Which record of each node names each line (A3: the first in list order,
+/// as [`Station::record_for`] finds it, when a broken file names one twice),
+/// built once from every record's lines. A pass over many slots looks each
+/// slot's record up here: scanning a node's records per slot cost lines x
+/// records at a hub, hours for a crafted file of one hub with 50,000 lines
+/// and a million history records (pre-PR review, RS-FX9).
+#[derive(Debug, Clone, Default)]
+pub struct RecordIndex {
+    at: HashMap<(StationId, LineId), usize>,
+}
+
+impl RecordIndex {
+    /// The index of `project`'s records.
+    pub fn of(project: &Project) -> Self {
+        let mut at = HashMap::new();
+        for (&node, station) in &project.stations {
+            for (i, record) in station.archived.iter().enumerate() {
+                for &line in &record.lines {
+                    at.entry((node, line)).or_insert(i);
+                }
+            }
+        }
+        Self { at }
+    }
+
+    /// Whether a record of `node` names `line`.
+    pub fn names(&self, node: StationId, line: LineId) -> bool {
+        self.at.contains_key(&(node, line))
+    }
+
+    /// The record of `node` naming `line` ([`Project::record_naming`]).
+    pub fn record<'p>(
+        &self,
+        project: &'p Project,
+        node: StationId,
+        line: LineId,
+    ) -> Option<&'p ArchivedStation> {
+        let &i = self.at.get(&(node, line))?;
+        project.stations.get(&node)?.archived.get(i)
+    }
+
+    /// The native lines of `node`, in the model's line order
+    /// ([`Project::native_lines`]).
+    pub fn native_lines(&self, project: &Project, node: StationId) -> Vec<LineId> {
+        project
+            .topology()
+            .lines_of(node)
+            .into_iter()
+            .filter(|&line| !self.names(node, line))
+            .collect()
+    }
+}
+
+/// Every line some record of `station` names, for a pass over the station's
+/// lines (one walk of its records, not one per line).
+pub(super) fn named_lines(station: &Station) -> HashSet<LineId> {
+    station
+        .archived
+        .iter()
+        .flat_map(|r| r.lines.iter().copied())
+        .collect()
+}
+
 /// Whether a comment holds text.
 pub(super) fn has_text(comment: Option<&String>) -> bool {
     comment.is_some_and(|c| !c.is_empty())
@@ -368,14 +431,17 @@ impl Project {
         self.topology().slot_on(node, line).is_some() && self.record_naming(node, line).is_none()
     }
 
-    /// The native lines of `node`, in the model's line order.
+    /// The native lines of `node`, in the model's line order. One walk of
+    /// the node's records, not one per line.
     pub fn native_lines(&self, node: StationId) -> Vec<LineId> {
-        let station = self.stations.get(&node);
-        self.topology()
-            .lines_of(node)
-            .into_iter()
-            .filter(|&line| station.is_none_or(|s| s.record_for(line).is_none()))
-            .collect()
+        let lines = self.topology().lines_of(node);
+        match self.stations.get(&node).filter(|s| !s.archived.is_empty()) {
+            Some(station) => {
+                let named = named_lines(station);
+                lines.into_iter().filter(|l| !named.contains(l)).collect()
+            }
+            None => lines,
+        }
     }
 
     /// The home line of the identity `identity` holds (RS 2): its first
@@ -732,7 +798,10 @@ impl Project {
             .filter(|(&id, s)| {
                 !s.archived.is_empty() && {
                     let lines = topology.lines_of(id);
-                    !lines.is_empty() && lines.iter().all(|&l| s.record_for(l).is_some())
+                    !lines.is_empty() && {
+                        let named = named_lines(s);
+                        lines.iter().all(|l| named.contains(l))
+                    }
                 }
             })
             .map(|(&id, _)| id)

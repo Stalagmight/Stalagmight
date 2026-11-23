@@ -510,7 +510,8 @@ impl fmt::Display for Violation {
                 into,
             } => write!(
                 f,
-                "archived station {archived} of station {station} is archived under {into},                  which is no other archived station of it"
+                "archived station {archived} of station {station} is archived under {into}, \
+                 which is no other archived station of it"
             ),
             Self::ArchivedUnderHistory {
                 station,
@@ -518,11 +519,13 @@ impl fmt::Display for Violation {
                 into,
             } => write!(
                 f,
-                "archived station {archived} of station {station} is archived under {into},                  which names no line"
+                "archived station {archived} of station {station} is archived under {into}, \
+                 which names no line"
             ),
             Self::ArchivedOwnerCycle { station, archived } => write!(
                 f,
-                "archived station {archived} of station {station} is archived under itself                  through other archived stations"
+                "archived station {archived} of station {station} is archived under itself \
+                 through other archived stations"
             ),
             Self::HandMoveOffLine { line, station } => write!(
                 f,

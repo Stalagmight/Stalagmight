@@ -434,6 +434,23 @@ pub fn name_characters_refusal(what: &str, name: &str) -> Option<String> {
     })
 }
 
+/// A station name as the user gives it, trimmed, or why no station may take
+/// it: an empty name, or one holding a character [`is_forbidden_name_char`]
+/// rejects, in 0.6.0's words. The one rule every user-given station name
+/// passes: Set Station Name and the renames a Merge, Detach or loop closure
+/// dialog sends with its command (RS-FX9). Whether the name is free on the
+/// station's lines is the caller's check.
+pub fn user_station_name(name: &str) -> Result<&str, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("A station name cannot be empty".to_string());
+    }
+    match name_characters_refusal("station", name) {
+        Some(refusal) => Err(refusal),
+        None => Ok(name),
+    }
+}
+
 /// Make the names of one line unique, in station order: the first holder of a
 /// name keeps it, a later one gets the Mid suffix of it (`5`, `5` -> `5`,
 /// `5a`), and a missing name is seeded from the station's index (letter

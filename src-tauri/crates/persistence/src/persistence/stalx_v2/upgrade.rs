@@ -86,16 +86,18 @@ pub(super) fn settles(violation: &Violation) -> bool {
 
 /// Run the upgrade on `project` (an earlier version 2 file as decoded, whose
 /// only violations are ones [`settles`] lists). `in_time` is asked between
-/// its steps (a reader's deadline, [`super::DecodeOptions::deadline`]).
+/// its steps and inside the long ones, per line or junction (a reader's
+/// deadline, [`super::DecodeOptions::deadline`]).
 pub(super) fn run(
     project: &mut Project,
     in_time: &dyn Fn() -> Result<(), DecodeError>,
 ) -> Result<UpgradeReport, DecodeError> {
     let records = project.stations.values().map(|s| s.archived.len()).sum();
-    let before = Before::of(project, Comments::Shared);
-    let swapped = kept::keep_longest(project, Comments::Shared);
+    let before = Before::of(project, Comments::Shared, in_time)?;
     in_time()?;
-    let settled = kept::settle(project, &before);
+    let swapped = kept::keep_longest(project, Comments::Shared, in_time)?;
+    in_time()?;
+    let settled = kept::settle(project, &before, in_time)?;
     Ok(UpgradeReport {
         records,
         swapped,

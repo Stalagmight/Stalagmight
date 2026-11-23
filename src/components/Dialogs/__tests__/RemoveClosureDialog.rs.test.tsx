@@ -122,6 +122,34 @@ describe('Remove Closure under RS', () => {
     useUIStore.setState({ geometryMode: 'measured' } as never);
   });
 
+  // RS-FX9 item 1: the command refuses a rename Edit Station would refuse,
+  // so a dialog never sends one. Both answers letter a name that already held
+  // a bidi override (an import's): Remove waits and says why, as Edit Station
+  // does. Injection: on 3b6bdf77e Remove stayed enabled and sent the name.
+  it('does not send a name Edit Station would refuse', async () => {
+    const odd = '1\u202E7';
+    invokeIpc.mockResolvedValue({
+      ...NAMING,
+      collisions: [
+        {
+          line_id: SIDE,
+          name: odd,
+          letter: { station: { id: 17, name: odd, home_line: SIDE }, to: `${odd}a` },
+          alternative: { station: { id: 71, name: odd, home_line: SIDE }, to: `${odd}a` },
+        },
+      ],
+    });
+    render(<RemoveClosureDialog />);
+    expect(await screen.findByTestId('remove-closure-rename-problem')).toHaveTextContent(
+      'A name cannot contain control characters or invisible formatting characters.',
+    );
+    expect(screen.getByTestId('remove-closure-confirm')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('remove-closure-collision-0-alternative'));
+    expect(screen.getByTestId('remove-closure-confirm')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('remove-closure-confirm'));
+    expect(removeLoopClosure).not.toHaveBeenCalled();
+  });
+
   it('says no name changes for a closure that hides nothing', async () => {
     invokeIpc.mockResolvedValue({ closure_id: 5n, renamed_lines: [], collisions: [] });
     render(<RemoveClosureDialog />);
@@ -147,5 +175,43 @@ describe('Remove Closure names what comes back as the answers leave it (RS-FX8)'
     fireEvent.click(screen.getByTestId('remove-closure-collision-0-alternative'));
     expect(screen.getByTestId('remove-closure-option-5-back')).toHaveTextContent('(17 comes back)');
     expect(screen.getByTestId('remove-closure-comes-back')).toHaveTextContent('Side / 17 comes back');
+  });
+});
+
+/**
+ * RS-FX9 item 7: a closure id reaches the dialog as a bigint from the store
+ * and as a plain number from an IPC answer (JSON has no bigint), so the
+ * dialog compares ids as strings, as its preview check does. With the
+ * preview's `closure_id` a number the row still follows the chosen answer.
+ * Injection: on 3b6bdf77e the row compared `5 === 5n` and said "(17 comes
+ * back)" while the removal gave 17a.
+ */
+describe('closure ids of mixed number and bigint', () => {
+  it('the row follows the answer whatever type the preview gives the id', async () => {
+    invokeIpc.mockResolvedValue({ ...NAMING, closure_id: 5 });
+    render(<RemoveClosureDialog />);
+    await screen.findByTestId('remove-closure-comes-back');
+    expect(screen.getByTestId('remove-closure-option-5-back')).toHaveTextContent('(17a comes back)');
+    fireEvent.click(screen.getByTestId('remove-closure-collision-0-alternative'));
+    expect(screen.getByTestId('remove-closure-option-5-back')).toHaveTextContent('(17 comes back)');
+  });
+
+  it('the chosen closure and the ends another closure shows match by value', async () => {
+    useProjectStore.setState((state: never) => ({
+      project: {
+        ...(state as { project: object }).project,
+        loop_closures: [
+          {
+            id: 5,
+            station_a: A,
+            station_b: B,
+            archived: { end: 'b', station: { id: 17, name: '17', home_line: SIDE }, shown_as: { id: 3, name: '3', home_line: MAIN } },
+          },
+        ],
+      },
+    }) as never);
+    render(<RemoveClosureDialog />);
+    expect(screen.getByTestId('remove-closure-option-5-back')).toHaveTextContent('(17');
+    expect(await screen.findByTestId('remove-closure-comes-back')).toHaveTextContent('Side / 17a comes back');
   });
 });

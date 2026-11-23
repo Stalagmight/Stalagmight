@@ -808,3 +808,72 @@ fn a1_and_a5_hold_for_records() {
     );
     assert!(p.is_archived_id(u0));
 }
+
+/// A hub: line 0 runs one shot from station `hub`, and `sides` more lines
+/// start there, one shot each; the hub holds `history` records naming no
+/// line (history, oldest first), then a record naming each side line
+/// (`a{k}`), so a scan for a line's record passes every history record.
+fn crafted_hub(sides: usize, history: usize) -> (Project, StationId, Vec<LineId>) {
+    let mut p = project();
+    let main = free_line(&mut p, [0.0, 0.0], run(90.0, 1, 1.0));
+    let hub = at(&p, main, 0);
+    let lines: Vec<LineId> = (0..sides)
+        .map(|_| branch(&mut p, hub, run(0.0, 1, 1.0)))
+        .collect();
+    let mut next = p.counters.next_station_id;
+    let mut record = |name: String, lines: Vec<LineId>| {
+        next += 1;
+        ArchivedStation {
+            id: next - 1,
+            name,
+            comment: None,
+            external: None,
+            into: None,
+            lines,
+        }
+    };
+    let mut records: Vec<ArchivedStation> = (0..history)
+        .map(|_| record("h".to_string(), Vec::new()))
+        .collect();
+    records.extend(
+        lines
+            .iter()
+            .enumerate()
+            .map(|(k, &line)| record(format!("a{k}"), vec![line])),
+    );
+    p.counters.next_station_id = next;
+    p.station_mut(hub).unwrap().archived = records;
+    (p, hub, lines)
+}
+
+/// Pre-PR review (RS-FX9 item 2), the per-line record scans of the model:
+/// at a hub of 4,001 lines and a million history records, `native_lines`
+/// (the home line every foreign slot's dot reads), Detach's case-2 test
+/// (`detach_keeps`, every command label and preview of a detach) and the
+/// epilogue's A4 restore (every command) each walked the hub's records once
+/// per line: about 4e9 record visits apiece. Each now builds the hub's
+/// named lines once. Injection: on 3b6bdf77e this test takes about 220 s
+/// here against its 10 s bound; it takes about 4 s, mostly building the hub.
+#[test]
+fn record_lookups_at_a_hub_cost_its_lines_plus_its_records() {
+    let (mut p, hub, lines) = crafted_hub(4_000, 1_000_000);
+    assert!(p.validate().is_empty());
+    let started = std::time::Instant::now();
+    let main = p.lines()[0].id;
+    assert_eq!(p.native_lines(hub), vec![main]);
+    assert_eq!(p.home_line(hub), Some(main));
+    assert!(p.detach_keeps(hub, main), "every other line is named");
+    assert!(!p.detach_keeps(hub, lines[0]));
+    assert!(
+        p.restore_archived_identities().is_empty(),
+        "line 0 is native"
+    );
+    // Every line named (A4 broken): the restore gives the hub a record back.
+    p.station_mut(hub).unwrap().archived[1_000_000]
+        .lines
+        .push(main);
+    let restored = p.restore_archived_identities();
+    assert_eq!(restored.len(), 1);
+    let elapsed = started.elapsed();
+    assert!(elapsed < std::time::Duration::from_secs(10), "{elapsed:?}");
+}

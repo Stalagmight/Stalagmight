@@ -89,9 +89,10 @@ fn identities(r: &CommandResult) -> Vec<(StationId, String, String)> {
 /// is archived, and the history row says which ("Merge A / 2 into B / 0
 /// (keeps 0)"). A then shows B's 0 at its end with B's dot beside its own
 /// 0: a foreign slot counts for no uniqueness (RS-FX5), so the merge needs
-/// no answer with or without the dialog and letters nothing; the dialog's
-/// rename of the kept station still goes through, with no notice (the
-/// rename is the user's).
+/// no answer with or without the dialog and letters nothing. A rename the
+/// merge's collisions do not ask for (here of the kept station, with none)
+/// refuses and changes nothing (RS-FX9 item 1: a dialog answers only its
+/// collisions); Set Station Name renames the kept station on every line.
 #[test]
 fn a_merge_keeps_the_dialogs_station_and_answers_its_collisions() {
     let (p, a, b) = two_lines();
@@ -117,11 +118,27 @@ fn a_merge_keeps_the_dialogs_station_and_answers_its_collisions() {
     assert!(r.identities.is_none(), "{:?}", r.identities);
     assert!(state.undo().success);
 
-    let r = run(
+    let reason = refused(
         state,
         merge_keeping(slot(a, 2), slot(b, 0), b0, Some(vec![rename(b0, "J")])),
     );
+    assert!(
+        reason.contains("is in none of the name collisions"),
+        "{reason}"
+    );
+    assert_eq!(shown_name(state, slot(b, 0)), "0");
+    let r = run(
+        state,
+        merge_keeping(slot(a, 2), slot(b, 0), b0, Some(Vec::new())),
+    );
     assert!(r.identities.is_none(), "{:?}", r.identities);
+    run(
+        state,
+        Command::SetStationName {
+            station_ref: slot(b, 0),
+            name: "J".to_string(),
+        },
+    );
     for at in [slot(a, 2), slot(b, 0)] {
         assert_eq!(shown_name(state, at), "J");
     }
@@ -149,7 +166,7 @@ fn detach_brings_the_archived_station_back_with_the_dialogs_answers() {
     let state = &opened.state;
     run(
         state,
-        merge_keeping(slot(a, 2), slot(b, 0), b0, Some(vec![rename(b0, "J")])),
+        merge_keeping(slot(a, 2), slot(b, 0), b0, Some(Vec::new())),
     );
     // A's own 2 is archived: the name is free on A.
     run(
@@ -291,4 +308,160 @@ fn station_commands_read_with_and_without_the_rs_fields() {
             renames: None
         }
     ));
+}
+
+/// RS-FX9 (pre-PR review, an unchecked assumption): with editing blocked the
+/// backend refuses Merge Stations, both Detach forms, Create Loop Closure and
+/// Remove Closure, renames and all, and changes nothing: on a SpeleoDB
+/// project held without its lock (`guard_mutation_for` in `execute`, the
+/// EDIT_DISABLED code) and on a file a newer build wrote (the pipeline's
+/// READ_ONLY_FILE). The app-mode term (Closures Computed View, Plan,
+/// Export) is the frontend's alone, by design (docs/app-modes.md), and each
+/// of these dialogs re-checks it when confirmed. Each command here would
+/// succeed with editing allowed (checked last).
+#[test]
+fn every_kept_station_command_is_refused_while_editing_is_blocked() {
+    let (p, a, b) = loop_lines();
+    let (a4, b3) = (st(&p, a, 4), st(&p, b, 3));
+    let mut q = p.clone();
+    let side = line_at(&mut q, "S", [500.0, 500.0], vec![shot(0.0, 4.0)]);
+    let s0 = st(&q, side, 0);
+    let commands = |closure: u64| {
+        vec![
+            merge_keeping(slot(a, 2), slot(side, 0), s0, Some(vec![rename(s0, "J")])),
+            Command::UnmergeStations {
+                station_ref: slot(b, 0),
+                renames: Some(vec![rename(st(&q, a, 0), "J")]),
+                rest_keep: None,
+            },
+            Command::UnmergeStationPair {
+                station_a: slot(a, 0),
+                station_b: slot(b, 0),
+                renames: Some(vec![rename(st(&q, a, 0), "J")]),
+                rest_keep: None,
+            },
+            Command::CreateLoopClosure {
+                station_a: slot(b, 3),
+                station_b: slot(a, 4),
+                closure_strategy: ClosureStrategy::Batch,
+                keep: Some(a4),
+                renames: Some(vec![rename(b3, "J")]),
+            },
+            Command::RemoveLoopClosure {
+                closure_id: closure,
+                renames: Some(vec![rename(b3, "J")]),
+            },
+        ]
+    };
+    let with_closure = |state: &AppState| -> u64 {
+        run(
+            state,
+            Command::CreateLoopClosure {
+                station_a: slot(b, 3),
+                station_b: slot(a, 4),
+                closure_strategy: ClosureStrategy::Batch,
+                keep: Some(a4),
+                renames: None,
+            },
+        );
+        state.project_state_wire().unwrap().project.loop_closures[0].id
+    };
+
+    // A SpeleoDB project held without its lock.
+    let opened = open(&q);
+    let state = &opened.state;
+    let closure = with_closure(state);
+    state.set_speleo_link_for_tests(Some(&crate::models::SpeleoLink {
+        endpoint: "http://speleodb.invalid/".to_string(),
+        project_id: "33333333-3333-3333-3333-333333333333".to_string(),
+        project_name: "Remote".to_string(),
+        base_commit_sha: Some("abc123".to_string()),
+        has_unpushed_edits: false,
+        last_edit_at: None,
+        last_verify_at: None,
+        undo_mode: None,
+    }));
+    for cmd in commands(closure) {
+        let what = cmd.description();
+        let reason = refused(state, cmd);
+        assert!(
+            reason.starts_with(crate::core::command::EDIT_DISABLED_CODE),
+            "{what}: {reason}"
+        );
+    }
+
+    // A file a newer build wrote (an unknown required feature).
+    let opened = open(&q);
+    let text = std::fs::read_to_string(&opened.path).unwrap();
+    let patched = text.replacen(
+        "\"requires\":[\"archived-stations\"]",
+        "\"requires\":[\"archived-stations\",\"x-from-the-future\"]",
+        1,
+    );
+    assert_ne!(patched, text);
+    std::fs::write(&opened.path, patched.as_bytes()).unwrap();
+    let state = AppState::new().unwrap();
+    assert!(
+        state
+            .execute(Command::OpenProject {
+                path: opened.path.clone()
+            })
+            .success
+    );
+    for cmd in commands(1) {
+        let what = cmd.description();
+        let reason = refused(&state, cmd);
+        assert!(
+            reason.starts_with(super::READ_ONLY_FILE_CODE),
+            "{what}: {reason}"
+        );
+    }
+
+    // With editing allowed each of them runs (renames dropped: the dialogs'
+    // renames answer collisions, and these make none).
+    let opened = open(&q);
+    let state = &opened.state;
+    for cmd in commands(0) {
+        let cmd = match cmd {
+            Command::RemoveLoopClosure { .. } => Command::RemoveLoopClosure {
+                closure_id: with_closure(state),
+                renames: Some(Vec::new()),
+            },
+            Command::MergeStations {
+                station_a,
+                station_b,
+                keep,
+                ..
+            } => Command::MergeStations {
+                station_a,
+                station_b,
+                keep,
+                renames: Some(Vec::new()),
+            },
+            Command::UnmergeStations {
+                station_ref,
+                rest_keep,
+                ..
+            } => Command::UnmergeStations {
+                station_ref,
+                renames: Some(Vec::new()),
+                rest_keep,
+            },
+            Command::UnmergeStationPair {
+                station_a,
+                station_b,
+                rest_keep,
+                ..
+            } => Command::UnmergeStationPair {
+                station_a,
+                station_b,
+                renames: Some(Vec::new()),
+                rest_keep,
+            },
+            Command::CreateLoopClosure { .. } => continue,
+            other => other,
+        };
+        run(state, cmd);
+        assert!(state.undo().success);
+    }
 }

@@ -25,13 +25,15 @@
 //! command layer's (C) business, which keeps every model operation a pure,
 //! deterministic function of its input.
 
+use std::collections::HashSet;
 use std::fmt;
 
+use crate::station_naming::user_station_name;
 use crate::{LineId, StationId, StationRef};
 
 use super::{
-    AnchorReport, BuildError, ClosureId, EditContext, IdentityReport, Project, SweepReport,
-    Violation,
+    AnchorReport, AnchorSnapshot, BuildError, ClosureId, EditContext, IdentityReport,
+    LetteredStation, Project, RestoredIdentity, SweepReport, Violation,
 };
 
 /// Why a command was refused. Nothing was changed.
@@ -68,6 +70,13 @@ pub enum OpError {
     /// Merge or detach: the command would show two stations by one name on
     /// `line` (invariant N8) and its renames do not answer it.
     NameTaken { line: LineId, name: String },
+    /// A dialog's rename gives `station` a name no station may take
+    /// (`reason`: empty, or holding a control or invisible formatting
+    /// character), the rule Set Station Name applies (RS-FX9).
+    InvalidRename { station: StationId, reason: String },
+    /// A dialog's rename addresses a station none of the command's own name
+    /// collisions names (RS-FX9): a dialog answers only those.
+    RenameNotAsked(StationId),
     /// Closure: both ends are one station.
     ClosureOnOneStation,
     /// Closure: the ends are in different pieces that are not both placed.
@@ -132,6 +141,12 @@ impl fmt::Display for OpError {
             Self::NameTaken { line, name } => write!(
                 f,
                 "Line {line} would show two stations named {name:?}; rename one of them"
+            ),
+            Self::InvalidRename { reason, .. } => f.write_str(reason),
+            Self::RenameNotAsked(id) => write!(
+                f,
+                "Station {id} is in none of the name collisions this would make, so it cannot \
+                 be renamed here"
             ),
             Self::ClosureOnOneStation => f.write_str(
                 "These stations are already merged. Closures are for unmerged station pairs.",
@@ -226,6 +241,17 @@ impl<T> OpOutcome<T> {
     }
 }
 
+/// What [`Project::epilogue`] did, for the op's outcome.
+struct Epilogue {
+    restored: Vec<RestoredIdentity>,
+    /// The op's edit context, with the restores' re-identifications.
+    ctx: EditContext,
+    anchors: AnchorReport,
+    sweep: SweepReport,
+    unarchived: Vec<ClosureId>,
+    lettered: Vec<LetteredStation>,
+}
+
 /// Whether a command runs the orphan-closure sweep after settling (plan 5.5:
 /// merge, detach, datum removal and every delete do).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -262,40 +288,37 @@ impl Project {
         let backup = self.clone();
         let before = self.anchor_snapshot();
         let result = op(self).and_then(|(value, ctx)| {
-            let own_collisions = answers.apply(self)?;
-            self.drop_stale_attachments();
-            let restored = self.restore_archived_identities();
-            let pairs: Vec<(StationId, StationId)> =
-                restored.iter().map(|r| (r.old, r.new)).collect();
-            let ctx = ctx.with_reidentified(&pairs);
-            let anchors = self.settle_anchors(&before, &ctx);
-            let sweep = match sweep {
-                Sweep::Run => self.sweep_orphan_closures(),
-                Sweep::Skip => SweepReport::default(),
-            };
-            let mut unarchived = sweep.unarchived.clone();
-            unarchived.extend(self.normalise_closure_archives());
-            self.refuse_unanswered(&own_collisions, &sweep)?;
-            // Every letter the command gave: the sweep's (it letters every
-            // collision standing when its promotions end, the command's own
-            // included) and the final pass's, so a preview lists them all
-            // and the notice names each.
-            let mut lettered = sweep.lettered.clone();
-            lettered.extend(self.letter_collisions(&backup));
+            // The stations a rename may address are those the op's own
+            // collisions name, worked out as its preview lists them: the
+            // epilogue run with rule L on a copy of the state right after
+            // the mutation (only when there are renames to check).
+            let own_collisions = answers.apply(self, |p| {
+                let mut probe = p.clone();
+                probe
+                    .epilogue(sweep, &before, ctx.clone(), &backup, &[])
+                    .map(|e| {
+                        e.lettered
+                            .iter()
+                            .flat_map(|l| [l.station, l.other])
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })?;
+            let done = self.epilogue(sweep, &before, ctx, &backup, &own_collisions)?;
             let violations = self.validate();
             if violations.is_empty() {
                 let identities = IdentityReport {
-                    restored,
-                    unarchived,
-                    lettered,
+                    restored: done.restored,
+                    unarchived: done.unarchived,
+                    lettered: done.lettered,
                     hidden: Vec::new(),
                 }
                 .with_hidden(&backup, self);
                 Ok(OpOutcome {
                     value,
-                    anchors,
-                    sweep,
-                    reidentified: ctx.reidentified,
+                    anchors: done.anchors,
+                    sweep: done.sweep,
+                    reidentified: done.ctx.reidentified,
                     identities,
                 })
             } else {
@@ -308,6 +331,48 @@ impl Project {
         result
     }
 
+    /// The epilogue after an op's mutation (module docs): drop stale
+    /// attachments, restore (A4), settle the anchors against `before`,
+    /// sweep, normalise the closure archives, refuse a collision of `own`
+    /// (the op's own collisions its renames left) still standing
+    /// ([`Self::refuse_unanswered`]), then letter what is left by rule L
+    /// against `backup` (the state before the op).
+    fn epilogue(
+        &mut self,
+        sweep: Sweep,
+        before: &AnchorSnapshot,
+        ctx: EditContext,
+        backup: &Project,
+        own: &[(LineId, String)],
+    ) -> Result<Epilogue, OpError> {
+        self.drop_stale_attachments();
+        let restored = self.restore_archived_identities();
+        let pairs: Vec<(StationId, StationId)> = restored.iter().map(|r| (r.old, r.new)).collect();
+        let ctx = ctx.with_reidentified(&pairs);
+        let anchors = self.settle_anchors(before, &ctx);
+        let sweep = match sweep {
+            Sweep::Run => self.sweep_orphan_closures(),
+            Sweep::Skip => SweepReport::default(),
+        };
+        let mut unarchived = sweep.unarchived.clone();
+        unarchived.extend(self.normalise_closure_archives());
+        self.refuse_unanswered(own, &sweep)?;
+        // Every letter the command gave: the sweep's (it letters every
+        // collision standing when its promotions end, the command's own
+        // included) and the final pass's, so a preview lists them all and
+        // the notice names each.
+        let mut lettered = sweep.lettered.clone();
+        lettered.extend(self.letter_collisions(backup));
+        Ok(Epilogue {
+            restored,
+            ctx,
+            anchors,
+            sweep,
+            unarchived,
+            lettered,
+        })
+    }
+
     /// The station at a slot, or [`OpError::UnknownSlot`].
     pub fn station_of_slot(&self, slot: StationRef) -> Result<StationId, OpError> {
         self.station_at(slot).ok_or(OpError::UnknownSlot(slot))
@@ -317,17 +382,38 @@ impl Project {
     /// it names) and return the collisions still standing, by line and name:
     /// what a command that carries renames runs right after its mutation,
     /// before the epilogue ([`Self::refuse_unanswered`] judges them once the
-    /// sweep ran).
+    /// sweep ran). Each name is a user's ([`user_station_name`]: trimmed,
+    /// refused when empty or holding a control or invisible formatting
+    /// character, as Set Station Name refuses it), and each rename must
+    /// address a station the op's own collisions name (`asked`, called only
+    /// when there are renames: the stations of its preview's collisions,
+    /// both answers of each); anything else refuses
+    /// ([`OpError::InvalidRename`], [`OpError::RenameNotAsked`]).
     pub(super) fn apply_renames(
         &mut self,
         renames: &[(StationId, String)],
+        asked: impl FnOnce(&Project) -> HashSet<StationId>,
     ) -> Result<Vec<(LineId, String)>, OpError> {
+        let mut checked: Vec<(StationId, &str)> = Vec::with_capacity(renames.len());
         for (id, name) in renames {
+            let name = user_station_name(name).map_err(|reason| OpError::InvalidRename {
+                station: *id,
+                reason,
+            })?;
+            checked.push((*id, name));
+        }
+        if !checked.is_empty() {
+            let asked = asked(self);
+            if let Some(&(id, _)) = checked.iter().find(|(id, _)| !asked.contains(id)) {
+                return Err(OpError::RenameNotAsked(id));
+            }
+        }
+        for (id, name) in checked {
             let station = self
                 .stations
-                .get_mut(id)
-                .ok_or(OpError::UnknownStation(*id))?;
-            station.name.clone_from(name);
+                .get_mut(&id)
+                .ok_or(OpError::UnknownStation(id))?;
+            name.clone_into(&mut station.name);
         }
         Ok(self
             .name_collisions()

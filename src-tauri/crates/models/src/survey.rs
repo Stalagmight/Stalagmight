@@ -305,7 +305,9 @@ mod rs_property_tests;
 
 pub use adjust::{AdjustError, AdjustedPositions, AdjustmentFailure, ShotSigmas, SolveHold};
 pub use anchors::{AnchorReport, AnchorSnapshot, EditContext, GpsEdit, MergeSides};
-pub use archive::{HiddenComment, IdentityReport, RestoredIdentity, ShownIndex, SlotOwner};
+pub use archive::{
+    HiddenComment, IdentityReport, RecordIndex, RestoredIdentity, ShownIndex, SlotOwner,
+};
 pub use build::{BuildError, StaleAttachments, StartAt};
 pub use closures::{ClosureAcrossOneShot, ShotKey, TieGroups};
 pub use gas::{GasProfilePoint, GasReach};
@@ -317,6 +319,7 @@ pub use positions::{
 pub use records::OwnerFault;
 pub use rigid::RigidGroups;
 pub use roles::{FarFix, GpsGapWarning};
+pub use slot_text::SlotTexts;
 pub use stats::SurveyStats;
 pub use topology::{Component, ShotLocation, ShotUuidIndex, Topology};
 pub use types::{

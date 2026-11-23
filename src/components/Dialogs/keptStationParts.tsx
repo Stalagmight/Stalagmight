@@ -27,6 +27,7 @@ import type { NameCollision } from '../../types/ipc/NameCollision';
 import type { RenameSuggestion } from '../../types/ipc/RenameSuggestion';
 import type { StationIdentity } from '../../types/ipc/StationIdentity';
 import type { StationRename } from '../../types/ipc/StationRename';
+import { stationNameProblemMessage, stationRenameProblem } from '../../utils/nameValidation';
 import i18n from '../../i18n';
 
 /** Which of a collision's two answers the user picked. */
@@ -134,6 +135,22 @@ export function renamesFromAnswers(
 }
 
 /**
+ * Why the renames a dialog would send cannot go: the first name Edit Station
+ * refuses too (`stationRenameProblem`: empty once trimmed, or holding a control
+ * or invisible formatting character), which the command refuses as Set Station
+ * Name does (RS-FX9). The answers are the backend's letters of the stations'
+ * own names, so only a name that already held such a character (an import's)
+ * trips it, and the user renames that station first. `null` when all are fine.
+ */
+export function renamesProblem(renames: readonly StationRename[]): string | null {
+  for (const rename of renames) {
+    const problem = stationRenameProblem(rename.name, null);
+    if (problem !== null) return stationNameProblemMessage(problem, '', rename.name);
+  }
+  return null;
+}
+
+/**
  * The name station `id` has once the answers apply: its new name when an
  * answer renames it, its own name when it is in a collision the answers
  * leave it out of, else `fallback` (a preview's name, which is rule L's
@@ -230,7 +247,8 @@ export function useCollisionAnswers(
 
 /**
  * One row per name the operation would show twice on a line, each with its
- * two answers as radios (RS 7). `testIdPrefix` roots the test ids:
+ * two answers as radios (RS 7), and under them why the chosen answers cannot
+ * be sent when a name is one Edit Station refuses ({@link renamesProblem}). `testIdPrefix` roots the test ids:
  * `{prefix}-collision-{i}`, `{prefix}-collision-{i}-letter`,
  * `{prefix}-collision-{i}-alternative`.
  */
@@ -254,6 +272,7 @@ export function CollisionRows({
   const { t } = useTranslation();
   const labels = useIdentityLabels();
   if (!collisions || collisions.length === 0) return null;
+  const problem = renamesProblem(renamesFromAnswers(collisions, answers));
   return (
     <div className="space-y-2 text-sm" data-testid={`${testIdPrefix}-collisions`}>
       <p className="text-text-secondary">{t('dialogs.keptStations.collisionsLead', { count: collisions.length })}</p>
@@ -285,6 +304,11 @@ export function CollisionRows({
           </fieldset>
         );
       })}
+      {problem !== null && (
+        <p role="alert" className="text-xs text-error" data-testid={`${testIdPrefix}-rename-problem`}>
+          {problem}
+        </p>
+      )}
     </div>
   );
 }

@@ -598,3 +598,161 @@ fn record_lines_are_counted_as_they_arrive() {
         })
     ));
 }
+
+/// An earlier version 2 file (no kept-stations feature) whose station 0 is a
+/// hub: line 0 runs one shot from it, and each of `sides` more lines starts
+/// there, runs one shot to a station of its own, and knew the hub by a U1
+/// alias of its own (`a{k}`, naming line k); after those the hub holds
+/// `history` aliases naming no line (history records once read).
+fn hub_text(sides: u64, history: u64) -> String {
+    let mut t = format!(
+        "{{\"format\":\"stalx\",\"version\":2,\"solver\":1,\"requires\":[],\n\
+         \"conventions\":{{\"length\":\"m\",\"angles\":\"deg\",\"azimuth\":\"cw-from-north\",\
+         \"inclination\":\"+down\",\"depth\":\"+down\",\"local\":\"enu-m\",\"gps\":\"wgs84-deg\",\
+         \"temperature\":\"degC\"}},\n\
+         \"project\":{{\"name\":\"x\",\"created\":\"2025-01-01T00:00:00Z\",\
+         \"modified\":\"2025-01-01T00:00:00Z\"}},\n\"stations\":[\n[0,\"0\",{{\"aliases\":["
+    );
+    let mut next = sides + 2;
+    for k in 1..=sides {
+        let sep = if k == 1 { "" } else { "," };
+        let _ = write!(t, "{sep}[{next},\"a{k}\",{k}]");
+        next += 1;
+    }
+    for _ in 0..history {
+        let _ = write!(t, ",[{next}]");
+        next += 1;
+    }
+    t.push_str("]}],\n[1,\"1\"]");
+    for k in 1..=sides {
+        let _ = write!(t, ",\n[{},\"s{k}\"]", k + 1);
+    }
+    let _ = write!(
+        t,
+        "\n],\n\"counters\":{{\"station\":{next},\"closure\":0,\"section\":0}},\n\"lines\":[\n\
+         {{\"id\":0,\"color\":\"#000\",\"start\":0}},\n[\"u0\",1,1.0,0.0,0.0,0.0,0.0]"
+    );
+    for k in 1..=sides {
+        let _ = write!(
+            t,
+            ",\n{{\"id\":{k},\"color\":\"#000\",\"start\":0}},\n[\"s{k}\",{},1.0,90.0,0.0,0.0,0.0]",
+            k + 1
+        );
+    }
+    t.push_str("\n],\n\"placements\":[{\"station\":0,\"x\":0.0,\"y\":0.0}],\n\"end\":true}\n");
+    t
+}
+
+/// Pre-PR review (RS-FX9 item 2): one hub of 42,001 lines (line ids stop at
+/// 42,948) holding a million history records besides a record per side line,
+/// as an earlier build of version 2 wrote it. The upgrade
+/// found each slot's record (what the slot showed, `Before::of`), each line's
+/// (`native_lines` in rule K) and the kept station's home line per changed
+/// slot (the conversion notice) by scanning the hub's whole record list: about
+/// 1e11 record visits, hours before decode returned. Each is now one lookup in
+/// a map built once (`RecordIndex`, a per-station line set, a home line per
+/// identity). Injection: on 3b6bdf77e this test runs past
+/// 3 minutes here (killed); it takes a few seconds.
+#[test]
+fn an_earlier_hub_with_many_records_upgrades_in_linear_time() {
+    const SIDES: u64 = 42_000;
+    let text = hub_text(SIDES, 1_000_000);
+    let started = Instant::now();
+    let mut decoded = decode(text.as_bytes(), &DecodeOptions::default()).unwrap();
+    let report = decoded.upgrade().unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(report.records, 1_042_000);
+    assert!(
+        report.swapped.is_empty(),
+        "the hub's own line 0 wins rule K"
+    );
+    // Every side line showed the hub by its alias and now shows the hub.
+    assert_eq!(report.changes.shown_as_other(), SIDES as usize);
+    let p = &decoded.project;
+    assert_eq!(p.slot_name(crate::models::StationRef::new(7, 0)), Some("0"));
+    assert_eq!(p.record_naming(0, 7).map(|r| r.name.as_str()), Some("a7"));
+    assert!(elapsed < Duration::from_secs(20), "{elapsed:?}");
+}
+
+/// Pre-PR review (RS-FX9 item 2): a reader's deadline stopped an earlier
+/// file's upgrade only between its steps, so a step that had started (what
+/// each slot showed, rule K per junction, the notice's per-slot changes) ran
+/// to its end however long it took. The upgrade now asks per line and per
+/// junction too: a deadline passing on the tenth ask stops it there, inside
+/// its first step. Injection: on 3b6bdf77e the upgrade asked once, after rule
+/// K, and this one ran to its end.
+#[test]
+fn an_upgrade_asks_its_deadline_inside_its_steps() {
+    let decoded = decode(hub_text(2_000, 0).as_bytes(), &DecodeOptions::default()).unwrap();
+    let asked = std::cell::Cell::new(0);
+    let in_time = || {
+        asked.set(asked.get() + 1);
+        if asked.get() >= 10 {
+            Err(DecodeError::DeadlinePassed)
+        } else {
+            Ok(())
+        }
+    };
+    let mut project = decoded.project.clone();
+    assert_eq!(
+        super::upgrade::run(&mut project, &in_time).map(|_| ()),
+        Err(DecodeError::DeadlinePassed)
+    );
+    assert_eq!(asked.get(), 10);
+    let mut whole = decoded.project.clone();
+    let report = super::upgrade::run(&mut whole, &|| Ok(())).unwrap();
+    assert_eq!(report.changes.shown_as_other(), 2_000);
+}
+
+/// Pre-PR review (RS-FX9 item 3): `records` records of station 0 all name
+/// line 1 (A3 allows one). Validation finds `records - 1` repeats, and
+/// salvage repaired each by walking the station's whole record list, so
+/// 200,000 records cost about 4e10 record visits; salvage has no deadline.
+/// The repeats are now grouped per station and settled in one walk of its
+/// records, each repeat still reported. Injection: on 3b6bdf77e this test
+/// takes about a minute here (58 s) against its 10 s bound; it takes about
+/// a second.
+#[test]
+fn salvaging_many_records_naming_one_line_is_linear() {
+    const RECORDS: u64 = 200_000;
+    let mut t = format!(
+        "{{\"format\":\"stalx\",\"version\":2,\"solver\":1,{REQUIRES},\n\
+         \"conventions\":{{\"length\":\"m\",\"angles\":\"deg\",\"azimuth\":\"cw-from-north\",\
+         \"inclination\":\"+down\",\"depth\":\"+down\",\"local\":\"enu-m\",\"gps\":\"wgs84-deg\",\
+         \"temperature\":\"degC\"}},\n\
+         \"project\":{{\"name\":\"x\",\"created\":\"2025-01-01T00:00:00Z\",\
+         \"modified\":\"2025-01-01T00:00:00Z\"}},\n\"stations\":[\n[0,\"0\",{{\"archived\":["
+    );
+    for i in 0..RECORDS {
+        let sep = if i == 0 { "" } else { "," };
+        let _ = write!(
+            t,
+            "{sep}{{\"id\":{},\"name\":\"r{i}\",\"lines\":[1]}}",
+            10 + i
+        );
+    }
+    let _ = write!(
+        t,
+        "]}}],\n[1,\"1\"],\n[2,\"2\"]\n],\n\
+         \"counters\":{{\"station\":{},\"closure\":0,\"section\":0}},\n\"lines\":[\n\
+         {{\"id\":0,\"color\":\"#000\",\"start\":0}},\n[\"u0\",1,1.0,0.0,0.0,0.0,0.0],\n\
+         {{\"id\":1,\"color\":\"#000\",\"start\":0}},\n[\"u1\",2,1.0,90.0,0.0,0.0,0.0]\n],\n\
+         \"placements\":[{{\"station\":0,\"x\":0.0,\"y\":0.0}}],\n\"end\":true}}\n",
+        10 + RECORDS
+    );
+    let started = Instant::now();
+    let (project, report) = decode_salvage(t.as_bytes());
+    let elapsed = started.elapsed();
+    let project = project.unwrap();
+    assert!(project.validate().is_empty());
+    let unnamed = report
+        .repairs
+        .iter()
+        .filter(|r| matches!(r, super::Repair::UnnamedArchivedLine { line: 1, .. }))
+        .count();
+    assert_eq!(unnamed, RECORDS as usize - 1);
+    let records = &project.stations[&0].archived;
+    assert_eq!(records[0].lines, [1], "the first record keeps the line");
+    assert!(records[1..].iter().all(|r| r.lines.is_empty()));
+    assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+}

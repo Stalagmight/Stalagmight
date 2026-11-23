@@ -318,6 +318,43 @@ pub(super) fn run(bytes: &[u8]) -> (Option<Project>, SalvageReport) {
     }
 }
 
+/// A3 at `station`: each record of `repeats` (`(record, line)`, the later
+/// record naming a line another names first) no longer names that line, in
+/// one walk of the station's records; each unnamed line is reported, and a
+/// record left naming none as history.
+fn unname_repeats(
+    p: &mut Project,
+    station: StationId,
+    repeats: &HashSet<(StationId, LineId)>,
+    repairs: &mut Vec<Repair>,
+) {
+    let Some(s) = p.stations.get_mut(&station) else {
+        return;
+    };
+    for record in &mut s.archived {
+        let archived = record.id;
+        let before = record.lines.len();
+        let mut unnamed: Vec<LineId> = Vec::new();
+        record.lines.retain(|&line| {
+            let repeat = repeats.contains(&(archived, line));
+            if repeat {
+                unnamed.push(line);
+            }
+            !repeat
+        });
+        for line in unnamed {
+            repairs.push(Repair::UnnamedArchivedLine {
+                station,
+                archived,
+                line,
+            });
+        }
+        if before > 0 && record.lines.is_empty() {
+            repairs.push(Repair::ArchivedBecameHistory { station, archived });
+        }
+    }
+}
+
 /// The repair stage a violation belongs to.
 fn stage(v: &Violation) -> u8 {
     match v {
@@ -464,6 +501,9 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
     // violations about it are re-checked next pass).
     let mut touched_lines = BTreeSet::new();
     let mut owners: BTreeMap<StationId, HashSet<StationId>> = BTreeMap::new();
+    // A3 repeats per station, `(record, line)`: settled after the loop in one
+    // walk of each station's records (RS-FX9).
+    let mut named_twice: BTreeMap<StationId, HashSet<(StationId, LineId)>> = BTreeMap::new();
     for v in violations.iter().filter(|v| stage(v) == first) {
         match v {
             Violation::StationKeyMismatch { key, id } => {
@@ -614,31 +654,20 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
             | Violation::StaleClosureVia { .. }
             | Violation::StaleArchivedLine { .. }
             | Violation::HandMoveOffLine { .. } => stale = true,
-            // A3: the later record naming a line no longer names it.
+            // A3: the later record naming a line no longer names it
+            // (applied after the loop, one walk per station: K records
+            // naming one line are K - 1 repeats, and a walk per repeat cost
+            // K squared).
             Violation::LineNamedTwice {
                 station,
                 line,
                 second,
                 ..
             } => {
-                if let Some(s) = p.stations.get_mut(station) {
-                    for record in &mut s.archived {
-                        if record.id == *second && record.lines.contains(line) {
-                            record.lines.retain(|l| l != line);
-                            repairs.push(Repair::UnnamedArchivedLine {
-                                station: *station,
-                                archived: *second,
-                                line: *line,
-                            });
-                            if record.lines.is_empty() {
-                                repairs.push(Repair::ArchivedBecameHistory {
-                                    station: *station,
-                                    archived: *second,
-                                });
-                            }
-                        }
-                    }
-                }
+                named_twice
+                    .entry(*station)
+                    .or_default()
+                    .insert((*second, *line));
             }
             // A6: the record goes directly under the station's identity
             // (applied after the loop, one walk per station).
@@ -776,6 +805,9 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
     if !remap.is_empty() {
         remap_stations(p, &remap);
     }
+    for (station, repeats) in named_twice {
+        unname_repeats(p, station, &repeats, repairs);
+    }
     for (station, ids) in owners {
         if let Some(s) = p.stations.get_mut(&station) {
             for record in &mut s.archived {
@@ -797,19 +829,23 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
             hand_moves: dropped.hand_moves.len(),
         });
         // A record that lost its last line is history now: say so per
-        // record, as a dropped one is said.
-        let cleared: BTreeSet<(StationId, StationId)> = dropped
-            .archived_lines
-            .iter()
-            .map(|&(station, record, _)| (station, record))
-            .collect();
-        for (station, archived) in cleared {
-            let emptied = p.stations.get(&station).is_some_and(|s| {
-                s.archived
-                    .iter()
-                    .any(|r| r.id == archived && r.lines.is_empty())
-            });
-            if emptied {
+        // record, as a dropped one is said. One walk of each station's
+        // records, not one per record cleared.
+        let mut cleared: BTreeMap<StationId, BTreeSet<StationId>> = BTreeMap::new();
+        for &(station, record, _) in &dropped.archived_lines {
+            cleared.entry(station).or_default().insert(record);
+        }
+        for (station, records) in cleared {
+            let Some(s) = p.stations.get(&station) else {
+                continue;
+            };
+            let emptied: BTreeSet<StationId> = s
+                .archived
+                .iter()
+                .filter(|r| r.lines.is_empty() && records.contains(&r.id))
+                .map(|r| r.id)
+                .collect();
+            for archived in emptied {
                 repairs.push(Repair::ArchivedBecameHistory { station, archived });
             }
         }

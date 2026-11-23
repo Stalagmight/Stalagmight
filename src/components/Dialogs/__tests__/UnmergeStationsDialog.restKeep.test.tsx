@@ -38,6 +38,8 @@ import UnmergeStationsDialog, { recordsInside } from '../UnmergeStationsDialog';
 const MAIN = 1;
 const SIDE = 2;
 const NORTH = 3;
+const TWIG = 4;
+const EAST = 5;
 const slot = (line_id: number, station_index: number) => ({ line_id, station_index });
 const unmergeStations = vi.fn();
 const unmergeStationPair = vi.fn();
@@ -189,37 +191,61 @@ describe('the remaining-junction pick and the preview on screen', () => {
  * with them, inside the one they get back. Picking North / 9 as that station
  * left Side / 0 archived in it, unsaid. The dialog names each one for either
  * pick, and the ones archived inside the picked station as before; a history
- * record stays with the junction. Injection: list only the records under the
- * picked station.
+ * record stays with the junction.
+ *
+ * RS-FX9 item 6: the stations nested inside one that moves move too (the
+ * backend's `detach_others` takes every record but the junction's history),
+ * so the lead names them with the station they are inside: picking 50, Twig
+ * / 7 (41, archived inside Side / 0 when Side's junction was merged) is
+ * named on Side / 0's row. The fixture's records follow A3 (one record per
+ * line: 41 names Twig, not Side). Injection: on 3b6bdf77e the row named Side
+ * / 0 alone and 41 nowhere.
  */
 describe('what stays archived inside the remaining junction (RS-FX8)', () => {
   beforeEach(() => {
     useProjectStore.setState({
+      project: {
+        lines: [
+          { id: MAIN, name: 'Main', shots: [] },
+          { id: SIDE, name: 'Side', shots: [] },
+          { id: NORTH, name: 'North', shots: [] },
+          { id: TWIG, name: 'Twig', shots: [] },
+        ],
+      },
       stations: [
         {
           station_ref: slot(MAIN, 3),
           id: 3,
           name: '3',
-          merged_with: [slot(SIDE, 0), slot(NORTH, 0)],
+          merged_with: [slot(SIDE, 0), slot(NORTH, 0), slot(TWIG, 0)],
           archived: [
             { id: 40, name: '0', lines: [SIDE] },
-            { id: 41, name: '7', into: 40, lines: [SIDE] },
+            { id: 41, name: '7', into: 40, lines: [TWIG] },
             { id: 50, name: '9', lines: [NORTH] },
             { id: 60, name: '5', lines: [] },
           ],
         },
-        { station_ref: slot(SIDE, 0), id: 3, name: '3', merged_with: [slot(MAIN, 3), slot(NORTH, 0)] },
-        { station_ref: slot(NORTH, 0), id: 3, name: '3', merged_with: [slot(MAIN, 3), slot(SIDE, 0)] },
+        { station_ref: slot(SIDE, 0), id: 3, name: '3', merged_with: [slot(MAIN, 3), slot(NORTH, 0), slot(TWIG, 0)] },
+        { station_ref: slot(NORTH, 0), id: 3, name: '3', merged_with: [slot(MAIN, 3), slot(SIDE, 0), slot(TWIG, 0)] },
+        { station_ref: slot(TWIG, 0), id: 3, name: '3', merged_with: [slot(MAIN, 3), slot(SIDE, 0), slot(NORTH, 0)] },
       ],
+    } as never);
+    useUIStore.setState({
+      dialogData: {
+        stationRef: slot(MAIN, 3),
+        mergedStations: [slot(SIDE, 0), slot(NORTH, 0), slot(TWIG, 0)],
+        chosenLine: MAIN,
+      },
     } as never);
   });
 
-  it('names the other stations for either pick', async () => {
+  it('names every station that moves, nested ones with the station they are inside', async () => {
     render(<UnmergeStationsDialog />);
     await screen.findByTestId('unmerge-stations-rest');
-    // Default pick 40: 41 inside it, and North / 9 goes with the lines too.
+    // Default pick 40: 41 was inside it and is directly inside the station
+    // they get back now; North / 9 goes with the lines too.
     expect(screen.getByTestId('unmerge-stations-inside-41')).toHaveTextContent(
-      'Side / 7 (Station ID 41) stays archived inside it: detach Side again to get it back.',
+      'Twig / 7 (Station ID 41) stays archived inside it: detach Twig again to get it back.',
     );
     expect(screen.getByTestId('unmerge-stations-inside-50')).toHaveTextContent(
       'North / 9 (Station ID 50) stays archived inside it: detach North again to get it back.',
@@ -230,10 +256,13 @@ describe('what stays archived inside the remaining junction (RS-FX8)', () => {
     await waitFor(() =>
       expect(screen.getByTestId('unmerge-stations-comes-back')).toHaveTextContent('They get back 9a (Station ID 50).'),
     );
-    // Picked 50: Side / 0 stays archived in it now, and nothing names 50 itself.
+    // Picked 50: Side / 0 stays archived in it, with Twig / 7 still inside
+    // Side / 0, and nothing names 50 itself or the history record.
     expect(screen.getByTestId('unmerge-stations-inside-40')).toHaveTextContent(
-      'Side / 0 (Station ID 40) stays archived inside it: detach Side again to get it back.',
+      'Side / 0 (Station ID 40) stays archived inside it, with Twig / 7 (Station ID 41) archived inside Side / 0: ' +
+        'detach Side again to get it back.',
     );
+    expect(screen.queryByTestId('unmerge-stations-inside-41')).toBeNull();
     expect(screen.queryByTestId('unmerge-stations-inside-50')).toBeNull();
     expect(screen.queryByTestId('unmerge-stations-inside-60')).toBeNull();
   });
@@ -242,13 +271,23 @@ describe('what stays archived inside the remaining junction (RS-FX8)', () => {
 describe('recordsInside', () => {
   const records = [
     { id: 40, name: '0', lines: [SIDE] },
-    { id: 41, name: '7', into: 40, lines: [SIDE] },
+    { id: 41, name: '7', into: 40, lines: [TWIG] },
+    { id: 42, name: '8', into: 41, lines: [EAST] },
     { id: 50, name: '9', lines: [NORTH] },
     { id: 60, name: '5', lines: [] },
+    { id: 61, name: '6', into: 41, lines: [] },
   ];
-  it('lists the records under the station, and with `kept` every other top record', () => {
-    expect(recordsInside(records, 40).map((r) => r.id)).toEqual([41]);
-    expect(recordsInside(records, 40, true).map((r) => r.id)).toEqual([41, 50]);
-    expect(recordsInside(records, 50, true).map((r) => r.id)).toEqual([40]);
+  const rows = (id: number, kept?: boolean) =>
+    recordsInside(records, id, kept).map((row) => [row.record.id, row.inner.map((r) => r.id)]);
+  it('lists every station that moves inside the one that comes back, nested ones under their row', () => {
+    // 40 comes back: 41 directly inside it, 42 inside 41; history never.
+    expect(rows(40)).toEqual([[41, [42]]]);
+    expect(rows(41)).toEqual([[42, []]]);
+    // Kept (case 2): every record but the junction's history moves.
+    expect(rows(40, true)).toEqual([
+      [41, [42]],
+      [50, []],
+    ]);
+    expect(rows(50, true)).toEqual([[40, [41, 42]]]);
   });
 });

@@ -1230,6 +1230,8 @@
       "comesBack_other": "They get back {{name}} (Station ID {{id}}).",
       "comesBackComment": "With its comment: \"{{comment}}\"",
       "staysInside": "{{station}} (Station ID {{id}}) stays archived inside it: detach {{line}} again to get it back.",
+      "staysInsideWith": "{{station}} (Station ID {{id}}) stays archived inside it, with {{inner}} archived inside {{station}}: detach {{line}} again to get it back.",
+      "insideStation": "{{station}} (Station ID {{id}})",
       "offTogether_one": "{{lines}} comes off with {{line}}: they were one station before the merge.",
       "offTogether_other": "{{lines}} come off with {{line}}: they were one station before the merge.",
       "shownBefore": "{{line}} showed {{station}} here through a loop closure; it will show {{name}}.",

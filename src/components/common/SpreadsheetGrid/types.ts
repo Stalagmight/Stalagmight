@@ -116,7 +116,6 @@ export interface GridSelection {
   active: CellCoord;
 }
 
-/** A single resolved edit emitted to the host. `value` is already coerced. */
 /**
  * What a host's `onEdit` returns when it holds a typed edit for an answer
  * (the stations grid asks whose station a dotted cell shows first): the grid
@@ -125,6 +124,7 @@ export interface GridSelection {
  */
 export const EDIT_HELD = 'held' as const;
 
+/** A single resolved edit emitted to the host. `value` is already coerced. */
 export interface CellEdit {
   row: number;
   colKey: string;

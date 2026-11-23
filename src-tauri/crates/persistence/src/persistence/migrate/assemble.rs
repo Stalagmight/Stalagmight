@@ -111,8 +111,8 @@ pub(super) fn build(
     //     own lines), the others staying records. A junction that keeps a
     //     record's member takes its Station ID, so the slots are re-keyed
     //     before anything else refers to them.
-    let before = Before::of(&project, Comments::Own);
-    let swapped = kept::keep_longest(&mut project, Comments::Own);
+    let Ok(before) = Before::of(&project, Comments::Own, &kept::no_deadline);
+    let Ok(swapped) = kept::keep_longest(&mut project, Comments::Own, &kept::no_deadline);
     report.kept_by_length = swapped.len();
     if !swapped.is_empty() {
         let rekeyed: HashMap<StationId, StationId> = swapped.into_iter().collect();
@@ -199,7 +199,7 @@ pub(super) fn build(
     //    by rule L (a station shown on more lines is never lettered for one
     //    shown on fewer, and chain order never decides); then what each slot
     //    shows differently than 0.6.0 did, for the conversion notice.
-    let settled = kept::settle(&mut project, &before);
+    let Ok(settled) = kept::settle(&mut project, &before, &kept::no_deadline);
     report.closures_archived = settled.closures_archived;
     report.closures_keep_both = settled.changes.closures_keep_both.len();
     report.stations_renamed = settled.lettered.len();
