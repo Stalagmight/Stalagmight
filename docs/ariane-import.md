@@ -105,6 +105,16 @@ a line holds once, so it is the line's **trip** for cutting runs into lines - se
 ### Loop closures
 CLOSURE-type shots in Ariane encode loop closure metadata. During import these are resolved into Stalagmight loop closures linking two stations across lines.
 
+Each closure the import makes archives one end (kept and archived stations,
+RS 9; `import_funnel.rs`), decided in file order once the lines are
+classified: the end whose station is shown on the longest line is kept
+(rule K) when the closure may keep it, else the other end when that one
+may be kept, else the closure archives nothing (both ends keep their
+names). The archived end is shown under the kept end's name; a station
+that then repeats that name on its line takes a letter (rule L). The
+import summary notes each archive and warns for each letter and for each
+station the project already held that a closure now shows as another.
+
 ## Import Workflow
 
 The Ariane import is a single dialog (not the DMP wizard's multi-step flow), but since #425 it reuses the wizard's pieces: the same resizable map column (`WizardMapPanel`, whose width is shared with the DMP wizard and persisted - see [#404 / `panels.wizard_map_panel_width`](configuration.md)), per-line toggles, and a placement step. It always creates a NEW project - importing a `.tml` into an open project is not supported (the unified router offers to close the current project first).
