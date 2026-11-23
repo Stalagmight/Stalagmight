@@ -688,3 +688,81 @@ or the code disagreed, each with its reason.
   random, and create and remove answer their collisions with the
   previews' suggestions four times in five; the fifth refuses and must
   change nothing.
+
+## Deviations (package RS-W)
+
+Decisions the wire and commands package took where this page is silent
+or the code disagreed, each with its reason.
+
+- **The slot keeps `name` and `comment` as the shown identity's; the RS
+  fields ride one optional `shown` object.** RS-M1 already made a slot's
+  `name` and `comment` its shown identity's, and every display site reads
+  them, so `shown_name` and `shown_comment` would repeat them on every slot
+  of every refresh (the per-station cost `closures_with` and the old
+  `aliases` avoid). Instead `Station.shown` (`ShownSlot`: `id` = the shown
+  Station ID, `home_line`, `foreign`, `loop_end`, `loop_closure`) is sent
+  only on foreign slots and loop ends; absent, the slot shows `id` natively.
+  `Station::shown_id()` and the TS `shown?.id ?? id` read the Station ID to
+  display. `id` stays the node id. The binary envelope carries the same as
+  the sparse `station_shown` list, and `station_archived` replaces
+  `station_aliases`, still in the unreleased version 9.
+- **`archived` (records) replaces `aliases` on the slot**, one entry per
+  record with all its lines (`ArchivedStationWire`: id, name, comment,
+  lines), so a history record is an entry with no lines. `DetachLineResult`
+  loses `alias_id`: a line shows its node's one identity.
+- **A collision's two answers are rule L's and "letter the other one".**
+  Section 4.1 step 6 offers "letter the other station" or "rename the kept
+  station". Rule L may itself letter the kept station (it is shown on fewer
+  lines), so the wire gives `letter` (rule L's) and `alternative` (the other
+  identity of the pair lettered instead, with a letter free on every line it
+  is shown on once the first has its name back), which is the kept station
+  in the usual case. The dialog may also offer free text; the command takes
+  any `(Station ID, name)` and refuses a collision left unanswered.
+- **The Merge dialog gets both keeps at once.** `check_merge_connectivity`
+  returns, per keep it may offer (both stations, or the forced one alone),
+  the renamed lines, the collisions and the hidden station (`keeps`), so the
+  keep radio needs no second round trip; the geometry is the default keep's
+  run (it is the same for either keep). The Create Loop Closure preview does
+  the same (`options`, one per allowed end plus "Keep both names"). The
+  detach preview takes `rest_keep` instead, as its choice is rare.
+- **No `renames` means no dialog.** Every station command takes `renames:
+  Option<Vec<StationRename>>`: absent, rule L letters every collision and
+  the result's `identities` names each letter; present (even empty), an
+  unanswered collision refuses with `NameTaken`. So a caller that has no
+  dialog yet (the agent harness, scripts, the frontend before RS-UI) keeps
+  working. Merge `keep` absent keeps the stationary station (the identity a
+  merge kept before RS, and what the current dialog's words say);
+  Create Loop Closure `keep` absent keeps both names. All new command fields
+  are `serde(default)`, so batches written before them still read.
+- **Notices ride `CommandResult.identities`** (`IdentityNotice`: lettered,
+  restored, unarchived), filled by the station commands, Delete Shot, Delete
+  Line, the delete-and-split and range recipes and Combine; it is absent when
+  empty. The dialogs' own renames are the user's and are not reported. Split
+  Line Here reports none (the halves share the node, so nothing is restored
+  or lettered). Imports report only in their receipt (RS 7), untouched here.
+- **The delete previews carry the identities too** (`DeleteShotImpact` and
+  `DeleteShotRangeImpact.identities`, read on the state before the delete, a
+  restored record named by the record), so the confirm can say "Side / 0
+  comes back; Main / 12's comment is hidden".
+- **History rows.** A merge reads "Merge Side / 0 into Main / 12 (keeps 12)"
+  whatever the keep (the archived station first, both on the slots the user
+  picked); a row worded on the state after the merge (an import's preview
+  rows) takes the slot on a native line as the kept one, which is the
+  target an import join keeps. A closure with a kept end reads "Create loop
+  closure: Side / 17 shown as Main / 3"; one keeping both names keeps the
+  old "Create loop closure between A and B". Remove Loop Closure keeps its
+  label.
+- **Three read-only queries are new**: `preview_loop_closure`,
+  `preview_remove_loop_closure` and `preview_station_identity` (whose
+  station a slot shows, every line a rename or comment edit through it
+  changes, the archiving closure, the line's own archived station). Rename
+  and comment commands already address the shown identity; RS-UI asks
+  first. Their telemetry events are registered.
+- **Frontend, minimal (RS-UI finishes it).** SurveyData keeps
+  `stationArchived` and `stationShown`; the rename check addresses the shown
+  identity on every line it is shown on (a loop end's too); the station
+  details list records where they listed aliases; the store's merge, detach
+  and closure actions and the batch commands accept the answers. The e2e
+  mock models kept stations (a merge's `keep`, renames, records, foreign
+  slots) and closure archives, so Playwright specs that asserted U1's
+  per-line junction names need RS-UI's update.
