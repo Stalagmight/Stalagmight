@@ -51,7 +51,7 @@ import {
   completeDraftData,
   commitAnchorArgs,
 } from './dataTableDrafts';
-import type { CellEdit } from '../common/SpreadsheetGrid/types';
+import { EDIT_HELD, type CellEdit } from '../common/SpreadsheetGrid/types';
 
 interface DataTableProps {
   lines: Line[];
@@ -1249,16 +1249,16 @@ function ProjectDataTable({ lines }: DataTableProps) {
   // native ones wait for its answer (`stationGridEdits`).
   const onStationBatchEdit = useCallback(
     (edits: CellEdit[]) => {
-      if (editingBlocked) return;
+      if (editingBlocked) return false;
       const planned = planStationGridEdits(edits, lineStations);
-      if (planned.length === 0) return;
+      if (planned.length === 0) return false;
       setSource('data-table');
-      commitStationGridEdits(planned, openDialog, { setStationName, updateStationComment });
+      return commitStationGridEdits(planned, openDialog, { setStationName, updateStationComment });
     },
     [editingBlocked, lineStations, updateStationComment, setStationName, openDialog]
   );
   const onStationEdit = useCallback(
-    (row: number, colKey: string, value: unknown) => onStationBatchEdit([{ row, colKey, value }]),
+    (row: number, colKey: string, value: unknown) => (onStationBatchEdit([{ row, colKey, value }]) ? EDIT_HELD : undefined),
     [onStationBatchEdit]
   );
 

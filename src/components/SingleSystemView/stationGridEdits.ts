@@ -70,22 +70,25 @@ export async function applyStationGridEdits(edits: readonly StationGridEdit[], a
  * Commit `edits` (one grid commit): at once when none needs the prompt;
  * else through the prompt, one for a lone edit (`stationRef`, `kind`,
  * `value`, as before) and one listing every station for a batch (`edits`:
- * all of them, sent together on going on).
+ * all of them, sent together on going on). Returns whether it asked: the
+ * grid then keeps its cursor on the edited cell while the prompt is open
+ * (RS-FX8, N6).
  */
 export function commitStationGridEdits(
   edits: readonly StationGridEdit[],
   openDialog: (dialog: string, data: Record<string, unknown>) => void,
   actions: StationEditActions,
-): void {
-  if (edits.length === 0) return;
+): boolean {
+  if (edits.length === 0) return false;
   if (!edits.some((e) => e.ask)) {
     void applyStationGridEdits(edits, actions);
-    return;
+    return false;
   }
   const [only] = edits;
   if (edits.length === 1 && only) {
     openDialog('shown-identity-edit', { stationRef: only.stationRef, kind: only.kind, value: only.value });
-    return;
+    return true;
   }
   openDialog('shown-identity-edit', { edits: [...edits] });
+  return true;
 }

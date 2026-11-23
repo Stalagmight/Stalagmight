@@ -1953,9 +1953,9 @@
       "belongs": "{{name}} belongs to {{line}}.",
       "loopEnd": "Shown as {{station}} through a loop closure.",
       "changes": {
-        "name": "A new name changes it on every line it is on: {{lines}}.",
-        "comment": "A new comment changes it on every line it is on: {{lines}}.",
-        "both": "A new name and comment change it on every line it is on: {{lines}}."
+        "name": "A new name changes it on every line it is on.",
+        "comment": "A new comment changes it on every line it is on.",
+        "both": "A new name and comment change it on every line it is on."
       },
       "proceedOn": {
         "name": "Rename {{station}} to {{to}} on {{lines}}",
