@@ -132,7 +132,13 @@ impl Project {
     /// exist.
     pub fn is_native_slot(&self, slot: StationRef) -> bool {
         self.station_at(slot)
-            .is_some_and(|node| NativeSlots::of(self).is_native(node, slot.line_id))
+            .is_some_and(|node| self.is_native_slot_of(node, slot.line_id))
+    }
+
+    /// [`Self::is_native_slot`] for `node`'s slot on `line`: `line` passes
+    /// the node, no record of it names `line` and no closure archives it.
+    pub fn is_native_slot_of(&self, node: StationId, line: LineId) -> bool {
+        self.is_native(node, line) && !self.is_closure_archived(node)
     }
 
     /// The lines `identity` is native on (RS-FX5): the native lines of the

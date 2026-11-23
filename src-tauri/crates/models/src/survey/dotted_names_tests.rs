@@ -9,7 +9,7 @@
 use crate::StationRef;
 
 use super::archive_tests::shown;
-use super::ops_test_helpers::{assert_valid, branch, free_line, ok, run};
+use super::ops_test_helpers::{assert_valid, free_line, ok, run};
 use super::test_helpers::{at, project};
 use super::{ClosureStrategy, LineId, NameConflict, Project, Violation};
 
