@@ -1131,3 +1131,102 @@ fn reload_project_after_the_lock_was_handed_back_elsewhere_stops_editing() {
         remote.lock().expect("remote").tip()
     );
 }
+
+/// The survey of an uploaded `.stalx`, with the edit time left out.
+fn survey_of(file: &str) -> crate::models::survey::Project {
+    let decoded = crate::persistence::stalx_v2::decode(
+        file.as_bytes(),
+        &crate::persistence::stalx_v2::DecodeOptions::default(),
+    )
+    .expect("an uploaded .stalx");
+    let mut project = decoded.project;
+    project.modified_at = project.created_at;
+    project
+}
+
+/// Farm finding R3-same-account-overwrite (seed 950443) on the product side:
+/// this session uploads twice, then Reverts back one. A Revert is Start Editing,
+/// a Restore with `restore: true` and Done; the Restore swaps the copy in place
+/// and carries the edit session (the frontend reconciles through
+/// `applySpeleoTreeReplacement`, no project switch), so the Revert's own Done
+/// uploads the restored revision and hands the lock back. The fuzzer modelled
+/// the swap as a project switch (`cancel_loading` moves the session on), its
+/// Done found no edit session, and the restored copy went up only at a later
+/// Save and Close. A guard, not a fix: this held on `sg/core` 54db7c016 already.
+///
+/// Injection: `speleodb_swap_in_revision` carrying no edit session (its
+/// `restore` argument passed as `false` for the gate) leaves the gate shut after
+/// the Restore, and Done answers `NotEditing` with nothing uploaded.
+#[test]
+fn a_revert_keeps_its_edit_session_and_uploads_the_restored_revision() {
+    let temp = tempfile::tempdir().expect("temp");
+    let (endpoint, remote) = server();
+    let a = Session::start(&temp.path().join("a"), &endpoint);
+    for message in ["First", "Second"] {
+        let pushed = a.run(push(message));
+        assert!(matches!(pushed, PushResult::Pushed { .. }), "{pushed:?}");
+    }
+    let (first, second) = {
+        let remote = remote.lock().expect("remote");
+        let id = |at: usize| remote.history[at].id.clone();
+        (id(1), id(2))
+    };
+
+    let restored = first.clone();
+    let (gate, link, done) = a.run(move |state| {
+        state
+            .speleodb_start_editing()
+            .expect("Start Editing answers");
+        state
+            .speleodb_restore_revision(
+                ID.to_owned(),
+                "Remote".to_owned(),
+                restored,
+                true,
+                false,
+                false,
+                false,
+                false,
+            )
+            .expect("the Restore");
+        let gate = state.edit_enabled();
+        let link = state.speleodb_open_link().expect("still open");
+        let done = state
+            .speleodb_done(Some("Revert".to_owned()))
+            .expect("Done answers");
+        (gate, link, done)
+    });
+    assert!(gate, "the Restore keeps the edit session");
+    assert_eq!(link.base_commit_sha.as_deref(), Some(second.as_str()));
+    assert!(
+        link.has_unpushed_edits,
+        "the restored revision is to upload"
+    );
+    assert!(
+        matches!(
+            done,
+            DoneResult::Released {
+                replaced_revisions: None,
+                ..
+            }
+        ),
+        "the Revert's Done uploads and hands the lock back: {done:?}"
+    );
+    let remote = remote.lock().expect("remote");
+    assert_eq!(
+        remote.uploads.len(),
+        3,
+        "the Revert went up in its own Done"
+    );
+    assert!(remote.holder.is_none(), "the lock was handed back");
+    let reverted = remote.tip().expect("a tip");
+    assert_eq!(
+        survey_of(&remote.files[&reverted]),
+        survey_of(&remote.files[&first]),
+        "with the restored revision's survey"
+    );
+    assert_ne!(
+        survey_of(&remote.files[&reverted]),
+        survey_of(&remote.files[&second])
+    );
+}
