@@ -351,9 +351,11 @@ export function oracleInjectionSource(): string {
  * checks: id uniqueness, id-allocator dominance, agreement between the model
  * and the derived arrays computed from it, and the station graph's identity
  * on the wire (plan 9.2, kept and archived stations RS 3, 5 and 6): a line
- * passes a node (`id`) once, and two slots of a line that show different
- * identities have different names (N8; a same-line closure shows one
- * identity twice); the slots of one node show one identity (its name,
+ * passes a node (`id`) once, and two native slots of a line (no `shown`)
+ * that show different identities have different names (N8; a foreign slot
+ * or a loop end counts for no name uniqueness, RS-FX5, so Main / 12 kept at
+ * Branch's start leaves Branch its own 12); the slots of one node show one
+ * identity (its name,
  * comment, records and shown Station ID) and list exactly each other in
  * `merged_with`; its records hold A1 to A4; a loop closure archives a node
  * at most once and never in a cycle (C1, C2); every slot shows what its
@@ -526,19 +528,20 @@ export function checkProjectInvariants(state: unknown): string[] {
     const ids = (perLineIds[lineKey] = perLineIds[lineKey] ?? {});
     if (ids[idKey] === true) violations.push(`line ${lineKey} passes Station ID ${idKey} twice (at ${here})`);
     ids[idKey] = true;
-    // N8: slots that show different identities have different names; two
-    // slots of one shown identity (a same-line closure) may share one.
-    if (typeof station.name === 'string') {
+    // N8 (RS-FX5): native slots (no `shown`) that show different
+    // identities have different names. A foreign slot or a loop end shows
+    // another station's identity (with a dot or the loop mark) and counts
+    // for no name uniqueness, against native slots or each other.
+    if (typeof station.name === 'string' && (station.shown === undefined || station.shown === null)) {
       const names = (perLineNames[lineKey] = perLineNames[lineKey] ?? {});
-      const shownKey = shownKeyOf(station);
       const prior = names[station.name];
-      if (prior !== undefined && prior !== shownKey) {
+      if (prior !== undefined && prior !== idKey) {
         violations.push(
           `line ${lineKey} shows two stations named ${JSON.stringify(station.name)} ` +
-            `(Station IDs ${prior} and ${shownKey}, at ${here})`,
+            `(Station IDs ${prior} and ${idKey}, at ${here})`,
         );
       }
-      names[station.name] = shownKey;
+      names[station.name] = idKey;
     }
     (byStationId[idKey] = byStationId[idKey] ?? []).push(station);
     (linesOfNode[idKey] = linesOfNode[idKey] ?? {})[lineKey] = true;
