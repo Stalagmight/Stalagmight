@@ -86,8 +86,8 @@ describe("Create Loop Closure: why rule K's end may not be kept", () => {
       rule_k: 3,
       rule_k_refused: 'other_end_archived',
       options: [
-        { keep: 17, hidden: main3, renamed_lines: [MAIN], collisions: [] },
-        { renamed_lines: [], collisions: [] },
+        { keep: 17, hidden: main3, renamed_lines: [MAIN] },
+        { renamed_lines: [] },
       ],
     });
     const note = await screen.findByTestId('closure-keep-not-allowed');
@@ -106,7 +106,7 @@ describe("Create Loop Closure: why rule K's end may not be kept", () => {
       allowed: [],
       rule_k: 17,
       rule_k_refused: 'kept_shows_other_end',
-      options: [{ renamed_lines: [], collisions: [] }],
+      options: [{ renamed_lines: [] }],
     });
     // No end may be kept, so the keep choice is not offered; the outcome
     // still says why rule K's end is not.
@@ -126,8 +126,8 @@ describe("Create Loop Closure: why rule K's end may not be kept", () => {
       rule_k: 3,
       rule_k_refused: 'other_end_archived',
       options: [
-        { keep: 17, hidden: main3, renamed_lines: [MAIN], collisions: [] },
-        { renamed_lines: [], collisions: [] },
+        { keep: 17, hidden: main3, renamed_lines: [MAIN] },
+        { renamed_lines: [] },
       ],
     });
     await screen.findByTestId('closure-keep');
@@ -153,9 +153,9 @@ describe("Create Loop Closure: why rule K's end may not be kept", () => {
       rule_k: 3,
       default_keep: 3,
       options: [
-        { keep: 3, hidden: side17, renamed_lines: [SIDE], collisions: [] },
-        { keep: 17, hidden: main3, renamed_lines: [MAIN], collisions: [] },
-        { renamed_lines: [], collisions: [] },
+        { keep: 3, hidden: side17, renamed_lines: [SIDE] },
+        { keep: 17, hidden: main3, renamed_lines: [MAIN] },
+        { renamed_lines: [] },
       ],
     });
     await screen.findByTestId('closure-keep');

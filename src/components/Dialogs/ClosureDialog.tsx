@@ -18,7 +18,7 @@ import type { KeepCandidate } from '../../types/ipc/KeepCandidate';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { listNames } from '../../utils/listNames';
-import { CollisionRows, IdentityPill, renamesFromAnswers, useCollisionAnswers, useIdentityLabel } from './keptStationParts';
+import { IdentityPill, useIdentityLabel } from './keptStationParts';
 
 /** "Keep both names" in the keep choice (no end archived). */
 const BOTH = 'both';
@@ -90,7 +90,6 @@ export default function ClosureDialog() {
     };
   }, [stationA, stationB, strategy, closureRefusal]);
   const option = naming?.options.find((o) => (o.keep ?? BOTH) === choice) ?? null;
-  const [answers, setAnswer] = useCollisionAnswers(option?.collisions);
 
   const handleClose = () => {
     onCancel?.();
@@ -111,12 +110,16 @@ export default function ClosureDialog() {
     try {
       if (onBeforeConfirm) await onBeforeConfirm();
       // The dialog's answers (RS 5.2): the end kept (none: keep both
-      // names) and every collision answered; without the naming preview,
-      // neither, and the closure keeps both names.
+      // names), and no renames. Creating a closure repeats no name (the
+      // archived end becomes a loop end, which counts for no name
+      // uniqueness, RS-FX5), so the preview lists no collision; the empty
+      // list still makes a collision the backend found refuse instead of
+      // being lettered unseen. Without the naming preview, neither, and the
+      // closure keeps both names.
       const answered = option
         ? {
             ...(option.keep !== undefined ? { keep: option.keep } : {}),
-            renames: renamesFromAnswers(option.collisions, answers),
+            renames: [],
           }
         : null;
       // When preCommands exist (snap-to-merge), batch move + closure as single undo operation
@@ -199,15 +202,6 @@ export default function ClosureDialog() {
         )}
         {naming && <RuleKRefusal naming={naming} />}
         {option && naming && <ClosureChoiceOutcome option={option} ends={naming.ends} />}
-        {option && (
-          <CollisionRows
-            collisions={option.collisions}
-            answers={answers}
-            onAnswer={setAnswer}
-            testIdPrefix="closure"
-            disabled={isLoading}
-          />
-        )}
 
         {/* Preview data */}
         {preview && (

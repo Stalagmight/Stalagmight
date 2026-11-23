@@ -4,8 +4,10 @@
  * default is rule K's end, or "Keep both names" when rule K's end may not be
  * kept (C1, C2), next to the other end. For the choice the dialog says which
  * end is hidden (its point stays, without a label; Remove Closure brings it
- * back) and lists the collisions with their two answers. Create sends the
- * keep (none for "Keep both names") and the answers.
+ * back). It lists no name collision: the hidden end becomes a loop end,
+ * which counts for no name uniqueness (RS-FX5). Create sends the keep (none
+ * for "Keep both names") and an empty renames list, so a collision the
+ * backend found refuses rather than being lettered unseen.
  *
  * Injections: sending `keep` for "Keep both names" fails "keeps both names";
  * defaulting to the first allowed end fails "defaults to keep both names".
@@ -45,21 +47,9 @@ function naming(extra: Partial<LoopClosureNaming> = {}): LoopClosureNaming {
     rule_k: 3,
     default_keep: 3,
     options: [
-      {
-        keep: 3,
-        hidden: side17,
-        renamed_lines: [SIDE],
-        collisions: [
-          {
-            line_id: SIDE,
-            name: '3',
-            letter: { station: { id: 30, name: '3', home_line: SIDE }, to: '3a' },
-            alternative: { station: main3, to: '3a' },
-          },
-        ],
-      },
-      { keep: 17, hidden: { id: 3, name: '3', home_line: MAIN }, renamed_lines: [MAIN], collisions: [] },
-      { renamed_lines: [], collisions: [] },
+      { keep: 3, hidden: side17, renamed_lines: [SIDE] },
+      { keep: 17, hidden: { id: 3, name: '3', home_line: MAIN }, renamed_lines: [MAIN] },
+      { renamed_lines: [] },
     ],
     ...extra,
   };
@@ -121,19 +111,16 @@ describe('Create Loop Closure: both ends show one station (RS 5.2)', () => {
     expect(screen.getByTestId('closure-hidden')).toHaveTextContent(
       'Side / 17 and its comment are hidden: its point stays on the map, without a label. Remove Closure brings them back.',
     );
-    expect(screen.getByTestId('closure-collision-0')).toHaveTextContent('Rename Side / 3 to 3a');
+    // A loop end repeats no name (RS-FX5): no collision rows.
+    expect(screen.queryByTestId('closure-collisions')).toBeNull();
   });
 
-  it('creates keeping the chosen end, with the collision answered', async () => {
+  it('creates keeping the chosen end, with no renames', async () => {
     open(naming());
     await screen.findByTestId('closure-keep');
-    fireEvent.click(screen.getByTestId('closure-collision-0-alternative'));
     fireEvent.click(screen.getByTestId('closure-create'));
     await waitFor(() => expect(createLoopClosure).toHaveBeenCalled());
-    expect(createLoopClosure).toHaveBeenCalledWith(A, B, 'Batch', {
-      keep: 3,
-      renames: [{ station_id: 3, name: '3a' }],
-    });
+    expect(createLoopClosure).toHaveBeenCalledWith(A, B, 'Batch', { keep: 3, renames: [] });
   });
 
   it('keeps both names: no keep, nothing hidden', async () => {
@@ -154,8 +141,8 @@ describe('Create Loop Closure: both ends show one station (RS 5.2)', () => {
           allowed: [17],
           rule_k: 3,
           options: [
-            { keep: 17, hidden: { id: 3, name: '3', home_line: MAIN }, renamed_lines: [MAIN], collisions: [] },
-            { renamed_lines: [], collisions: [] },
+            { keep: 17, hidden: { id: 3, name: '3', home_line: MAIN }, renamed_lines: [MAIN] },
+            { renamed_lines: [] },
           ],
         }),
       ),
