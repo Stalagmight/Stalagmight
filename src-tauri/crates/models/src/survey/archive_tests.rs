@@ -211,8 +211,11 @@ fn merging_the_ends_of_an_archiving_closure_keeps_its_kept_end() {
     assert_eq!(p.stations[&b0].archived, vec![record(a2, "2", vec![a])]);
 }
 
-/// RS 4.1 step 5: a closure-archived station keeps showing its closure's
-/// kept end after a merge, whichever station is kept.
+/// RS 4.1 step 5: a closure-archived station kept by a merge keeps showing
+/// its closure's kept end. When the other station is kept, the closure
+/// drops its archive instead, so the kept station is shown on every line
+/// (RS 1.3, model review finding 1; deviation RS-FX1): its comment stays
+/// shown and the outcome and the preview name the closure.
 #[test]
 fn a_closure_archived_station_keeps_showing_its_kept_end_after_a_merge() {
     for keep_other in [false, true] {
@@ -220,17 +223,38 @@ fn a_closure_archived_station_keeps_showing_its_kept_end_after_a_merge() {
         let a = free_line(&mut p, [0.0, 0.0], run(90.0, 3, 10.0));
         let b = free_line(&mut p, [100.0, 50.0], run(0.0, 2, 5.0));
         let (a0, a3, b0) = (at(&p, a, 0), at(&p, a, 3), at(&p, b, 0));
+        p.set_shown_name(b0, "B0".to_string());
+        p.set_shown_comment(b0, Some("kept".to_string()));
         // A same-line closure: A:3 shows A:0 ("0" twice on A, one identity).
-        ok(p.create_closure(a3, Some(a), a0, Some(a), ClosureStrategy::Batch, None, &[]));
+        let closure =
+            ok(p.create_closure(a3, Some(a), a0, Some(a), ClosureStrategy::Batch, None, &[]))
+                .value
+                .closure
+                .id;
         p.closures[0].archived = Some(ClosureEnd::A);
         assert_valid(&p);
         assert_eq!(shown(&p, a), ["0", "1", "2", "0"]);
         let keep = if keep_other { b0 } else { a3 };
+        let preview = p.merge_preview(a3, b0, keep).unwrap();
         let out = ok(p.merge_stations_auto(a3, b0, keep));
         assert_valid(&p);
         let node = out.value.kept;
-        assert_eq!(p.shown(node), a0, "still shown as A:0");
-        assert_eq!(shown(&p, b)[0], "0");
+        if keep_other {
+            assert_eq!(p.shown(node), b0, "the kept station is shown");
+            assert_eq!(shown(&p, a), ["0", "1", "2", "B0"]);
+            assert_eq!(shown(&p, b)[0], "B0");
+            assert_eq!(p.shown_comment(node), Some("kept"));
+            assert_eq!(out.value.unarchived, Some(closure));
+            assert_eq!(out.identities.unarchived, vec![closure]);
+            assert_eq!(preview.unarchived, Some(closure));
+        } else {
+            assert_eq!(p.shown(node), a0, "still shown as A:0");
+            assert_eq!(shown(&p, b)[0], "0");
+            assert_eq!(out.value.unarchived, None);
+            // B0's comment goes with it: the dialog's own `hidden`.
+            assert_eq!(preview.hidden.0, b0);
+        }
+        assert!(preview.comments_hidden.is_empty());
         let candidate = p.merge_preview(at(&p, a, 1), b0, b0);
         assert!(candidate.is_none(), "one piece now");
     }
@@ -592,7 +616,20 @@ fn a_merge_that_would_cycle_the_closure_archives_drops_the_later_one() {
     assert_valid(&p);
     assert_eq!((p.shown(x), p.shown(k), p.shown(y)), (y, y, y));
     assert_eq!(p.nodes_showing(y), vec![x, k, y]);
-    let out = ok(p.merge_stations_auto(x, y, y));
+    // Keeping Y: X's closure c1 drops its archive so Y is shown on X's line
+    // (RS 1.3, deviation RS-FX1), and K keeps showing Y through c2.
+    let mut q = p.clone();
+    let out = ok(q.merge_stations_auto(x, y, y));
+    assert_valid(&q);
+    assert_eq!(out.identities.unarchived, vec![c1]);
+    assert_eq!((q.shown(out.value.kept), q.shown(k)), (y, y));
+    assert!(q
+        .closures
+        .iter()
+        .any(|cl| cl.id == c2 && cl.archived.is_some()));
+    // Keeping X, which shows Y through K: c1 still archives the merged node,
+    // and c2 would close the cycle, so the normalisation drops c2's.
+    let out = ok(p.merge_stations_auto(x, y, x));
     assert_valid(&p);
     assert_eq!(out.identities.unarchived, vec![c2]);
     let node = out.value.kept;

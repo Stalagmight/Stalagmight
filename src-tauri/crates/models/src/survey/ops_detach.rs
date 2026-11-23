@@ -152,8 +152,10 @@ pub struct DetachNaming {
     pub rest_choices: Vec<StationId>,
     pub rest_default: Option<StationId>,
     /// The identity the detached line showed at the junction before, when a
-    /// loop closure made it another station's (RS 4.2 case 3: it will show
-    /// the junction's own name).
+    /// loop closure made it another station's and the line shows another
+    /// identity there afterwards (the junction's own name in case 3, the
+    /// restored record in case 1, the junction's own identity in case 2
+    /// when the closure's end goes with the other lines).
     pub shown_before: Option<StationId>,
     /// The names the detach would show twice, with rule L's answers.
     pub collisions: Vec<LetteredStation>,
@@ -164,6 +166,25 @@ pub struct DetachNaming {
     /// there after the detach (demo finding V-1: the dialog says what each
     /// line ends up with, not one Station ID for all).
     pub lines: Vec<DetachLineOutcome>,
+    /// The slots away from the junction that show another identity after
+    /// the detach (RS 4.2, M-P2-8): a loop end whose closure's kept end
+    /// moved with the lines that came off, or a station a promotion the
+    /// detach's sweep made merged. In line order, then chain order; letters
+    /// are in `collisions`, not here.
+    pub shown_elsewhere: Vec<ShownElsewhere>,
+    /// The comments the detach hides (RS 12): a promotion its sweep makes,
+    /// or a closure end it moves, may hide one.
+    pub comments_hidden: Vec<super::HiddenComment>,
+}
+
+/// A slot away from the junction that shows another identity after a
+/// detach ([`DetachNaming::shown_elsewhere`]): the identity it showed
+/// before and the one it shows after, each by Station ID and name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShownElsewhere {
+    pub slot: StationRef,
+    pub before: (StationId, String),
+    pub after: (StationId, String),
 }
 
 /// What one line through a junction ends up with after a detach
@@ -230,9 +251,8 @@ impl Project {
         rest_keep: Option<StationId>,
     ) -> Result<OpOutcome<DetachReport>, OpError> {
         self.detach_refusal(station, line)?;
-        self.run_op(Sweep::Run, |p| {
+        self.run_op_answered(Sweep::Run, answers.answers(), |p| {
             let report = p.detach_ids(station, line, DetachMode::Restore { rest_keep })?;
-            answers.answers().apply(p)?;
             let ctx = EditContext::line(line).with_renamed(station, report.new_station);
             Ok((report, ctx))
         })
@@ -342,6 +362,11 @@ impl Project {
                 .map(|r| (r.name.clone(), r.comment.clone()))
                 .ok_or(OpError::UnknownStation(report.new_station))?,
         };
+        let line_now = lines
+            .iter()
+            .find(|o| o.line == line)
+            .map_or(report.line_node(), |o| o.station);
+        let shown_elsewhere = self.shown_elsewhere(&copy, station);
         Ok(DetachNaming {
             name,
             id: report.new_station,
@@ -360,11 +385,47 @@ impl Project {
             },
             rest_choices,
             rest_default,
-            shown_before: (!report.restored && !report.kept && shown != station).then_some(shown),
+            shown_before: (shown != station && copy.shown(line_now) != shown).then_some(shown),
             collisions: outcome.identities.lettered.clone(),
             alternatives: copy.alternative_letters(&outcome.identities.lettered),
             lines,
+            shown_elsewhere,
+            comments_hidden: outcome.identities.hidden.clone(),
         })
+    }
+
+    /// The slots (other than `junction`'s, which [`DetachNaming::lines`]
+    /// covers) whose shown identity differs between this state and `after`,
+    /// a detach of this state: a detach adds and removes no slot, so slots
+    /// match by line and index.
+    fn shown_elsewhere(&self, after: &Project, junction: StationId) -> Vec<ShownElsewhere> {
+        let (before_index, after_index) = (self.shown_index(), after.shown_index());
+        let name = |p: &Project, id: StationId| {
+            p.stations
+                .get(&id)
+                .map(|s| s.name.clone())
+                .unwrap_or_default()
+        };
+        let mut out = Vec::new();
+        for line in self.lines() {
+            let Some(now) = after.line(line.id) else {
+                continue;
+            };
+            for (index, (node, node_after)) in line.stations().zip(now.stations()).enumerate() {
+                if node == junction {
+                    continue;
+                }
+                let (was, is) = (before_index.shown(node), after_index.shown(node_after));
+                if was != is {
+                    out.push(ShownElsewhere {
+                        slot: StationRef::new(line.id, index as u32),
+                        before: (was, name(self, was)),
+                        after: (is, name(after, is)),
+                    });
+                }
+            }
+        }
+        out
     }
 
     /// Whether detaching `line` from `station` keeps the station on `line`

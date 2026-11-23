@@ -100,6 +100,24 @@ pub struct RestoredIdentity {
     pub comment_hidden: Option<String>,
 }
 
+/// A comment an op hid (RS 12, U-P1-3): an identity showed it on some slot
+/// before the op, and afterwards it is kept in an identity no slot shows (a
+/// record, or a node a loop closure archives). Undo brings it back; for a
+/// record, so does Detach Line from Station.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HiddenComment {
+    /// The identity that showed the comment before the op: its Station ID,
+    /// its name then and its home line then (the pill's colour).
+    pub station: StationId,
+    pub name: String,
+    pub home_line: Option<LineId>,
+    /// The comment.
+    pub comment: String,
+    /// The identity holding it now: `station`, or the record a restore of
+    /// the op moved it to before a promotion archived that record.
+    pub held_by: StationId,
+}
+
 /// What an epilogue did to identities (RS 3), for the op's notice and the
 /// previews.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -107,18 +125,52 @@ pub struct IdentityReport {
     /// Nodes left with no native line that took an archived identity back
     /// (RS 4.3), in old-id order.
     pub restored: Vec<RestoredIdentity>,
-    /// Closures whose archive was dropped by the normalisation (RS 5.4), in
-    /// list order.
+    /// Closures whose archive was dropped (RS 5.4), in the order dropped: a
+    /// merge's or promotion's for the station it keeps (so the kept station
+    /// is shown, RS 1.3), the sweep's normalisation, then the epilogue's.
     pub unarchived: Vec<ClosureId>,
     /// Rule-L letters (RS 2), in the order given: the orphan-closure
     /// sweep's (also in `SweepReport::lettered`), then the epilogue's.
     pub lettered: Vec<LetteredStation>,
+    /// Every comment the op hid ([`Project::hidden_comments`]), but the one
+    /// its own dialog names (a merge's archived station, a closure's
+    /// archived end) and those a restore names
+    /// ([`RestoredIdentity::comment_hidden`]): what a promotion, a restore
+    /// whose node a promotion then archived, or a closure archive the op
+    /// moved made disappear. By Station ID.
+    pub hidden: Vec<HiddenComment>,
 }
 
 impl IdentityReport {
     /// Whether the epilogue changed no identity.
     pub fn is_empty(&self) -> bool {
-        self.restored.is_empty() && self.unarchived.is_empty() && self.lettered.is_empty()
+        self.restored.is_empty()
+            && self.unarchived.is_empty()
+            && self.lettered.is_empty()
+            && self.hidden.is_empty()
+    }
+
+    /// Fill [`Self::hidden`] from the comments `after` hides that `before`
+    /// showed, leaving out those `restored` already names.
+    pub(super) fn with_hidden(mut self, before: &Project, after: &Project) -> Self {
+        let mut hidden = after.hidden_comments(before);
+        hidden.retain(|h| {
+            !self
+                .restored
+                .iter()
+                .any(|r| r.old == h.station && r.comment_hidden.is_some())
+        });
+        self.hidden = hidden;
+        self
+    }
+
+    /// Leave out the comment of `identity` (the one the op's own dialog
+    /// names as hidden).
+    pub(super) fn without_hidden(mut self, identity: Option<StationId>) -> Self {
+        if let Some(id) = identity {
+            self.hidden.retain(|h| h.station != id);
+        }
+        self
     }
 }
 
@@ -269,6 +321,105 @@ impl Project {
             loop_closure: self.archiving_closure(node).map(|c| c.id),
             own_station: self.record_naming(node, slot.line_id).map(|r| r.id),
         })
+    }
+
+    /// The comment each shown identity shows: every identity some slot
+    /// shows (RS 5.1) whose comment has text, by Station ID.
+    pub fn shown_comments(&self) -> BTreeMap<StationId, &str> {
+        let index = self.shown_index();
+        let mut out = BTreeMap::new();
+        for &node in self.topology().stations() {
+            let shown = index.shown(node);
+            if let Some(text) = self
+                .stations
+                .get(&shown)
+                .and_then(|s| s.comment.as_deref())
+                .filter(|c| !c.is_empty())
+            {
+                out.insert(shown, text);
+            }
+        }
+        out
+    }
+
+    /// The comment the identity `id` holds, a node's or a record's.
+    fn stored_comment(&self, id: StationId) -> Option<&str> {
+        match self.stations.get(&id) {
+            Some(s) => s.comment.as_deref(),
+            None => self
+                .stations
+                .values()
+                .flat_map(|s| &s.archived)
+                .find(|r| r.id == id)
+                .and_then(|r| r.comment.as_deref()),
+        }
+    }
+
+    /// The comments this state (after an op) hides that `before` showed
+    /// (RS 12): each identity that showed a comment on some slot in
+    /// `before` and is shown with it on none now, while the comment is kept
+    /// in an identity no slot shows: the identity itself (a record now, or
+    /// a node a loop closure archives), or the identity a restore moved the
+    /// comment to (RS 4.3) when that one is shown nowhere either. A comment
+    /// that is gone (its station deleted, or the text replaced) or that
+    /// another identity shows now and did not before (a restore moved it,
+    /// or Combine's comment pick took or joined it) is not hidden. By
+    /// Station ID.
+    pub fn hidden_comments(&self, before: &Project) -> Vec<HiddenComment> {
+        let shown_before = before.shown_comments();
+        if shown_before.is_empty() {
+            return Vec::new();
+        }
+        let shown_after = self.shown_comments();
+        let mut out = Vec::new();
+        for (&id, &text) in &shown_before {
+            if shown_after.get(&id) == Some(&text) {
+                continue;
+            }
+            let shown_elsewhere = shown_after.iter().any(|(&other, &now)| {
+                other != id
+                    && now.contains(text)
+                    && shown_before
+                        .get(&other)
+                        .is_none_or(|was| !was.contains(text))
+            });
+            if shown_elsewhere {
+                continue;
+            }
+            let held_by = if self.stored_comment(id) == Some(text) {
+                Some(id)
+            } else {
+                // Moved by a restore: the identity that holds it now and did
+                // not before.
+                self.stations
+                    .values()
+                    .flat_map(|s| {
+                        std::iter::once((s.id, s.comment.as_deref()))
+                            .chain(s.archived.iter().map(|r| (r.id, r.comment.as_deref())))
+                    })
+                    .find(|&(other, comment)| {
+                        other != id
+                            && comment == Some(text)
+                            && before.stored_comment(other) != Some(text)
+                    })
+                    .map(|(other, _)| other)
+            };
+            let Some(held_by) = held_by else { continue };
+            if shown_after.get(&held_by) == Some(&text) {
+                continue;
+            }
+            let Some(station) = before.stations.get(&id) else {
+                continue;
+            };
+            out.push(HiddenComment {
+                station: id,
+                name: station.name.clone(),
+                home_line: before.home_line(id),
+                comment: text.to_string(),
+                held_by,
+            });
+        }
+        out
     }
 
     /// Whether `id` is the id of some station's record.

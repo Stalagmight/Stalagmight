@@ -161,6 +161,33 @@ pub struct MergeKeepPreview {
     /// The station archived: hidden everywhere ("Side / 0 is archived", plus
     /// "with its comment" when it has one).
     pub hidden: StationIdentity,
+    /// The loop closure whose hidden end was the station not kept: it stops
+    /// hiding it, so the kept station is shown on that end's lines too (RS
+    /// 1.3). Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub unarchived: Option<u64>,
+    /// Every other comment the merge hides (a promotion it makes, a loop
+    /// closure end it moves), each identity as it showed it, with the
+    /// comment. Undo brings them back.
+    #[serde(default)]
+    pub comments_hidden: Vec<StationIdentity>,
+    /// The lines the archived station's own earlier merges named: Detach
+    /// Line from Station gives the archived station back on its own lines,
+    /// but these keep showing the kept station. In line order.
+    #[serde(default)]
+    pub not_given_back: Vec<LineId>,
+}
+
+/// A slot away from a detached junction that shows another station after
+/// the detach (`DetachLinePreview::shown_elsewhere`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct ShownElsewhereWire {
+    pub station: StationRef,
+    /// What it showed before.
+    pub before: StationIdentity,
+    /// What it shows after.
+    pub after: StationIdentity,
 }
 
 /// What creating the loop closure with one choice of kept end does (RS 5.2).
@@ -293,14 +320,23 @@ pub struct IdentityNotice {
     pub lettered: Vec<LetteredStationWire>,
     pub restored: Vec<RestoredIdentityWire>,
     /// Closures that no longer archive an end (their hidden end shows its
-    /// own name again), by id.
+    /// own name again, or the station a merge kept there), by id.
     pub unarchived: Vec<u64>,
+    /// The comments the action hid on its own (a promotion it made, a loop
+    /// closure end it moved), each identity as it showed it, with the
+    /// comment: Undo brings them back. A dialog's own hidden station is not
+    /// repeated here, nor a restore's `comment_hidden`.
+    #[serde(default)]
+    pub hidden: Vec<StationIdentity>,
 }
 
 impl IdentityNotice {
     /// Whether the action did nothing to identities on its own.
     pub fn is_empty(&self) -> bool {
-        self.lettered.is_empty() && self.restored.is_empty() && self.unarchived.is_empty()
+        self.lettered.is_empty()
+            && self.restored.is_empty()
+            && self.unarchived.is_empty()
+            && self.hidden.is_empty()
     }
 
     /// Append `other`'s entries (a batch folds its sub-commands' notices).
@@ -308,5 +344,6 @@ impl IdentityNotice {
         self.lettered.extend(other.lettered);
         self.restored.extend(other.restored);
         self.unarchived.extend(other.unarchived);
+        self.hidden.extend(other.hidden);
     }
 }

@@ -59,7 +59,7 @@ use crate::{
     CombineJoinKind, CombineStationRenames, KeptMovesReason, LineEnd, LineId, StationId, StationRef,
 };
 
-use super::super::{ClosureId, IdentityReport, LoopClosure};
+use super::super::{ArchivedStation, ClosureId, IdentityReport, LoopClosure};
 
 mod apply;
 mod plan;
@@ -179,8 +179,17 @@ pub struct CombineReport {
     /// line's: the joined station shows the other line's join station (RS
     /// 4.1 step 4), and the dialog says why.
     pub join_keep_forced_by: Option<ClosureId>,
+    /// The join station not kept, when it stays archived for lines of its
+    /// own besides the absorbed one (it was native on a third line too):
+    /// its record, naming those lines, which show the kept join station from
+    /// now on (with a dot), its comment hidden with it until Detach Line
+    /// from Station brings it back. The comment pick does not apply then
+    /// (RS 4.4: it applies only when that station becomes history), and the
+    /// dialog says so. `None` when it becomes history or the join is shared.
+    pub join_archived: Option<ArchivedStation>,
     /// What the combine's epilogue did to identities (RS 3): restores,
-    /// dropped closure archives, rule-L letters.
+    /// dropped closure archives (the join's for the kept join station
+    /// first, RS 1.3), rule-L letters and the comments it hides.
     pub identities: IdentityReport,
     /// Stations under another id after the combine, `(old, new)`: the
     /// forced join identity and the restores.
@@ -204,6 +213,7 @@ impl CombineReport {
             moved_with_joined_station: None,
             station_renames: None,
             join_keep_forced_by: None,
+            join_archived: None,
             identities: IdentityReport::default(),
             reidentified: Vec::new(),
         }

@@ -214,6 +214,12 @@ mod closure_archive_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod kept_report_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point, and bit-exact float equality is what it checks"
 )]
@@ -285,7 +291,7 @@ mod rs_property_tests;
 
 pub use adjust::{AdjustError, AdjustedPositions, AdjustmentFailure, ShotSigmas, SolveHold};
 pub use anchors::{AnchorReport, AnchorSnapshot, EditContext, GpsEdit, MergeSides};
-pub use archive::{IdentityReport, RestoredIdentity, ShownIndex, SlotOwner};
+pub use archive::{HiddenComment, IdentityReport, RestoredIdentity, ShownIndex, SlotOwner};
 pub use build::{BuildError, StaleAttachments, StartAt};
 pub use closures::{ClosureAcrossOneShot, ShotKey, TieGroups};
 pub use gas::{GasProfilePoint, GasReach};
@@ -321,7 +327,7 @@ pub use edit::{
 pub use ops::{OpError, OpOutcome};
 pub use ops_closures::{ClosureCreated, ClosureKeepChoices, ClosureNaming};
 pub use ops_datums::{DatumChange, DatumSet};
-pub use ops_detach::{DetachLineOutcome, DetachNaming, DetachReport, NameAnswers};
+pub use ops_detach::{DetachLineOutcome, DetachNaming, DetachReport, NameAnswers, ShownElsewhere};
 pub use ops_merge::{
     MergeCandidate, MergeCheck, MergeCollision, MergeDatumShift, MergeMove, MergeReport,
 };

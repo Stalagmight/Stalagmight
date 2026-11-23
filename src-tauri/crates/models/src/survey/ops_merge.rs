@@ -22,8 +22,11 @@
 //!   raw layout and depths are bit-identical for either keep (M-P1-1).
 //! - Merging the two ends of an archiving closure keeps the closure's kept
 //!   end (RS 4.1 step 4): its archived end becomes the merge record, whatever
-//!   `keep` says. A closure-archived station keeps showing its closure's kept
-//!   end after the merge (step 5).
+//!   `keep` says. A closure-archived station kept by the merge keeps showing
+//!   its closure's kept end after it (step 5); when the other station is
+//!   kept, the closure archiving the one not kept drops its archive, so the
+//!   kept station is shown on every line, as the user asked (RS 1.3), and
+//!   the report names that closure ([`MergeReport::unarchived`]).
 //! - The user's `renames` apply in the same op; a name the merge shows twice
 //!   on a line that they do not answer refuses it ([`OpError::NameTaken`],
 //!   invariant N8). [`Project::merge_stations_auto`] answers every collision
@@ -64,6 +67,10 @@ pub struct MergeReport {
     /// The closure whose kept end the merge had to keep (RS 4.1 step 4),
     /// when the caller's `keep` was the other end.
     pub keep_forced_by: Option<ClosureId>,
+    /// The closure that archived the station not kept as a loop end: its
+    /// archive is dropped, so the kept station is shown on every line (RS
+    /// 1.3). Also first in the outcome's `identities.unarchived`.
+    pub unarchived: Option<ClosureId>,
 }
 
 /// How a command with a dialog answers the name collisions it makes.
@@ -76,11 +83,13 @@ pub(super) enum Answers<'a> {
 }
 
 impl Answers<'_> {
-    /// Apply the renames, or leave the collisions to the epilogue's rule L.
-    pub(super) fn apply(self, p: &mut Project) -> Result<(), OpError> {
+    /// Apply the renames and return the collisions still standing (the op's
+    /// own, judged after the sweep, [`Project::refuse_unanswered`]); with
+    /// rule L none: the epilogue letters them.
+    pub(super) fn apply(self, p: &mut Project) -> Result<Vec<(LineId, String)>, OpError> {
         match self {
             Self::Given(renames) => p.apply_renames(renames),
-            Self::RuleL => Ok(()),
+            Self::RuleL => Ok(Vec::new()),
         }
     }
 }
@@ -168,6 +177,20 @@ pub struct MergeMove {
     pub alternatives: Vec<LetteredStation>,
     /// The identity that becomes hidden: its Station ID, name and comment.
     pub hidden: (StationId, String, Option<String>),
+    /// The closure whose archive the merge drops so the kept station is
+    /// shown on every line ([`MergeReport::unarchived`]): the station not
+    /// kept was its loop end, shown as that closure's kept end until now.
+    pub unarchived: Option<ClosureId>,
+    /// Every other comment the merge hides (RS 12): a promotion the merge's
+    /// sweep makes, or a closure archive it moves, may hide one. `hidden`'s
+    /// own comment is not repeated here.
+    pub comments_hidden: Vec<super::HiddenComment>,
+    /// The lines the archived station's own records name (a junction of its
+    /// own merged earlier): Detach Line from Station on the archived
+    /// station's lines gives it back on those lines only, and these keep
+    /// showing the kept station, their records staying with it. In line
+    /// order (model review finding 4).
+    pub not_given_back: Vec<LineId>,
 }
 
 /// The Merge tool's check of a picked pair (today's
@@ -248,16 +271,16 @@ impl Project {
             Some((closure, kept)) if kept != keep => (kept, Some(closure)),
             _ => (keep, None),
         };
-        self.run_op(Sweep::Run, |p| {
+        let archived = if keep == moving { stationary } else { moving };
+        let mut outcome = self.run_op_answered(Sweep::Run, answers, |p| {
             let stationary_native = p.native_lines(stationary);
+            let unarchived = p.unarchive_for_keep(keep, archived);
             let moving_lines = p.merge_ids(stationary, moving)?;
             let mut ctx = EditContext::merge(stationary, moving).with_renamed(moving, stationary);
             if keep == moving {
                 p.reidentify_merged(stationary, moving, stationary_native);
                 ctx = ctx.with_reidentified(&[(stationary, moving)]);
             }
-            answers.apply(p)?;
-            let archived = if keep == moving { stationary } else { moving };
             let report = MergeReport {
                 kept: keep,
                 archived,
@@ -265,9 +288,39 @@ impl Project {
                 moving,
                 moving_lines,
                 keep_forced_by,
+                unarchived,
             };
             Ok((report, ctx))
-        })
+        })?;
+        if let Some(closure) = outcome.value.unarchived {
+            outcome.identities.unarchived.insert(0, closure);
+        }
+        // The archived station's comment is the dialog's own `hidden`.
+        outcome.identities = std::mem::take(&mut outcome.identities).without_hidden(Some(archived));
+        Ok(outcome)
+    }
+
+    /// RS 1.3 (the kept station is shown everywhere): before a merge of
+    /// `kept` and `other` that keeps `kept`, drop the archive of the closure
+    /// that archives `other` as a loop end, unless that closure's kept end
+    /// is `kept` (the two ends of one closure, RS 4.1 step 4, where `other`
+    /// becomes the merge record and the closure goes, #738). Without it the
+    /// merged node stays archived by that closure and shows its kept end on
+    /// every line, so the station the merge keeps is shown nowhere (model
+    /// review finding 1). Every merge path calls it on the ids before the
+    /// fold: Merge Stations, the sweep's promotions and Combine's join.
+    /// Returns the closure.
+    pub(super) fn unarchive_for_keep(
+        &mut self,
+        kept: StationId,
+        other: StationId,
+    ) -> Option<ClosureId> {
+        let closure = self.closures.iter_mut().find(|c| {
+            c.archive()
+                .is_some_and(|(archived, kept_end)| archived == other && kept_end != kept)
+        })?;
+        closure.archived = None;
+        Some(closure.id)
     }
 
     /// The closure between `a` and `b` that archives one of them, with its
@@ -452,6 +505,14 @@ impl Project {
             })
             .fold((sx - mx).hypot(sy - my), f64::max);
         let hidden_station = self.stations.get(&report.archived)?;
+        let mut not_given_back: Vec<(usize, LineId)> = hidden_station
+            .archived
+            .iter()
+            .flat_map(|r| r.lines.iter().copied())
+            .filter_map(|l| Some((self.line_position(l)?, l)))
+            .collect();
+        not_given_back.sort_unstable();
+        not_given_back.dedup();
         let collisions = outcome
             .identities
             .lettered
@@ -481,6 +542,9 @@ impl Project {
                 hidden_station.name.clone(),
                 hidden_station.comment.clone(),
             ),
+            unarchived: report.unarchived,
+            comments_hidden: outcome.identities.hidden.clone(),
+            not_given_back: not_given_back.into_iter().map(|(_, l)| l).collect(),
         })
     }
 

@@ -411,20 +411,24 @@ impl Project {
         } else {
             Vec::new()
         };
-        let unarchived = self.normalise_closure_archives();
+        let mut unarchived = sweep.unarchived.clone();
+        unarchived.extend(self.normalise_closure_archives());
         // The sweep's letters (every collision standing when its promotions
         // end, the edit's own included) and the final pass's (see `run_op`).
         let mut lettered = sweep.lettered.clone();
         lettered.extend(self.letter_collisions(original));
+        let identities = IdentityReport {
+            restored,
+            unarchived,
+            lettered,
+            hidden: Vec::new(),
+        }
+        .with_hidden(original, self);
         EditReport {
             anchors,
             stale,
             reidentified,
-            identities: IdentityReport {
-                restored,
-                unarchived,
-                lettered,
-            },
+            identities,
             sweep,
             removed_across_one_shot,
         }

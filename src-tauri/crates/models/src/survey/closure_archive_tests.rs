@@ -390,30 +390,33 @@ fn two_archived_loops() -> (Project, [LineId; 4], [super::ClosureId; 2]) {
 }
 
 /// M-P1-2, C1 through a merge: merging two closure-archived stations would
-/// leave the merged node archived twice; the normalisation drops the later
-/// closure's archive and reports it, whichever station is kept, and the
-/// merged node shows the earlier closure's kept end on both lines.
+/// leave the merged node archived twice. The closure archiving the station
+/// not kept drops its archive and is reported, so the merged node shows
+/// what the kept station showed, on both lines (RS 1.3, deviation RS-FX1:
+/// the normalisation's list order no longer decides against the keep).
 #[test]
-fn merging_two_closure_archived_stations_keeps_the_earlier_archive() {
-    let (p, [a, b, _, e], [first, second]) = two_archived_loops();
-    let (a4, b3, e3) = (at(&p, a, 4), at(&p, b, 3), at(&p, e, 3));
-    for keep in [b3, e3] {
+fn merging_two_closure_archived_stations_keeps_the_kept_ones_archive() {
+    let (p, [a, b, d, e], [first, second]) = two_archived_loops();
+    let (a4, b3, d4, e3) = (at(&p, a, 4), at(&p, b, 3), at(&p, d, 4), at(&p, e, 3));
+    for (keep, stays, goes, shows, name) in
+        [(b3, first, second, a4, "A4"), (e3, second, first, d4, "D4")]
+    {
         let mut q = p.clone();
         let out = ok(q.merge_stations_auto(b3, e3, keep));
         assert_valid(&q);
-        assert_eq!(out.identities.unarchived, vec![second], "keep {keep}");
+        assert_eq!(out.identities.unarchived, vec![goes], "keep {keep}");
         let node = out.value.kept;
-        assert_eq!(q.shown(node), a4);
-        assert_eq!(shown(&q, b)[3], "A4");
-        assert_eq!(shown(&q, e)[3], "A4");
+        assert_eq!(q.shown(node), shows);
+        assert_eq!(shown(&q, b)[3], name);
+        assert_eq!(shown(&q, e)[3], name);
         assert!(q
             .closures
             .iter()
-            .any(|c| c.id == first && c.archived.is_some()));
+            .any(|c| c.id == stays && c.archived.is_some()));
         assert!(q
             .closures
             .iter()
-            .any(|c| c.id == second && c.archived.is_none()));
+            .any(|c| c.id == goes && c.archived.is_none()));
         undo_is_exact(&p, &q);
     }
 }
