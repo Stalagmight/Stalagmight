@@ -317,8 +317,12 @@ fn station_commands_read_with_and_without_the_rs_fields() {
 /// EDIT_DISABLED code) and on a file a newer build wrote (the pipeline's
 /// READ_ONLY_FILE). The app-mode term (Closures Computed View, Plan,
 /// Export) is the frontend's alone, by design (docs/app-modes.md), and each
-/// of these dialogs re-checks it when confirmed. Each command here would
-/// succeed with editing allowed (checked last).
+/// of these dialogs re-checks it when confirmed. With editing allowed each
+/// command here is refused for its rename alone and runs without it, Create
+/// Loop Closure included (checked last): the fixture makes no name
+/// collision, and a creation never makes one (a loop end counts for no
+/// uniqueness, RS-FX5), so no Create Loop Closure takes a rename (RS-FX9:
+/// a dialog answers only its op's collisions; the dialog sends none).
 #[test]
 fn every_kept_station_command_is_refused_while_editing_is_blocked() {
     let (p, a, b) = loop_lines();
@@ -417,51 +421,82 @@ fn every_kept_station_command_is_refused_while_editing_is_blocked() {
         );
     }
 
-    // With editing allowed each of them runs (renames dropped: the dialogs'
-    // renames answer collisions, and these make none).
+    // With editing allowed each of them is refused for its rename alone,
+    // nothing else, and runs without it (RS-FX10 item 4: Create Loop Closure
+    // too; Remove Closure removes a closure made just before).
     let opened = open(&q);
     let state = &opened.state;
     for cmd in commands(0) {
         let cmd = match cmd {
-            Command::RemoveLoopClosure { .. } => Command::RemoveLoopClosure {
+            Command::RemoveLoopClosure { renames, .. } => Command::RemoveLoopClosure {
                 closure_id: with_closure(state),
-                renames: Some(Vec::new()),
+                renames,
             },
-            Command::MergeStations {
-                station_a,
-                station_b,
-                keep,
-                ..
-            } => Command::MergeStations {
-                station_a,
-                station_b,
-                keep,
-                renames: Some(Vec::new()),
-            },
-            Command::UnmergeStations {
-                station_ref,
-                rest_keep,
-                ..
-            } => Command::UnmergeStations {
-                station_ref,
-                renames: Some(Vec::new()),
-                rest_keep,
-            },
-            Command::UnmergeStationPair {
-                station_a,
-                station_b,
-                rest_keep,
-                ..
-            } => Command::UnmergeStationPair {
-                station_a,
-                station_b,
-                renames: Some(Vec::new()),
-                rest_keep,
-            },
-            Command::CreateLoopClosure { .. } => continue,
             other => other,
         };
-        run(state, cmd);
+        let what = cmd.description();
+        let reason = refused(state, cmd.clone());
+        assert!(
+            reason.contains("is in none of the name collisions this would make"),
+            "{what}: {reason}"
+        );
+        run(state, without_renames(cmd));
         assert!(state.undo().success);
+    }
+}
+
+/// `cmd` as its dialog sends it when it answers no collision: no renames.
+fn without_renames(cmd: Command) -> Command {
+    let none = Some(Vec::new());
+    match cmd {
+        Command::MergeStations {
+            station_a,
+            station_b,
+            keep,
+            ..
+        } => Command::MergeStations {
+            station_a,
+            station_b,
+            keep,
+            renames: none,
+        },
+        Command::UnmergeStations {
+            station_ref,
+            rest_keep,
+            ..
+        } => Command::UnmergeStations {
+            station_ref,
+            renames: none,
+            rest_keep,
+        },
+        Command::UnmergeStationPair {
+            station_a,
+            station_b,
+            rest_keep,
+            ..
+        } => Command::UnmergeStationPair {
+            station_a,
+            station_b,
+            renames: none,
+            rest_keep,
+        },
+        Command::CreateLoopClosure {
+            station_a,
+            station_b,
+            closure_strategy,
+            keep,
+            ..
+        } => Command::CreateLoopClosure {
+            station_a,
+            station_b,
+            closure_strategy,
+            keep,
+            renames: none,
+        },
+        Command::RemoveLoopClosure { closure_id, .. } => Command::RemoveLoopClosure {
+            closure_id,
+            renames: none,
+        },
+        other => other,
     }
 }
