@@ -17,7 +17,7 @@ import type { ClosureKeepPreview } from '../../types/ipc/ClosureKeepPreview';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { listNames } from '../../utils/listNames';
-import { CollisionRows, renamesFromAnswers, useCollisionAnswers, useIdentityLabel } from './keptStationParts';
+import { CollisionRows, IdentityPill, renamesFromAnswers, useCollisionAnswers, useIdentityLabel } from './keptStationParts';
 
 /** "Keep both names" in the keep choice (no end archived). */
 const BOTH = 'both';
@@ -291,7 +291,7 @@ function ClosureKeepChoice({
               onChange={() => onChoice(id)}
               data-testid={`closure-keep-${id}`}
             />
-            <StationBlob station={end.station} withLine />
+            <IdentityPill slot={end.station} identity={end.identity} testId={`closure-keep-${id}-pill`} />
             {end.shown_as && (
               <span className="text-text-secondary" data-testid={`closure-keep-${id}-shown-as`}>
                 {t('dialogs.keptStations.shownAsThroughClosure', { station: label(end.shown_as) })}

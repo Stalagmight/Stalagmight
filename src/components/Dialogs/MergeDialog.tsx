@@ -20,7 +20,7 @@ import { formatDatumMetres } from '../../utils/zeroDatumPreview';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
-import { CollisionRows, renamesFromAnswers, useCollisionAnswers, useIdentityLabel } from './keptStationParts';
+import { CollisionRows, IdentityPill, renamesFromAnswers, useCollisionAnswers, useIdentityLabel } from './keptStationParts';
 
 /** A move shorter than this (metres) is not worth a sentence: the two
  *  stations already sit on one point, as after a snap. */
@@ -247,7 +247,7 @@ function KeepPicker({
               onChange={() => onKeep(id)}
               data-testid={`merge-keep-${id}`}
             />
-            <StationBlob station={candidate.station} withLine />
+            <IdentityPill slot={candidate.station} identity={candidate.identity} testId={`merge-keep-${id}-pill`} />
             {candidate.holds_datum && (
               <span className="text-text-secondary" data-testid={`merge-keep-${id}-datum`}>
                 {t('dialogs.mergeStations.holdsDatum')}

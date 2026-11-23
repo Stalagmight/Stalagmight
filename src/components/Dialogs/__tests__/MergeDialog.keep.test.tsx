@@ -179,6 +179,8 @@ describe('Merge Stations keeps one station (RS 4.1)', () => {
       }),
     );
     expect(screen.getByTestId('merge-keep-40-shown-as')).toHaveTextContent('shown as Main / 3 through a loop closure');
+    // Its pill names its own station, not what the closure shows it as.
+    expect(screen.getByTestId('merge-keep-40-pill')).toHaveTextContent('Side: 0');
   });
 
   it('keeps the old rows and sends no answers without a keep preview', async () => {

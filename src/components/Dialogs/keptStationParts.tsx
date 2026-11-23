@@ -16,7 +16,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
-import { formatStationLabel } from '../../utils/formatters';
+import { displayStationName, formatStationLabel } from '../../utils/formatters';
+import type { StationRef } from '../../types/project';
+import { EntityBlob } from '../common/EntityBlob';
 import type { NameCollision } from '../../types/ipc/NameCollision';
 import type { StationIdentity } from '../../types/ipc/StationIdentity';
 import type { StationRename } from '../../types/ipc/StationRename';
@@ -33,6 +35,37 @@ export function identityLabelOf(identity: StationIdentity, lineName: (lineId: nu
 export function useIdentityLabel(): (identity: StationIdentity) => string {
   const labels = useIdentityLabels();
   return useMemo(() => (identity: StationIdentity) => identityLabelOf(identity, labels.lineName), [labels]);
+}
+
+/**
+ * A keep candidate's pill (RS 7): the slot's line as the context, the
+ * station's OWN name and Station ID (not what a closure shows it as: the
+ * radio says that beside it), coloured by the slot's line.
+ */
+export function IdentityPill({
+  slot,
+  identity,
+  testId,
+}: {
+  slot: StationRef;
+  identity: StationIdentity;
+  testId?: string | undefined;
+}) {
+  const labels = useIdentityLabels();
+  const name = displayStationName(identity.name);
+  const line = labels.lineName(slot.line_id);
+  return (
+    <EntityBlob
+      entity="station"
+      lineId={slot.line_id}
+      context={line}
+      stationId={identity.id}
+      plain={formatStationLabel(identity.name, line)}
+      testId={testId}
+    >
+      {name}
+    </EntityBlob>
+  );
 }
 
 /**

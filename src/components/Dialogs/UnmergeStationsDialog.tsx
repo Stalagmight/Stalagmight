@@ -344,6 +344,9 @@ export default function UnmergeStationsDialog() {
                         onChange={() => {
                           pickedRef.current = true;
                           setSelectedKey(key);
+                          // A remaining-junction pick belongs to the line it
+                          // was made for.
+                          setRestKeep(undefined);
                         }}
                         data-testid={`unmerge-station-option-${ref.line_id}-${ref.station_index}`}
                       />
