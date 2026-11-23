@@ -202,23 +202,20 @@ pub(super) fn apply(
             let strategy = (*closure_strategy).into();
             // No `renames`: no dialog asked, so rule L letters what the
             // archive shows twice. `keep` absent: "Keep both names".
-            let outcome = match answers(renames.as_ref()) {
-                Some(renames) => {
-                    project.create_closure_at(*station_a, *station_b, strategy, *keep, &renames)
-                }
-                None => {
-                    let (a, b) = project
-                        .resolve_slot_pair(*station_a, *station_b)
-                        .map_err(text_or(NO_SUCH_STATIONS))?;
-                    project.create_closure_auto(
-                        a.station,
-                        Some(a.line),
-                        b.station,
-                        Some(b.line),
-                        strategy,
-                        *keep,
-                    )
-                }
+            let outcome = if let Some(renames) = answers(renames.as_ref()) {
+                project.create_closure_at(*station_a, *station_b, strategy, *keep, &renames)
+            } else {
+                let (a, b) = project
+                    .resolve_slot_pair(*station_a, *station_b)
+                    .map_err(text_or(NO_SUCH_STATIONS))?;
+                project.create_closure_auto(
+                    a.station,
+                    Some(a.line),
+                    b.station,
+                    Some(b.line),
+                    strategy,
+                    *keep,
+                )
             }
             .map_err(text_or(NO_SUCH_STATIONS))?;
             let closure = outcome.value.closure;

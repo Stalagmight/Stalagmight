@@ -162,7 +162,8 @@ fn the_merge_preview_offers_both_keeps_and_both_answers() {
         assert_valid(&q);
         assert_eq!(q.shown_name(answer.station.id), Some("0a"));
     }
-    assert!(p.clone().merge_stations(a2, b0, b0, &[]).is_err());
+    let mut unanswered = p;
+    assert!(unanswered.merge_stations(a2, b0, b0, &[]).is_err());
 }
 
 /// RS 4.2, 7: after a merge the Detach preview names what comes back with
@@ -307,7 +308,7 @@ fn the_delete_preview_names_the_station_that_comes_back() {
     let first = p.line(b).unwrap().shots[0].id;
     let preview = p.preview_delete_shot(b, first).unwrap();
     let impact = p.delete_shot_impact(&preview);
-    let notice = impact.identities.expect("the delete restores A's own 2");
+    let notice = impact.identities.unwrap();
     assert_eq!(notice.restored.len(), 1, "{notice:?}");
     let restored = &notice.restored[0];
     assert_eq!(restored.old_id, b0);
