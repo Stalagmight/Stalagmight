@@ -469,8 +469,10 @@ test.describe('Kept and archived stations (RS)', () => {
     await expect(page.getByTestId('closure-dialog')).toBeHidden();
   });
 
-  // RS 6: a Plan pin on a loop end reads "K (loop end)".
-  test('a Plan endpoint on a loop end reads as the station it is shown as', async ({ page }) => {
+  // RS 6, RS-FX6 P3-10: a Plan pin on a loop end names the loop end's own
+  // station, then the station it is shown as ("Main / 1 (loop end)" read as
+  // if Main / 1 were the loop end).
+  test('a Plan endpoint on a loop end names it and the station it is shown as', async ({ page }) => {
     const [mainId, sideId] = await setUp(page);
     expect((await createClosure(page, ref(mainId, 1), ref(sideId, 2), mainId * 100_000 + 1)).success).toBe(true);
     await page.evaluate(
@@ -486,6 +488,6 @@ test.describe('Kept and archived stations (RS)', () => {
     await page.evaluate((at) => {
       (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__.gasPlanStore.getState().setEndpoint(at);
     }, ref(sideId, 2));
-    await expect(page.getByTestId('gas-endpoint-readout')).toHaveText('Main / 1 (loop end)');
+    await expect(page.getByTestId('gas-endpoint-readout')).toHaveText('Side / 2 (loop end, shown as Main / 1)');
   });
 });

@@ -10,14 +10,22 @@ import { identityLabels, type IdentityLabels } from '../utils/stationIdentity';
  * changes, so they are safe in dependency arrays.
  */
 export function useIdentityLabels(): IdentityLabels {
-  const { surveyData, stations, lines } = useProjectStore(
-    useShallow((s) => ({ surveyData: s.surveyData, stations: s.stations, lines: s.project?.lines }))
+  const { surveyData, stations, lines, closures } = useProjectStore(
+    useShallow((s) => ({
+      surveyData: s.surveyData,
+      stations: s.stations,
+      lines: s.project?.lines,
+      closures: s.project?.loop_closures,
+    }))
   );
-  return useMemo(() => identityLabels({ surveyData, stations, lines }), [surveyData, stations, lines]);
+  return useMemo(
+    () => identityLabels({ surveyData, stations, lines, closures }),
+    [surveyData, stations, lines, closures],
+  );
 }
 
 /** {@link useIdentityLabels} outside React (event handlers, store actions). */
 export function currentIdentityLabels(): IdentityLabels {
   const { surveyData, stations, project } = useProjectStore.getState();
-  return identityLabels({ surveyData, stations, lines: project?.lines });
+  return identityLabels({ surveyData, stations, lines: project?.lines, closures: project?.loop_closures });
 }

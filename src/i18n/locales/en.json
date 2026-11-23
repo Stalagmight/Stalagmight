@@ -2352,7 +2352,7 @@
       "viaSuffix": ")",
       "metrics": "Path {{path}} | Error {{error}} | {{percent}}",
       "unavailable": "Closure metrics unavailable",
-      "archives": "{{hidden}} is shown as {{shown}} (loop end). Removing the closure brings it back."
+      "archives": "{{hidden}}, the loop end, is shown as {{shown}}. Removing the closure brings it back."
     },
     "multiShot": {
       "title_one": "{{count}} shot selected",
@@ -4423,7 +4423,8 @@
     "nameInvalidChars": "A name cannot contain control characters or invisible formatting characters.",
     "loopEnd": "loop end",
     "loopEndLabel": "{{station}} (loop end on {{line}})",
-    "loopEndPinLabel": "{{station}} (loop end)",
+    "loopEndPinLabel": "{{own}} (loop end, shown as {{station}})",
+    "loopEndPinLabelLine": "Loop end on {{line}}, shown as {{station}}",
     "homeMarkTitle": "Belongs to {{line}}",
     "homeMarkLabel": "({{line}})",
     "foreignLabel": "{{station}} ({{home}})"

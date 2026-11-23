@@ -125,7 +125,7 @@ describe('the Station details entry points (RS 7)', () => {
     });
     render(<DetailPanel />);
     expect(screen.getByTestId('closure-archive-5')).toHaveTextContent(
-      'Main / 4 is shown as Main / 3a (loop end). Removing the closure brings it back.',
+      'Main / 4, the loop end, is shown as Main / 3a. Removing the closure brings it back.',
     );
     await act(async () => {
       fireEvent.click(screen.getByTestId('detail-remove-closure-5'));

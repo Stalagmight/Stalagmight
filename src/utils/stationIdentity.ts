@@ -17,6 +17,7 @@
 import i18n from '../i18n';
 import type { Station, StationRef } from '../types/project';
 import type { ShownSlot } from '../types/ipc/ShownSlot';
+import type { ClosureArchive } from '../types/ipc/ClosureArchive';
 import type { SurveyData } from '../types/survey-data';
 import { displayStationName, formatShotLabel, formatStationLabel } from './formatters';
 
@@ -39,6 +40,8 @@ export interface IdentitySource {
   /** Fallback when there is no SurveyData. */
   stations?: ReadonlyArray<Station> | null | undefined;
   lines?: ReadonlyArray<IdentityLine & { shots?: ReadonlyArray<{ id: number }> }> | null | undefined;
+  /** The project's loop closures, for a loop end's own (hidden) station. */
+  closures?: ReadonlyArray<{ id: bigint; archived?: ClosureArchive | undefined }> | null | undefined;
 }
 
 interface RefIndex {
@@ -360,16 +363,24 @@ export function stationPillLabelOf(src: IdentitySource, ref: StationRef): string
 
 /**
  * A Plan mode pin's label (RS 6): `Main Line / 17`, as {@link stationLabelOf}
- * with the line, except a loop end, which reads as the station it is shown
- * as with the mark alone, `Main / 3 (loop end)`: the pin is on that station
- * (Plan's route, turn and drop lists collapse a loop end into it), so where
- * the loop end sits, which closure texts add, says nothing here.
+ * with the line, except a loop end, which is named by its own station first,
+ * then the station it is shown as: `Loop / L8 (loop end, shown as Main / 8)`.
+ * "Main / 8 (loop end)" read as if Main / 8 were the loop end (RS-FX6,
+ * P3-10). Without the closure's archive (an older backend), `Loop end on
+ * Loop, shown as Main / 8`.
  */
 export function planStationLabelOf(src: IdentitySource, ref: StationRef): string {
   const shown = shownSlotOf(src, ref);
   if (!shown?.loop_end) return stationLabelOf(src, ref, true);
+  const station = formatStationLabel(stationNameOf(src, ref), lineNameOf(src, shown.home_line ?? ref.line_id));
+  const own =
+    shown.loop_closure === undefined
+      ? undefined
+      : src.closures?.find((c) => c.id === shown.loop_closure)?.archived?.station;
+  if (!own) return i18n.t('identity.loopEndPinLabelLine', { line: lineNameOf(src, ref.line_id), station });
   return i18n.t('identity.loopEndPinLabel', {
-    station: formatStationLabel(stationNameOf(src, ref), lineNameOf(src, shown.home_line ?? ref.line_id)),
+    own: formatStationLabel(own.name, lineNameOf(src, own.home_line ?? ref.line_id)),
+    station,
   });
 }
 
