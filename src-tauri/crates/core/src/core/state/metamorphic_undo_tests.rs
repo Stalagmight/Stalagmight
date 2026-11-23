@@ -2038,6 +2038,8 @@ struct Pair {
 }
 
 const DOOMED_ANCHOR_SHAPE: &str = "doomed-anchor-range";
+/// A merge the two twins made keeping different stations.
+const EITHER_KEEP_SHAPE: &str = "either-keep";
 /// The doomed-anchor shape where the piece cut loose is the edited line's
 /// own head.
 const CUT_LOOSE_HEAD_SHAPE: &str = "cut-loose-head";
@@ -2123,6 +2125,14 @@ const PAIRS: &[Pair] = &[
         promise: "MoveLine translates a rigid group by an offset; the negated offset translates \
                   it back",
         run: pair_move_out_and_back_is_identity,
+    },
+    Pair {
+        id: "merge-keeping-either-station",
+        promise: "ops_merge.rs merge_stations - geometry and identity are independent (RS 4.1 \
+                  step 3, M-P1-1): keeping either station moves the same piece the same way, \
+                  the raw layout bit for bit and the Computed View within its tolerance \
+                  (M-P2-9), with the same allocators, and both unwind to the start",
+        run: pair_merge_keeping_either_station,
     },
     Pair {
         id: "create-line-with-shots-is-create-then-append",
@@ -2733,6 +2743,132 @@ fn pair_reverse_twice_is_identity(twins: &Twins, rng: &mut Rng) -> Option<Compar
         }
     }
     let mut found = twins.compare(Mask::Strict);
+    found.absorb(
+        twins
+            .unwind_and_compare(Mask::Strict)
+            .prefixed("AFTER UNWIND: "),
+    );
+    Some(found)
+}
+
+/// Merge Stations keeping the first picked station on the left twin and
+/// the second on the right (both letter by rule L): the stored surveys
+/// differ by which identity the junction shows (by design), so the routes
+/// are compared on what must not depend on the keep (module docs, "RS"):
+/// the raw layout of every slot bit for bit, the Computed View within
+/// [`POSITION_TOLERANCE_M`], the integrity verdict and the allocators; then
+/// both unwind to the start.
+fn pair_merge_keeping_either_station(twins: &Twins, rng: &mut Rng) -> Option<Comparison> {
+    // A free line of its own, the same on both twins: the piece that merges
+    // (the base survey is often one piece).
+    let count = 1 + rng.below(4);
+    let shots: Vec<ShotData> = (0..count).map(|_| random_shot(rng)).collect();
+    let line = create_line_command(format!("keep-{}", rng.below(1000)), COLORS[1], shots);
+    for twin in [&twins.left, &twins.right] {
+        if !twin.execute(line.clone()).success {
+            return None;
+        }
+    }
+    let targets = read_targets(&twins.left);
+    let (free, _) = targets.lines.last()?;
+    let free = *free;
+    let mine: Vec<StationRef> = targets
+        .slots
+        .iter()
+        .copied()
+        .filter(|s| s.line_id == free)
+        .collect();
+    let others: Vec<StationRef> = targets
+        .slots
+        .iter()
+        .copied()
+        .filter(|s| s.line_id != free)
+        .collect();
+    let (a, b) = (*pick(rng, &mine)?, *pick(rng, &others)?);
+    let (a, b) = if rng.chance(0.5) { (a, b) } else { (b, a) };
+    let p = twins.left.get_project_state()?;
+    let (keep_a, keep_b) = (p.station_at(a)?, p.station_at(b)?);
+    let merge = |keep: StationId| Command::MergeStations {
+        station_a: a,
+        station_b: b,
+        keep: Some(keep),
+        renames: None,
+    };
+    let left = twins.left.execute(merge(keep_a));
+    let right = twins.right.execute(merge(keep_b));
+    let mut found = Comparison::default();
+    match (left.success, right.success) {
+        (false, false) => return None,
+        (true, true) => {}
+        _ => {
+            found.problems.push(format!(
+                "keeping {keep_a} {} the merge of {a} and {b}, keeping {keep_b} {} it ({:?} / \
+                 {:?})",
+                if left.success { "made" } else { "refused" },
+                if right.success { "made" } else { "refused" },
+                left.error,
+                right.error
+            ));
+            return Some(found);
+        }
+    }
+    let (raw_l, raw_r) = (raw_of(&twins.left), raw_of(&twins.right));
+    let raw: Vec<String> = raw_l
+        .keys()
+        .chain(raw_r.keys())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|key| {
+            let (x, y) = (raw_l.get(key), raw_r.get(key));
+            let same = matches!((x, y), (Some(x), Some(y))
+                if x.iter().zip(y).all(|(u, v)| u.to_bits() == v.to_bits()));
+            (!same).then(|| format!("slot {key}: {x:?} keeping {keep_a}, {y:?} keeping {keep_b}"))
+        })
+        .take(12)
+        .collect();
+    if !raw.is_empty() {
+        found.problems.push(format!(
+            "the raw layout depends on the keep (M-P1-1):\n    {}",
+            raw.join("\n    ")
+        ));
+    }
+    let (l, r) = (
+        observe(&twins.left, Mask::Strict),
+        observe(&twins.right, Mask::Strict),
+    );
+    let computed: Vec<String> = l
+        .adjusted
+        .iter()
+        .filter_map(|(key, x)| {
+            let y = r.adjusted.get(key);
+            let near =
+                y.is_some_and(|y| (0..3).all(|i| (x[i] - y[i]).abs() <= POSITION_TOLERANCE_M));
+            (!near).then(|| format!("slot {key}: {x:?} keeping {keep_a}, {y:?} keeping {keep_b}"))
+        })
+        .take(12)
+        .collect();
+    if !computed.is_empty() || l.adjusted.len() != r.adjusted.len() {
+        found.problems.push(format!(
+            "the Computed View depends on the keep beyond {POSITION_TOLERANCE_M} m \
+             (M-P2-9):\n    {}",
+            computed.join("\n    ")
+        ));
+    }
+    if !l.verdict.is_empty() || !r.verdict.is_empty() {
+        found.problems.push(format!(
+            "an accepted merge left an invalid survey: {:?} / {:?}",
+            l.verdict, r.verdict
+        ));
+    }
+    if l.allocators != r.allocators {
+        found.problems.push(format!(
+            "the allocators depend on the keep: {:?} vs {:?}",
+            l.allocators, r.allocators
+        ));
+    }
+    if keep_a != keep_b {
+        *found.shapes.entry(EITHER_KEEP_SHAPE).or_insert(0) += 1;
+    }
     found.absorb(
         twins
             .unwind_and_compare(Mask::Strict)
