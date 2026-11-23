@@ -6,6 +6,7 @@ import {
   waitForMapReady,
   waitForNoDialogs,
 } from './helpers/app';
+import { expectSpoken, prosePillKinds } from './helpers/proseText';
 
 type StationRef = { line_id: number; station_index: number };
 
@@ -368,9 +369,12 @@ test.describe('Context Menu Coverage', () => {
 
     const dialog = page.getByTestId('unmerge-stations-dialog');
     await expect(dialog).toBeVisible();
-    await expect(page.getByTestId('unmerge-stations-naming')).toHaveText(
+    // RS-PROSE: the sentence draws its lines and the keeper's station as pills.
+    await expectSpoken(
+      page.getByTestId('unmerge-stations-naming'),
       /^Merge B comes off: it gets back .+ \(Station ID \d+\); Merge A keeps .+\.$/,
     );
+    expect(await prosePillKinds(page.getByTestId('unmerge-stations-naming'))).toEqual(['line', 'line', 'station']);
     await expect(page.getByTestId(`unmerge-station-option-${targetRef.line_id}-${targetRef.station_index}`)).toHaveCount(0);
     await page.getByTestId('unmerge-stations-confirm').click();
     await expect(dialog).not.toBeVisible({ timeout: 5000 });

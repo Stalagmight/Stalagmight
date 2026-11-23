@@ -2,6 +2,7 @@ import { test, expect } from './fixtures/coverage';
 import type { Page } from '@playwright/test';
 import { setupMockedPage, createProject, seedProjectWithLines, waitForMapIdle, getMapLabels } from './helpers/app';
 import type { LineSeed } from './helpers/app';
+import { expectSpoken, prosePillKinds } from './helpers/proseText';
 
 /**
  * Kept and archived stations in the four dialogs (plan 2026-11-23, RS 6 and
@@ -129,14 +130,18 @@ test.describe('Kept and archived stations (RS)', () => {
 
     // Main / 3 is first in line order: the default keep.
     await expect(page.getByTestId(`merge-keep-${mainId * 100_000 + 3}`)).toBeChecked();
-    await expect(page.getByTestId('merge-hidden')).toHaveText('Side / 0 is archived.');
-    await expect(page.getByTestId('merge-renamed-lines')).toHaveText('Side will show Main / 3.');
+    // RS-PROSE: the sentences draw their names as pills and read as written.
+    await expectSpoken(page.getByTestId('merge-hidden'), 'Side / 0 is archived.', { exact: true });
+    await expectSpoken(page.getByTestId('merge-renamed-lines'), 'Side will show Main / 3.', { exact: true });
+    expect(await prosePillKinds(page.getByTestId('merge-renamed-lines'))).toEqual(['line', 'station']);
     // No collision rows: the dotted 3 repeats no name.
     await expect(page.getByTestId('merge-collisions')).toHaveCount(0);
     // RS-FX6, P2-6: the dialog says Side will list 3 twice, before the user
     // confirms (shot 01 said only "Side will show Main / 3").
-    await expect(page.getByTestId(`merge-repeat-${sideId}-${sideId * 100_000 + 1}`)).toHaveText(
+    await expectSpoken(
+      page.getByTestId(`merge-repeat-${sideId}-${sideId * 100_000 + 1}`),
       `Side already has a station 3 (Station ID ${sideId * 100_000 + 1}); it keeps its name, and Side shows 3 twice, the junction with Main's dot.`,
+      { exact: true },
     );
 
     await page.getByTestId('merge-confirm').click();
@@ -178,12 +183,14 @@ test.describe('Kept and archived stations (RS)', () => {
     // Keeping Side / 0 shows 0 on Main through a foreign slot, where Main / 0
     // shows its own 0: no collision.
     await page.getByTestId(`merge-keep-${sideId * 100_000}`).click();
-    await expect(page.getByTestId('merge-hidden')).toHaveText('Main / 3 is archived.');
-    await expect(page.getByTestId('merge-renamed-lines')).toHaveText('Main will show Side / 0.');
+    await expectSpoken(page.getByTestId('merge-hidden'), 'Main / 3 is archived.', { exact: true });
+    await expectSpoken(page.getByTestId('merge-renamed-lines'), 'Main will show Side / 0.', { exact: true });
     await expect(page.getByTestId('merge-collisions')).toHaveCount(0);
     // RS-FX6, P2-6: Main's own 0 keeps its name beside the dotted 0.
-    await expect(page.getByTestId(`merge-repeat-${mainId}-${mainId * 100_000}`)).toHaveText(
+    await expectSpoken(
+      page.getByTestId(`merge-repeat-${mainId}-${mainId * 100_000}`),
       `Main already has a station 0 (Station ID ${mainId * 100_000}); it keeps its name, and Main shows 0 twice, the junction with Side's dot.`,
+      { exact: true },
     );
 
     await page.getByTestId('merge-confirm').click();
@@ -216,23 +223,30 @@ test.describe('Kept and archived stations (RS)', () => {
     const dialog = page.getByTestId('unmerge-stations-dialog');
     await expect(dialog).toBeVisible();
     const row = page.getByTestId('unmerge-stations-collision-0');
-    await expect(row).toContainText('On Side, 0 would name two stations');
+    await expectSpoken(row, 'On Side, 0 would name two stations');
     // RS-FX6, P1-1: the two answers rename two stations named 0; each says
     // which, by its role and Station ID (both read "Rename Side / 0 to 0a").
-    await expect(page.getByTestId('unmerge-stations-collision-0-letter').locator('..')).toHaveText(
+    // Each radio is named by the plain sentence; its label draws pills.
+    await expect(page.getByTestId('unmerge-stations-collision-0-letter')).toHaveAccessibleName(
       `Rename the station that comes back (Side / 0, Station ID ${sideId * 100_000}) to 0a`,
     );
-    await expect(page.getByTestId('unmerge-stations-collision-0-alternative').locator('..')).toHaveText(
+    await expect(page.getByTestId('unmerge-stations-collision-0-alternative')).toHaveAccessibleName(
       `Rename the 0 that is on Side now (Station ID ${sideId * 100_000 + 1}) to 0a`,
     );
+    expect(await prosePillKinds(page.getByTestId('unmerge-stations-collision-0-alternative').locator('..'))).toEqual([
+      'station',
+      'line',
+    ]);
     // RS-FX6, P2-2: the lead follows the answer: rule L's letter first, then
     // the station's own name once the other one takes the letter.
-    await expect(page.getByTestId('unmerge-stations-naming')).toContainText(
+    await expectSpoken(
+      page.getByTestId('unmerge-stations-naming'),
       `Side comes off: it gets back 0a (Station ID ${sideId * 100_000})`,
     );
     // Rename the station that reused the name instead.
     await page.getByTestId('unmerge-stations-collision-0-alternative').click();
-    await expect(page.getByTestId('unmerge-stations-naming')).toContainText(
+    await expectSpoken(
+      page.getByTestId('unmerge-stations-naming'),
       `Side comes off: it gets back 0 (Station ID ${sideId * 100_000})`,
     );
     await page.getByTestId('unmerge-stations-confirm').click();
@@ -281,19 +295,25 @@ test.describe('Kept and archived stations (RS)', () => {
     await page.getByTestId(`detail-unmerge-${thirdId}-0`).click();
     const dialog = page.getByTestId('unmerge-stations-dialog');
     await expect(dialog).toBeVisible();
-    await expect(page.getByTestId('unmerge-stations-naming')).toHaveText(
+    await expectSpoken(
+      page.getByTestId('unmerge-stations-naming'),
       'Third comes off and gets back the station it had here before the merge.',
+      { exact: true },
     );
     await expect(page.getByTestId('unmerge-stations-comes-back')).toContainText(
       `It gets back 0 (Station ID ${sideId! * 100_000}).`,
     );
-    await expect(page.getByTestId('unmerge-stations-together')).toHaveText(
+    await expectSpoken(
+      page.getByTestId('unmerge-stations-together'),
       'Side comes off with Third: they were one station before the merge.',
+      { exact: true },
     );
     // RS-FX6, P3-12: Third's own station stays inside the one that comes
     // back, and a second Detach gives it back.
-    await expect(page.getByTestId(`unmerge-stations-inside-${thirdId! * 100_000}`)).toHaveText(
+    await expectSpoken(
+      page.getByTestId(`unmerge-stations-inside-${thirdId! * 100_000}`),
       `Third / 0 (Station ID ${thirdId! * 100_000}) stays archived inside it: detach Third again to get it back.`,
+      { exact: true },
     );
     await page.getByTestId('unmerge-stations-confirm').click();
     await expect(dialog).toBeHidden();
@@ -338,7 +358,8 @@ test.describe('Kept and archived stations (RS)', () => {
 
     await openClosure();
     await expect(page.getByTestId(`closure-keep-${mainId * 100_000 + 1}`)).toBeChecked();
-    await expect(page.getByTestId('closure-hidden')).toContainText('Side / 2 is hidden');
+    await expectSpoken(page.getByTestId('closure-hidden'), 'Side / 2 is hidden');
+    expect(await prosePillKinds(page.getByTestId('closure-hidden'))).toEqual(['station']);
     await page.getByTestId('closure-create').click();
     await expect(page.getByTestId('closure-dialog')).toBeHidden();
     await expect.poll(closures).toEqual([{ id: '1', archived: true }]);
@@ -356,8 +377,8 @@ test.describe('Kept and archived stations (RS)', () => {
       },
       { anchor: ref(mainId, 1), other: ref(sideId, 2) },
     );
-    await expect(page.getByTestId('remove-closure-option-1-back')).toHaveText('(2 comes back)');
-    await expect(page.getByTestId('remove-closure-comes-back')).toContainText('Side / 2 comes back');
+    await expectSpoken(page.getByTestId('remove-closure-option-1-back'), '(2 comes back)', { exact: true });
+    await expectSpoken(page.getByTestId('remove-closure-comes-back'), 'Side / 2 comes back');
     await page.getByTestId('remove-closure-confirm').click();
     await expect(page.getByTestId('remove-closure-dialog')).toBeHidden();
     await expect.poll(closures).toEqual([]);
@@ -491,13 +512,18 @@ test.describe('Kept and archived stations (RS)', () => {
       { a: ref(mainId, 2), b: ref(sideId, 2) },
     );
     await expect(page.getByTestId('closure-dialog')).toBeVisible();
-    await expect(page.getByTestId('closure-keep-not-allowed')).toHaveText(
+    await expectSpoken(
+      page.getByTestId('closure-keep-not-allowed'),
       'Main / 2 cannot be kept here: it would hide Side / 2, which another loop closure already shows as Main / 1.',
+      { exact: true },
     );
     await expect(page.getByTestId('closure-keep-both')).toBeChecked();
-    await expect(page.getByTestId('closure-keep-outcome')).toHaveText(
+    await expectSpoken(
+      page.getByTestId('closure-keep-outcome'),
       'No name changes. Side / 2 stays shown as Main / 1 through another loop closure.',
+      { exact: true },
     );
+    expect(await prosePillKinds(page.getByTestId('closure-keep-outcome'))).toEqual(['station', 'station']);
     await page.getByTestId('closure-cancel').click();
     await expect(page.getByTestId('closure-dialog')).toBeHidden();
   });
@@ -678,15 +704,16 @@ test.describe('Remove Closure follows the collision answer (RS-FX8)', () => {
       { anchor: ref(mainId, 1), other: ref(sideId, 2) },
     );
     await expect(page.getByTestId('remove-closure-collision-0')).toBeVisible();
-    await expect(page.getByTestId('remove-closure-collision-0-letter').locator('..')).toHaveText(
+    await expect(page.getByTestId('remove-closure-collision-0-letter')).toHaveAccessibleName(
       `Rename the station that comes back (Side / 2, Station ID ${sideId * 100_000 + 2}) to 2a`,
     );
-    await expect(page.getByTestId('remove-closure-option-1-back')).toHaveText('(2a comes back)');
-    await expect(page.getByTestId('remove-closure-comes-back')).toContainText('Side / 2a comes back');
+    await expectSpoken(page.getByTestId('remove-closure-option-1-back'), '(2a comes back)', { exact: true });
+    await expectSpoken(page.getByTestId('remove-closure-comes-back'), 'Side / 2a comes back');
 
     await page.getByTestId('remove-closure-collision-0-alternative').click();
-    await expect(page.getByTestId('remove-closure-option-1-back')).toHaveText('(2 comes back)');
-    await expect(page.getByTestId('remove-closure-comes-back')).toContainText('Side / 2 comes back');
+    await expectSpoken(page.getByTestId('remove-closure-option-1-back'), '(2 comes back)', { exact: true });
+    expect(await prosePillKinds(page.getByTestId('remove-closure-option-1-back'))).toEqual(['station']);
+    await expectSpoken(page.getByTestId('remove-closure-comes-back'), 'Side / 2 comes back');
     await page.getByTestId('remove-closure-confirm').click();
     await expect(page.getByTestId('remove-closure-dialog')).toBeHidden();
     await expect.poll(() => nameAt(page, ref(sideId, 2))).toBe('2');

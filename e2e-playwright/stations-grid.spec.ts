@@ -7,6 +7,7 @@ import {
   waitForNoDialogs,
   type LineSeed,
 } from './helpers/app';
+import { expectSpoken, prosePillKinds } from './helpers/proseText';
 
 /**
  * E2E tests for the data table's stations view (SpreadsheetGrid migration).
@@ -431,7 +432,9 @@ test.describe('Stations grid at a junction', () => {
     await page.keyboard.press('Enter');
     const prompt = page.getByTestId('shown-identity-edit-dialog');
     await expect(prompt).toBeVisible();
-    await expect(page.getByTestId('shown-identity-prompt-lead')).toHaveText('3 belongs to Stations Test Line.');
+    // RS-PROSE: the lead draws the slot and the home line as pills.
+    await expectSpoken(page.getByTestId('shown-identity-prompt-lead'), '3 belongs to Stations Test Line.', { exact: true });
+    expect(await prosePillKinds(page.getByTestId('shown-identity-prompt-lead'))).toEqual(['station', 'line']);
     // One wording, with the new name and the lines (RS-FX6, P3-11).
     await expect(page.getByTestId('shown-identity-prompt-proceed')).toHaveText(
       'Rename Stations Test Line / 3 to J on Stations Test Line and Side Line',
@@ -494,9 +497,7 @@ test.describe('Stations grid at a junction', () => {
     // Cancel drops every row of the paste.
     await pasteComments();
     await expect(prompt).toBeVisible();
-    await expect(page.getByTestId('shown-identity-batch-row-0')).toContainText(
-      'On Side Line, 3 belongs to Stations Test Line.',
-    );
+    await expectSpoken(page.getByTestId('shown-identity-batch-row-0'), 'On Side Line, 3 belongs to Stations Test Line.');
     await expect(page.getByTestId('shown-identity-batch-row-1')).toHaveCount(0);
     for (const i of [0, 1, 2]) expect(await getStationComment(page, sideId, i)).toBeNull();
     await page.getByTestId('shown-identity-prompt-cancel').click();
