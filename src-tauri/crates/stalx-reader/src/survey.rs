@@ -6,7 +6,7 @@
 //! change for a consumer. Each struct is `#[non_exhaustive]` so fields can be
 //! added in a minor release.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use stalagmight_models::station::{GpsCoordinates, StationRef};
@@ -37,6 +37,22 @@ type ModelStationId = stalagmight_models::StationId;
 /// a merge) has ONE Station ID, one name and one comment, and is listed at
 /// every one of its positions. [`Survey::station_merges`] pairs the positions
 /// of each junction.
+///
+/// # Shown identity
+///
+/// The app shows some stations as another one (its "kept and archived
+/// stations"):
+/// - The stations a merge did not keep are not stations of the survey at all:
+///   a junction shows its kept station on every section through it, and that
+///   is the one station this crate lists there.
+/// - A loop closure can **archive** one of its two ends: that end is still a
+///   station of its own, with its own position, Station ID and slot ids
+///   ([`Section::station_ids`]), but the app shows it under the station at
+///   the closure's other end (its name, Station ID and comment). Its own
+///   name and comment are hidden. [`Survey::shown_as`] maps each such
+///   station to the one shown in its place; [`Survey::station_names`] lists
+///   the shown name at its positions and [`Survey::station_comments`] leaves
+///   its own comment out.
 ///
 /// # Identity
 ///
@@ -92,17 +108,24 @@ pub struct Survey {
     pub zero_datums: Vec<ZeroDatum>,
     pub loop_closures: Vec<LoopClosure>,
     /// One per station that has a comment, at the station's first position
-    /// (lowest `(section_id, index)`): a junction's comment is listed once.
+    /// (lowest `(section_id, index)`): a junction's comment is listed once. A
+    /// loop end a closure archives is left out (its comment is hidden; see
+    /// [`Survey::shown_as`]).
     pub station_comments: Vec<StationComment>,
     /// The station names (e.g. the MNemo station number a DMP import
-    /// recorded), at every position: a junction's one name is listed once per
-    /// section it is on. Unique among the stations of each section, except
-    /// that a junction's name may repeat a section's own station's name on a
-    /// section that knows the junction by another name (the station it had
-    /// there before a merge or a 0.6.0 conversion joined it: in a version 2
-    /// file, an alias naming that section). Not unique across the survey:
-    /// MNemo numbers restart at 0 in every section.
+    /// recorded), at every position, as the app shows them: a junction's one
+    /// name is listed once per section it is on, and a loop end a closure
+    /// archives shows the name of the station in [`Survey::shown_as`]. On
+    /// each section, positions showing different stations have different
+    /// names; a closure whose two ends are on one section shows that one name
+    /// twice there. Not unique across the survey: MNemo numbers restart at 0
+    /// in every section.
     pub station_names: Vec<StationName>,
+    /// The loop ends a closure archives: each one's Station ID mapped to the
+    /// Station ID of the station the app shows in its place (the closure's
+    /// other end, followed when that end is archived in turn). Empty when
+    /// no closure archives an end. See the type's "Shown identity".
+    pub shown_as: BTreeMap<u32, u32>,
     /// The zero datum whose station is the georeference origin of the local frame
     /// (the project's first resolvable datum, as the app defines it). `None` when
     /// the project has no usable datum. See [`StationPosition`].
@@ -476,9 +499,11 @@ impl Survey {
             })
             .collect();
         loop_closures.sort_by_key(|c| c.id);
+        let shown = project.shown_index();
         let mut station_comments: Vec<StationComment> = project
             .stations
             .values()
+            .filter(|station| !shown.is_archived(station.id))
             .filter_map(|station| {
                 let text = station.comment.as_ref().filter(|t| !t.is_empty())?;
                 Some(StationComment {
@@ -491,7 +516,10 @@ impl Survey {
         let mut station_names: Vec<StationName> = Vec::new();
         for line in project.lines() {
             for (index, id) in line.stations().enumerate() {
-                let Some(station) = project.station(id).filter(|s| !s.name.is_empty()) else {
+                let Some(station) = project
+                    .station(shown.shown(id))
+                    .filter(|s| !s.name.is_empty())
+                else {
                     continue;
                 };
                 station_names.push(StationName {
@@ -504,6 +532,11 @@ impl Survey {
             }
         }
         station_names.sort_by_key(|n| n.station);
+        let shown_as: BTreeMap<u32, u32> = shown
+            .archived_nodes()
+            .map(|node| (node, shown.shown(node)))
+            .filter(|(node, kept)| node != kept)
+            .collect();
         let frame = project.frame_datum();
         let frame_datum = frame.and_then(datum_at);
 
@@ -562,6 +595,7 @@ impl Survey {
             loop_closures,
             station_comments,
             station_names,
+            shown_as,
             frame_datum,
             stations,
             unresolved_references: meta.unresolved_references,
