@@ -8,15 +8,30 @@
  * nothing the user sees changes name unasked; otherwise it acts at once, as
  * before.
  */
+import i18n from '../i18n';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
+import { isEditingBlockedNow } from '../hooks/useEditingBlocked';
 import type { StationRef } from '../types/project';
 import type { DetachLinePreview } from '../types/ipc/DetachLinePreview';
 import type { RemoveClosureNaming } from '../types/ipc/RemoveClosureNaming';
 import { invokeIpc } from './ipc';
+import { TOAST_KEYS } from './toastKeys';
 
 /** What a one-click action did: acted, opened its dialog, or failed. */
 export type AskingOutcome = 'done' | 'asked' | 'failed';
+
+/**
+ * Whether editing became blocked while the preview was out (review finding
+ * ui-5): a mode switch to Plan or Export, the Closures Computed View, or a
+ * file turning read-only. The app-mode gate has no backend backstop, so the
+ * action re-checks after its round trip, says why it did nothing, and fails.
+ */
+function blockedAfterPreview(): boolean {
+  if (!isEditingBlockedNow()) return false;
+  useUIStore.getState().showToast(i18n.t('dialogs.keptStations.editingDisabled'), TOAST_KEYS.EDIT_DISABLED, 'warning');
+  return true;
+}
 
 /** Whether a detach must be asked (RS 7): something comes back, other lines
  *  come off with it or keep another station, the line shows another name
@@ -58,6 +73,7 @@ export async function detachLineAsking(
       ),
     )
     .catch(() => null);
+  if (blockedAfterPreview()) return 'failed';
   if (preview && detachNeedsDialog(preview)) {
     useUIStore.getState().openDialog('unmerge-stations', {
       stationRef,
@@ -86,6 +102,7 @@ export async function removeClosureAsking(closureId: bigint, anchor?: StationRef
       ),
     )
     .catch(() => null);
+  if (blockedAfterPreview()) return 'failed';
   if (naming && removalNeedsDialog(naming)) {
     const closure = useProjectStore.getState().project?.loop_closures?.find((c) => c.id === closureId);
     const same = (a: StationRef, b: StationRef) => a.line_id === b.line_id && a.station_index === b.station_index;

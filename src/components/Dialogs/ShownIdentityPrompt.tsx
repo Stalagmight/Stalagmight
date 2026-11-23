@@ -20,6 +20,7 @@ import { invokeIpc } from '../../utils/ipc';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { listNames } from '../../utils/listNames';
 import { displayStationName } from '../../utils/formatters';
 import { removeClosureAsking } from '../../utils/keptStationActions';
@@ -56,6 +57,8 @@ export function ShownIdentityPrompt({
   const labels = useIdentityLabels();
   const label = useIdentityLabel();
   const stations = useProjectStore((s) => s.stations);
+  // Every way on edits (ui-5): the read-only gate disables them; Cancel stays.
+  const editingBlocked = useEditingBlocked();
   const [owner, setOwner] = useState<StationOwner | null>(null);
   useEffect(() => {
     let live = true;
@@ -112,18 +115,27 @@ export function ShownIdentityPrompt({
         </p>
       )}
       <div className="flex flex-col gap-2">
-        <Button variant="primary" onClick={onProceed} disabled={busy} data-testid="shown-identity-prompt-proceed">
+        <Button
+          variant="primary"
+          onClick={onProceed}
+          disabled={busy || editingBlocked}
+          data-testid="shown-identity-prompt-proceed"
+        >
           {loopEnd
             ? t(`dialogs.shownIdentity.proceedLoop.${edit}`, { station: shownLabel })
             : t(`dialogs.shownIdentity.proceed.${edit}`)}
         </Button>
         {loopEnd && loopClosure !== undefined && (
-          <Button onClick={removeClosure} disabled={busy} data-testid="shown-identity-prompt-remove-closure">
+          <Button
+            onClick={removeClosure}
+            disabled={busy || editingBlocked}
+            data-testid="shown-identity-prompt-remove-closure"
+          >
             {t('dialogs.shownIdentity.removeClosure')}
           </Button>
         )}
         {!loopEnd && owner?.own_station && (
-          <Button onClick={detach} disabled={busy} data-testid="shown-identity-prompt-detach">
+          <Button onClick={detach} disabled={busy || editingBlocked} data-testid="shown-identity-prompt-detach">
             {t('dialogs.shownIdentity.detach', {
               line,
               name: displayStationName(owner.own_station.name),
