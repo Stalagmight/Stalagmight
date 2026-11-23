@@ -683,6 +683,14 @@ impl AppState {
                 ReconcileVerdict::FastForward => {}
             }
         }
+        // The reload carries an edit session only over a lock SpeleoDB still
+        // records as this account's (farm finding P2-take-remote-editable: the
+        // account's other session can hand it back without this one hearing).
+        let editing_stopped = self.speleodb_confirm_lock_for_reload(
+            (&endpoint, &token, insecure_http),
+            &link.project_id,
+            consent.generation,
+        );
         let local_path = self
             .speleodb_fast_forward(
                 &endpoint,
@@ -701,7 +709,10 @@ impl AppState {
                 ),
             )
             .map_err(local_dto)?;
-        Ok(UpdateResult::FastForwarded { local_path })
+        Ok(UpdateResult::FastForwarded {
+            local_path,
+            editing_stopped,
+        })
     }
 
     /// Resolve the server's TRUE HEAD and return it with the full revision

@@ -72,8 +72,18 @@ async function openRemote(page: Page, opts: { editing: boolean; behind?: boolean
       w.__lockCalls.push('take_remote');
       unpushed = false;
       conflict = false;
-      return path;
+      // The backend reads the holder before the reload: an edit session goes on
+      // only over a lock SpeleoDB still records (farm finding
+      // P2-take-remote-editable).
+      if (bound && !held) {
+        bound = false;
+        return { local_path: path, editing_stopped: { kind: 'released' } };
+      }
+      return { local_path: path };
     } });
+    // Another session of the same account hands the lock back on the server (its
+    // Close): this session is not told.
+    (w as unknown as { __releaseElsewhere: () => void }).__releaseElsewhere = () => { held = false; };
     for (const release of ['speleodb_release_lock', 'speleodb_release_current_lock']) {
       Object.defineProperty(overrides, release, { get: () => {
         w.__lockCalls.push(release);
@@ -166,4 +176,25 @@ test('one Resume editing click on a copy behind SpeleoDB downloads it and starts
   await expect(page.getByTestId('speleodb-readonly-resume')).toBeHidden();
   await expect(page.getByTestId('speleodb-read-only-dialog')).toBeHidden();
   expect(await lockCalls(page)).toEqual(['acquire']);
+});
+
+// Farm finding P2-take-remote-editable (seed 950411): another session of the
+// same account handed the lock back on the server, and Take the SpeleoDB version
+// came back editable with no lock on SpeleoDB. It now opens read-only and says
+// editing stopped, and why.
+test('Take remote over a lock handed back elsewhere opens read-only and says editing stopped', async ({ page }) => {
+  await openRemote(page, { editing: true });
+  await expect.poll(() => editState(page)).toBe('editing');
+  await page.evaluate(() => (window as unknown as { __releaseElsewhere: () => void }).__releaseElsewhere());
+
+  await takeRemote(page, 'You keep the write lock and go on editing');
+
+  const notice = page.getByTestId('speleodb-read-only-dialog');
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText('Editing stopped');
+  await expect(notice).toContainText('handed back elsewhere');
+  await expect(notice).toContainText('The SpeleoDB version is open read-only');
+  await expect(notice).not.toContainText('kept on this computer');
+  expect(await editState(page)).toBe('read-only');
+  expect(await lockCalls(page)).toEqual(['acquire', 'take_remote']);
 });

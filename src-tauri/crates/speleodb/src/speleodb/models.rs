@@ -496,10 +496,47 @@ pub enum UpdateResult {
     /// Already at the server tip - nothing to do.
     UpToDate,
     /// Fast-forwarded to the server tip (re-pulled + reloaded the project).
-    FastForwarded { local_path: String },
+    FastForwarded {
+        local_path: String,
+        /// An edit session the reload would have carried, ended because SpeleoDB
+        /// no longer records this account's lock ([`EditingStopped`]); absent in
+        /// the ordinary case.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        editing_stopped: Option<EditingStopped>,
+    },
     /// The server diverged from our base AND we hold un-pushed local edits - the
     /// refresh cannot proceed without reconciliation (#198/#199, next batch).
     DivergenceNeeded,
+}
+
+/// Why an in-place reload that would have carried an edit session (Take the
+/// SpeleoDB version, Reload Project) reopened the project read-only instead:
+/// SpeleoDB, asked right before the reload, no longer records this account as
+/// the lock's holder (farm finding P2-take-remote-editable). The lock is the
+/// account's, so another session of the same account can hand it back (its
+/// Close), and the session's own claim cannot know.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "../../bindings/")]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EditingStopped {
+    /// SpeleoDB records no lock on the project: it was handed back elsewhere.
+    Released,
+    /// Someone else holds the lock now.
+    HeldBy { email: String },
+}
+
+/// Outcome of `speleodb_take_remote`: the copy now holds SpeleoDB's latest
+/// revision at `local_path`, which the frontend reloads.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../bindings/")]
+pub struct TakeRemoteResult {
+    pub local_path: String,
+    /// The edit session ended because SpeleoDB no longer records this account's
+    /// lock ([`EditingStopped`]); absent when it went on (or there was none).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub editing_stopped: Option<EditingStopped>,
 }
 
 /// Current backend session status, so the dialog can restore its view when
@@ -813,6 +850,7 @@ mod tests {
         .expect("serialize done result");
         let update = serde_json::to_string(&UpdateResult::FastForwarded {
             local_path: "/cache/project.stalx".to_owned(),
+            editing_stopped: None,
         })
         .expect("serialize update result");
         // #204: the link-status DTO is authed-derived (permission + lock holder)

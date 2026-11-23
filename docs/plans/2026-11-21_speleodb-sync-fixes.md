@@ -801,7 +801,9 @@ apart, and the client did not say so or act on it.
     claim still bound carries) and goes on editing the server version; a read-only
     session stays read-only with whatever pointer it had. The confirmation says
     which ("You keep the write lock and go on editing the SpeleoDB version" / "The
-    write lock is left as it is, and the project stays read-only").
+    write lock is left as it is, and the project stays read-only"). Amended by X6
+    (below): the session goes on only while SpeleoDB still records this account's
+    lock, read once before the reload.
   - *Rejected:* releasing and re-acquiring. The project is unlocked in between, and
     an acquire that fails there leaves exactly the bug. *Rejected:* a re-acquire on
     top (an acquire by the account that holds the lock is a no-op, so it proves
@@ -1094,3 +1096,58 @@ injection that puts the old rule back).
   history client kept an empty description as `Some("")`; it reads an empty or
   blank one as none now (above, should-fix 4). Test:
   `an_empty_revision_description_reaches_the_history_as_none`.
+
+### X6: a reload carried an edit session over a lock SpeleoDB no longer recorded
+
+Farm finding P2-take-remote-editable on `sdb/core` dff90754d (seed 950411, step
+12): the app opened a project and took its lock (step 7), edited (8), an upload
+landed over another revision (9), an actor of the same account released the lock
+on the server the way another session's Close does (10), and `take_remote`
+returned with the edit gate open while SpeleoDB recorded no lock on the project
+(12). A regression of X3's demo item 2: before it, Take the SpeleoDB version
+released the lock and ended read-only.
+
+- **Cause.** `speleodb_take_remote` (`speleodb.rs:1405`) hands its fast-forward
+  (`:1445`) the decision to carry the edit session, and `speleodb_fast_forward`
+  takes it from the session's own claim alone (`speleodb_pull.rs:433`,
+  `was_editing = self.edit_enabled()`, passed to `open_project_download` at
+  `:475`, carried by `speleodb_edit_gate.rs:147`). The claim is this process's
+  record; SpeleoDB's lock is the account's, so another session of the account can
+  hand it back without this one hearing. Reload Project's fast-forward
+  (`speleodb_push.rs:616` `speleodb_reload_locked`, `:687`) carried it the same
+  way. Resume editing on a copy behind does not: Start Editing acquires first, and
+  the acquire is SpeleoDB's own answer. A Restore with `restore: true` carries it
+  too, but its only path from the UI (the revert) runs Start Editing right before
+  it; the standalone Restore dialog is registered but nothing opens it.
+- **Fix.** `speleodb_confirm_lock_for_reload` reads the holder once (the project
+  read every holder check uses; the history read carries the project too, but the
+  client keeps only its commits, and no test server keeps its holder honest), right
+  before the reload commits, and only when there is an edit session to carry.
+  This account: the session goes on. No holder, or another account: the gate is
+  shut (the claim stays as the pointer a later holder-checked release needs), the
+  reload opens read-only, and the result says why: `TakeRemoteResult.editing_stopped`
+  and `UpdateResult::FastForwarded.editing_stopped` (`EditingStopped::Released` or
+  `HeldBy { email }`). The frontend marks the session read-only before the tree
+  replacement (so the status re-read raises no generic lost notice, which would
+  say the just-discarded changes are kept) and shows "Editing stopped" worded for
+  the SpeleoDB version now on screen: handed back elsewhere, Resume editing takes
+  the lock again; or held by someone else now.
+- **No reply.** A holder read that gets no reply (or a 5xx, or no email to compare
+  with) keeps the session, as before the check. Shutting it instead would end a
+  live session on every network blip, and Resume editing could not take it back
+  offline; carrying it loses nothing, because every upload reads the holder again
+  before it sends (`speleodb_require_owned_lock_locked`) and shuts the gate then,
+  and the next status refresh that hears from SpeleoDB raises "Editing stopped".
+- **Tests.** Same-account loopback server (which can now drop project reads):
+  `taking_the_speleodb_version_after_the_lock_was_handed_back_elsewhere_stops_editing`
+  (the trace shape; fails on dff90754d with the gate open), `..._over_a_lock_someone_else_holds_now_says_who`,
+  `..._when_the_holder_read_gets_no_reply_goes_on_editing`, and
+  `reload_project_after_the_lock_was_handed_back_elsewhere_stops_editing` (injection:
+  drop the check from `speleodb_reload_locked`); the existing keep-the-lock tests
+  assert `editing_stopped` is none. Vitest (Take remote released and held_by,
+  Reload Project released; fail on the old hook) and the new case of
+  `speleodb-take-remote.spec.ts` (fails on the old hook: "editing did not start").
+- **Left.** The window between the holder read and the reload's commit (the
+  download) is not closed: a release landing in it is caught by the next upload's
+  holder read or status refresh. A Restore over a lock released elsewhere is not
+  checked (unreachable from the UI today, above).

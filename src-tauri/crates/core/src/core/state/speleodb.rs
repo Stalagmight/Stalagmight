@@ -15,8 +15,8 @@ use crate::speleodb::contract::{dto_for_error, map_status, Endpoint};
 use crate::speleodb::sync::{self, ReconcileVerdict};
 use crate::speleodb::SpeleoDbAction;
 use crate::speleodb::{
-    RemoteState, SpeleoDbError, SpeleoErrorDto, SpeleoLinkStatus, SpeleoSessionStatus,
-    StartEditingResult,
+    EditingStopped, RemoteState, SpeleoDbError, SpeleoErrorDto, SpeleoLinkStatus,
+    SpeleoSessionStatus, StartEditingResult, TakeRemoteResult,
 };
 
 /// Per-session SpeleoDB connection state held in [`AppState`]. The token lives
@@ -1402,7 +1402,16 @@ impl AppState {
     /// discard before it, so it is not discarded with the rest: the revision read
     /// on entry is the consent the fast-forward checks, and an edit since refuses
     /// the reload (`SessionMoved`) with the edit kept.
-    pub fn speleodb_take_remote(&self) -> Result<String, SpeleoErrorDto> {
+    ///
+    /// The edit session goes on only while SpeleoDB still records this account's
+    /// lock: the claim is this session's own record, and another session of the
+    /// same account can hand the account's lock back on the server (its Close)
+    /// without this one hearing of it. Right before the reload the holder is read
+    /// once (`speleodb_confirm_lock_for_reload`); a lock released elsewhere or
+    /// held by someone else shuts the gate, the reload comes back read-only, and
+    /// the result says why (`editing_stopped`; farm finding
+    /// P2-take-remote-editable).
+    pub fn speleodb_take_remote(&self) -> Result<TakeRemoteResult, SpeleoErrorDto> {
         let (generation, link) = self.speleodb_session_snapshot()?;
         let consented_revision = {
             let _project = self
@@ -1436,25 +1445,91 @@ impl AppState {
             )));
         }
 
+        // An edit session is carried only over a lock SpeleoDB still records as
+        // this account's (see the doc above).
+        let editing_stopped = self.speleodb_confirm_lock_for_reload(
+            (&endpoint, &token, insecure_http),
+            &link.project_id,
+            generation,
+        );
+
         // Re-pull + reset to the tip: BASE = tip, dirty cleared, last_edit_at reset,
         // and the in-place reload starts the undo/redo stacks empty (the server
         // snapshot carries no history). This IS a fast-forward, minus the dirty guard
         // - the whole point of take-remote is to discard the local edits - and it
         // carries the edit session exactly as an Update's fast-forward does: only a
         // claim still bound to it.
-        self.speleodb_fast_forward(
-            &endpoint,
-            &token,
-            insecure_http,
-            &link,
-            tip.as_deref(),
-            (
-                LocalEditsPolicy::Discard,
-                generation,
-                Some(consented_revision),
-            ),
-        )
-        .map_err(local_dto)
+        let local_path = self
+            .speleodb_fast_forward(
+                &endpoint,
+                &token,
+                insecure_http,
+                &link,
+                tip.as_deref(),
+                (
+                    LocalEditsPolicy::Discard,
+                    generation,
+                    Some(consented_revision),
+                ),
+            )
+            .map_err(local_dto)?;
+        Ok(TakeRemoteResult {
+            local_path,
+            editing_stopped,
+        })
+    }
+
+    /// Before an in-place reload that would carry the open edit session (Take
+    /// the SpeleoDB version, Reload Project): does SpeleoDB still record this
+    /// account as the lock's holder? Read once, right before the reload commits.
+    ///
+    /// - No edit session (`!edit_enabled`): nothing to carry, nothing read.
+    /// - The holder is this account: the session goes on (`None`).
+    /// - No holder, or another account: the lock was handed back elsewhere (the
+    ///   account's other session's Close) or taken since. The gate is shut for
+    ///   the session that asked (the claim stays as the pointer a later
+    ///   holder-checked release needs), so the reload opens read-only, and the
+    ///   answer says why.
+    /// - The holder cannot be read (no reply, a 5xx), or there is no email to
+    ///   compare it with: the session goes on, as before this check. A blip must
+    ///   not end a live session, and nothing is lost by carrying it: every upload
+    ///   reads the holder again before it sends (`speleodb_require_owned_lock_locked`)
+    ///   and shuts the gate then, and the next status refresh does too.
+    pub(super) fn speleodb_confirm_lock_for_reload(
+        &self,
+        (endpoint, token, insecure_http): (&str, &str, bool),
+        project_id: &str,
+        generation: u64,
+    ) -> Option<EditingStopped> {
+        if !self.edit_enabled() {
+            return None;
+        }
+        let me = self.speleodb_my_email();
+        let stopped =
+            match self.speleodb_lock_holder_checked(endpoint, token, insecure_http, project_id) {
+                Ok(Some(holder)) if lock_held_by_me(Some(holder.as_str()), me.as_deref()) => None,
+                Ok(Some(holder)) if me.is_some() => Some(EditingStopped::HeldBy { email: holder }),
+                Ok(None) => Some(EditingStopped::Released),
+                Ok(Some(_)) | Err(_) => {
+                    tracing::warn!(
+                        project_id,
+                        purpose = "confirm the lock before a reload carries the edit session",
+                        "speleodb: the lock holder could not be read or compared; the edit \
+                     session goes on (every upload checks the holder again)"
+                    );
+                    None
+                }
+            };
+        if stopped.is_some() {
+            tracing::info!(
+                project_id,
+                ?stopped,
+                purpose = "never carry an edit session over a lock SpeleoDB no longer records",
+                "speleodb: the lock is no longer this account's; the reload opens read-only"
+            );
+            self.speleodb_disable_editing_if_current(generation);
+        }
+        stopped
     }
 
     pub fn speleodb_release_lock(&self, project_id: String) -> Result<(), SpeleoErrorDto> {
