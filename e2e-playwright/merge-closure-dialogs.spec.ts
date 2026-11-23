@@ -117,16 +117,19 @@ test.describe('Merge and Closure Dialogs', () => {
     await expect(closureDialog).toBeVisible({ timeout: 5000 });
 
     // Should show station names
-    await expect(closureDialog.getByText('Main Line')).toBeVisible();
-    await expect(closureDialog.getByText('Side Passage')).toBeVisible();
+    await expect(closureDialog.getByText('Main Line').first()).toBeVisible();
+    await expect(closureDialog.getByText('Side Passage').first()).toBeVisible();
 
     // Should show preview data
     await expect(closureDialog.getByText('2.2%')).toBeVisible();
     await expect(closureDialog.getByText('23.0m')).toBeVisible();
     await expect(closureDialog.getByText('0.5m').first()).toBeVisible();
 
-    // Closure dialog no longer exposes strategy options (auto strategy is applied)
-    await expect(closureDialog.locator('input[type="radio"]')).toHaveCount(0);
+    // No strategy options (auto strategy is applied): the only radios are
+    // the keep choice (RS 5.2), both ends and "Keep both names".
+    await expect(page.getByTestId('closure-keep')).toBeVisible();
+    await expect(closureDialog.locator('input[type="radio"]')).toHaveCount(3);
+    await expect(page.getByTestId('closure-keep-both')).toBeVisible();
 
     // Should have Cancel and Create Closure buttons
     const cancelButton = closureDialog.getByRole('button', { name: /Cancel/i });
