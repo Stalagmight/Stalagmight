@@ -111,6 +111,23 @@ describe('Close', () => {
     expect(useProjectStore.getState().project).toBeNull();
   });
 
+  // sdbdemo2 P3 (screenshot 06): a read-only session whose lock request got no
+  // reply closed with the connection refused, and the prompt stated the lock as
+  // certain ("Until it is handed back, nobody else can edit the project") although
+  // the tab said the lock was free and the request had never reached SpeleoDB.
+  // Only an edit session knows it holds the lock.
+  it.each([
+    ['an edit session', 'editing', true],
+    ['a read-only session', 'read-only', false],
+  ] as const)('the question from %s says whether the lock is known to be held', async (_case, editState, certain) => {
+    useSpeleoStore.setState({ link: { ...editing, editState } });
+    replies.close_project = [failed()];
+    void useProjectStore.getState().closeProject();
+    const prompt = await waitForPrompt();
+    expect(prompt.lockCertain).toBe(certain);
+    prompt.settle('cancel');
+  });
+
   it('a failed release keeps the project open, pauses editing and asks; Retry closes once it settles', async () => {
     replies.close_project = [failed(), released];
     const closing = useProjectStore.getState().closeProject();

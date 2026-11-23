@@ -48,6 +48,11 @@ export interface ReleaseFailureRequest {
   reason: ReleaseFailureReason;
   /** Why the release did not happen, as the backend said it. */
   detail: string;
+  /** The lock was known to be this session's (it was editing under it). A
+      read-only session's claim is only a pointer to a lock that may or may not
+      be held (a lock request whose reply was lost, a lost-lock signal), so the
+      prompt does not state it as certain (sdbdemo2 P3, screenshot 06). */
+  lockCertain: boolean;
   /** Run the release again; the dialog stays up while it fails. */
   retry: () => Promise<ReleaseRetryOutcome>;
   /** Finish the request. Idempotent; only the first call counts. */
@@ -69,6 +74,7 @@ export function askReleaseFailure(
   reason: ReleaseFailureReason,
   detail: string,
   retry: () => Promise<ReleaseRetryOutcome>,
+  lockCertain = true,
 ): Promise<ReleaseFailureAnswer> {
   const { request, working } = useReleaseFailurePrompt.getState();
   if (working) return Promise.resolve('cancel');
@@ -84,7 +90,7 @@ export function askReleaseFailure(
       }
       resolve(answer);
     };
-    useReleaseFailurePrompt.setState({ request: { id, reason, detail, retry, settle }, working: false });
+    useReleaseFailurePrompt.setState({ request: { id, reason, detail, lockCertain, retry, settle }, working: false });
   });
 }
 
@@ -126,11 +132,14 @@ function failure(error: string): CommandResult {
  * success (released, not ours, or kept), a failure that is not about the lock
  * (shown by the caller as before), or a failure whose error is
  * {@link RELEASE_CANCELLED} - the user stays, with editing paused.
+ * `lockCertain`: the session was editing under the lock when it tried to leave
+ * (see {@link ReleaseFailureRequest.lockCertain}).
  */
 export async function resolveReleaseFailure(
   reason: ReleaseFailureReason,
   failed: CommandResult,
   attempt: (releaseLock: boolean) => Promise<CommandResult>,
+  lockCertain = true,
 ): Promise<CommandResult> {
   let settled: CommandResult = failed;
   const answer = await askReleaseFailure(reason, releaseFailureDetail(failed), async () => {
@@ -143,7 +152,7 @@ export async function resolveReleaseFailure(
     if (releaseFailed(next)) return { ok: false, detail: releaseFailureDetail(next) };
     settled = next;
     return { ok: true };
-  });
+  }, lockCertain);
   if (answer === 'settled') return settled;
   if (answer === 'cancel') return { ...failed, error: RELEASE_CANCELLED };
   try {
@@ -182,6 +191,7 @@ export async function settleOpenLockBeforeLeaving(
   isCurrent: () => boolean = () => true,
 ): Promise<boolean> {
   if (!projectOpen || useSpeleoStore.getState().link === null) return true;
+  const lockCertain = useSpeleoStore.getState().link?.editState === 'editing';
   const settle = (releaseLock: boolean) => invokeIpc<CommandResult>(
     'speleodb_settle_open_lock',
     { releaseLock },
@@ -198,5 +208,5 @@ export async function settleOpenLockBeforeLeaving(
   if (result.lock_release) pauseOpenEditing();
   if (!releaseFailed(result)) return result.success === true;
   if (!isCurrent()) return false;
-  return (await resolveReleaseFailure(reason, result, settle)).success;
+  return (await resolveReleaseFailure(reason, result, settle, lockCertain)).success;
 }
