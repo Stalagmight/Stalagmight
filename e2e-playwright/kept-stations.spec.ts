@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures/coverage';
 import type { Page } from '@playwright/test';
-import { setupMockedPage, createProject, seedProjectWithLines, waitForMapIdle } from './helpers/app';
+import { setupMockedPage, createProject, seedProjectWithLines, waitForMapIdle, getMapLabels } from './helpers/app';
 import type { LineSeed } from './helpers/app';
 
 /**
@@ -588,5 +588,102 @@ test.describe('Kept-station dialogs at 1024x640 (RS-FX6)', () => {
     );
     await expect(page.getByTestId('remove-closure-comes-back')).toBeVisible();
     await inView('remove-closure-cancel', 'remove-closure-confirm');
+  });
+});
+
+/**
+ * RS-FX8, N1 (shots 03, 10, 55 of the RS capture): after a merge, Side starts
+ * on the junction Main / 3, and its line name sat on the junction's station
+ * label: the two overlapped at every zoom, so one of them never showed (in
+ * the capture the junction's label, here Side's name), and turning names off
+ * did not bring a lost station label back. The name now sits on Side's first
+ * own station, so both show, and a line-name toggle shows the station label
+ * a name covers without a rebuild. The oracle is the label layer's read-out
+ * (`__stalagmight_labels__`).
+ */
+test.describe('Map labels at a junction (RS-FX8)', () => {
+  const STATION_LABEL = 1;
+  const LINE_NAME = 2;
+  type Ui = { getState: () => { toggleDisplay: (k: string) => void } };
+  const toggle = (page: Page, key: string) =>
+    page.evaluate((k) => {
+      (window as unknown as { __E2E_TEST__: { uiStore: Ui } }).__E2E_TEST__.uiStore.getState().toggleDisplay(k);
+    }, key);
+  /** Whether a label of `kind` reading `text` is drawn at zoom `z`. */
+  const drawn = async (page: Page, kind: number, text: string, z: number) =>
+    (await getMapLabels(page)).some((l) => l.kind === kind && l.text === text && l.kindVisible && l.revealZoom <= z);
+
+  test('the junction keeps its label beside the branch name, and a name toggle needs no rebuild', async ({ page }) => {
+    const [mainId, sideId] = await setUp(page);
+    await page.evaluate(
+      async ({ a, b, keep }) => {
+        const e2e = (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__;
+        await e2e.projectStore.getState().mergeStations(a, b, { keep, renames: [] });
+      },
+      { a: ref(sideId, 0), b: ref(mainId, 3), keep: mainId * 100_000 + 3 },
+    );
+    await toggle(page, 'showStationLabels');
+    // Center the map on the junction at z18.
+    await page.evaluate((lineId) => {
+      const w = window as unknown as {
+        __stalagmight_map__?: { jumpTo: (o: { zoom: number; center: unknown }) => void };
+        __stalagmight_geometry__?: () => { stations: Array<{ lineId: number; stationIndex: number; lngLat: unknown }> };
+      };
+      const junction = w.__stalagmight_geometry__?.().stations.find((s) => s.lineId === lineId && s.stationIndex === 3);
+      w.__stalagmight_map__?.jumpTo({ zoom: 18, center: junction?.lngLat });
+    }, mainId);
+    await waitForMapIdle(page);
+
+    const junction = String(mainId * 100_000 + 3);
+    const mainFirst = String(mainId * 100_000);
+    await expect.poll(() => drawn(page, STATION_LABEL, junction, 18)).toBe(true);
+    await expect.poll(() => drawn(page, LINE_NAME, 'Side', 18)).toBe(true);
+    // Main's name covers Main / 0's label...
+    expect(await drawn(page, STATION_LABEL, mainFirst, 18)).toBe(false);
+    // ...which line names off brings back, and on again hides; the junction
+    // stays labelled throughout.
+    await toggle(page, 'showLineNames');
+    await expect.poll(() => drawn(page, STATION_LABEL, mainFirst, 18)).toBe(true);
+    expect(await drawn(page, STATION_LABEL, junction, 18)).toBe(true);
+    await toggle(page, 'showLineNames');
+    await expect.poll(() => drawn(page, STATION_LABEL, mainFirst, 18)).toBe(false);
+    expect(await drawn(page, STATION_LABEL, junction, 18)).toBe(true);
+  });
+});
+
+/**
+ * RS-FX8, N2 (shot 54 of the RS capture): Remove Closure said "(2 comes
+ * back)" and "Side / 2 comes back" while its default answer letters the
+ * returning station, and the removal gave 2a. Both follow the chosen answer.
+ */
+test.describe('Remove Closure follows the collision answer (RS-FX8)', () => {
+  test('says 2a with the default answer, 2 with the other, and removes as it said', async ({ page }) => {
+    const [mainId, sideId] = await setUp(page);
+    expect((await createClosure(page, ref(mainId, 1), ref(sideId, 2), mainId * 100_000 + 1)).success).toBe(true);
+    // Side / 2 is hidden behind Main / 1: its name is free on Side, so reuse it.
+    await seedNames(page, [[sideId, 1, '2']]);
+    await page.evaluate(
+      ({ anchor, other }) => {
+        (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__.uiStore.getState().openDialog('remove-closure', {
+          anchorStation: anchor,
+          closures: [{ closureId: 1n, stationRef: other }],
+        });
+      },
+      { anchor: ref(mainId, 1), other: ref(sideId, 2) },
+    );
+    await expect(page.getByTestId('remove-closure-collision-0')).toBeVisible();
+    await expect(page.getByTestId('remove-closure-collision-0-letter').locator('..')).toHaveText(
+      `Rename the station that comes back (Side / 2, Station ID ${sideId * 100_000 + 2}) to 2a`,
+    );
+    await expect(page.getByTestId('remove-closure-option-1-back')).toHaveText('(2a comes back)');
+    await expect(page.getByTestId('remove-closure-comes-back')).toContainText('Side / 2a comes back');
+
+    await page.getByTestId('remove-closure-collision-0-alternative').click();
+    await expect(page.getByTestId('remove-closure-option-1-back')).toHaveText('(2 comes back)');
+    await expect(page.getByTestId('remove-closure-comes-back')).toContainText('Side / 2 comes back');
+    await page.getByTestId('remove-closure-confirm').click();
+    await expect(page.getByTestId('remove-closure-dialog')).toBeHidden();
+    await expect.poll(() => nameAt(page, ref(sideId, 2))).toBe('2');
+    await expect.poll(() => nameAt(page, ref(sideId, 1))).toBe('2a');
   });
 });
