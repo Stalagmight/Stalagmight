@@ -117,9 +117,13 @@ test.describe('Stations grid', () => {
   test('gutter shows station name pills and a read-only Station ID column; X/Y/Depth are read-only', async ({ page }) => {
     const lineId = await getLineId(page);
 
-    // The gutter names each station (seeded from its index: "0" ... "3").
-    await expect(page.getByTestId('grid-gutter-0')).toHaveText('0');
-    await expect(page.getByTestId('grid-gutter-3')).toHaveText('3');
+    // The gutter names each station (seeded from its index: "0" ... "3") in a
+    // line pill that ends with the Station ID the column below shows.
+    await expect(page.getByTestId('grid-gutter-0').locator('.sh-lpill-main')).toHaveText('0');
+    await expect(page.getByTestId('grid-gutter-0').locator('sup.sh-lpill-sid')).toHaveText(
+      `Station ID ${lineId * 100_000}`,
+    );
+    await expect(page.getByTestId('grid-gutter-3').locator('.sh-lpill-main')).toHaveText('3');
 
     // The Station ID column shows the project-unique id (the mock derives it
     // from the line and index) and never opens the editor.
@@ -174,7 +178,7 @@ test.describe('Stations grid', () => {
     await expect(page.getByTestId('grid-cell-2-name')).toHaveText('2');
     await expect(page.getByTestId('grid-cell-3-name')).toHaveText('10');
     // The gutter pill shows the same name.
-    await expect(page.getByTestId('grid-gutter-1')).toHaveText('8');
+    await expect(page.getByTestId('grid-gutter-1').locator('.sh-lpill-main')).toHaveText('8');
 
     // A name another station of the line holds is refused inline: the editor
     // stays open and nothing is sent.
@@ -191,7 +195,7 @@ test.describe('Stations grid', () => {
     await page.keyboard.press('Enter');
     await expect(editor).toHaveCount(0);
     await expect(page.getByTestId('grid-cell-1-name')).toHaveText('8b');
-    await expect(page.getByTestId('grid-gutter-1')).toHaveText('8b');
+    await expect(page.getByTestId('grid-gutter-1').locator('.sh-lpill-main')).toHaveText('8b');
     expect(await getStationName(page, lineId, 1)).toBe('8b');
 
     // Undo gives the old name back; redo the new one.
