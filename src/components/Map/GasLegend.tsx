@@ -1,6 +1,7 @@
 import { useId, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useProse } from '../../hooks/useProse';
+import { Prose } from '../common/Prose';
 import { getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
@@ -22,12 +23,12 @@ interface GasLegendProps {
  * Gas reachable-frontier legend (#38): a gold→purple scale (0 → the turn budget),
  * bottom-left while the gas sub-mode is active. Doubles as the color key and the
  * cue for which overlay you're in. Shows the current origin (entrance default or a
- * picked station). Mirrors {@link ./DistanceLegend}.
+ * picked station, a prose pill: RS-PROSE). Mirrors {@link ./DistanceLegend}.
  */
 export function GasLegend({ field, units, visible }: GasLegendProps) {
   const gradientId = useId();
   const { t } = useTranslation();
-  const identity = useIdentityLabels();
+  const prose = useProse();
   // Re-render on theme change so text colors stay correct.
   useUIStore((s) => s.resolvedTheme);
   const origin = useGasPlanStore((s) => s.origin);
@@ -42,7 +43,7 @@ export function GasLegend({ field, units, visible }: GasLegendProps) {
   const minLabel = formatVolume(0, units);
   const maxLabel = formatVolume(field.budget_litres, units);
   const originLabel = origin
-    ? t('map.gasLegend.fromStation', { station: identity.planStation(origin) })
+    ? t('map.gasLegend.fromStation', { station: prose.planStation(origin) })
     : t('map.gasLegend.fromEntrance');
 
   return (
@@ -69,7 +70,7 @@ export function GasLegend({ field, units, visible }: GasLegendProps) {
         data-testid="gas-legend-origin"
         style={{ fontSize: 10, opacity: 0.8, color: textColor }}
       >
-        {originLabel}
+        <Prose text={originLabel} />
       </span>
       <div style={{ display: 'flex', gap: 6 }}>
         <svg

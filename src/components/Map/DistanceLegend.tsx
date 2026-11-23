@@ -1,7 +1,8 @@
 import { useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatFixed } from '../../i18n/format';
-import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useProse } from '../../hooks/useProse';
+import { Prose } from '../common/Prose';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
@@ -23,12 +24,12 @@ interface DistanceLegendProps {
  * Distance-gradient legend (#34): a gold→purple scale (0 → max reachable),
  * bottom-left while the distance overlay is active. Doubles as the color key and
  * as the cue for which overlay you're in (vs depth). Shows the current origin
- * (the entrance default, or the picked station).
+ * (the entrance default, or the picked station, a prose pill: RS-PROSE).
  */
 export function DistanceLegend({ max, visible, colorScale = null, embedded = false }: DistanceLegendProps) {
   const gradientId = useId();
   const { t } = useTranslation();
-  const identity = useIdentityLabels();
+  const prose = useProse();
   const precision = useDecimalPrecision();
   // Re-render on theme change so text colors stay correct.
   useUIStore((s) => s.resolvedTheme);
@@ -51,7 +52,7 @@ export function DistanceLegend({ max, visible, colorScale = null, embedded = fal
     : `0${t('common.units.meters')}`;
   const maxLabel = `${formatFixed(scaled ? scaled.max : max, undefined, precision.coordinates)}${t('common.units.meters')}`;
   const originLabel = origin
-    ? t('map.distanceLegend.fromStation', { station: identity.station(origin, true) })
+    ? t('map.distanceLegend.fromStation', { station: prose.station(origin, true) })
     : t('map.distanceLegend.fromEntrance');
 
   return (
@@ -75,7 +76,7 @@ export function DistanceLegend({ max, visible, colorScale = null, embedded = fal
         data-testid="distance-legend-origin"
         style={{ fontSize: 10, opacity: 0.8, color: textColor }}
       >
-        {originLabel}
+        <Prose text={originLabel} />
       </span>
       <div style={{ display: 'flex', gap: 6 }}>
         <svg

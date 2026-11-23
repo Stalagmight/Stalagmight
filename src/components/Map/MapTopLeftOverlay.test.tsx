@@ -5,6 +5,7 @@ import { MapTopLeftOverlay } from './MapTopLeftOverlay';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import type { AdjustmentReport } from '../../types/ipc/AdjustmentReport';
+import { accessibleText } from '../../test/accessibleText';
 
 // `t` resolves against the REAL shipped locale file rather than a hand-copied
 // literal table: the assertions below quote user-visible English, and a private
@@ -221,7 +222,8 @@ describe('MapTopLeftOverlay', () => {
 
     it('names the GPS fix the computed view is bent to, and how far off it is (#741)', () => {
       // The station is named with its line (`Main Line / A7`), never by its
-      // positional `line:index` handle.
+      // positional `line:index` handle: a prose pill (RS-PROSE) that reads
+      // as that plain label.
       useProjectStore.setState({
         surveyData: null,
         stations: [
@@ -238,9 +240,12 @@ describe('MapTopLeftOverlay', () => {
       const { rerender } = render(
         <MapTopLeftOverlay {...baseProps} adjustmentReport={report({ far_gps_fixes: [fix(2, 5, 43.2)] })} />
       );
-      expect(screen.getByTestId('adjustment-notice-far-gps-fix')).toHaveTextContent(
+      expect(accessibleText(screen.getByTestId('adjustment-notice-far-gps-fix'))).toBe(
         'Bent to a GPS fix at Main Line / A7, 43 m from its surveyed position. Check it.'
       );
+      const pills = screen.getByTestId('adjustment-notice-far-gps-fix').querySelectorAll('.sh-ppill');
+      expect([...pills].map((el) => el.getAttribute('data-prose-kind'))).toEqual(['station']);
+      expect(pills[0]!.querySelector('[aria-hidden="true"]')!.textContent).toBe('Main Line: A7#31');
       expect(screen.queryByTestId('adjustment-notice-skipped')).toBeNull();
       // The backend sorts the largest gap first; the notice names it.
       rerender(
@@ -249,7 +254,7 @@ describe('MapTopLeftOverlay', () => {
           adjustmentReport={report({ far_gps_fixes: [fix(3, 1, 80), fix(2, 5, 43.2)] })}
         />
       );
-      expect(screen.getByTestId('adjustment-notice-far-gps-fix')).toHaveTextContent(
+      expect(accessibleText(screen.getByTestId('adjustment-notice-far-gps-fix'))).toBe(
         'Bent to 2 GPS fixes far from their surveyed positions, up to 80 m at Side / 12. Check them.'
       );
     });
