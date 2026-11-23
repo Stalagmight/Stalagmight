@@ -184,7 +184,8 @@ pub struct AlongLine {
     pub along_line: Option<f64>,
     /// The shots traversed, whole, in order; closure ties are skipped.
     pub path_shots: Vec<PathShot>,
-    /// The stations on the path, in order (consecutive repeats removed).
+    /// The stations on the path, in order (consecutive repeats removed). A loop end and its kept
+    /// end, consecutive across the closure's tie, show one station and are listed once (RS 6).
     pub path_stations: Vec<StationId>,
     /// The slots on the path, for the wire: the two ends of each traversed
     /// shot on that shot's line, in order, consecutive repeats removed (the
@@ -601,9 +602,21 @@ impl Project {
                 }
             }
         }
+        // RS 6: a step across a loop-closure tie (no shot joins it) between two nodes that show
+        // one identity stays on that station, so the second node is not listed.
+        let shown = self.shown_index();
         let mut path_stations: Vec<StationId> = Vec::new();
-        for &node in &chain {
-            if node < n && path_stations.last() != Some(&stations[node]) {
+        for (k, &node) in chain.iter().enumerate() {
+            if node >= n || path_stations.last() == Some(&stations[node]) {
+                continue;
+            }
+            let one_station = !shown.is_empty()
+                && k.checked_sub(1).map(|p| chain[p]).is_some_and(|prev| {
+                    prev < n
+                        && !shot_edge.contains_key(&(prev, node))
+                        && shown.shown(stations[prev]) == shown.shown(stations[node])
+                });
+            if !one_station {
                 path_stations.push(stations[node]);
             }
         }

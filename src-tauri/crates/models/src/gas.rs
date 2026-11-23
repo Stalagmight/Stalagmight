@@ -279,10 +279,14 @@ pub struct GasReachField {
     pub station_refs: Vec<StationRef>,
     pub gas_to_reach: Vec<Option<f64>>,
     pub reachable: Vec<bool>,
+    /// The turn candidates: one slot per station the dive could end at that borders one it
+    /// could not; a loop end and its kept end are one station (RS 6), listed once.
     pub turn_frontier: Vec<StationRef>,
     pub max_reachable_gas: f64,
     pub budget_litres: f64,
-    /// Ordered legs origin→target (for the route highlight); empty when nothing is reachable.
+    /// Ordered legs origin→target (for the route highlight); empty when nothing is reachable. A
+    /// loop end and its kept end are one route station (RS 6), so no leg joins them: the leg
+    /// after them starts on the node the route leaves by.
     pub route: Vec<RouteLeg>,
     /// Station where each stage's IN gas is exhausted, in stage order (staged strategies only).
     pub stage_drop_refs: Vec<StationRef>,
