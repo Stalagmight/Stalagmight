@@ -46,26 +46,26 @@ pub(super) fn apply(
 }
 
 /// Rename the station at `slot` to `name`, trimmed (0.6.0's
-/// `set_station_name` on the station graph, per line): the name the slot's
-/// line shows the station by changes, which is the alias that line knows a
-/// junction by when it has one (that line alone), else the station's own name
-/// (every line without an alias of its own shows it; plan 5.3). The name the
-/// slot already shows is a no-op before any other check, as 0.6.0's execute
-/// answered it (the pipeline then records nothing and keeps the redo branch).
-/// Otherwise the name must be non-empty, free of control and invisible
-/// formatting characters, and shown for no other station on a line that
-/// shows the renamed name.
+/// `set_station_name` on the station graph): the identity the slot shows is
+/// renamed (RS: a junction shows its kept station on every line, a loop end
+/// its closure's kept end), so every line it is shown on shows the new name.
+/// RS-W/RS-UI: a foreign or closure-archived slot first asks whose station it
+/// is (RS 5.4). The name the slot already shows is a no-op before any other
+/// check, as 0.6.0's execute answered it (the pipeline then records nothing
+/// and keeps the redo branch). Otherwise the name must be non-empty, free of
+/// control and invisible formatting characters, and shown for no other
+/// station on a line that shows the renamed identity.
 fn set_station_name(project: &mut Project, slot: StationRef, name: &str) -> Result<(), String> {
     let station = named_station(project, slot)?;
     let name = name.trim();
-    let current = project.name_on(station, slot.line_id);
+    let current = project.shown_name(station);
     if !name.is_empty() && current == Some(name) {
         return Ok(());
     }
     if let Some(refusal) = station_name_refusal(project, station, slot, name) {
         return Err(refusal);
     }
-    project.set_name_on(station, slot.line_id, name.to_string());
+    project.set_shown_name(station, name.to_string());
     tracing::info!(
         ?slot,
         station,
@@ -102,7 +102,7 @@ fn station_name_refusal(
     if let Some(refusal) = name_characters_refusal("station", name) {
         return Some(refusal);
     }
-    let conflicts = project.conflicts_with_name_on(station, slot.line_id, name);
+    let conflicts = project.conflicts_with_name(station, name);
     let clash = conflicts
         .iter()
         .find(|c| c.line == slot.line_id)

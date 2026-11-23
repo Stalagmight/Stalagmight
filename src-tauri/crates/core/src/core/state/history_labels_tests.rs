@@ -584,7 +584,7 @@ fn a_detach_that_keeps_the_station_names_the_line_that_comes_off() {
     let junction = p.topology().station_at(StationRef::new(MAIN, 4)).unwrap();
     assert!(p.detach_keeps(junction, MAIN), "Main keeps the station");
     assert!(!p.detach_keeps(junction, SIDE));
-    assert_eq!(p.name_on(junction, SIDE), Some("0"));
+    assert_eq!(p.shown_name(junction), Some("0"));
 
     exec(
         &o.state,

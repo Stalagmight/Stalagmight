@@ -33,7 +33,7 @@ fn station_text(project: &Project, at: StationRef) -> String {
     project
         .topology()
         .station_at(at)
-        .and_then(|id| project.name_on(id, at.line_id))
+        .and_then(|id| project.shown_name(id))
         .map_or_else(
             || format!("a station of {line}"),
             |name| {

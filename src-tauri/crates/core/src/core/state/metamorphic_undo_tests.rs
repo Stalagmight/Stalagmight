@@ -1154,7 +1154,7 @@ fn mirrored_junction_problems(atomic: &Project, singles: &Project, m: &Mirrored)
     let mut problems = Vec::new();
     let slot_lines: BTreeSet<LineId> = m.atomic_at.iter().map(|((line, _), _)| *line).collect();
     for ((line, index), a) in &m.atomic_at {
-        let (shown_a, shown_s) = (atomic.name_on(a.id, *line), singles.name_on(s.id, *line));
+        let (shown_a, shown_s) = (atomic.shown_name(a.id), singles.shown_name(s.id));
         if shown_a != shown_s {
             problems.push(format!(
                 "line {line} shows the junction of closure {} at slot {line}:{index} as \
@@ -3320,7 +3320,7 @@ fn an_adopted_survey_the_encoder_refuses_is_a_reported_divergence() {
         .iter()
         .find_map(|l| {
             let chain: Vec<StationId> = l.stations().collect();
-            let taken = p.name_on(*chain.get(2)?, l.id)?.to_string();
+            let taken = p.shown_name(*chain.get(2)?)?.to_string();
             Some((l.id, chain[1], taken))
         })
         .expect("a line of three stations");

@@ -67,7 +67,7 @@ fn names(p: &Project, line: LineId) -> Vec<String> {
     p.line(line)
         .unwrap()
         .stations()
-        .map(|s| p.name_on(s, line).unwrap().to_string())
+        .map(|s| p.shown_name(s).unwrap().to_string())
         .collect()
 }
 

@@ -179,8 +179,8 @@ fn a_junction_keeps_its_name_where_a_line_knows_it_by_an_alias() {
     assert_eq!(s.aliases.len(), 1);
     assert_eq!(s.aliases[0].name.as_deref(), Some("0"));
     assert_eq!(s.aliases[0].line, Some(side), "Side knew it as 0");
-    assert_eq!(out.project.name_on(j, side), Some("0"));
-    assert_eq!(out.project.name_on(j, main), Some("2"));
+    assert_eq!(out.project.shown_name(j), Some("0"));
+    assert_eq!(out.project.shown_name(j), Some("2"));
     assert_eq!(
         out.project.stations[&station(&out.project, side, 2)].name,
         "2"
@@ -225,7 +225,7 @@ fn a_member_without_a_usable_id_keeps_its_name_under_a_fresh_alias_id() {
         s.aliases[0].id > highest_station,
         "minted after every station"
     );
-    assert_eq!(out.project.name_on(j, side), Some("0"));
+    assert_eq!(out.project.shown_name(j), Some("0"));
     assert_eq!(out.report.names_changed, 0);
 }
 

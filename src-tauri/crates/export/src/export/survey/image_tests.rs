@@ -88,7 +88,7 @@ fn a_junction_is_labelled_by_the_name_its_representative_line_shows() {
         name: Some("M1".to_string()),
         line: Some(main),
     });
-    assert_eq!(p.name_on(j, main), Some("M1"));
+    assert_eq!(p.shown_name(j), Some("M1"));
     let names = texts(
         &generate_svg_string(&p, &labelled(false)).unwrap(),
         "station-names",

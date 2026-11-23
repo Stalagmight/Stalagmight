@@ -402,8 +402,8 @@ fn reverse_line_warnings_name_a_junction_as_the_line_shows_it() {
     );
     let j = st(&p, side, 2);
     p.merge_stations(st(&p, main, 1), j).unwrap();
-    assert_eq!(p.name_on(j, main), Some("1"));
-    assert_eq!(p.name_on(j, side), Some("2"));
+    assert_eq!(p.shown_name(j), Some("1"));
+    assert_eq!(p.shown_name(j), Some("2"));
     let opened = open(&p);
     let r = opened.state.execute(Command::ReverseLine {
         line_id: main,

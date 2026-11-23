@@ -120,13 +120,15 @@ pub(crate) fn preview_detach_line_impl(
     let station = project
         .station_at(station_ref)
         .ok_or_else(|| "Station not found".to_string())?;
+    // RS-W: the preview's comment, lines coming off together, remaining-
+    // junction picker, collisions and earlier name ride the wire (RS 7).
     let naming = project
-        .detach_naming(station, line_id)
+        .detach_naming(station, line_id, None)
         .map_err(|e| e.to_string())?;
     Ok(DetachLinePreview {
         name: naming.name,
         station_id: naming.id,
-        restored: naming.restored_alias,
+        restored: naming.restored,
         kept: naming.kept,
         lines: naming
             .lines
@@ -136,7 +138,9 @@ pub(crate) fn preview_detach_line_impl(
                 name: o.name,
                 station_id: o.station,
                 comes_off: o.comes_off,
-                alias_id: o.alias_id,
+                // RS-W: no per-line alias ids under RS (a line shows a
+                // node's shown identity); the field leaves the wire.
+                alias_id: None,
                 joined_with: o.joined_with,
             })
             .collect(),

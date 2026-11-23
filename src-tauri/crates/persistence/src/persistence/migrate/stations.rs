@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, HashSet};
 use stalagmight_legacy::models::StationId as LegacyStationId;
 use stalagmight_legacy::LegacyProject;
 
-use crate::models::survey::{Station, StationAlias};
+use crate::models::survey::{ArchivedStation, Station};
 use crate::models::{StationId, MAX_STATION_ID};
 
 use super::merges::MergePlan;
@@ -161,14 +161,16 @@ pub(super) fn plan(
                 id,
                 name: shown(claim.owner),
                 comment,
-                aliases: Vec::new(),
                 external: None,
+                archived: Vec::new(),
             },
         );
     }
-    // Every other member's line keeps showing the name 0.6.0 showed there:
-    // an alias naming the line, under the member's id, or one minted after
-    // every station's (so stations keep the ids they had).
+    // Every other member is archived in the station (a record naming its
+    // line), under the member's id, or one minted after every station's (so
+    // stations keep the ids they had). RS-F: 8.3 keeps the member on the
+    // longest line (rule K), puts each member's own comment on its record,
+    // and settles the names by rule L.
     for claim in &chosen {
         let mut aliases = Vec::with_capacity(claim.aliases.len());
         for &(alias, member) in &claim.aliases {
@@ -182,17 +184,18 @@ pub(super) fn plan(
                 next += 1;
                 next - 1
             };
-            aliases.push(StationAlias {
+            aliases.push(ArchivedStation {
                 id: alias,
-                name: Some(shown(member)),
-                // The member's line knew the junction by this alias (UX-4,
-                // D-migration-upgrade-8).
-                line: Some(slots.slot(member).line_id),
+                name: shown(member),
+                comment: None,
+                external: None,
+                // The member's own line (UX-4, D-migration-upgrade-8).
+                lines: vec![slots.slot(member).line_id],
             });
         }
         report.aliases_created += aliases.len();
         if let Some(station) = stations.get_mut(&of_slot[claim.owner]) {
-            station.aliases = aliases;
+            station.archived = aliases;
         }
     }
     Ok(StationPlan {

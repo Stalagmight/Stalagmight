@@ -896,7 +896,7 @@ fn a_drifted_legacy_merge_raises_the_conversion_notice_once() {
     let c = project.lines()[2].id;
     let start = project.line(c).unwrap().start;
     assert_eq!(
-        project.name_on(start, c),
+        project.shown_name(start),
         Some("0"),
         "C's start keeps its name"
     );

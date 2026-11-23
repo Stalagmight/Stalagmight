@@ -11,7 +11,9 @@ use serde::de::{self, DeserializeOwned, DeserializeSeed, Deserializer, SeqAccess
 use serde_json::value::RawValue;
 
 use crate::models::config::ValidationConfig;
-use crate::models::survey::{ClosureStrategy, LoopClosure, Placement, ProjectSettings, ZeroDatum};
+use crate::models::survey::{
+    ClosureEnd, ClosureStrategy, LoopClosure, Placement, ProjectSettings, ZeroDatum,
+};
 use crate::models::{GpsCoordinates, Section};
 
 use super::canon::{canonical_checked, CanonError};
@@ -670,6 +672,18 @@ pub(super) fn read_closure(
             ClosureStrategy::Batch
         }),
     };
+    // RS 8.1: the end the closure archives, "a" or "b" (left out when it
+    // archives nothing). RS-F: the `requires` feature and the reader docs.
+    let archived = match f.opt::<String>("archived")?.as_deref() {
+        None => None,
+        Some("a") => Some(ClosureEnd::A),
+        Some("b") => Some(ClosureEnd::B),
+        Some(token) => {
+            let at = f.at().to_string();
+            ctx.unknown(|_| format!("{at} archived {token:?}"));
+            None
+        }
+    };
     f.unknown_to(ctx);
     Ok(LoopClosure {
         id,
@@ -678,6 +692,7 @@ pub(super) fn read_closure(
         b,
         b_via,
         strategy,
+        archived,
     })
 }
 

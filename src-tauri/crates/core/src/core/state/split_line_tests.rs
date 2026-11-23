@@ -1271,8 +1271,8 @@ fn the_label_names_the_cut_station_as_the_line_shows_it() {
     let j = st(&p, side, 1);
     p.merge_stations(st(&p, main, 2), j).unwrap();
     assert_eq!(st(&p, main, 2), j, "Side's station survives the merge");
-    assert_eq!(p.name_on(j, main), Some("2"));
-    assert_eq!(p.name_on(j, side), Some("1"));
+    assert_eq!(p.shown_name(j), Some("2"));
+    assert_eq!(p.shown_name(j), Some("1"));
     let opened = open(&p);
     let state = &opened.state;
     let result = state.execute_split_line(main, SplitAt::Station { station_index: 2 }, options());

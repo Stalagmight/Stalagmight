@@ -34,7 +34,7 @@ fn station_columns(project: &Project, line: &Line) -> Vec<(String, u32)> {
     line.stations()
         .map(|id| {
             let name = project
-                .name_on(id, line.id)
+                .shown_name(id)
                 .map(str::to_string)
                 .unwrap_or_default();
             (name, id)

@@ -15,7 +15,9 @@ use std::collections::BTreeMap;
 
 use super::commands::{Applied, Record};
 use crate::core::{Command, ValidationWarning, WarningSeverity};
-use crate::models::survey::{ClosureId, LoopClosure, OpError, Project, SweepReport};
+use crate::models::survey::{
+    ClosureId, LoopClosure, NameAnswers, OpError, Project, SweepReport,
+};
 use crate::models::{StationRef, CLOSURE_REMOVED_MERGED_ENDS};
 
 /// 0.6.0's refusal of a merge between two stations of one line.
@@ -234,7 +236,13 @@ fn merge(
         .resolve_slot_pair(station_a, station_b)
         .map_err(text_or(NO_SUCH_STATIONS))?;
     let names = ClosureNames::of(project);
-    let outcome = project.merge_stations(a.station, b.station).map_err(|e| {
+    // RS-W: the command carries the dialog's keep and renames (RS 4.1);
+    // until then the stationary station is kept (the one the dialog says the
+    // other piece moves to join) and every collision is lettered by rule L.
+    let keep = project.merge_direction(a.station, b.station).0;
+    let outcome = project
+        .merge_stations_auto(a.station, b.station, keep)
+        .map_err(|e| {
         tracing::warn!(
             ?station_a,
             ?station_b,
@@ -242,13 +250,13 @@ fn merge(
             purpose = "connect survey lines",
             "Failed to merge stations"
         );
-        e.to_string()
-    })?;
+            e.to_string()
+        })?;
     tracing::debug!(
         ?station_a,
         ?station_b,
-        survivor = outcome.value.survivor,
-        retired = outcome.value.retired,
+        kept = outcome.value.kept,
+        archived = outcome.value.archived,
         purpose = "connect survey lines",
         "Stations merged"
     );
@@ -275,7 +283,10 @@ fn unmerge(
         return Ok(Applied::default());
     }
     let names = ClosureNames::of(project);
-    let outcome = project.unmerge_station(station_ref).map_err(text)?;
+    // RS-W: the dialog's renames and remaining-junction pick (RS 4.2).
+    let outcome = project
+        .unmerge_station(station_ref, NameAnswers::RuleL, None)
+        .map_err(text)?;
     if let Some(detached) = &outcome.value {
         tracing::info!(
             station = detached.station,
@@ -311,8 +322,9 @@ fn unmerge_pair(
         return Err(OpError::NotDirectlyMerged.to_string());
     }
     let names = ClosureNames::of(project);
+    // RS-W: the dialog's renames and remaining-junction pick (RS 4.2).
     let outcome = project
-        .unmerge_station_pair(station_a, station_b)
+        .unmerge_station_pair(station_a, station_b, NameAnswers::RuleL, None)
         .map_err(text)?;
     tracing::info!(
         station = outcome.value.station,

@@ -661,7 +661,7 @@ pub(super) fn check(legacy: &LegacySurvey, migrated: &Migrated) -> Result<(), St
             let was = lp
                 .station_name_at(sr)
                 .map_or_else(|| index.to_string(), str::to_string);
-            let now = p.name_on(station, line.id).unwrap_or_default();
+            let now = p.shown_name(station).unwrap_or_default();
             if now != was {
                 return Err(format!(
                     "slot {}:{index} reads {now:?}, 0.6.0 showed {was:?}",

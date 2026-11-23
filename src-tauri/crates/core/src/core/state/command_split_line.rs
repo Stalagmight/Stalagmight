@@ -81,7 +81,7 @@ fn frozen_cut_refusal(
 fn split_label(project: &Project, line_name: &str, first: LineId, second: LineId) -> String {
     let at = project
         .line(second)
-        .and_then(|l| project.name_on(l.start, second))
+        .and_then(|l| project.shown_name(l.start))
         .map(|name| name.trim().to_string())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| project.line(first).map_or(0, |l| l.shots.len()).to_string());

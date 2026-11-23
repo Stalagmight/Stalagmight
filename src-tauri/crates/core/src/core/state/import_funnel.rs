@@ -52,7 +52,7 @@ use crate::models::station_naming::{
 };
 use crate::models::survey::changeset::{PreviewRow, RecordedPreview};
 use crate::models::survey::{
-    ClosureId, ClosureStrategy, EditContext, Line, Placement, Project, Shot, StationAlias,
+    ArchivedStation, ClosureId, ClosureStrategy, EditContext, Line, Placement, Project, Shot,
     ZeroDatum, MAX_SHOT_UUID_CHARS,
 };
 use crate::models::{
@@ -788,17 +788,20 @@ fn station_names(
     let mut renamed = Vec::new();
     if let Some((index, name)) = fixed {
         if junction_alias.is_some() {
-            // The name the line shows the junction by, as the settle left it.
+            // The file's name for the junction, as the settle left it: a
+            // record of the junction now (RS 4.1).
             junction_alias = names.get(index).cloned();
-        } else {
-            let mut taken: HashSet<String> = names.iter().cloned().collect();
-            taken.insert(name.clone());
-            for (i, slot) in names.iter_mut().enumerate() {
-                if i != index && *slot == name {
-                    let fresh = name_with_free_letter(&name, &|c| taken.contains(c));
-                    taken.insert(fresh.clone());
-                    *slot = fresh;
-                }
+        }
+        // The line shows the junction's own (kept) name (RS 4.1), so a new
+        // station named like it takes the letter (rule L: new on the line,
+        // shown on one line). RS-X: the funnel's naming and receipt.
+        let mut taken: HashSet<String> = names.iter().cloned().collect();
+        taken.insert(name.clone());
+        for (i, slot) in names.iter_mut().enumerate() {
+            if i != index && *slot == name {
+                let fresh = name_with_free_letter(&name, &|c| taken.contains(c));
+                taken.insert(fresh.clone());
+                *slot = fresh;
             }
         }
         for (i, (file, now)) in file_names.iter().zip(&names).enumerate() {
@@ -820,11 +823,11 @@ fn station_names(
 }
 
 /// Keep `name`, the file's own name for the existing station `station` the
-/// new line `line` joins, as an alias of that station on that line under the
-/// retired Station ID `id` minted for it: what Merge Stations keeps of the
-/// station it retires (the moving line knows the junction by it), and what
-/// the migration keeps of a 0.6.0 merge member. Detaching the line gives it
-/// this id and name back.
+/// new line `line` joins, as a record of that station naming the line, under
+/// the Station ID `id` minted for it (RS 4.1: the target is kept, the file's
+/// station archived). Detaching the line gives it this id and name back.
+/// RS-X: the record also carries the file's comment and external id, and
+/// the comments are not joined.
 fn keep_file_name_as_alias(
     project: &mut Project,
     station: StationId,
@@ -833,10 +836,12 @@ fn keep_file_name_as_alias(
     line: LineId,
 ) {
     if let Some(station) = project.stations.get_mut(&station) {
-        station.aliases.push(StationAlias {
+        station.archived.push(ArchivedStation {
             id,
-            name: Some(name),
-            line: Some(line),
+            name,
+            comment: None,
+            external: None,
+            lines: vec![line],
         });
     }
 }

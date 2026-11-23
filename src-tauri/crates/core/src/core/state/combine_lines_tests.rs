@@ -871,7 +871,7 @@ fn a_removed_merge_names_each_slot_as_its_line_shows_it() {
     let o = line_at(&mut p, "O", [30.0, 30.0], vec![shot(90.0, 5.0)]);
     p.merge_stations(st(&p, o, 0), x1).unwrap();
     assert_eq!(st(&p, o, 0), x1, "X's end survives the merge");
-    assert_eq!(p.name_on(x1, o), Some("0"), "O knows it by its own start");
+    assert_eq!(p.shown_name(x1), Some("0"), "O knows it by its own start");
     let own = p.stations.get(&x1).unwrap().name.clone();
     assert_ne!(own, "0", "the junction's own name is X's");
     p.push_closure(

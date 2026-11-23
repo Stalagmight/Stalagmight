@@ -417,7 +417,7 @@ impl Project {
     /// archived end (C2); otherwise it archives nothing. A closure whose two
     /// ends are one station is left for the sweep (#738). Returns the ids of
     /// the closures whose archive was dropped, in list order.
-    pub(super) fn normalise_closure_archives(&mut self) -> Vec<ClosureId> {
+    pub fn normalise_closure_archives(&mut self) -> Vec<ClosureId> {
         if self.closures.iter().all(|c| c.archived.is_none()) {
             return Vec::new();
         }

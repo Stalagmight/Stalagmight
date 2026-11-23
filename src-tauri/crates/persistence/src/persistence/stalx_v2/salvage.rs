@@ -138,7 +138,7 @@ impl fmt::Display for Repair {
             Self::RenumberedClosure { from, to } => write!(f, "a closure {from} is now {to}"),
             Self::DroppedSection { id } => write!(f, "dropped Section {id}"),
             Self::DroppedAlias { station, alias } => {
-                write!(f, "dropped alias {alias} of station {station}")
+                write!(f, "dropped archived station {alias} of station {station}")
             }
             Self::ReMintedShotUuid { line, index, uuid } => {
                 write!(f, "shot {index} of line {line} has the new uuid {uuid}")
@@ -245,8 +245,8 @@ fn stage(v: &Violation) -> u8 {
     match v {
         Violation::StationKeyMismatch { .. }
         | Violation::IdOutOfRange { .. }
-        | Violation::AliasCollision { .. }
-        | Violation::AliasOutOfRange { .. }
+        | Violation::ArchivedIdCollision { .. }
+        | Violation::ArchivedIdOutOfRange { .. }
         | Violation::DuplicateLineId { .. }
         | Violation::DuplicateClosureId { .. }
         | Violation::DuplicateSectionId { .. }
@@ -259,7 +259,9 @@ fn stage(v: &Violation) -> u8 {
         | Violation::DanglingClosureEnd { .. }
         | Violation::StaleDatumVia { .. }
         | Violation::StaleClosureVia { .. }
-        | Violation::StaleAliasLine { .. }
+        | Violation::StaleArchivedLine { .. }
+        | Violation::LineNamedTwice { .. }
+        | Violation::NoNativeLine { .. }
         | Violation::HandMoveOffLine { .. }
         | Violation::DanglingSection { .. } => 1,
         Violation::RepeatedStationInChain { .. }
@@ -269,7 +271,9 @@ fn stage(v: &Violation) -> u8 {
         | Violation::ExtraPlacement { .. }
         | Violation::PlacementInDatumComponent { .. }
         | Violation::ClosureSelfLoop { .. }
-        | Violation::ClosureAcrossUnplacedPieces { .. } => 3,
+        | Violation::ClosureAcrossUnplacedPieces { .. }
+        | Violation::StationArchivedTwice { .. }
+        | Violation::ClosureArchiveCycle { .. } => 3,
         Violation::DuplicateStationName { .. }
         | Violation::DuplicateSectionName { .. }
         | Violation::CounterNotAbove { .. }
@@ -311,7 +315,7 @@ impl Pass {
             aliases: p
                 .stations
                 .values()
-                .flat_map(|s| s.aliases.iter().map(|a| a.id))
+                .flat_map(|s| s.archived.iter().map(|r| r.id))
                 .collect(),
             uuids: p
                 .lines()
@@ -428,14 +432,14 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                     }
                 }
             },
-            Violation::AliasCollision { station, alias }
-            | Violation::AliasOutOfRange { station, alias } => {
+            Violation::ArchivedIdCollision { station, archived }
+            | Violation::ArchivedIdOutOfRange { station, archived } => {
                 if let Some(s) = p.stations.get_mut(station) {
-                    if let Some(i) = s.aliases.iter().position(|a| a.id == *alias) {
-                        s.aliases.remove(i);
+                    if let Some(i) = s.archived.iter().position(|r| r.id == *archived) {
+                        s.archived.remove(i);
                         repairs.push(Repair::DroppedAlias {
                             station: *station,
-                            alias: *alias,
+                            alias: *archived,
                         });
                     }
                 }
@@ -515,10 +519,38 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
             | Violation::ClosureAcrossUnplacedPieces { closure, .. } => {
                 drop_closures.insert(*closure);
             }
+            Violation::StationArchivedTwice { .. } | Violation::ClosureArchiveCycle { .. } => {
+                p.normalise_closure_archives();
+            }
             Violation::StaleDatumVia { .. }
             | Violation::StaleClosureVia { .. }
-            | Violation::StaleAliasLine { .. }
+            | Violation::StaleArchivedLine { .. }
             | Violation::HandMoveOffLine { .. } => stale = true,
+            // RS-F: salvage's repairs for A3, A4, C1 and C2 (with their
+            // reports); here the minimal ones: the later record naming a line
+            // drops it, a station with no native line makes its records
+            // history, and the closure archives are normalised.
+            Violation::LineNamedTwice {
+                station,
+                line,
+                second,
+                ..
+            } => {
+                if let Some(s) = p.stations.get_mut(station) {
+                    for record in &mut s.archived {
+                        if record.id == *second {
+                            record.lines.retain(|l| l != line);
+                        }
+                    }
+                }
+            }
+            Violation::NoNativeLine { station } => {
+                if let Some(s) = p.stations.get_mut(station) {
+                    for record in &mut s.archived {
+                        record.lines.clear();
+                    }
+                }
+            }
             Violation::DanglingSection { line, section } => {
                 if let Some(position) = pass.position(*line, 0) {
                     edits.clear_section.push(position);
@@ -537,7 +569,7 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                 if touched_lines.insert(*line) {
                     if let Some(position) = pass.position(*line, 0) {
                         let name = p
-                            .name_on(*station, *line)
+                            .shown_name(*station)
                             .map_or_else(|| station.to_string(), str::to_string);
                         let to = pass.station(p, name);
                         edits.slots.push((position, *second, to));
@@ -560,7 +592,7 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                 if touched_lines.insert(*line) {
                     if let Some(position) = pass.position(*line, 0) {
                         let name = p
-                            .name_on(*to, *line)
+                            .shown_name(*to)
                             .map_or_else(|| to.to_string(), str::to_string);
                         let new_station = pass.station(p, name);
                         edits.slots.push((position, index + 1, new_station));
@@ -572,6 +604,7 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                             b: *to,
                             b_via: None,
                             strategy: ClosureStrategy::Batch,
+                            archived: None, // RS-F: 8.3 / 8.2 give closures an archived end
                         });
                         repairs.push(Repair::BrokeCycle {
                             line: *line,
@@ -593,10 +626,10 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
                     station: *lowest_station,
                 });
             }
-            Violation::DuplicateStationName { line, second, .. } => {
-                // The name the line shows the later station by: an alias's on
-                // a line that knows it by one, else its own.
-                if let Some(name) = p.uniquify_name_on(*second, *line) {
+            Violation::DuplicateStationName { second, .. } => {
+                // The later identity's name, free on every line it is shown
+                // on. RS-F: rule L (never the junction shown on more lines).
+                if let Some(name) = p.uniquify_station_name(*second) {
                     repairs.push(Repair::RenamedStation { id: *second, name });
                 }
             }
@@ -621,7 +654,7 @@ fn repair_pass(p: &mut Project, violations: &[Violation], repairs: &mut Vec<Repa
     if stale {
         let dropped = p.drop_stale_attachments();
         repairs.push(Repair::ClearedAttachments {
-            vias: dropped.datum_vias.len() + dropped.closure_vias.len() + dropped.alias_lines.len(),
+            vias: dropped.datum_vias.len() + dropped.closure_vias.len() + dropped.archived_lines.len(),
             hand_moves: dropped.hand_moves.len(),
         });
     }
@@ -691,7 +724,7 @@ fn apply_line_edits(p: &mut Project, edits: LineEdits) {
 fn fresh_station_id(p: &Project) -> StationId {
     p.stations
         .values()
-        .flat_map(|s| std::iter::once(s.id).chain(s.aliases.iter().map(|a| a.id)))
+        .flat_map(|s| std::iter::once(s.id).chain(s.archived.iter().map(|r| r.id)))
         .filter(|&id| id < MAX_STATION_ID)
         .map(|id| id.saturating_add(1))
         .chain(std::iter::once(
