@@ -1151,3 +1151,52 @@ released the lock and ended read-only.
   download) is not closed: a release landing in it is caught by the next upload's
   holder read or status refresh. A Restore over a lock released elsewhere is not
   checked (unreachable from the UI today, above).
+
+### X7: a Revert's upload after the Revert (an oracle finding)
+
+Farm finding R3-same-account-overwrite on `sdb/core` 411227301 (seed 950443,
+step 8): one account opened its project and edited (steps 1-2), Save Changes
+uploaded the edit (4), Revert back one restored the revision before it (5),
+and Save and Close (8) uploaded the restored copy over the app's own upload.
+The oracle read that as a revision superseded without a prompt.
+
+- **Cause: the fuzzer's model, not the app.** In step 5 the restore answered,
+  and the fuzzer then reloaded the project through its model of `loadProject`,
+  which runs `cancel_loading`. That is a project switch: it moves the backend's
+  session on and ends the edit session the restore had carried. The trace shows
+  this as `link_status edit=false` after the swap. Done then answered
+  `NotEditing` with nothing uploaded, and the restored copy stayed as
+  un-uploaded work until step 8. The real Revert (`useRevertRevision.ts:231`
+  Start Editing, `:304` the restore, `:123` Done) restores through
+  `useRestoreRevision.ts:77`. It reconciles only through
+  `applySpeleoTreeReplacement` (`:103`), never through `loadProject` or
+  `cancel_loading`. The backend carries the session through the swap
+  (`speleodb_revisions.rs:529`, `restore` passed as the carry). So the app's
+  own Done uploads the Revert. This does not reproduce in the product on
+  411227301 or on `sg/core` 54db7c016 (the same lines). It is not X3 issue 1
+  either: the restore paths never went through `loadProject`. The same model
+  error sat at the other in-place reloads (a View, an Unwind, the
+  fast-forwards of Start Editing and Reload Project, Take the SpeleoDB
+  version).
+- **Is the later upload an overwrite?** No. The restore installs the older
+  revision as un-uploaded work on top of the tip it rode on, here the app's own
+  upload. Uploading it later (after a failed Done, from Retry, Save Changes or
+  Save and Close) drops exactly what the user asked the Revert to drop, and
+  only on the copy's own BASE. The oracle now excuses such an upload when its
+  parent is the BASE the restore rode on and every line it drops is one the
+  restored revision does not have either. Anything else is judged as before.
+  The product needs no change.
+- **Fuzzer fixes** (on the fuzzer's own branch, not here): every in-place
+  reload is modelled as `applySpeleoTreeReplacement` (file status, link status,
+  no `cancel_loading`). A Revert's restore is remembered until an upload of it
+  lands, and the overwrite check takes that claim with the two conditions
+  above. Its test (`a_later_upload_of_a_restored_revision_is_the_reverts`)
+  fails when the claim is ignored.
+- **Guards on this branch** (both pass on 411227301; there is no product bug
+  to fail first):
+  - `a_revert_keeps_its_edit_session_and_uploads_the_restored_revision`
+    (same-account loopback server: two uploads, Revert back one, the gate
+    stays open, Done releases with the restored survey uploaded). Injection:
+    the swap carrying no session fails it at the gate.
+  - The vitest case "calls neither loadProject nor cancel_loading" in
+    `useRestoreRevision.test.tsx`.
