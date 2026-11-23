@@ -30,6 +30,7 @@ import type { StationRename } from '../../types/ipc/StationRename';
 import { stationNameProblemMessage, stationRenameProblem } from '../../utils/nameValidation';
 import i18n from '../../i18n';
 import { Prose } from '../common/Prose';
+import { proseToPlain } from '../../utils/prose';
 import { useKeptProse, type KeptProse } from './keptStationProse';
 
 /** Which of a collision's two answers the user picked. */
@@ -321,13 +322,23 @@ export function CollisionRows({
       {collisions.map((collision, i) => {
         const answer = answers[i] ?? 'letter';
         const name = `${testIdPrefix}-collision-${i}`;
+        const legend = t('dialogs.keptStations.collision', { line: prose.line(collision.line_id), name: collision.name });
+        // A name a label gives (the group's, each radio's) is the plain
+        // sentence: computed from the pills, a browser spaces their words
+        // apart ("( Side / 0 , Station ID 40)").
         return (
-          <fieldset key={`${collision.line_id}:${collision.name}:${i}`} className="p-2 rounded border border-border space-y-1" data-testid={name}>
+          <fieldset
+            key={`${collision.line_id}:${collision.name}:${i}`}
+            className="p-2 rounded border border-border space-y-1"
+            aria-label={proseToPlain(legend)}
+            data-testid={name}
+          >
             <legend className="px-1 text-text-primary">
-              <Prose text={t('dialogs.keptStations.collision', { line: prose.line(collision.line_id), name: collision.name })} />
+              <Prose text={legend} />
             </legend>
             {(['letter', 'alternative'] as const).map((which) => {
               const suggestion = collision[which];
+              const text = collisionAnswerProse(suggestion, collision, subject, prose);
               return (
                 <label key={which} className="flex items-center gap-2 p-1 rounded hover:bg-background-50">
                   <input
@@ -337,12 +348,12 @@ export function CollisionRows({
                     checked={answer === which}
                     disabled={disabled}
                     onChange={() => onAnswer(i, which)}
+                    aria-label={proseToPlain(text)}
                     data-testid={`${name}-${which}`}
                   />
-                  {/* A sentence beside the radio: its names as pills, while the
-                      radio's accessible name stays the plain sentence. */}
+                  {/* A sentence beside the radio: its names as pills. */}
                   <span>
-                    <Prose text={collisionAnswerProse(suggestion, collision, subject, prose)} />
+                    <Prose text={text} />
                   </span>
                 </label>
               );

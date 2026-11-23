@@ -13,6 +13,7 @@ import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBl
 import { listNames } from '../../utils/listNames';
 import { EntityBlob } from '../common/EntityBlob';
 import { Prose } from '../common/Prose';
+import { proseToPlain } from '../../utils/prose';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
@@ -380,26 +381,30 @@ export default function UnmergeStationsDialog() {
   const otherLines = selected
     ? slots.filter((ref) => ref.line_id !== selected.line_id).map((ref) => prose.line(ref.line_id))
     : [];
-  /** A row's label: the line (a line pill), or for a line that keeps the
-   *  junction the lines that then come off together, as a sentence (V-1)
-   *  with its lines as pills (the radio's name stays the plain sentence). */
-  const rowLabel = (ref: StationRef, clicked: boolean): ReactNode => {
-    const line = labels.lineName(ref.line_id);
-    if (previews.get(ref.line_id)?.kept) {
-      const others = listNames(
-        slots.filter((o) => o.line_id !== ref.line_id).map((o) => prose.line(o.line_id)),
-        t,
-      );
-      const text = t(clicked ? 'dialogs.detachLine.togetherClicked' : 'dialogs.detachLine.together', {
-        line: prose.line(ref.line_id),
-        others,
-      });
+  /** A row's sentence, for a line that keeps the junction: the lines that
+   *  then come off together (V-1), as prose tokens; null for another line. */
+  const rowSentence = (ref: StationRef, clicked: boolean): string | null => {
+    if (!previews.get(ref.line_id)?.kept) return null;
+    const others = listNames(
+      slots.filter((o) => o.line_id !== ref.line_id).map((o) => prose.line(o.line_id)),
+      t,
+    );
+    return t(clicked ? 'dialogs.detachLine.togetherClicked' : 'dialogs.detachLine.together', {
+      line: prose.line(ref.line_id),
+      others,
+    });
+  };
+  /** A row's label: the line (a line pill), or its sentence with the lines
+   *  as pills (the radio is named by the plain sentence, see `CollisionRows`). */
+  const rowLabel = (ref: StationRef, clicked: boolean, sentence: string | null): ReactNode => {
+    if (sentence !== null) {
       return (
         <span>
-          <Prose text={text} />
+          <Prose text={sentence} />
         </span>
       );
     }
+    const line = labels.lineName(ref.line_id);
     return <EntityBlob entity="line" lineId={ref.line_id}>{clicked ? t('dialogs.detachLine.thisLine', { line }) : line}</EntityBlob>;
   };
 
@@ -504,6 +509,7 @@ export default function UnmergeStationsDialog() {
               <div className="space-y-2 max-h-56 overflow-y-auto border border-border rounded p-2">
                 {slots.map((ref, i) => {
                   const key = stationRefKey(ref);
+                  const sentence = rowSentence(ref, i === 0);
                   return (
                     <label key={key} className="flex items-center gap-2 text-sm p-1 rounded hover:bg-background-50">
                       <input
@@ -519,9 +525,10 @@ export default function UnmergeStationsDialog() {
                           setRestKeep(undefined);
                           setPickFailed(false);
                         }}
+                        {...(sentence !== null ? { 'aria-label': proseToPlain(sentence) } : {})}
                         data-testid={`unmerge-station-option-${ref.line_id}-${ref.station_index}`}
                       />
-                      {rowLabel(ref, i === 0)}
+                      {rowLabel(ref, i === 0, sentence)}
                     </label>
                   );
                 })}
