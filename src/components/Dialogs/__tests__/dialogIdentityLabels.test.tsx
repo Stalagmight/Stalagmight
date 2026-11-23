@@ -32,7 +32,7 @@ import DeleteShotChoiceDialog from '../DeleteShotChoiceDialog';
 import SwapCommentsDialog from '../SwapCommentsDialog';
 import ReverseLineDialog from '../ReverseLineDialog';
 import BulkDeleteDialog from '../BulkDeleteDialog';
-import { said } from './proseSentence';
+import { said as spoken } from './proseSentence';
 import { accessibleText } from '../../../test/accessibleText';
 
 const MAIN = 3;
@@ -149,7 +149,7 @@ describe('dialog identity labels', () => {
     });
     render(<UnmergeStationsDialog />);
     // The sentence draws its names as prose pills; it reads as it was written.
-    expect(said(await screen.findByTestId('unmerge-stations-naming'))).toBe(
+    expect(spoken(await screen.findByTestId('unmerge-stations-naming'))).toBe(
       'Side comes off: it gets back S1 (Station ID 9); Main Line keeps station M0.',
     );
     expectNoHandles();
