@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
-import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useProse } from '../../hooks/useProse';
 import { Button } from '../common/Button';
+import { Prose } from '../common/Prose';
 import { DialogWrapper } from './DialogWrapper';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import { SplitNameFields, useSplitNames } from './SplitNameFields';
@@ -23,7 +24,8 @@ import { setSource, trackDialogComplete } from '../../utils/telemetry';
 export default function BulkDeleteDialog() {
   const { closeDialog, dialogData, clearSelection, setSelection } = useUIStore();
   const { deleteShotRangeSplit, deleteShotRangeShift } = useProjectStore();
-  const labels = useIdentityLabels();
+  // The stations and the line the sentences name, as prose pills (RS-PROSE).
+  const prose = useProse();
 
   const lineId = dialogData.lineId as number | undefined;
   const startShotId = dialogData.startShotId as number | undefined;
@@ -59,7 +61,7 @@ export default function BulkDeleteDialog() {
       ? removedComments.filter((c: StationRef) => c.station_index > endPos)
       : removedComments;
   // Every station listed is on this one line, which the summary names.
-  const fmt = (s: StationRef) => labels.station(s);
+  const fmt = (s: StationRef) => prose.station(s);
   // The preview is the only source of the datum/comment/shift-blocked warnings,
   // so keep the destructive actions disabled until it resolves (loaded or
   // errored) - otherwise a fast click could confirm before the warning renders.
@@ -95,7 +97,7 @@ export default function BulkDeleteDialog() {
     startStationIndex !== undefined &&
     endStationIndex !== undefined &&
     lineId !== undefined
-      ? `Delete ${shotCount} shots (stations ${labels.station({ line_id: lineId, station_index: startStationIndex })} to ${labels.station({ line_id: lineId, station_index: endStationIndex })} in ${labels.lineName(lineId)}).`
+      ? `Delete ${shotCount} shots (stations ${prose.station({ line_id: lineId, station_index: startStationIndex })} to ${prose.station({ line_id: lineId, station_index: endStationIndex })} in ${prose.line(lineId)}).`
       : `Delete ${shotCount ?? 0} shots.`;
 
   const finish = (split: boolean) => {
@@ -161,7 +163,9 @@ export default function BulkDeleteDialog() {
       data-testid="bulk-delete-dialog"
     >
       <div className="space-y-4">
-        <p className="text-text-secondary">{summary}</p>
+        <p className="text-text-secondary" data-testid="bulk-delete-summary">
+          <Prose text={summary} />
+        </p>
         {isInterior && (
           <p className="text-text-secondary text-sm">
             These shots are in the middle of the line. Split keeps both ends in place; closing
@@ -196,16 +200,24 @@ export default function BulkDeleteDialog() {
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
             <p className="font-medium">Deleting these shots will remove anchored data.</p>
             {isInterior && removedDatums.length > 0 && (
-              <p>Zero datums (anchor the survey&apos;s real-world position) on {removedDatums.map(fmt).join(', ')}.</p>
+              <p data-testid="bulk-delete-datums">
+                Zero datums (anchor the survey&apos;s real-world position) on <Prose text={removedDatums.map(fmt).join(', ')} />.
+              </p>
             )}
             {splitComments.length > 0 && (
-              <p>Station comments on {splitComments.map(fmt).join(', ')}.</p>
+              <p data-testid="bulk-delete-split-comments">
+                Station comments on <Prose text={splitComments.map(fmt).join(', ')} />.
+              </p>
             )}
             {gapComments.length > 0 && (
-              <p>
-                {isInterior
-                  ? `Closing the gap also removes comments on ${gapComments.map(fmt).join(', ')} (splitting keeps them).`
-                  : `Station comments on ${gapComments.map(fmt).join(', ')}.`}
+              <p data-testid="bulk-delete-gap-comments">
+                <Prose
+                  text={
+                    isInterior
+                      ? `Closing the gap also removes comments on ${gapComments.map(fmt).join(', ')} (splitting keeps them).`
+                      : `Station comments on ${gapComments.map(fmt).join(', ')}.`
+                  }
+                />
               </p>
             )}
             <p>You can undo to restore them.</p>
@@ -223,7 +235,9 @@ export default function BulkDeleteDialog() {
               </ul>
             )}
             {!isInterior && removedDatums.length > 0 && (
-              <p className="mt-1">Blocking zero datum on {removedDatums.map(fmt).join(', ')}.</p>
+              <p className="mt-1" data-testid="bulk-delete-blocking-datums">
+                Blocking zero datum on <Prose text={removedDatums.map(fmt).join(', ')} />.
+              </p>
             )}
             {!isInterior && (
               <p className="mt-1">

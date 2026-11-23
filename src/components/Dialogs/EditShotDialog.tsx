@@ -6,12 +6,14 @@ import { normalizeAzimuth } from '../../utils/azimuth';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useProse } from '../../hooks/useProse';
+import { Prose } from '../common/Prose';
 
 export default function EditShotDialog() {
   const { closeDialog, dialogData } = useUIStore();
   const { updateShot, project, isShotFrozen } = useProjectStore();
-  const labels = useIdentityLabels();
+  // The shot the caption names, as a prose pill (RS-PROSE), like Draw Shot's `From:`.
+  const prose = useProse();
 
   const lineId = dialogData.lineId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;
@@ -160,7 +162,7 @@ export default function EditShotDialog() {
         )}
 
         <div className="text-sm text-text-secondary" data-testid="edit-shot-identity">
-          {lineId !== undefined && shotIndex >= 0 ? labels.shotAt(lineId, shotIndex, true) : ''}
+          {lineId !== undefined && shotIndex >= 0 ? <Prose text={prose.shotAt(lineId, shotIndex, true)} /> : null}
         </div>
 
         {frozen && (

@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '../../i18n';
 import { TOAST_DEDUP_WINDOW_MS, useUIStore } from '../../store/uiStore';
 import { notifyIdentityChanges } from '../identityNotice';
+import { proseToPlain } from '../prose';
 import { TOAST_KEYS } from '../toastKeys';
 import type { CommandResult } from '../../types/commands';
 
@@ -35,7 +36,8 @@ const notices = () =>
   useUIStore
     .getState()
     .toasts.filter((t) => t.key === TOAST_KEYS.STATION_IDENTITIES && !t.leaving)
-    .map((t) => t.message);
+    // The messages hold prose tokens (RS-PROSE); these read their plain words.
+    .map((t) => proseToPlain(t.message));
 
 beforeEach(() => {
   vi.useFakeTimers();

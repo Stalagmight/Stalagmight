@@ -7,6 +7,7 @@ import {
   waitForNoDialogs,
   type LineSeed,
 } from './helpers/app';
+import { expectSpoken, prosePillKinds } from './helpers/proseText';
 
 /**
  * E2E tests for bulk (contiguous-range) shot deletion (#95).
@@ -89,7 +90,10 @@ test.describe('Bulk delete dialog', () => {
     await openBulkDelete(page, interiorData(r));
 
     const dialog = page.getByTestId('bulk-delete-dialog');
-    await expect(dialog).toContainText('Delete 2 shots (stations 1 to 3 in Main Line).');
+    // The stations and the line are prose pills; the sentence reads as plain text wrote it.
+    const summary = page.getByTestId('bulk-delete-summary');
+    await expectSpoken(summary, 'Delete 2 shots (stations 1 to 3 in Main Line).', { exact: true });
+    expect(await prosePillKinds(summary)).toEqual(['station', 'station', 'line']);
 
     // Interior → split offered with two prefilled name inputs.
     await expect(page.getByTestId('split-name-a')).toHaveValue('Main Line A');
