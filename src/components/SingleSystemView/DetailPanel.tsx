@@ -743,6 +743,13 @@ function StationDetail({ station }: { station: Station }) {
             }
             testId="station-detail-line"
           />
+          {/* A loop end's Name and Station ID are the station it is shown
+              as; X, Y and Depth are its own point's (RS-FX6, P3-14). */}
+          {labels.shown(station.station_ref)?.loop_end && (
+            <p className="text-xs text-text-secondary" data-testid="station-detail-loop-end-position">
+              {t('detailPanel.station.loopEndPosition')}
+            </p>
+          )}
           <DetailRow label={t('detailPanel.labels.x')} value={`${formatFixed(displayStation.coordinates.x, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
           <DetailRow label={t('detailPanel.labels.y')} value={`${formatFixed(displayStation.coordinates.y, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
           <DetailRow label={t('detailPanel.labels.depth')} value={`${formatFixed(displayStation.coordinates.z, undefined, precision.depth)} ${t('common.units.meters')}`} />

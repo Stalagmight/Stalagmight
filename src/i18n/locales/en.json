@@ -2289,6 +2289,7 @@
       "recordComment": "Comment: {{comment}}",
       "loopEnd": "Loop closure end, shown as {{station}}",
       "loopEndOwn": "Its own station {{name}} (Station ID {{id}}) is hidden. Removing the closure brings it back.",
+      "loopEndPosition": "This end's own position:",
       "belongsTo": "{{name}} belongs to {{line}}."
     },
     "shot": {
