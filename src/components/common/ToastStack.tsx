@@ -38,6 +38,8 @@ import {
 } from '../../utils/toastCapacity';
 import { UI_SCALE_EVENT } from '../../utils/uiScale';
 import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, CloseIcon, InfoIcon } from './icons';
+import { Prose } from './Prose';
+import { proseToPlain } from '../../utils/prose';
 
 // ---------------------------------------------------------------------------
 // Timing. One place, named, so the lifecycle is readable and tunable.
@@ -282,7 +284,8 @@ function useLiveRegionMessages(items: readonly ToastItem[]): readonly Announceme
     const unseen = items.filter((item) => seen.get(item.id) !== item.revision);
     if (unseen.length === 0) return;
     for (const item of unseen) seen.set(item.id, item.revision);
-    setLines(unseen.map((item) => ({ key: `${item.id}:${item.revision}`, message: item.message })));
+    // Live regions read the plain words of a message that names stations as prose pills (RS-PROSE).
+    setLines(unseen.map((item) => ({ key: `${item.id}:${item.revision}`, message: proseToPlain(item.message) })));
   });
   return lines;
 }
@@ -765,7 +768,7 @@ export function ToastStack() {
               paused={paused}
               reducedMotion={reducedMotion}
               measureRef={attach}
-              dismissLabel={t('common.toast.dismiss', { message: item.message })}
+              dismissLabel={t('common.toast.dismiss', { message: proseToPlain(item.message) })}
               onDismiss={() => dismissToast(item.id)}
             />
           ))}
@@ -868,7 +871,7 @@ function Toast({
         <Icon size={16} className={`shrink-0 mt-0.5 ${style.icon}`} />
         {/* aria-hidden: the live regions above already announce this text. */}
         <span className="text-text-primary text-sm leading-5" aria-hidden="true">
-          {item.message}
+          <Prose text={item.message} />
         </span>
         {/* The one part of the stack that opts back INTO pointer events, and only
             while it is visible: the container is click-through so a toast never
