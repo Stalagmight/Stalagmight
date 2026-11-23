@@ -45,16 +45,18 @@
 
 use std::collections::BTreeMap;
 
+use super::robustness_kit::Targets;
 use super::robustness_kit::{
     build_project, differences, observe, panic_text, random_shot, read_targets, Observed, Rng,
     COLORS, GEOMETRY_EXTREME,
 };
 use super::AppState;
 use crate::core::{Command, CommandResult};
+use crate::models::survey::Project;
 use crate::models::{
     ClosureStrategy, CombineLinesOptions, CombinePick, Coordinates, GpsCoordinates, LineId,
-    LineUpdates, ShotData, ShotId, ShotKind, ShotUpdates, SplitAt, SplitLineOptions, StationRef,
-    FEATURE_ID_STRIDE,
+    LineUpdates, ShotData, ShotId, ShotKind, ShotUpdates, SplitAt, SplitLineOptions, StationId,
+    StationRef, StationRename, FEATURE_ID_STRIDE,
 };
 use crate::test_helpers::isolated_config;
 
@@ -133,6 +135,85 @@ fn hostile_string(rng: &mut Rng) -> String {
         5 => "\u{fffd}\u{202e}\u{200b}".repeat(64),
         _ => "'; DROP TABLE shots; --".to_string(),
     }
+}
+
+/// A keep the type admits and no dialog offers (RS 4.1, 4.2, 5.2): the
+/// extremes, the station counter, an archived record's Station ID, a live
+/// station that is (most likely) neither end.
+fn hostile_keep(rng: &mut Rng, project: &Project) -> StationId {
+    let live = project.topology().stations().to_vec();
+    let record = project
+        .stations
+        .values()
+        .flat_map(|s| s.archived.iter().map(|r| r.id))
+        .next();
+    match rng.below(6) {
+        0 => StationId::MAX,
+        1 => 0,
+        2 => project.counters.next_station_id,
+        3 => record.unwrap_or(StationId::MAX - 1),
+        4 => live.last().copied().unwrap_or(1),
+        _ => live.get(live.len() / 2).copied().unwrap_or(2),
+    }
+}
+
+/// Renames the type admits and no dialog sends (RS 4.1 step 6): unknown and
+/// archived Station IDs, hostile names, a name another station already
+/// shows, the same Station ID twice.
+fn hostile_renames(rng: &mut Rng, project: &Project) -> Option<Vec<StationRename>> {
+    if rng.chance(10) {
+        return None;
+    }
+    let live = project.topology().stations().to_vec();
+    let record = project
+        .stations
+        .values()
+        .flat_map(|s| s.archived.iter().map(|r| r.id))
+        .next();
+    let mut out: Vec<StationRename> = Vec::new();
+    for _ in 0..1 + rng.below(3) {
+        let station_id = match rng.below(5) {
+            0 => StationId::MAX,
+            1 => record.unwrap_or(StationId::MAX - 1),
+            2 => project.counters.next_station_id,
+            _ => live.get(rng.below(live.len().max(1))).copied().unwrap_or(0),
+        };
+        let name = match rng.below(4) {
+            0 => hostile_string(rng),
+            1 => live
+                .get(rng.below(live.len().max(1)))
+                .and_then(|s| project.shown_name(*s))
+                .unwrap_or_default()
+                .to_string(),
+            2 => String::new(),
+            _ => format!("ren-{}", rng.range(0, 99)),
+        };
+        out.push(StationRename { station_id, name });
+    }
+    if rng.chance(25) {
+        let twice = StationRename {
+            station_id: out[0].station_id,
+            name: format!("twice-{}", rng.range(0, 99)),
+        };
+        out.push(twice);
+    }
+    Some(out)
+}
+
+/// Two live slots, on different lines when there are two lines.
+fn live_pair(rng: &mut Rng, targets: &Targets) -> Option<(StationRef, StationRef)> {
+    let slots = &targets.stations;
+    if slots.is_empty() {
+        return None;
+    }
+    let (la, ia) = slots[rng.below(slots.len())];
+    let others: Vec<&(LineId, u32)> = slots.iter().filter(|(l, _)| *l != la).collect();
+    let (lb, ib) = if others.is_empty() {
+        slots[rng.below(slots.len())]
+    } else {
+        *others[rng.below(others.len())]
+    };
+    Some((StationRef::new(la, ia), StationRef::new(lb, ib)))
 }
 
 /// A shot whose every field is drawn from the hostile pool. The uuid is left
@@ -247,7 +328,7 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
     let length = u32::try_from(live_shots.len()).unwrap_or(u32::MAX);
     let index = hostile_station_index(rng, length);
 
-    let call = match rng.below(26) {
+    let call = match rng.below(30) {
         // ---- the hand-written recipes ----
         0 => Move {
             label: format!("execute_delete_shot_range_shift(s={line_id}, {shot_id}..{shot_id})"),
@@ -546,6 +627,90 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
                 result: state.execute(Command::Batch {
                     commands: vec![valid, hostile],
                     label: rng.chance(50).then(|| hostile_string(rng)),
+                }),
+            }
+        }
+        // ---- RS: the dialogs' answers, hostile, on live slots ----
+        26 => {
+            let project = state.get_project_state()?;
+            let (a, b) = live_pair(rng, &targets)?;
+            let keep = rng.chance(70).then(|| hostile_keep(rng, &project));
+            let renames = hostile_renames(rng, &project);
+            Move {
+                label: format!("MergeStations({a}, {b}, keep={keep:?}, hostile renames)"),
+                result: state.execute(Command::MergeStations {
+                    station_a: a,
+                    station_b: b,
+                    keep,
+                    renames,
+                }),
+            }
+        }
+        27 => {
+            let project = state.get_project_state()?;
+            let topology = project.topology();
+            let junctions: Vec<_> = topology
+                .stations()
+                .iter()
+                .copied()
+                .filter(|&s| topology.is_junction(s))
+                .collect();
+            let junction = *junctions.get(rng.below(junctions.len().max(1)))?;
+            let slots = topology.slots_of(junction).to_vec();
+            let slot = slots[rng.below(slots.len())];
+            let rest_keep = rng.chance(70).then(|| hostile_keep(rng, &project));
+            let renames = hostile_renames(rng, &project);
+            if rng.chance(50) {
+                Move {
+                    label: format!("UnmergeStations({slot}, rest_keep={rest_keep:?}, hostile)"),
+                    result: state.execute(Command::UnmergeStations {
+                        station_ref: slot,
+                        renames,
+                        rest_keep,
+                    }),
+                }
+            } else {
+                let other = slots[rng.below(slots.len())];
+                Move {
+                    label: format!(
+                        "UnmergeStationPair({other}, {slot}, rest_keep={rest_keep:?}, hostile)"
+                    ),
+                    result: state.execute(Command::UnmergeStationPair {
+                        station_a: other,
+                        station_b: slot,
+                        renames,
+                        rest_keep,
+                    }),
+                }
+            }
+        }
+        28 => {
+            let project = state.get_project_state()?;
+            let (a, b) = live_pair(rng, &targets)?;
+            let keep = rng.chance(70).then(|| hostile_keep(rng, &project));
+            let renames = hostile_renames(rng, &project);
+            Move {
+                label: format!("CreateLoopClosure({a}, {b}, keep={keep:?}, hostile renames)"),
+                result: state.execute(Command::CreateLoopClosure {
+                    station_a: a,
+                    station_b: b,
+                    closure_strategy: ClosureStrategy::Batch,
+                    keep,
+                    renames,
+                }),
+            }
+        }
+        29 => {
+            let project = state.get_project_state()?;
+            let id = *targets
+                .closures
+                .get(rng.below(targets.closures.len().max(1)))?;
+            let renames = hostile_renames(rng, &project);
+            Move {
+                label: format!("RemoveLoopClosure({id}, hostile renames)"),
+                result: state.execute(Command::RemoveLoopClosure {
+                    closure_id: id,
+                    renames,
                 }),
             }
         }

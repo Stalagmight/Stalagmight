@@ -58,9 +58,39 @@ use super::robustness_kit::{
 };
 use super::AppState;
 use crate::core::Command;
-use crate::models::{LineId, ShotData, ShotUpdates, StationRef};
+use crate::models::{LineId, ShotData, ShotUpdates, StationId, StationRef, StationRename};
 use crate::persistence::stalx_v2::{self, DecodeOptions, Fingerprint};
 use crate::test_helpers::isolated_config;
+
+/// The Merge dialog's answers for `a` and `b` as its preview gives them now:
+/// one of the keeps it offers, and that keep's suggested renames (RS 4.1).
+/// `(None, None)` when the preview offers no merge.
+fn dialog_answers(
+    state: &AppState,
+    a: StationRef,
+    b: StationRef,
+    rng: &mut Rng,
+) -> (Option<StationId>, Option<Vec<StationRename>>) {
+    let Some(preview) = state
+        .check_merge_connectivity(a, b)
+        .ok()
+        .and_then(|c| c.merge_preview)
+    else {
+        return (None, None);
+    };
+    let Some(choice) = preview.keeps.get(rng.below(preview.keeps.len().max(1))) else {
+        return (Some(preview.default_keep), Some(Vec::new()));
+    };
+    let renames = choice
+        .collisions
+        .iter()
+        .map(|c| StationRename {
+            station_id: c.letter.station.id,
+            name: c.letter.to.clone(),
+        })
+        .collect();
+    (Some(choice.keep), Some(renames))
+}
 
 // ===========================================================================
 // What a thread was doing
@@ -322,11 +352,22 @@ fn worker(
                         .collect();
                     if !others.is_empty() {
                         let b = others[rng.below(others.len())];
+                        let (station_a, station_b) =
+                            (StationRef::new(a.0, a.1), StationRef::new(b.0, b.1));
+                        // Half the merges answer the Merge dialog (RS 4.1):
+                        // a keep and the renames its preview suggests, read
+                        // before the command runs, so another thread may
+                        // have made them stale (refused, or still valid).
+                        let (keep, renames) = if rng.chance(50) {
+                            dialog_answers(&state, station_a, station_b, &mut rng)
+                        } else {
+                            (None, None)
+                        };
                         state.execute(Command::MergeStations {
-                            station_a: StationRef::new(a.0, a.1),
-                            station_b: StationRef::new(b.0, b.1),
-                            keep: None,
-                            renames: None,
+                            station_a,
+                            station_b,
+                            keep,
+                            renames,
                         });
                     }
                 }
