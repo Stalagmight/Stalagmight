@@ -1204,9 +1204,15 @@ test.describe('Detail Panel Links', () => {
       await selectShot(page, mainLineId, shotIds[0]!);
       // The shot's ends are named, never `line:index`; the aria-label adds the line.
       await expect(page.getByTestId('shot-detail-label')).toHaveText('Shot:7 \u2192 8');
-      await expect(page.getByTestId(`station-${mainLineId}-0-link`)).toHaveText('7');
-      await expect(page.getByTestId(`station-${mainLineId}-0-link`)).toHaveAttribute('aria-label', 'Select station Main Tunnel / 7');
-      await expect(page.getByTestId(`station-${mainLineId}-1-link`)).toHaveText('8');
+      // At the Full level the pill ends with the Station ID (the mock's
+      // lineId * 100000 + index), which the accessible name reads too.
+      await expect(page.getByTestId(`station-${mainLineId}-0-link`).locator('.sh-lpill-main')).toHaveText('7');
+      await expect(page.getByTestId(`station-${mainLineId}-0-link-station-id`)).toHaveText(String(mainLineId * 100_000));
+      await expect(page.getByTestId(`station-${mainLineId}-0-link`)).toHaveAttribute(
+        'aria-label',
+        `Select station Main Tunnel / 7, Station ID ${mainLineId * 100_000}`,
+      );
+      await expect(page.getByTestId(`station-${mainLineId}-1-link`).locator('.sh-lpill-main')).toHaveText('8');
 
       await selectStation(page, mainLineId, 1);
       // Each line shows the junction by its own name (I-3): Main Tunnel by
@@ -1314,13 +1320,13 @@ test.describe('Detail Panel Links', () => {
       // The start station is station 0, named "0" (seeded from its index).
       const startLink = page.getByTestId(`station-${mainLineId}-0-link`);
       await expect(startLink).toBeVisible();
-      await expect(startLink).toHaveText('0');
-      await expect(startLink).toHaveAttribute('aria-label', 'Select station Main Tunnel / 0');
+      await expect(startLink.locator('.sh-lpill-main')).toHaveText('0');
+      await expect(startLink).toHaveAttribute('aria-label', `Select station Main Tunnel / 0, Station ID ${mainLineId * 100_000}`);
 
       // The end station is station 1, named "1".
       const endLink = page.getByTestId(`station-${mainLineId}-1-link`);
       await expect(endLink).toBeVisible();
-      await expect(endLink).toHaveText('1');
+      await expect(endLink.locator('.sh-lpill-main')).toHaveText('1');
     });
 
     test('verifies station at index 0 has no previous shot', async ({ page }) => {

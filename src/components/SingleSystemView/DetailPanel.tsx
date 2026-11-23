@@ -565,7 +565,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                         })}
                         data-testid={warningOpenShotTestId(warning)}
                       >
-                        <EntityBlob entity="shot">{shot}</EntityBlob>
+                        <EntityBlob entity="shot" lineId={warning.lineId}>{shot}</EntityBlob>
                       </button>
                       {' '}
                       {body}
@@ -580,7 +580,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
               )}
             </div>
             {showPills && (
-              <div className="mt-1 flex items-center gap-1.5 flex-wrap clear-both">
+              <div className="mt-1 flex items-center gap-1.5 flex-wrap clear-both text-sm">
                 <DetailLink
                   type="line"
                   target={{ lineId: warning.lineId }}

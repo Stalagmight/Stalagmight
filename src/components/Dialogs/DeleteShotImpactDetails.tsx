@@ -1,16 +1,14 @@
 import type { DeleteShotImpact, DeleteShotRangeImpact } from '../../types/commands';
 import type { StationRef } from '../../types/project';
-import { EntityBlob } from '../common/EntityBlob';
-import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { StationBlob } from '../common/EntityBlob';
 
 /**
- * A station as the entity pill (Full level) or plain text: `Main Line / 17`.
+ * A station as the line pill (Full level) or plain text: `Main Line / 17`.
  * Every station named here exists before the delete, so the open project
  * names it.
  */
 function StationRefBlob({ station }: { station: StationRef }) {
-  const labels = useIdentityLabels();
-  return <EntityBlob entity="station">{labels.station(station, true)}</EntityBlob>;
+  return <StationBlob station={station} withLine />;
 }
 
 function Pair({ a, b }: { a: StationRef; b: StationRef }) {

@@ -1626,10 +1626,10 @@ button.sh-tool.sh-tool--active {
   border-color: color-mix(in oklab, var(--o) 72%, transparent);
 }
 
-/* Entity-link pill: a tinted background + dim, entity-tinted border (--o set to
-   var(--sh-<entity>)), matching the icon-set legend chips. The full `border`
-   shorthand is required because <button> doesn't get border-style: solid here,
-   so a width-only utility renders nothing. The entity symbol sits inside. */
+/* Neutral pill (the data table's raw-table name): a tinted background + dim
+   border in --o. The full `border` shorthand is required because <button>
+   doesn't get border-style: solid here, so a width-only utility renders
+   nothing. Line link pills are `.sh-lpill`, below. */
 .sh-pill {
   background: color-mix(in oklab, var(--o) 14%, var(--cc-panel));
   border: 1px solid color-mix(in oklab, var(--o) 30%, var(--cc-border));
@@ -1683,35 +1683,87 @@ button.sh-apill {
      only sets width). The element pills work for the same reason. */
   border: 1px solid var(--cc-accent);
 }
-/* The line context (a line name) after a divider, at the SAME font/size as the
-   pill text (just dimmer). The divider is a SHORT centered vertical bar
-   (pseudo-element), not a full-height border, so it doesn't span the whole
-   line. Never an id: positional handles are not shown. */
-.sh-pill-id {
-  position: relative;
-  margin-left: 0;
-  /* Balanced gap around the divider: flex gap (~4px) + divider left (1px) ≈ 5px
-     before, padding-left - divider ≈ 5px after. */
-  padding-left: 7px;
-  padding-right: 5px;
-  text-align: center;
+/* Line link pill (DetailLink, EntityBlob; src/components/common/LinePill.tsx).
+   Every colour is a custom property set inline from src/theme/pillColors.ts,
+   derived from the line's own colour and the theme so the text keeps 7:1 and
+   the muted parts 4.5:1 whatever colour the line has. The main part takes the
+   surrounding text size; the context and the Station ID are smaller. Children
+   share one baseline (the smaller context sits on the name's baseline); the
+   dots are centred, and the Station ID is lifted off the baseline by a
+   relative offset so it never changes the pill's height. */
+.sh-lpill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3em;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0.18em 0.6em 0.18em 0.5em;
+  border: 1px solid var(--pill-border);
+  border-radius: 9999px;
+  background: var(--pill-bg);
+  color: var(--pill-text);
+  line-height: 1.15;
+  white-space: nowrap;
+  vertical-align: middle;
+  text-align: left;
+}
+.sh-lpill:hover:not([aria-disabled='true']) {
+  background: var(--pill-bg-hover);
+  border-color: var(--pill-border-hover);
+}
+.sh-lpill--missing {
+  border-style: dashed;
+}
+/* The line colour, as the Sections panel's row dot draws it, sized for the
+   pill; the ring is drawn only when the colour alone is too close to the fill. */
+.sh-lpill-dot {
+  flex: none;
+  align-self: center;
+  width: 0.6em;
+  height: 0.6em;
+  border-radius: 9999px;
+  background: var(--pill-dot);
+  box-shadow: 0 0 0 1px var(--pill-ring, transparent);
+}
+.sh-lpill-warn {
+  flex: none;
+  align-self: center;
+  color: var(--pill-warning);
+  font-size: 0.85em;
   line-height: 1;
-  font-weight: 600;
-  color: color-mix(in oklab, var(--o) 55%, var(--cc-text-secondary));
 }
-.sh-pill-id::before {
-  content: "";
-  position: absolute;
-  left: 1px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 1px;
-  height: 0.8em;
-  background: color-mix(in oklab, var(--o) 30%, var(--cc-border));
+.sh-lpill-ctx {
+  flex: none;
+  font-size: 0.857em;
+  color: var(--pill-muted);
 }
-/* Cap-height glyphs sit high in their line box; nudge the context text down a
-   hair to optically center it. The divider (on .sh-pill-id) stays centered. */
-.sh-pill-nudge {
+.sh-lpill-main {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A station's home-line mark: a smaller dot right after its name. Inline in a
+   shot's two ends, a flex item after a station's name. */
+.sh-lpill-mark {
+  display: inline-block;
+  flex: none;
+  align-self: center;
+  width: 0.42em;
+  height: 0.42em;
+  margin-left: 0.12em;
+  border-radius: 9999px;
+  vertical-align: 0.12em;
+  background: var(--mark-dot);
+  box-shadow: 0 0 0 1px var(--mark-ring, transparent);
+}
+.sh-lpill-sid {
+  flex: none;
   position: relative;
-  top: 1px;
+  top: -0.6em;
+  margin-left: -0.12em;
+  font-size: 0.7em;
+  line-height: 1;
+  color: var(--pill-muted);
+  font-variant-numeric: tabular-nums;
+  vertical-align: baseline;
 }

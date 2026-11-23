@@ -6,7 +6,7 @@ import { getErrorMessage } from '../../utils/ipc';
 import { notifyRemovedClosures } from '../../utils/closureRemovalToast';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
-import { EntityBlob } from '../common/EntityBlob';
+import { StationBlob } from '../common/EntityBlob';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef } from '../../types/project';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
@@ -25,7 +25,6 @@ const MOVE_SAID_FROM_M = 0.01;
 export default function MergeDialog() {
   const { closeDialog, dialogData, clearMergeStations } = useUIStore();
   const { mergeStations, executeBatch } = useProjectStore();
-  const labels = useIdentityLabels();
 
   const stationA = dialogData.stationA as StationRef | undefined;
   const stationB = dialogData.stationB as StationRef | undefined;
@@ -96,13 +95,13 @@ export default function MergeDialog() {
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station A:</span>
             <span className="inline-flex items-center gap-1.5">
-              <EntityBlob entity="station">{labels.station(stationA, true)}</EntityBlob>
+              <StationBlob station={stationA} withLine />
             </span>
           </div>
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station B:</span>
             <span className="inline-flex items-center gap-1.5">
-              <EntityBlob entity="station">{labels.station(stationB, true)}</EntityBlob>
+              <StationBlob station={stationB} withLine />
             </span>
           </div>
         </div>

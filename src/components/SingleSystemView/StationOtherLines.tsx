@@ -118,6 +118,7 @@ export function StationOtherLines({ station }: { station: Station }) {
                     displayText={line}
                     fullText={labels.station(ref, true)}
                     pillLabel={line}
+                    stationIdShown={false}
                     onSelect={() => {
                       setSource('detail-panel');
                       setSelection({ type: 'station', stationRef: { line_id: ref.line_id, station_index: ref.station_index } });

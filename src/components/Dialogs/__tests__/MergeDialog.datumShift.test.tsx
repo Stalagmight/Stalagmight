@@ -60,8 +60,9 @@ describe('MergeDialog datum shift (#741)', () => {
 
   it('names both stations with their lines, never the positional handles', () => {
     render(<MergeDialog />);
-    expect(screen.getByText('Upstream / 17')).toBeInTheDocument();
-    expect(screen.getByText('Second entrance / B4')).toBeInTheDocument();
+    // Full highlighting: line pills, the line as the muted context.
+    expect(document.body.textContent).toContain('Upstream: 17');
+    expect(document.body.textContent).toContain('Second entrance: B4');
     expect(document.body.textContent).not.toMatch(/\d+:\d+|Line \d/);
   });
 

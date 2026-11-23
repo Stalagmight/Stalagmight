@@ -75,6 +75,7 @@ vi.mock('../../common/Button', () => ({
 
 vi.mock('../../common/EntityBlob', () => ({
   EntityBlob: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
+  StationBlob: () => <span />,
 }));
 
 import DrawShotDialog from '../DrawShotDialog';

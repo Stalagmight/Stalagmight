@@ -7,7 +7,7 @@ import { useUIStore, type Selection } from '../../store/uiStore';
 import { notifyIfFileReadOnly, useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useShallow } from 'zustand/react/shallow';
 import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
-import { EntityBlob } from '../common/EntityBlob';
+import { EntityBlob, StationBlob } from '../common/EntityBlob';
 import { ChevronDownIcon, ExpandIcon } from '../common/icons';
 import type { ProjectWarning } from '../../types/commands';
 import { lineDisplayName } from '../../utils/stationIdentity';
@@ -1223,8 +1223,8 @@ function ProjectDataTable({ lines }: DataTableProps) {
           title={labels.shotAt(selectedLineId, shotIndex, true)}
           data-testid={`data-table-shot-row-label-${selectedLineId}-${shot.id}`}
         >
-          <EntityBlob entity="shot" className="min-w-0 max-w-full">
-            <span className="truncate">{labels.shotAt(selectedLineId, shotIndex)}</span>
+          <EntityBlob entity="shot" lineId={selectedLineId} className="min-w-0 max-w-full">
+            {labels.shotAt(selectedLineId, shotIndex)}
           </EntityBlob>
         </span>
       ) : (
@@ -1419,9 +1419,7 @@ function ProjectDataTable({ lines }: DataTableProps) {
         title={labels.station(station.station_ref, true)}
         data-testid={`data-table-station-row-label-${station.station_ref.line_id}-${station.station_ref.station_index}`}
       >
-        <EntityBlob entity="station" className="min-w-0 max-w-full">
-          <span className="truncate">{labels.station(station.station_ref)}</span>
-        </EntityBlob>
+        <StationBlob station={station.station_ref} className="min-w-0 max-w-full" />
       </span>
     ),
     [triggerCenterOnStation, labels]
@@ -1686,11 +1684,13 @@ function ProjectDataTable({ lines }: DataTableProps) {
               onHoverOption={handleLineHover}
               onHoverTrigger={(over) => handleLineHover(over ? String(selectedLine.id) : null)}
               renderTrigger={({ open }) => (
-                <EntityBlob entity="line" className="min-w-0 max-w-full">
-                  <span className="truncate">
-                    {lineDisplayName(selectedLine.name)}
-                  </span>
-                  <PillChevron open={open} testId="data-table-line-menu" />
+                <EntityBlob
+                  entity="line"
+                  lineId={selectedLine.id}
+                  className="min-w-0 max-w-full"
+                  trailing={<PillChevron open={open} testId="data-table-line-menu" />}
+                >
+                  {lineDisplayName(selectedLine.name)}
                 </EntityBlob>
               )}
             />
