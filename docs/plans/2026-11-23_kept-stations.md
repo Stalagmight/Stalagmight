@@ -764,5 +764,7 @@ or the code disagreed, each with its reason.
   details list records where they listed aliases; the store's merge, detach
   and closure actions and the batch commands accept the answers. The e2e
   mock models kept stations (a merge's `keep`, renames, records, foreign
-  slots) and closure archives, so Playwright specs that asserted U1's
-  per-line junction names need RS-UI's update.
+  slots) and closure archives. Of the Playwright specs that touch merges,
+  closures and station names (nine files), the three tests that asserted
+  U1's per-line junction names now read the kept name on both lines; the
+  rest of the Playwright suite was not run here.
