@@ -1488,7 +1488,7 @@ fn merge_then_detach(
     if !detached.sweep.is_empty() || !detached.identities.is_empty() {
         return Ok(false);
     }
-    if before.stations.get(&x).is_none() {
+    if !before.stations.contains_key(&x) {
         return Ok(false);
     }
     if chains(&copy) != chains(before) {

@@ -204,7 +204,7 @@ fn detaching_the_kept_line_gives_the_rest_the_whole_archived_junction() {
         p.clone().detach_line(y, ly, &[], Some(r)),
         Err(super::OpError::InvalidKeep(id)) if id == r
     ));
-    let mut q = p.clone();
+    let mut q = p;
     let out = ok(q.detach_line(y, ly, &[], None));
     assert_eq!(out.value.new_station, x);
     assert_valid(&q);
@@ -368,7 +368,7 @@ fn record_helpers_keep_order_and_owners() {
         [(10, None), (30, Some(10))]
     );
     assert_eq!(taken.archived, vec![rec(40, None)]);
-    let mut alone = s.clone();
+    let mut alone = s;
     alone.take_record(10).unwrap();
     assert_eq!(
         alone

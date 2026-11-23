@@ -5,6 +5,7 @@
 //! repaired by salvage) in linear time; an earlier version 2 file's records
 //! are all put under their station's own identity. Fully synthetic data.
 
+use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
@@ -211,9 +212,7 @@ fn a_long_owner_cycle_is_refused_without_hanging() {
         if i > 0 {
             records.push(',');
         }
-        records.push_str(&format!(
-            "{{\"id\":{id},\"name\":\"r{i}\",\"into\":{into}}}"
-        ));
+        write!(records, "{{\"id\":{id},\"name\":\"r{i}\",\"into\":{into}}}").unwrap();
     }
     let text = format!(
         "{{\"format\":\"stalx\",\"version\":2,\"solver\":1,{REQUIRES},\n\
