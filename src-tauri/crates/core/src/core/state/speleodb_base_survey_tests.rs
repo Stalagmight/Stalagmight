@@ -1164,3 +1164,81 @@ fn resume_editing_on_a_copy_behind_downloads_the_newer_revision_first() {
         assert!(!state.edit_enabled(), "still read-only");
     });
 }
+
+/// The `requires` text of every file this build writes (plan 2026-11-23, RS
+/// 8.1); a version 2 file without it was written by an earlier build.
+const KEPT_STATIONS: &str = "\"requires\":[\"archived-stations\"]";
+
+/// [`revision`] as a build before the kept-stations rules wrote it: the same
+/// body without the `archived-stations` feature (RS 8.2).
+fn earlier_revision(endpoint: &str) -> Vec<u8> {
+    let text = String::from_utf8(revision(endpoint, None)).expect("utf-8");
+    assert_eq!(text.matches(KEPT_STATIONS).count(), 1, "{text}");
+    text.replacen(KEPT_STATIONS, "\"requires\":[]", 1)
+        .into_bytes()
+}
+
+fn has_kept_stations(bytes: &[u8]) -> bool {
+    String::from_utf8_lossy(bytes).contains(KEPT_STATIONS)
+}
+
+/// A BASE revision an earlier build wrote is converted on install (RS 8.2),
+/// and the digest recorded is the converted copy's, as for a 0.6.0 revision:
+/// the conversion is not un-uploaded work. A lost edit reopens clean, an edit
+/// taken back counts as clean, and the upload of a real edit carries the
+/// feature (RS 8.1).
+///
+/// Injection: record no digest for a converted install (`cache_bytes`
+/// returning early when `self.original` is `None`) and the install leaves the
+/// copy without one, so every lost edit would be taken at its word.
+#[test]
+fn an_earlier_base_revision_installs_converted_with_its_digest() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
+        let repo = Arc::new(Mutex::new(Repo::default()));
+        let endpoint = server(Arc::clone(&repo), None);
+        repo.lock()
+            .expect("repo")
+            .push(BASE, earlier_revision(&endpoint));
+        let dest = cache_path_in(temp.path(), ID);
+
+        let state = open_for_editing(&endpoint, &dest);
+        let installed = std::fs::read(&dest).expect("the copy");
+        assert!(has_kept_stations(&installed), "converted on install");
+        let digest = digest_on_disk(&dest).expect("the BASE digest is recorded");
+        assert_eq!(
+            Some(digest),
+            stalx_v2::survey_digest(&installed, BASE).ok(),
+            "of the converted copy"
+        );
+
+        // An edit lost in a crash: the copy reopens clean.
+        set_elevation(&state, Some(12.5));
+        assert!(raw_mark(&dest));
+        drop(state);
+        let state = signed_in(&endpoint);
+        assert!(!listed_unpushed(&state));
+        assert!(state.open_project(dest.clone()).success);
+        assert!(!open_link(&state).has_unpushed_edits, "opens clean");
+        drop(state);
+
+        // An edit taken back with Undo and saved counts as clean.
+        let state = open_for_editing(&endpoint, &dest);
+        set_elevation(&state, Some(12.5));
+        save(&state);
+        assert!(state.undo().success);
+        assert_eq!(save(&state).speleodb_unpushed_cleared, Some(true));
+        assert!(!open_link(&state).has_unpushed_edits);
+
+        // A real edit uploads the converted survey with the feature.
+        set_elevation(&state, Some(20.0));
+        let pushed = state
+            .speleodb_push_only(Some("Synthetic push".to_owned()))
+            .expect("push");
+        assert!(matches!(pushed, PushResult::Pushed { .. }), "{pushed:?}");
+        let repo = repo.lock().expect("repo");
+        assert_eq!(repo.uploads, 1);
+        assert!(has_kept_stations(&repo.files[PUSHED]), "the upload");
+    });
+}

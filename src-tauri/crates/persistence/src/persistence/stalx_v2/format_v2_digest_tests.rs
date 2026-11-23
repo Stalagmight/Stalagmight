@@ -1,13 +1,13 @@
 //! The survey digest (`local.speleodb.base_survey`): what it covers, what it
 //! leaves out, and that it is bound to the BASE revision it was taken for.
 
-use super::test_helpers::{generate, history, text_of, Rng, SMALL};
+use super::test_helpers::{generate, history, text_of, Rng, REQUIRES, SMALL};
 use super::types::{History, LocalSync, SpeleoDbLink};
 use super::{
     decode, encode, probe_bytes, rewrite_local, survey_digest, DecodeOptions, EncodeError, Extras,
     Mode, PushOptions, RawJson,
 };
-use crate::models::survey::Project;
+use crate::models::survey::{ArchivedStation, ClosureEnd, Project};
 use crate::models::UndoMode;
 
 const BASE: &str = "3a7bd3e2360a3d29eea436fcfb7e44c735d117c4";
@@ -149,6 +149,93 @@ fn every_survey_change_changes_the_digest() {
         .top
         .push(("x_newer".to_string(), RawJson::parse("[1,2]").unwrap()));
     changed("a newer build's survey member", &p, &unknown);
+}
+
+/// The kept-stations content (plan 2026-11-23, RS) is survey content: an
+/// archived station (a merge put it away; Detach Line from Station brings it
+/// back with its name and comment), a loop closure's archived end, and the
+/// `archived-stations` feature (a file without it is read through the
+/// load-time upgrade, RS 8.2) ride in `stations`, `closures` and `requires`,
+/// which the digest covers. A copy that differs from BASE in any of them holds
+/// work to upload.
+#[test]
+fn every_kept_station_change_changes_the_digest() {
+    // A generated survey with a loop closure.
+    let (p, extras) = (0..64)
+        .map(linked)
+        .find(|(p, _)| !p.closures.is_empty())
+        .unwrap();
+    let digest = digest_of(&p, &extras);
+
+    // A history record (no lines) on a junction with no record of its own.
+    let host = *p
+        .stations
+        .iter()
+        .find(|(id, s)| s.archived.is_empty() && p.topology().lines_of(**id).len() > 1)
+        .unwrap()
+        .0;
+    let mut archived = p.clone();
+    let id = archived.mint_station_id().unwrap();
+    archived
+        .station_mut(host)
+        .unwrap()
+        .archived
+        .push(ArchivedStation {
+            id,
+            name: format!("old{id}"),
+            comment: None,
+            external: None,
+            into: None,
+            lines: Vec::new(),
+        });
+    let with_record = digest_of(&archived, &extras);
+    assert_ne!(with_record, digest, "an archived station");
+
+    let record = |what: &str, edit: &dyn Fn(&mut ArchivedStation)| {
+        let mut q = archived.clone();
+        edit(q.station_mut(host).unwrap().archived.last_mut().unwrap());
+        assert!(q.validate().is_empty(), "{what}: {:?}", q.validate());
+        let changed = digest_of(&q, &extras);
+        assert_ne!(changed, with_record, "{what}");
+        assert_ne!(changed, digest, "{what}");
+    };
+    record("an archived station's name", &|r| r.name.push('x'));
+    record("an archived station's comment", &|r| {
+        r.comment = Some("hidden note".to_string());
+    });
+    record("an archived station's external id", &|r| {
+        r.external = Some("EXT-1".to_string());
+    });
+    let first_line = p.topology().lines_of(host)[0];
+    record(
+        "the lines an archived station was the own station of",
+        &|r| {
+            r.lines = vec![first_line];
+        },
+    );
+
+    let closure = |end: ClosureEnd| {
+        let mut q = p.clone();
+        q.closures[0].archived = Some(end);
+        assert!(q.validate().is_empty(), "{end}: {:?}", q.validate());
+        digest_of(&q, &extras)
+    };
+    let (keeps_b, keeps_a) = (closure(ClosureEnd::A), closure(ClosureEnd::B));
+    assert_ne!(keeps_b, digest, "a loop closure's archived end");
+    assert_ne!(keeps_a, digest, "a loop closure's archived end");
+    assert_ne!(keeps_a, keeps_b, "which end a loop closure archives");
+
+    // The same body without the feature is an earlier version 2 file, which
+    // the load-time upgrade reads differently: not BASE's survey.
+    let bytes = encode(&p, &extras, Mode::Normal).unwrap();
+    let text = text_of(&bytes);
+    assert_eq!(text.matches(REQUIRES).count(), 1, "{REQUIRES}");
+    let earlier = text.replacen(REQUIRES, "\"requires\":[]", 1);
+    assert_ne!(
+        survey_digest(earlier.as_bytes(), BASE).unwrap(),
+        digest,
+        "the archived-stations feature"
+    );
 }
 
 #[test]

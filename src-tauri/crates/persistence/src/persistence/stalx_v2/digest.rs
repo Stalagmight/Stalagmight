@@ -13,7 +13,10 @@
 //! hashed from the bytes as written (canonical form, `docs/file-format.md`
 //! section 8): `requires`, `conventions`, `project` without `modified`,
 //! `settings`, `speleodb` without `endpoint` and `name`, the body members
-//! (`sections` through `imports`) and any unknown top-level member.
+//! (`sections` through `imports`) and any unknown top-level member. The
+//! kept-stations content (plan 2026-11-23, RS) is in these: the
+//! `archived-stations` feature in `requires`, the archived records in
+//! `stations` and a loop closure's archived end in `closures`.
 //! Left out: `format`, `version`, `solver` and `generator` (which build wrote
 //! it), `summary` (derived from the body), `local` (per machine), `history`
 //! (cut per push), `end`, `counters` (the next ids to hand out: allocation
