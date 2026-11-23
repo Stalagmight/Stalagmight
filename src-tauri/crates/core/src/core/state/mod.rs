@@ -258,6 +258,13 @@ mod issue_738_tests;
 mod issue_756_tests;
 #[cfg(test)]
 #[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod kept_station_commands_tests;
+#[cfg(test)]
+#[expect(
     clippy::expect_used,
     reason = "test kit: a setup step that fails is a broken fixture"
 )]

@@ -214,7 +214,7 @@ fn test_execute_create_and_merge_success() {
         rows,
         vec![
             "Create line \"Imported\"".to_string(),
-            "Merge stations Imported / 1 and Existing / 1".to_string()
+            "Merge Imported / 1 into Existing / 1 (keeps 1)".to_string()
         ]
     );
 

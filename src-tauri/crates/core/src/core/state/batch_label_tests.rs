@@ -475,7 +475,7 @@ fn summaries_name_what_a_batch_did_together() {
             renames: None,
         },
     ];
-    assert_eq!(summary(&snapped), "Merge stations Side / 0 and Main / 1");
+    assert_eq!(summary(&snapped), "Merge Side / 0 into Main / 1 (keeps 1)");
     let moves = [
         Command::MoveStation {
             station_ref: a,

@@ -251,7 +251,9 @@ fn holder(names: &NameBook<'_>, holder: &CommentHolder) -> String {
 /// `Merge Side / 0 into Main / 12 (keeps 12)` (RS 6): the station archived,
 /// the station kept (on the slots the user picked), and the kept name. The
 /// kept station is the command's `keep`, unless a loop closure between the
-/// two forces its kept end (RS 4.1 step 4); absent, the stationary one.
+/// two forces its kept end (RS 4.1 step 4); absent, the stationary one. On a
+/// project after the merge (an import's preview rows: a join keeps the
+/// target, RS 4.1) the kept slot is the one on a native line.
 fn merge_label(
     names: &NameBook<'_>,
     a: StationRef,
@@ -268,7 +270,20 @@ fn merge_label(
         .map(|(_, kept)| kept)
         .or(keep.filter(|&k| k == na || k == nb))
         .unwrap_or_else(|| project.merge_direction(na, nb).0);
-    let (kept_slot, archived_slot) = if kept == na { (a, b) } else { (b, a) };
+    // Worded after the merge (an import's preview rows), both slots are one
+    // node: the kept station's slot is the one on a native line of it.
+    let kept_slot = if na == nb {
+        if project.is_native(na, a.line_id) && !project.is_native(na, b.line_id) {
+            a
+        } else {
+            b
+        }
+    } else if kept == na {
+        a
+    } else {
+        b
+    };
+    let archived_slot = if kept_slot == a { b } else { a };
     match (
         names.station(archived_slot),
         names.station(kept_slot),

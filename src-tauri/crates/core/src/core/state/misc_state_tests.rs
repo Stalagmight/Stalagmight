@@ -1480,7 +1480,7 @@ fn a_read_only_refusal_names_the_command_without_positional_ids() {
     });
     assert!(
         merge.contains(&format!(
-            "Merge stations {name} / 0 and {name} / 2 is disabled"
+            "Merge {name} / 0 into {name} / 2 (keeps 2) is disabled"
         )),
         "{merge}"
     );

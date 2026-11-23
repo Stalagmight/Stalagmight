@@ -415,7 +415,7 @@ fn the_history_names_lines_and_stations_as_they_were_at_the_edit() {
     // Worded when the merge was made (plan 8.2): Side is named although it
     // is gone now.
     assert_eq!(
-        labels[1], "Merge stations Main Line / 0 and Side / 1",
+        labels[1], "Merge Main Line / 0 into Side / 1 (keeps 1)",
         "{labels:?}"
     );
     assert!(labels[2].starts_with("Update shot"), "{labels:?}");
@@ -424,7 +424,7 @@ fn the_history_names_lines_and_stations_as_they_were_at_the_edit() {
     assert!(state.undo().success);
     let labels: Vec<String> = history(state).into_iter().map(|(_, d)| d).collect();
     assert_eq!(
-        labels[0], "Merge stations Main Line / 0 and Side / 1",
+        labels[0], "Merge Main Line / 0 into Side / 1 (keeps 1)",
         "{labels:?}"
     );
 }

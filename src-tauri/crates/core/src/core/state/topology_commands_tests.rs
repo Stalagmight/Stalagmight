@@ -133,7 +133,7 @@ fn a_merge_makes_one_station_records_one_entry_and_undoes_exactly() {
         history(state)[0],
         (
             "merge_stations".to_string(),
-            "Merge stations A / 1 and B / 0".to_string()
+            "Merge A / 1 into B / 0 (keeps 0)".to_string()
         )
     );
     assert_round_trip(state, &before, "merge");
