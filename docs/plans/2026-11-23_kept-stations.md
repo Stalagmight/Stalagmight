@@ -1204,9 +1204,10 @@ disagreed, each with its reason.
   than 64 letters in a row between them, it is the first letter no slot of
   the survey shows instead (free on its lines too), so a crafted survey
   whose lines take letters in turn cannot make every search walk them all.
-  A letter a pass frees (a station lettered away from `5a`) is not offered
-  again in that pass; the next pass sees it. Both only differ from the first
-  free letter in surveys no user makes.
+  A letter a pass frees (the only `5a` on a line lettered to `5aa`) may not
+  be offered again in that pass, as a cursor already past it stays. Either
+  way the letter is free on every line, and it differs from the first free
+  one only in crafted or pathological surveys.
 - **Data-2 covers every quadratic step of the upgrade, not rule L alone.**
   Decode runs the earlier file's upgrade, and three crafted shapes each hung
   it: a long line of one name (rule L), 50,000 closures chaining one line
