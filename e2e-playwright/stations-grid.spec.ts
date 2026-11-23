@@ -450,4 +450,61 @@ test.describe('Stations grid at a junction', () => {
     await expect(prompt).toBeHidden();
     expect(await getStationComment(page, sideId, 0)).toBeNull();
   });
+
+  // ui-2: a paste over the comment column of Side Line covers its foreign slot
+  // (row 0, Main Line's station 3) and two native rows. It is ONE commit: one
+  // prompt lists the foreign station, and the native rows wait for the
+  // answer, so the paste is applied whole (going on) or dropped whole
+  // (Cancel). Before, the native rows were sent at once.
+  test('a paste over a foreign slot asks once and is applied or dropped whole', async ({ context, page }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    const [mainId, sideId] = await page.evaluate(() => {
+      const lines = (window as any).__E2E_TEST__.projectStore.getState().project.lines as Array<{ id: number }>;
+      return [lines[0]!.id, lines[1]!.id];
+    });
+    await page.evaluate(
+      async ({ mainId, sideId }) => {
+        const e2e = (window as any).__E2E_TEST__;
+        await e2e.projectStore
+          .getState()
+          .mergeStations({ line_id: mainId, station_index: 3 }, { line_id: sideId, station_index: 0 });
+        e2e.uiStore.getState().setSelection({ type: 'line', lineId: sideId });
+      },
+      { mainId, sideId },
+    );
+    await page.keyboard.press('Control+3');
+    await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
+    await page.getByTestId('data-table-view-stations').click();
+    await expect(page.getByTestId('grid-row-2')).toBeVisible({ timeout: 5000 });
+
+    const pasteComments = async () => {
+      await page.evaluate(() => navigator.clipboard.writeText('Arch\nWet\nLow'));
+      await page.getByTestId('grid-cell-0-comment').click();
+      await page.keyboard.press('Control+v');
+    };
+    const prompt = page.getByTestId('shown-identity-edit-dialog');
+
+    // Cancel drops every row of the paste.
+    await pasteComments();
+    await expect(prompt).toBeVisible();
+    await expect(page.getByTestId('shown-identity-batch-row-0')).toContainText(
+      'On Side Line, 3 belongs to Stations Test Line.',
+    );
+    await expect(page.getByTestId('shown-identity-batch-row-1')).toHaveCount(0);
+    for (const i of [0, 1, 2]) expect(await getStationComment(page, sideId, i)).toBeNull();
+    await page.getByTestId('shown-identity-prompt-cancel').click();
+    await expect(prompt).toBeHidden();
+    for (const i of [0, 1, 2]) expect(await getStationComment(page, sideId, i)).toBeNull();
+
+    // Going on applies every row, the foreign one on every line it is on.
+    await pasteComments();
+    await expect(prompt).toBeVisible();
+    await expect(page.getByTestId('shown-identity-prompt-proceed')).toHaveText('Apply all 3 edits');
+    await page.getByTestId('shown-identity-prompt-proceed').click();
+    await expect(prompt).toBeHidden();
+    await expect.poll(() => getStationComment(page, sideId, 0)).toBe('Arch');
+    await expect.poll(() => getStationComment(page, mainId, 3)).toBe('Arch');
+    expect(await getStationComment(page, sideId, 1)).toBe('Wet');
+    expect(await getStationComment(page, sideId, 2)).toBe('Low');
+  });
 });
