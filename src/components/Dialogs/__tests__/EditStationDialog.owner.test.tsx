@@ -173,6 +173,15 @@ describe('Edit Station asks whose station it is (RS 5.4)', () => {
     expect(screen.queryByTestId('shown-identity-prompt-detach')).toBeNull();
   });
 
+  it("names a loop end's datum point by the plain label, without nested parentheses (RS-FX5)", () => {
+    ipc(LOOP_OWNER);
+    open(SIDE2);
+    fireEvent.click(screen.getByTestId('station-zero-datum-input'));
+    expect(screen.getByTestId('station-datum-loop-end')).toHaveTextContent(
+      'This station is Main / 3 (loop end on Side): the datum goes on its own point.',
+    );
+  });
+
   it('saves a native slot at once', async () => {
     open(MAIN2);
     fireEvent.change(screen.getByTestId('station-name-input'), { target: { value: '13b' } });
