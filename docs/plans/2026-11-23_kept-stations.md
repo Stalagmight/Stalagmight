@@ -768,3 +768,111 @@ or the code disagreed, each with its reason.
   closures and station names (nine files), the three tests that asserted
   U1's per-line junction names now read the kept name on both lines; the
   rest of the Playwright suite was not run here.
+
+## Deviations (package RS-T)
+
+Decisions the oracles and properties package took where this page is
+silent or the code disagreed, each with its reason.
+
+- **The section 12 properties live in one seeded model fuzzer.**
+  `survey/rs_property_tests.rs` runs random synthetic surveys through every
+  operation that moves identities and checks, after every step, validity,
+  that a refusal changes nothing, no stale record, every shown comment kept
+  or named, rule L, and the dialogs' answers; per merge, either keep's raw
+  layout bit for bit and Computed View within 1e-6 m, and merge then
+  detach; per closure, create then remove. A CI gate runs 24 seeds of 50
+  steps (about a second); `rs_property_sweep` is the farm's window
+  (`STALAGMIGHT_RUST_RS_SEEDS`, `_FIRST_SEED`, `_STEPS`, `_TRACE`). The
+  model level, not `AppState`, because the properties read previews and
+  reports the wire flattens; the command level is covered by the undo,
+  hostile, concurrency and metamorphic fuzzers below.
+- **One property more than the page lists: the dialogs' answers.** A merge,
+  detach or closure given its preview's suggested renames must be accepted,
+  and one given no answers may be refused for a collision only when its
+  preview listed one (`rs-answers`). Without it a preview that misses a
+  collision passes every other property while the dialog fails.
+- **Merge then detach restores everything only when the archived station
+  held no records.** Records carry no ownership link (RS-M1), so a retired
+  junction's own records stay on the kept node after the detach of its
+  line: the lines they name keep showing the kept station. For such a merge
+  the property checks the archived station's own identity (name, comment,
+  external) and that it is back on exactly the lines its record named.
+  Merges that also ran a promotion, a restore, a letter or the user's
+  renames are not compared (the detach cannot undo those); neither are
+  closures created with renames or letters.
+- **"No record is history while its line still passes a node at its
+  slot"** is checked by following the slot's shots, wherever a split, a
+  range move or Combine took them: the node at either end of the shot next
+  to the slot (and past shots the step made, Insert Station or a reversal)
+  must be the record or hold it for that line. A tear of a line through one
+  junction twice gives the record a node of its own at the other slot of
+  the same line (deviation RS-M1, "a tear with a several-line record"),
+  which passes; Combine's join stations are left out, since RS 4.4 drops
+  the absorbed line there, and the kept line at a shared join, on purpose.
+- **"Named in its preview" is strict where a preview exists.** A merge may
+  hide only the identity `merge_preview` names (`hidden`), a detach
+  nothing (`detach_naming` names nothing hidden), a delete what
+  `preview_delete_shot` or `preview_delete_shot_range` name (restores with
+  a hidden or moved comment, the archived ends of their promotions). A
+  promotion a merge's or detach's sweep makes is not in those previews, so
+  a comment it hides is reported (none on the gate seeds; the farm will
+  say whether the previews need a field). Steps with no preview (Delete
+  Line, Split Line Here, Insert Station, Reverse, Combine, Add .stalx,
+  datums) are held to their report. Combine's comment pick is the user's
+  choice (RS 4.4): both join stations' comments may change, and Both may
+  join them.
+- **Rule L is checked on what the step reports**, every letter in its
+  identity report (and its sweep's), over the lines each identity is shown
+  on after the step.
+- **Two bugs the properties found on the gate seeds are fixed here**,
+  being small and in the model's own contract. `detach_naming` refused
+  ("Station N does not exist") a detach that goes through when the
+  detach's sweep promotes the closure that alone joined the restored
+  station's piece, archiving that station: the preview now names the
+  station as the detach left it (a record of the promoted node). And the
+  sweep letters every collision standing when its promotions end, the
+  command's own included, but its letters stayed in `SweepReport::lettered`
+  only, so previews listed no collision, the dialog's empty answers were
+  refused with `NameTaken`, and no notice named the letter (against "every
+  automatic path reports each letter"): `IdentityReport::lettered` of every
+  command and edit now carries the sweep's letters first. Both are pinned
+  by hand-built tests in the same file.
+- **Z3 and the migration oracles are RS-F's.** Their move to rule K and
+  rule L is on `rs/F` (the conversion notice's names, hidden comments and
+  letters); this package does not edit them a second time, which would
+  conflict at integration. The keep-independence of the geometry the page
+  asks of Z3 is asserted by the model fuzzer and by T5's new pair, on every
+  merge path rather than on migrated junctions only.
+- **T5 under RS.** The two range-vs-singles oracles RS-M1 ignored run again,
+  with every pinned seed and shape count. The singles' intermediate
+  promotions leave RS traces, each asserted: the junction's comment is the
+  identity it ends with, never a join (the partner end's, or the edited
+  end's when the promotion kept it and the partner had none); a junction
+  promoted both ways shows each route's own kept station (each its
+  promotion's survivor, with the same two ids); the singles' junction may
+  show another of the junction's identities than the atomic route only
+  when each holds the other and a single delete's promotion kept it or its
+  restore gave it back; a station rule L lettered in one route only, from
+  the singles' first promotion on (a later restore of an identity the
+  promotion brought in letters too) or by a range that promoted, is
+  compared under the atomic route's name. A new pair,
+  `merge-keeping-either-station`, merges a fresh free line keeping either
+  station on the two twins and compares the raw layout bit for bit, the
+  Computed View within 1e-6 m, the verdict and the allocators.
+- **The undo fuzzer answers the dialogs symbolically.** Merge, Detach,
+  Create Loop Closure and Remove Closure moves draw a keep (none, the
+  dialog's default, either station), an answer (none, rule L's letters,
+  the other answers, an empty list) and a `rest_keep`, resolved on the live
+  state through the app's own previews, so a replay resolves them again;
+  the new trace fields are `serde(default)`. The concurrency soak answers
+  half its merges from a preview read before the command, which another
+  thread may have made stale; the hostile fuzzer sends keeps and renames
+  no dialog would. The datum, format, crash and transition fuzzers keep the
+  commands' defaults (no keep, no renames): their oracles do not read
+  identities.
+- **The harness invariants count stations, not slots.** Besides moving
+  `checkProjectInvariants` from U1 to RS, its stats check compared
+  `station_count` (a junction once, RS U-P3-11) with the slot count, which
+  fired on every survey with a junction; it now counts nodes. An ignored
+  core test (`rs_wire_dump`) writes real project-state payloads of the RS
+  shapes so the harness oracle can be checked against them.
