@@ -1153,10 +1153,11 @@ the test ids) but are never shown:
   / 17, Station ID 42`). The fill (a tint of the line's hue), the border (the
   line colour itself, moved toward the text only until it stands 1.8:1 from
   the panel and the fill), the hover and the dots (the line colour, ringed
-  only where it alone falls under 3:1 on what it sits on) come from
+  only where it alone falls under its floor on what it sits on) come from
   `src/theme/pillColors.ts` and `pillBlend.ts`, which hold main text at 7:1,
-  the muted parts at 4.5:1 and the dots at 3:1 for any line colour on every
-  theme. A foreign end or a loop end says so in its tooltip and its
+  the muted parts at 4.5:1, the leading dot at 3:1 and the home dot, small
+  (0.26em) and quiet because the words say the same, at 2:1 for any line
+  colour on every theme. A foreign end or a loop end says so in its tooltip and its
   screen-reader words. The Station detail's "Also on"
   rows name the other line only, without the ID. The data table's gutter and
   line picker, and the dialogs that name stations or lines, use the same pill
