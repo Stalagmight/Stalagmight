@@ -426,7 +426,8 @@ fn an_archived_record_row_carries_every_field() {
 /// a slot, as a builder hands it over).
 fn labelled(changes: super::Changeset) -> HistoryEntry {
     let shot = ProsePart::Shot(ProseShot {
-        text: "Main: 4 \u{2192} 5".to_string(),
+        // The to end is a loop end: worded as the backend words it.
+        text: "Main: 4 \u{2192} 5 (loop end on Main)".to_string(),
         line_id: Some(3),
         context: Some("Main".to_string()),
         from: ProseShotEnd {
@@ -469,7 +470,7 @@ fn a_labels_parts_say_its_words_and_round_trip_without_slots() {
     let mut e = labelled(super::Changeset::default());
     assert_eq!(
         e.label,
-        "Update shot Main: 4 \u{2192} 5 near Side / 0 in line \"Main\""
+        "Update shot Main: 4 \u{2192} 5 (loop end on Main) near Side / 0 in line \"Main\""
     );
     assert_eq!(prose::plain(&e.label_parts), e.label);
     e.fit_limits(&EntryLimits::default());
@@ -631,4 +632,51 @@ fn a_part_whose_drawing_is_not_in_its_words_costs_the_pills() {
     }
     // The untouched entry keeps them.
     assert!(!decode_entry(&text, &limits).unwrap().label_parts.is_empty());
+}
+
+/// RS-PROSE delta fix 3: a persisted part's words must be exactly the words
+/// its fields make in the shapes the backend words them (`slot_text.rs`),
+/// not merely hold them: a station worded "Main / 12" drawn as "1" (a
+/// substring) passed the earlier check. Injection: a `contains` check again
+/// fails it.
+#[test]
+fn a_part_whose_drawing_is_a_substring_of_its_words_costs_the_pills() {
+    let mut e = labelled(super::Changeset::default());
+    e.fit_limits(&EntryLimits::default());
+    let text = encode_entry(&e).unwrap();
+    let limits = EntryLimits::default();
+    for hostile in [
+        // "Side / 0" drawn as a name its words merely contain.
+        text.replacen("\"name\":\"0\"", "\"name\":\"\"", 1),
+        text.replacen("\"context\":\"Side\"", "\"context\":\"Sid\"", 1),
+        // A shot end drawn as part of its name.
+        text.replacen("\"name\":\"4\"", "\"name\":\"\"", 1),
+        // A line drawn as part of its name.
+        text.replacen("\"name\":\"Main\"", "\"name\":\"Mai\"", 1),
+    ] {
+        assert_ne!(hostile, text);
+        let back = decode_entry(&hostile, &limits).unwrap();
+        assert!(back.label_parts.is_empty(), "{hostile}");
+    }
+    // The coordinator's example: words "Main / 12", name "1".
+    let forged = ProsePart::Station(ProseStation {
+        text: "Main / 12".to_string(),
+        line_id: Some(1),
+        context: Some("Main".to_string()),
+        name: "1".to_string(),
+        home_line: None,
+        loop_end: None,
+        station_id: Some(12),
+        slot: None,
+    });
+    let mut e = entry(super::Changeset::default());
+    e.label = "Rename station Main / 12".to_string();
+    e.label_parts = vec![
+        ProsePart::Text {
+            text: "Rename station ".to_string(),
+        },
+        forged,
+    ];
+    let text = encode_entry(&e).unwrap();
+    assert!(decode_entry(&text, &limits).unwrap().label_parts.is_empty());
 }

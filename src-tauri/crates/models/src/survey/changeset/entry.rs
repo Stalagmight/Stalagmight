@@ -38,7 +38,7 @@ use serde::de::{self, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::prose::{self, ProsePart};
+use crate::prose::{self, ProsePart, ProseShot, ProseShotEnd};
 use crate::{LineId, SectionId, StationId};
 
 use super::super::{ClosureId, MAX_SHOT_UUID_CHARS};
@@ -162,24 +162,96 @@ fn fitted_parts(
     fits.then(|| prose::without_slots(parts))
 }
 
-/// Whether everything `part` draws (a station's and a line's name and
-/// context, a shot's two ends and context) occurs in its own words, the ones
-/// a screen reader reads: a part read from a file cannot draw one name and
-/// say another (RS-PROSE fix 5).
+/// Whether `part`'s words are exactly the words its fields make, in the
+/// shapes the backend words a slot, a shot and a line (`slot_text.rs`,
+/// `prose::line_part`), the ones a screen reader reads: a part read from a
+/// file cannot draw one name and say another, nor draw a piece of its words
+/// (RS-PROSE fix 5, delta fix 3). The only words no field holds are a
+/// foreign slot's home line and a loop end's line, which must be there and
+/// not empty.
 fn draws_its_words(part: &ProsePart) -> bool {
-    let holds = |text: &str, field: &str| text.contains(field);
     match part {
         ProsePart::Text { .. } => true,
-        ProsePart::Station(s) => {
-            holds(&s.text, &s.name) && s.context.as_deref().is_none_or(|c| holds(&s.text, c))
-        }
-        ProsePart::Shot(s) => {
-            holds(&s.text, &s.from.name)
-                && holds(&s.text, &s.to.name)
-                && s.context.as_deref().is_none_or(|c| holds(&s.text, c))
-        }
-        ProsePart::Line(l) => holds(&l.text, &l.name),
+        ProsePart::Station(s) => station_words(
+            &s.text,
+            &s.name,
+            s.context.as_deref(),
+            s.home_line.is_some(),
+            s.loop_end == Some(true),
+        ),
+        ProsePart::Shot(s) => shot_words(s),
+        ProsePart::Line(l) => l.text == l.name || l.text == format!("\"{}\"", l.name),
     }
+}
+
+/// `words` is `" (X)"` for a non-empty `X`.
+fn qualifier(words: &str) -> bool {
+    words
+        .strip_prefix(" (")
+        .and_then(|w| w.strip_suffix(')'))
+        .is_some_and(|x| !x.is_empty())
+}
+
+/// `words` is `" (loop end on X)"` for a non-empty `X` (`line`, when given).
+fn loop_qualifier(words: &str, line: Option<&str>) -> bool {
+    words
+        .strip_prefix(" (loop end on ")
+        .and_then(|w| w.strip_suffix(')'))
+        .is_some_and(|x| !x.is_empty() && line.is_none_or(|l| x == l))
+}
+
+/// A slot's words (`slot_name_text`, or `slot_text` with a context): `12`,
+/// `12 (Main)`, `12 (loop end on Side)`; `Side / 12`, `Side / 12 (Main)`
+/// (the context naming the owner, RS-OWNERSHIP), `Main / 12 (loop end on
+/// Side)`.
+fn station_words(
+    text: &str,
+    name: &str,
+    context: Option<&str>,
+    owned: bool,
+    loop_end: bool,
+) -> bool {
+    match context {
+        None => text
+            .strip_prefix(name)
+            .is_some_and(|rest| match (loop_end, owned) {
+                (true, _) => loop_qualifier(rest, None),
+                (false, true) => qualifier(rest),
+                (false, false) => rest.is_empty(),
+            }),
+        Some(c) if loop_end => text
+            .strip_prefix(&format!("{c} / {name}"))
+            .is_some_and(|rest| loop_qualifier(rest, None)),
+        Some(c) if owned => text
+            .strip_suffix(&format!(" / {name} ({c})"))
+            .is_some_and(|line| !line.is_empty()),
+        Some(c) => text == format!("{c} / {name}"),
+    }
+}
+
+/// A shot's words (`shot_text`): `Side: 12 (Main) \u{2192} 13`, each end
+/// as `slot_name_text` words it on the shot's line.
+fn shot_words(shot: &ProseShot) -> bool {
+    let end = |words: &str, end: &ProseShotEnd| {
+        words.strip_prefix(end.name.as_str()).is_some_and(|rest| {
+            if end.loop_end == Some(true) {
+                loop_qualifier(rest, shot.context.as_deref())
+            } else if end.home_line.is_some() {
+                qualifier(rest)
+            } else {
+                rest.is_empty()
+            }
+        })
+    };
+    let ends = match shot.context.as_deref() {
+        Some(c) => shot.text.strip_prefix(&format!("{c}: ")),
+        None => Some(shot.text.as_str()),
+    };
+    let arrow = " \u{2192} ";
+    ends.is_some_and(|ends| {
+        ends.match_indices(arrow)
+            .any(|(at, _)| end(&ends[..at], &shot.from) && end(&ends[at + arrow.len()..], &shot.to))
+    })
 }
 
 /// Entities an entry names, by stable id (never session ids or slots).

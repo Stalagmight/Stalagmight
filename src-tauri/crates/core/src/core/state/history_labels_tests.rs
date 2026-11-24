@@ -2062,3 +2062,84 @@ fn label_parts_cost_a_measured_share_of_the_history_budget() {
     );
     assert!(with > without);
 }
+
+/// RS-PROSE delta fix 3: the exact-words check on persisted parts accepts
+/// every shape the backend words: a foreign slot named through its line
+/// (`Side / 4 (Main)`, context the owner) and bare (`4 (Main)`), a shot with
+/// a foreign end and one with a loop end. Each entry's parts survive a
+/// write and a read.
+#[test]
+fn real_foreign_and_loop_end_labels_keep_their_parts_through_a_read() {
+    let o = open();
+    let s = &o.state;
+    let survey = |s: &AppState| survey_of(s);
+    exec(
+        s,
+        Command::MergeStations {
+            station_a: StationRef::new(SIDE, 0),
+            station_b: StationRef::new(MAIN, 4),
+            keep: None,
+            renames: None,
+        },
+    );
+    let az = ShotUpdates {
+        azimuth_in: Some(12.0),
+        azimuth_out: Some(12.0),
+        ..ShotUpdates::default()
+    };
+    exec(
+        s,
+        Command::UpdateShot {
+            line_id: SIDE,
+            shot_id: shot_id(s, SIDE, 0),
+            updates: az.clone(),
+        },
+    );
+    exec(
+        s,
+        Command::SetStationName {
+            station_ref: StationRef::new(SIDE, 0),
+            name: "J4".to_string(),
+        },
+    );
+    // A closure from Side's end onto Main's start, Main's kept: Side's end is a loop end.
+    let main_start = survey(s).line(MAIN).unwrap().station(0).unwrap();
+    exec(
+        s,
+        Command::CreateLoopClosure {
+            station_a: StationRef::new(SIDE, 3),
+            station_b: StationRef::new(MAIN, 0),
+            closure_strategy: ClosureStrategy::Batch,
+            keep: Some(main_start),
+            renames: Some(Vec::new()),
+        },
+    );
+    exec(
+        s,
+        Command::UpdateShot {
+            line_id: SIDE,
+            shot_id: shot_id(s, SIDE, 2),
+            updates: az,
+        },
+    );
+    let stack = s.undo_stack.lock().unwrap();
+    let mut seen = Vec::new();
+    for held in stack.undo_entries() {
+        let entry = held.entry();
+        let text = encode_entry(entry).unwrap();
+        let back = decode_entry(&text, &EntryLimits::default()).unwrap();
+        assert_eq!(back.label_parts, entry.label_parts, "{}", entry.label);
+        if !entry.label_parts.is_empty() {
+            seen.push(entry.label.clone());
+        }
+    }
+    let joined = seen.join(" | ");
+    assert!(
+        joined.contains("(Main)"),
+        "a foreign slot's label: {joined}"
+    );
+    assert!(
+        joined.contains("(loop end on"),
+        "a loop end's label: {joined}"
+    );
+}
