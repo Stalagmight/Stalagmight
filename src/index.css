@@ -1805,6 +1805,27 @@ button.sh-apill {
   position: relative;
   margin-left: -1px;
 }
+/* The arrow is a segment of its own (RS-ARROW): its fill and border run
+   from the from half's colour to the to half's, so the cross-fade is
+   centred on the arrow, whose padding is the same on both sides. The
+   halves beside it give up most of their padding on that side, so the
+   arrow keeps the one-colour pill's spacing and the blend spans the arrow
+   and the space around it. The from half sits above the arrow's 1px
+   overlap (both are its colour there), so the overlap never covers the
+   from end's dot. */
+.sh-lpill-seg.sh-lpill-seg--to-arrow {
+  position: relative;
+  z-index: 1;
+  padding-right: 0.05em;
+}
+.sh-lpill-seg.sh-lpill-seg--from-arrow {
+  padding-left: 0.05em;
+}
+.sh-lpill-seg.sh-lpill-seg--arrow {
+  flex: none;
+  padding-left: 0.32em;
+  padding-right: 0.32em;
+}
 .sh-lpill--split:hover:not([aria-disabled='true']) .sh-lpill-seg {
   background:
     var(--seg-fill-hover, linear-gradient(var(--pill-bg-hover), var(--pill-bg-hover))) padding-box,
@@ -1911,11 +1932,21 @@ button.sh-apill {
   -webkit-box-decoration-break: slice;
   box-decoration-break: slice;
 }
+/* The arrow's segment carries its own spaces (RS-ARROW); the halves beside
+   it give up their padding on that side. */
+.sh-ppill-seg.sh-ppill-seg--to-arrow {
+  padding-right: 0;
+}
+.sh-ppill-seg.sh-ppill-seg--from-arrow {
+  padding-left: 0;
+}
+.sh-ppill-seg.sh-ppill-seg--arrow {
+  padding: 0;
+}
 .sh-ppill-nw {
   white-space: nowrap;
 }
-.sh-ppill-dot,
-.sh-ppill-mark {
+.sh-ppill-dot {
   display: inline-block;
   border-radius: 9999px;
 }
@@ -1931,27 +1962,33 @@ button.sh-apill {
   font-size: 0.857em;
   color: var(--pill-muted);
 }
+/* The marks after a name are empty inline boxes, not inline-blocks
+   (RS-ARROW): WebKit allows a line break after an atomic inline even where
+   white-space forbids one, and that break separated a from end's dot from
+   the arrow. The home-line dot (0.42em, its 1px ring outside) is a radial
+   gradient in the box's padding; the loop mark is its glyph as a mask over
+   the muted colour (`--loop-glyph`, LinePill.tsx). Both are centred on the
+   x-height, and an inline box adds no height to the line. */
 .sh-ppill-mark {
-  width: 0.42em;
-  height: 0.42em;
-  margin: -0.42em 0 0 0.14em;
-  vertical-align: 0.2em;
-  background: var(--mark-dot);
-  box-shadow: 0 0 0 1px var(--mark-ring, transparent);
+  margin-left: 0.14em;
+  padding: 0 calc(0.21em + 1px);
+  background: radial-gradient(
+    circle closest-side,
+    var(--mark-dot) calc(100% - 1.25px),
+    var(--mark-ring, transparent) calc(100% - 0.75px),
+    var(--mark-ring, transparent) calc(100% - 0.25px),
+    transparent 100%
+  );
 }
+/* The mask covers the whole box (the glyph keeps its aspect, centred and
+   0.8em wide): WebKit left the parts of an inline box outside a smaller
+   mask image unmasked, as two bars above and below the glyph. */
 .sh-ppill-loop {
-  display: inline-block;
-  width: 0.8em;
-  height: 0.8em;
-  margin: -0.8em 0 0 0.1em;
-  overflow: hidden;
-  vertical-align: -0.04em;
-  color: var(--pill-muted);
-}
-.sh-ppill-loop svg {
-  display: block;
-  width: 100%;
-  height: 100%;
+  margin-left: 0.1em;
+  padding: 0 0.4em;
+  background-color: var(--pill-muted);
+  -webkit-mask: var(--loop-glyph) 0 0 / 100% 100% no-repeat;
+  mask: var(--loop-glyph) 0 0 / 100% 100% no-repeat;
 }
 .sh-ppill-sid {
   position: relative;

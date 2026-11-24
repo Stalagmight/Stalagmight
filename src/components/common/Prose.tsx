@@ -40,7 +40,7 @@ import { withoutControls } from '../../utils/proseTokenCore';
 import i18n from '../../i18n';
 import type { ProseShotEnd } from '../../types/ipc/ProseShotEnd';
 import {
-  LoopGlyph,
+  LOOP_GLYPH_URL,
   markOf,
   markOver,
   prosePillStyle,
@@ -54,6 +54,9 @@ import {
 import { useSegmentTints } from './useSegmentTints';
 
 type NamePart = Exclude<ProsePart, { kind: 'text' }>;
+
+/** The arrow between a shot's ends, with no-break spaces: no line break on either side of it (RS-ARROW). */
+const ARROW_GLUED = `\u00a0${SHOT_ARROW}\u00a0`;
 
 /** A home-line dot after a name, with its tooltip ("Belongs to Main"). */
 function ProseMark({ mark }: { mark: HomeMark }) {
@@ -69,10 +72,17 @@ function ProseMark({ mark }: { mark: HomeMark }) {
 }
 
 function ProseLoop() {
+  // An empty inline box with the glyph as a mask, not an inline SVG: an
+  // atomic inline after the from end's name let WebKit break before the
+  // arrow (RS-ARROW).
   return (
-    <span className="sh-ppill-loop" data-prose-mark="loop">
-      <LoopGlyph />
-    </span>
+    <span
+      className="sh-ppill-loop"
+      data-prose-mark="loop"
+      data-glyph="loop"
+      title={i18n.t('identity.loopEndMarkTitle')}
+      style={{ '--loop-glyph': LOOP_GLYPH_URL } as CSSProperties}
+    />
   );
 }
 
@@ -198,20 +208,33 @@ function Drawing({
     );
   }
   if (part.kind === 'shot') {
-    // A break may fall before the arrow, never after it.
+    // A break never falls on either side of the arrow (RS-ARROW): its
+    // spaces are no-break spaces, so the from end's last word, the arrow and
+    // the to end's first word stay on one line (`.sh-ppill-join` holds the
+    // three), while each name still wraps between its own words. Not
+    // white-space: both WebKit and Chromium broke at the space before the
+    // arrow inside a nowrap span when the from end's own box allowed wraps.
     if (!tone) {
       return (
         <>
           <Head context={context} />
-          <Glued before={dot} text={part.from.name} after={marksOf(pill, endDot(part.from), part.from.loop_end)} />{' '}
-          <Glued before={`${SHOT_ARROW} `} text={part.to.name} after={marksOf(pill, endDot(part.to), part.to.loop_end)} />
+          <span className="sh-ppill-join">
+            <span className="sh-ppill-end">
+              <Glued before={dot} text={part.from.name} after={marksOf(pill, endDot(part.from), part.from.loop_end)} />
+            </span>
+            {ARROW_GLUED}
+            <span className="sh-ppill-end">
+              <Glued text={part.to.name} after={marksOf(pill, endDot(part.to), part.to.loop_end)} />
+            </span>
+          </span>
         </>
       );
     }
     // Two tints (RS-OWNERSHIP): the half holding an end of another line in
-    // that line's tint, split before the arrow; the head stays the shot's.
-    // The tints blend at each seam into one (RS-BLEND): the space before the
-    // arrow is inside the to half, so no gap opens between them.
+    // that line's tint; the head stays the shot's and blends into the from
+    // half (RS-BLEND). The arrow is a segment of its own whose tint runs
+    // from the from half's to the to half's, so the halves blend across it
+    // (RS-ARROW).
     return (
       <>
         {tone.head && (
@@ -219,21 +242,21 @@ function Drawing({
             {context ? <Head context={context} /> : DOT}
           </span>
         )}
-        <span className="sh-ppill-seg" style={{ ...tone.from, ...tints?.from }} data-prose-seg="from">
-          {!tone.head && <Head context={context} />}
-          <Glued
-            before={tone.head ? null : dot}
-            text={part.from.name}
-            after={marksOf(pill, endDot(part.from), part.from.loop_end, undefined, tone.fromOn)}
-          />
-        </span>
-        <span className="sh-ppill-seg" style={{ ...tone.to, ...tints?.to }} data-prose-seg="to">
-          {' '}
-          <Glued
-            before={`${SHOT_ARROW} `}
-            text={part.to.name}
-            after={marksOf(pill, endDot(part.to), part.to.loop_end, undefined, tone.toOn)}
-          />
+        <span className="sh-ppill-join">
+          <span className="sh-ppill-seg sh-ppill-seg--to-arrow" style={{ ...tone.from, ...tints?.from }} data-prose-seg="from">
+            {!tone.head && <Head context={context} />}
+            <Glued
+              before={tone.head ? null : dot}
+              text={part.from.name}
+              after={marksOf(pill, endDot(part.from), part.from.loop_end, undefined, tone.fromOn)}
+            />
+          </span>
+          <span className="sh-ppill-seg sh-ppill-seg--arrow" style={{ ...tone.arrow, ...tints?.arrow }} data-prose-seg="arrow">
+            {ARROW_GLUED}
+          </span>
+          <span className="sh-ppill-seg sh-ppill-seg--from-arrow" style={{ ...tone.to, ...tints?.to }} data-prose-seg="to">
+            <Glued text={part.to.name} after={marksOf(pill, endDot(part.to), part.to.loop_end, undefined, tone.toOn)} />
+          </span>
         </span>
       </>
     );
@@ -276,7 +299,7 @@ function DrawnPill({ part, testId }: { part: NamePart; testId: string | undefine
       ? shotToneOf(resolve, part.line_id ?? null, part.from.home_line, part.to.home_line, 'prose', {
           head: context ? `${context}:` : '',
           from: part.from.name,
-          to: `${SHOT_ARROW} ${part.to.name}`,
+          to: part.to.name,
         })
       : null;
   // Each line's fragment of a two-tone shot tinted on its own (RS-BLEND).

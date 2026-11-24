@@ -2378,3 +2378,58 @@ they amend RS-OWNERSHIP's two-tone bullet.
   on adjacent lines overlap (48 and 67 pairs; RS-OWNERSHIP's run: 0 of 44
   and 61). Across a link pill's seam the fill changes by at most 14 (sum of
   the RGB steps) between neighbouring pixels: no seam line.
+
+## Deviations (package RS-ARROW)
+
+The user's request (2026-11-24), looking at the Blue Link shot pill in the
+data table: "why does table-shots-blue-link have two dots at the end
+(yellow and black). Also the color should blend over in the middle of the
+-> arrow, not before it". Decisions this package took, each with its
+reason; they amend RS-BLEND's link and prose bullets and RS 6's loop mark.
+
+- **The loop mark is the loop-closure sign `∽`.** The second "dot" was
+  the loop mark of the loop end (3 is a closure-archived node shown as
+  Lemon's 3): an open ring with an arrowhead that, at pill size and in the
+  muted colour, read as a black dot. The app has no loop-closure glyph to
+  reuse: the data table's Conn column draws a chain link for merges and
+  closures alike, Station details' Loop closures section has no icon, and
+  the toolbar has no closure tool. So the mark is a drawn reversed tilde
+  (`∽`, `LOOP_GLYPH_PATH` in `LinePill.tsx`), small and muted, in every
+  pill that draws it (link, blob, data table gutter, shot ends, prose,
+  history and warning rows), with a new tooltip "Loop end: a loop closure
+  shows this station here" beside its existing screen-reader words. It is
+  drawn rather than typed so it looks the same in every webview whatever
+  fonts it has.
+- **The blend is centred on the arrow.** The arrow is now a segment of its
+  own, a bridge whose fill and border (a prose pill's tint) run from the
+  from half's colour to the to half's in OKLab, the midpoint at its middle;
+  the arrow has the same padding on both sides, so the midpoint is the
+  arrow's middle (measured in the real app: within 0.3 px on every link and
+  prose arrow captured). The halves keep their own colour up to it. With
+  three colours the head still blends into the from half at their seam
+  (RS-BLEND). The arrow's text takes whichever of the two halves' text
+  colours reads 7:1 on every colour of the bridge (`twoTonePills.test.ts`
+  sweeps the bridge's samples and the sRGB points between its stops for
+  every pair, both variants, every theme). The from half sits above the
+  arrow's 1px overlap, so the overlap never covers the from end's dot (the
+  first capture cut a third of it).
+- **No wrap on either side of the arrow.** A nowrap span around the from
+  end, the arrow and the to end did not hold in either engine: WebKit
+  breaks after an inline-block (the from end's home dot) even where
+  white-space forbids it, and Chromium broke at the space before the arrow
+  when the from end's own box allowed wraps. The arrow's spaces are now
+  no-break spaces, and the prose marks after a name are empty inline boxes
+  rather than inline-blocks: the home-line dot a radial gradient, the loop
+  mark its glyph as a mask over the muted colour (covering the whole box:
+  WebKit left the parts of an inline box outside a smaller mask image
+  unmasked). Each name still wraps between its own words. Measured in the
+  real app by narrowing a box around each prose shot pill from 40 to 460 px
+  (one-colour and two-tone, 1266 layouts, 971 of them wrapped): the arrow
+  was always on the line of the from end's last word and the to end's
+  first word; a Playwright test does the same on a Warnings message.
+- **Measured in the real app** (this worktree's build, the RS-BLEND survey,
+  17 surfaces in dark and light at 1440x900 and 860x900): prose line pitch
+  equal to plain text's in every compared block (26 blocks, 109 and 136
+  line gaps, 0 px deviation), with 14 two-tone prose pills on screen per
+  combination; no two tint fragments on adjacent lines overlap (65 and 90
+  pairs).

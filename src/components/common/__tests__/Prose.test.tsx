@@ -121,23 +121,34 @@ describe('prose pills (RS-PROSE)', () => {
     expect(foreign.style.getPropertyValue('--pill-dot')).toBe(prosePillColorsOf('#ffff00', 'dark').dot);
     // The loop end: its loop mark, the Station ID it shows, its kept end's (Main's) colour.
     const loopEnd = pills[2]! as HTMLElement;
-    expect(loopEnd.querySelector('[data-prose-mark="loop"]')).not.toBeNull();
+    // The loop mark: the loop-closure glyph as a mask on an empty inline box
+    // (no atomic inline a line could break after, RS-ARROW).
+    const loopMark = loopEnd.querySelector('[data-prose-mark="loop"][data-glyph="loop"]') as HTMLElement;
+    expect(loopMark.style.getPropertyValue('--loop-glyph')).toContain(encodeURIComponent('M1.2 4.9C2.5'));
+    expect(loopMark.querySelector('svg')).toBeNull();
+    expect(loopEnd.querySelector('[data-prose-mark="loop"]')).toHaveAttribute('title', 'Loop end: a loop closure shows this station here');
     expect(loopEnd.querySelector('[aria-hidden="true"]')!.textContent).toBe('3#3');
     expect(loopEnd.style.getPropertyValue('--pill-dot')).toBe(prosePillColorsOf('#ffff00', 'dark').dot);
     // The shot: two tints, the foreign from end's half in Main's after a
     // head in Side's, the end's dot kept; no Station ID.
     const shotPill = pills[3]!;
-    expect(shotPill.querySelector('[aria-hidden="true"]')!.textContent).toBe('Side: 12 → 1');
+    expect(shotPill.querySelector('[aria-hidden="true"]')!.textContent).toBe('Side: 12\u00a0→\u00a01');
     expect(shotPill.querySelectorAll('[data-prose-mark="home"]')).toHaveLength(1);
     const seg = (name: string) => shotPill.querySelector(`[data-prose-seg="${name}"]`) as HTMLElement;
     expect(seg('head').textContent).toBe('Side: ');
     expect(seg('from').textContent).toBe('12');
-    // RS-BLEND: the space before the arrow is inside the to half, so the
-    // tints meet with no gap; each half's tint blends toward its neighbour.
-    expect(seg('to').textContent).toBe(' → 1');
+    // RS-ARROW: the arrow and its spaces are a segment of their own, whose
+    // tint runs from the from half's to the to half's; each half's tint
+    // blends toward its neighbour.
+    expect(seg('arrow').textContent).toBe('\u00a0→\u00a0');
+    expect(seg('to').textContent).toBe('1');
     const tint = (el: HTMLElement) => el.style.getPropertyValue('--seg-tint');
-    for (const name of ['head', 'from', 'to']) expect(tint(seg(name))).toMatch(/^url\("data:image\/svg\+xml,/);
+    for (const name of ['head', 'from', 'arrow', 'to']) expect(tint(seg(name))).toMatch(/^url\("data:image\/svg\+xml,/);
     expect(tint(seg('from'))).not.toBe(tint(seg('to')));
+    // A wrap never separates the arrow from either end: its spaces are
+    // no-break spaces, and the from half, the arrow and the to half are joined.
+    expect(seg('from').parentElement).toHaveClass('sh-ppill-join');
+    expect(seg('arrow').parentElement).toBe(seg('to').parentElement);
     expect(seg('from')).toContainElement(shotPill.querySelector('[data-prose-mark="home"]') as HTMLElement);
     expect(shotPill.querySelector('[data-prose-sid]')).toBeNull();
     // Colours come from the line (custom properties of pillColors.ts).

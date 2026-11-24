@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest';
 import { themeTokens } from '../tokens';
 import { hexOfOklch, oklchOfHex } from '../cssColor';
 import { contrastRatio } from '../../utils/colors';
-import { blendBackdrops, mixHex, type Neighbours } from '../pillBlend';
+import { blendBackdrops, bridgeBackdrops, linkBridgeStyle, mixHex, proseBridgeStyle, type Neighbours } from '../pillBlend';
 import {
   PILL_DOT_MIN,
   PILL_MUTED_MIN,
@@ -203,5 +203,37 @@ describe('the blend mixes in OKLab (RS-BLEND)', () => {
     expect(wb.L).toBeLessThan(0.65);
     expect(mixHex('#123456', '#abcdef', 1)).toBe('#123456');
     expect(mixHex('#123456', '#abcdef', 0)).toBe('#abcdef');
+  });
+});
+
+// ---- RS-ARROW: the arrow is the blend ------------------------------------------------
+
+/** Every colour under a bridge: its samples and the sRGB points the browser draws between its quarter stops. */
+function bridgeColours(left: PillColors, right: PillColors, panel?: string): string[] {
+  const out = bridgeBackdrops(left, right, panel);
+  for (const pick of panel === undefined ? [(c: PillColors) => c.bg, (c: PillColors) => c.hoverBg] : [(c: PillColors) => c.bg]) {
+    const q = [1, 0.75, 0.5, 0.25, 0].map((t) => mixHex(pick(left), pick(right), t));
+    for (let i = 0; i < q.length - 1; i++) out.push(srgbMid(q[i]!, q[i + 1]!));
+  }
+  return out;
+}
+
+describe.each(['link', 'prose'] as const)('the arrow of a two-tone %s pill reads on its whole blend (RS-ARROW)', (variant) => {
+  it.each(THEMES)('%s: the arrow (text 7:1) on every colour from one half to the other, both ways', (name) => {
+    const theme = pillThemeOf(name);
+    const panel = variant === 'prose' ? theme.panel : undefined;
+    const of = colorsOf(variant);
+    const style = variant === 'link' ? linkBridgeStyle : proseBridgeStyle;
+    const failures: string[] = [];
+    for (const [a, b] of PAIRS) {
+      const L = of(a, theme);
+      const R = of(b, theme);
+      const css = style(L, R, name) as Record<string, string>;
+      const text = css['--pill-text']!;
+      for (const bg of bridgeColours(L, R, panel)) {
+        if (contrastRatio(text, bg) < PILL_TEXT_MIN) failures.push(`${a}->${b} arrow ${text} on ${bg}`);
+      }
+    }
+    expect(failures.slice(0, 20)).toEqual([]);
   });
 });

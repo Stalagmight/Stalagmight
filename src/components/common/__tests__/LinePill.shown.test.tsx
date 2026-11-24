@@ -116,6 +116,22 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     expect(screen.getByTestId('loop').style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('#ffff00', 'dark').bg);
   });
 
+  it('draws the loop mark as the loop-closure sign, never a ring that reads as a second dot (RS-ARROW)', () => {
+    // The user: "why does table-shots-blue-link have two dots at the end".
+    // Injection: the old open ring (an arc with an arrowhead) fails here.
+    render(<StationBlob station={{ line_id: SIDE, station_index: 2 }} testId="loop" />);
+    const mark = screen.getByTestId('loop-loop-end');
+    expect(mark).toHaveAttribute('title', 'Loop end: a loop closure shows this station here');
+    const glyph = mark.querySelector('svg[data-glyph="loop"]')!;
+    const paths = [...glyph.querySelectorAll('path')];
+    // One open stroke, the reversed tilde: two curves, no arc, no fill.
+    expect(paths).toHaveLength(1);
+    expect(paths[0]!.getAttribute('fill')).toBe('none');
+    expect(paths[0]!.getAttribute('d')).not.toMatch(/[Aa]/);
+    expect(paths[0]!.getAttribute('d')!.match(/C/g)).toHaveLength(2);
+    expect(glyph.querySelector('circle')).toBeNull();
+  });
+
   it("bySlot: a list of slots keeps each slot's line, and still says whose station it shows", () => {
     render(<StationBlob station={{ line_id: SIDE, station_index: 0 }} withLine bySlot testId="slot" />);
     const pill = screen.getByTestId('slot');

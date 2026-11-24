@@ -538,9 +538,11 @@ no closure archives is a **native slot**: the line shows its own station. On a
 was not kept) the line shows the kept station in the colour of that
 station's **home line**, its first native line in line order: its pill takes
 that line's colour and names it ("Main: 12", RS-OWNERSHIP); a loop end shows
-the kept end with a loop mark, in its kept end's home-line colour. A shot
-with such an end is two-tone, split at the arrow: the half holding that end
-in its home line's colour, with that line's dot after the end's name. Plain text names them `Side / 12 (Main)` and
+the kept end with a loop mark (the loop-closure sign `∽`, small and muted),
+in its kept end's home-line colour. A shot with such an end is two-tone,
+blending across the arrow: the half holding that end in its home line's
+colour, with that line's dot after the end's name, the arrow in the blend
+between the two colours. Plain text names them `Side / 12 (Main)` and
 `Main / 12 (loop end on Side)`. Split Line Here keeps the split station native
 on both halves, or, when an archived station names the line there, that
 station names the second half too.
@@ -1197,7 +1199,8 @@ the test ids) but are never shown:
   names a station, shot or line with a **prose pill** (RS-PROSE,
   `ProsePill`): the same dot, muted context, bare name, loop mark and
   superscript Station ID inline in the sentence (a station of another line
-  in that line's colour, a two-tone shot as two tints), on a soft radial
+  in that line's colour, a two-tone shot as two tints blending across its
+  arrow, which never wraps away from either end), on a soft radial
   tint of the line's colour that fades to the surface (no border, no pill
   shape, so wrapped lines never meet), never as `Main / 12`. The paragraph's
   line pitch is the same as with plain text. A screen reader reads the

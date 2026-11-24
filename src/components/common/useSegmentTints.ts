@@ -17,7 +17,7 @@
  * one-line tint stands (`proseSegmentStyle`).
  */
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
-import { proseSegmentTint, SEAM_EM } from '../../theme/pillBlend';
+import { proseBridgeTint, proseSegmentTint, SEAM_EM } from '../../theme/pillBlend';
 import type { PillColors } from '../../theme/pillColors';
 import type { SegmentKey, ShotTone } from './LinePill';
 
@@ -28,9 +28,10 @@ export interface FragmentBox {
   width: number;
 }
 
-/** A segment once laid out: its colours and its fragments, one per line, in order. */
+/** A segment once laid out: its colours (a bridge's run to `bridgeTo`) and its fragments, one per line, in order. */
 export interface SegmentBox {
   colors: PillColors;
+  bridgeTo?: PillColors | undefined;
   rects: readonly FragmentBox[];
 }
 
@@ -61,9 +62,15 @@ export function fragmentTints(segs: readonly SegmentBox[], panel: string, fontPx
     seg.rects.forEach((r, j) => {
       const first = j === 0;
       const last = j === seg.rects.length - 1;
-      const left = first && prev && sameLine(prev.rects[prev.rects.length - 1]!, r) ? prev.colors : null;
+      // The colours a neighbour on this line shows at the shared edge (a
+      // bridge's left edge is its from colour, its right edge its to colour).
+      const left = first && prev && sameLine(prev.rects[prev.rects.length - 1]!, r) ? (prev.bridgeTo ?? prev.colors) : null;
       const right = last && next && sameLine(r, next.rects[0]!) ? next.colors : null;
-      images.push(proseSegmentTint(seg.colors, { left, right }, panel, (SEAM_EM * fontPx) / Math.max(r.width, 1)));
+      images.push(
+        seg.bridgeTo
+          ? proseBridgeTint(seg.colors, seg.bridgeTo, panel, { left: left !== null, right: right !== null })
+          : proseSegmentTint(seg.colors, { left, right }, panel, (SEAM_EM * fontPx) / Math.max(r.width, 1)),
+      );
       sizes.push(`${pct(r.width / total)} 100%`);
       // A percentage places that share of the layer at that share of the
       // strip: x / (strip - layer) puts the layer's left edge at x.
@@ -114,10 +121,11 @@ export function useSegmentTints(
     const el = vis.current;
     const t = toneRef.current;
     if (!el || !t) return;
-    const segs = Array.from(el.querySelectorAll<HTMLElement>(':scope > .sh-ppill-seg'));
+    const segs = Array.from(el.querySelectorAll<HTMLElement>('.sh-ppill-seg'));
     if (segs.length !== t.segments.length) return;
     const boxes = segs.map((seg, i) => ({
       colors: t.segments[i]!.colors,
+      bridgeTo: t.segments[i]!.bridgeTo,
       rects: Array.from(seg.getClientRects()).filter((r) => r.width > 0.5),
     }));
     const styles = fragmentTints(boxes, t.panel, parseFloat(getComputedStyle(el).fontSize) || 13);

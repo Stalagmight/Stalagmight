@@ -82,6 +82,30 @@ describe('fragmentTints (RS-BLEND)', () => {
     expect(svgs((t[1] as Record<string, string>)['--seg-tint']).map(fadeCentre)).toEqual([null]);
   });
 
+  it('the arrow bridges the halves: each half keeps its own colour up to it, the bridge fades only top and bottom (RS-ARROW)', () => {
+    // Injection: reading the bridge's left colour for the to half's left
+    // edge shifts the to half toward the from half's colour.
+    const t = fragmentTints(
+      [
+        { colors: A, rects: [line(0, 60)] },
+        { colors: A, bridgeTo: B, rects: [line(0, 20)] },
+        { colors: B, rects: [line(0, 40)] },
+      ],
+      panel,
+      13,
+    )!;
+    const [from, arrow, to] = t.map((x) => svgs((x as Record<string, string>)['--seg-tint'])[0]!);
+    const colours = (svg: string) => [...svg.matchAll(/<stop offset='[^']+' stop-color='(rgb[^']+)' stop-opacity='([^']+)'/g)].map((m) => `${m[1]}@${m[2]}`);
+    expect(fadeCentre(from!)).toBe(1);
+    expect(fadeCentre(to!)).toBe(0);
+    expect(fadeCentre(arrow!)).toBeNull();
+    expect(new Set(colours(from!)).size).toBe(1);
+    expect(new Set(colours(to!)).size).toBe(1);
+    // The bridge starts in the from half's colour and ends in the to half's.
+    expect(colours(arrow!)[0]).toBe(colours(from!)[0]);
+    expect(colours(arrow!)[colours(arrow!).length - 1]).toBe(colours(to!)[0]);
+  });
+
   it('is null until laid out', () => {
     expect(fragmentTints([{ colors: A, rects: [] }], panel, 13)).toBeNull();
   });

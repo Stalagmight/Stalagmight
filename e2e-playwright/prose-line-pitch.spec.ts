@@ -101,6 +101,77 @@ async function expectSamePitch(page: Page, el: Locator): Promise<void> {
   expect(Math.abs(mean(withPills.pitch) - mean(plain.pitch))).toBeLessThanOrEqual(0.5);
 }
 
+/** Shows a Warnings tab message naming stations, a two-tone shot and a one-colour shot, and returns it. */
+async function showWarning(page: Page): Promise<Locator> {
+  await page.evaluate((lineName) => {
+    const e2e = (window as unknown as {
+      __E2E_TEST__: {
+        projectStore: {
+          getState: () => { project: { lines: Array<{ id: number; name: string; shots: Array<{ id: number }> }> } };
+          setState: (s: unknown) => void;
+        };
+      };
+    }).__E2E_TEST__;
+    const line = e2e.projectStore.getState().project.lines[0]!;
+    const side = e2e.projectStore.getState().project.lines[1]!;
+    const station = (index: number, name: string) => ({
+      kind: 'station',
+      text: `${lineName} / ${name}`,
+      line_id: line.id,
+      context: lineName,
+      name,
+      station_id: 100 + index,
+      slot: { line_id: line.id, station_index: index },
+    });
+    const parts = [
+      { kind: 'text', text: 'The depth readings at ' },
+      station(2, '2'),
+      { kind: 'text', text: ', where 2 lines meet, differ by 4.0 m; the shots from ' },
+      station(1, '1'),
+      { kind: 'text', text: ' and ' },
+      station(3, '3'),
+      { kind: 'text', text: ' disagree, and the shot ' },
+      {
+        kind: 'shot',
+        text: `${lineName}: 1 (${side.name}) \u2192 2`,
+        line_id: line.id,
+        context: lineName,
+        from: { name: '1', home_line: side.id },
+        to: { name: '2' },
+      },
+      { kind: 'text', text: ' is one of them. Check the depths of the shots that meet here, as on ' },
+      {
+        kind: 'shot',
+        text: `${lineName}: 2 \u2192 3`,
+        line_id: line.id,
+        context: lineName,
+        from: { name: '2' },
+        to: { name: '3' },
+      },
+      { kind: 'text', text: '.' },
+    ];
+    const message = parts.map((p) => p.text).join('');
+    e2e.projectStore.setState({
+      warnings: [
+        {
+          lineId: line.id,
+          shotId: line.shots[1]!.id,
+          shotIndex: 1,
+          code: 'JUNCTION_DEPTH_SPREAD',
+          message,
+          messageParts: parts,
+          severity: 'warning',
+          isResolved: false,
+        },
+      ],
+    });
+  }, LONG_LINE);
+  await page.getByTestId('detail-tab-warnings').click();
+  const message = page.getByTestId('warnings-content').locator('.text-sm').filter({ hasText: 'The depth readings at' });
+  await expect(message).toHaveCount(1);
+  return message;
+}
+
 test.describe('Prose pills keep the line pitch', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
@@ -144,66 +215,52 @@ test.describe('Prose pills keep the line pitch', () => {
   });
 
   test('a Warnings tab message has the same line pitch with pills as plain text', async ({ page }) => {
-    await page.evaluate((lineName) => {
-      const e2e = (window as unknown as {
-        __E2E_TEST__: {
-          projectStore: {
-            getState: () => { project: { lines: Array<{ id: number; name: string; shots: Array<{ id: number }> }> } };
-            setState: (s: unknown) => void;
-          };
-        };
-      }).__E2E_TEST__;
-      const line = e2e.projectStore.getState().project.lines[0]!;
-      const side = e2e.projectStore.getState().project.lines[1]!;
-      const station = (index: number, name: string) => ({
-        kind: 'station',
-        text: `${lineName} / ${name}`,
-        line_id: line.id,
-        context: lineName,
-        name,
-        station_id: 100 + index,
-        slot: { line_id: line.id, station_index: index },
-      });
-      const parts = [
-        { kind: 'text', text: 'The depth readings at ' },
-        station(2, '2'),
-        { kind: 'text', text: ', where 2 lines meet, differ by 4.0 m; the shots from ' },
-        station(1, '1'),
-        { kind: 'text', text: ' and ' },
-        station(3, '3'),
-        { kind: 'text', text: ' disagree, and the shot ' },
-        {
-          kind: 'shot',
-          text: `${lineName}: 1 (${side.name}) \u2192 2`,
-          line_id: line.id,
-          context: lineName,
-          from: { name: '1', home_line: side.id },
-          to: { name: '2' },
-        },
-        { kind: 'text', text: ' is one of them. Check the depths of the shots that meet here.' },
-      ];
-      const message = parts.map((p) => p.text).join('');
-      e2e.projectStore.setState({
-        warnings: [
-          {
-            lineId: line.id,
-            shotId: line.shots[1]!.id,
-            shotIndex: 1,
-            code: 'JUNCTION_DEPTH_SPREAD',
-            message,
-            messageParts: parts,
-            severity: 'warning',
-            isResolved: false,
-          },
-        ],
-      });
-    }, LONG_LINE);
-    await page.getByTestId('detail-tab-warnings').click();
-    const message = page.getByTestId('warnings-content').locator('.text-sm').filter({ hasText: 'The depth readings at' });
-    await expect(message).toHaveCount(1);
-    // The shot is two-tone: its from end belongs to Side Passage.
+    const message = await showWarning(page);
+    // One shot is two-tone: its from end belongs to Side Passage. Its head,
+    // from half, arrow and to half are four segments (RS-ARROW).
     await expect(message.locator('.sh-ppill-vis--split')).toHaveCount(1);
-    await expect(message.locator('.sh-ppill-seg')).toHaveCount(3);
+    await expect(message.locator('.sh-ppill-seg')).toHaveCount(4);
     await expectSamePitch(page, message);
+  });
+
+  test('a wrap never separates a shot\'s arrow from either end (RS-ARROW)', async ({ page }) => {
+    const message = await showWarning(page);
+    // Narrow the message step by step: the arrow of each shot pill (the
+    // two-tone one and the one-colour one) stays on the line of the from
+    // end's last word and of the to end's first word.
+    const broken = await message.evaluate((root) => {
+      const lineOf = (node: Text, i: number) => {
+        const r = document.createRange();
+        r.setStart(node, i);
+        r.setEnd(node, i + 1);
+        const box = r.getClientRects()[0]!;
+        return (box.top + box.bottom) / 2;
+      };
+      const textNodes = (el: Element) => {
+        const out: Text[] = [];
+        const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        for (let n = w.nextNode(); n; n = w.nextNode()) if ((n as Text).data.trim()) out.push(n as Text);
+        return out;
+      };
+      const joins = [...root.querySelectorAll('.sh-ppill-join')];
+      const bad: string[] = [];
+      for (let width = 60; width <= 420; width += 4) {
+        (root as HTMLElement).style.width = `${width}px`;
+        for (const join of joins) {
+          const nodes = textNodes(join);
+          const arrowNode = nodes.find((n) => n.data.includes('\u2192'))!;
+          const at = nodes.indexOf(arrowNode);
+          const before = nodes[at - 1]!;
+          const after = nodes[at + 1]!;
+          const a = lineOf(arrowNode, arrowNode.data.indexOf('\u2192'));
+          if (Math.abs(lineOf(before, before.data.length - 1) - a) > 2 || Math.abs(lineOf(after, 0) - a) > 2) {
+            bad.push(`${width}px: ${join.textContent}`);
+          }
+        }
+      }
+      return { joins: joins.length, bad };
+    });
+    expect(broken.joins).toBe(2);
+    expect(broken.bad).toEqual([]);
   });
 });
