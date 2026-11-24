@@ -1921,6 +1921,10 @@ fn recipe_labels_name_their_lines_and_stations_as_parts() {
 /// (`UNDO_BYTE_BUDGET_BYTES`, 4 MiB); asserts only that the parts cost
 /// something and every entry with parts still decodes with them.
 #[test]
+#[expect(
+    clippy::print_stdout,
+    reason = "the measurement prints its numbers (run with --nocapture)"
+)]
 fn label_parts_cost_a_measured_share_of_the_history_budget() {
     let o = open();
     let s = &o.state;
