@@ -1140,6 +1140,21 @@ the test ids) but are never shown:
   rows name the other line only, without the ID. The data table's gutter and
   line picker, and the dialogs that name stations or lines, use the same pill
   (`EntityBlob`). Below `full`, links are plain underlined text.
+- Running text (dialog sentences, the Station details' sentences, Warnings
+  tab messages, undo and redo history rows, the conversion notice, toasts)
+  names a station, shot or line with a **prose pill** (RS-PROSE,
+  `ProsePill`): the same dot, muted context, bare name, home-line dot, loop
+  mark and superscript Station ID inline in the sentence, on a soft radial
+  tint of the line's colour that fades to the surface (no border, no pill
+  shape, so wrapped lines never meet), never as `Main / 12`. The paragraph's
+  line pitch is the same as with plain text. A screen reader reads the
+  sentence as plain text writes it (`Main / 12 (loop end on Side)`, sr-only
+  words beside the drawing); aria-labels, tooltips, copies, exports and logs
+  keep the plain text. Backend texts carry their names as parts beside the
+  plain string (`ProjectWarning.messageParts`,
+  `ValidationWarning.parts`, `UndoHistoryItem.descriptionParts`,
+  `ConversionNoticeView.change_parts` / `detail_parts`; `models::prose`).
+  Below `full` prose is plain text.
 
 **Shot Detail - Connected Line:**
 ```
@@ -3679,7 +3694,8 @@ The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortc
 `{shot}` names the shot by its line and stations, `Main Line: 4 → 5`
 (section 4.2), never by a positional id. The structured `lineId` /
 `shotIndex` of a warning say which shot it is; the Warnings tab's Full level
-turns the leading `Shot {shot}` into a shot pill.
+turns the leading `Shot {shot}` into a shot pill, and every other station,
+shot or line the message names into a prose pill (`messageParts`, RS-PROSE).
 
 | Rule | Severity | Message |
 |------|----------|---------|

@@ -344,12 +344,13 @@ Paths without a dialog: rule L, reported.
   the loop mark on loop ends; editing a name or comment there goes through the
   prompt of 5.4.
 - **Pills**: station and shot pills pass `homeLineId` on foreign slots
-  (`rs/P-pills`); plain-text contexts (warnings, toasts, search results,
-  history rows, aria, tooltips, closure texts, Plan lists) write "12 (Main)"
+  (`rs/P-pills`); plain-text contexts (search results, aria, tooltips,
+  Plan lists) and the words of a prose pill (running text: warnings, toasts,
+  history rows, closure texts, dialog sentences, RS-PROSE) write "12 (Main)"
   and "Side / 12 (Main)" for a foreign slot and "12 (loop end on Side)" and
   "Main / 12 (loop end on Side)" for a loop end (U-P3-8, RS-FX5), so two
   "12"s on one line read apart; one helper on each side words it.
-- **History rows** name the kept station: "Merge Side / 0 into Main / 12 (keeps
+- **History rows** (prose pills since RS-PROSE) name the kept station: "Merge Side / 0 into Main / 12 (keeps
   12)", "Create loop closure: Side / 17 shown as Main / 3" (U-P3-6).
 - **Plan mode**: routes, the ruler path and turn or drop lists collapse
   consecutive nodes that share a shown identity across a closure edge (keeping
@@ -2089,3 +2090,105 @@ its reason.
   new name changes it on every line it is on." is left out whenever the
   go-on button names the lines (every case but a rename with no new name
   to say).
+
+## Deviations (package RS-PROSE)
+
+The user's request (2026-11-24): prose should still use pills, not "Main /
+12"; the pills should not affect the line spacing; check how it looks before
+submitting; if pills overlap frequently, drop the pill background for
+something like a radial gradient that fades towards the edges. Decisions
+this package took, each with its reason; they supersede section 6's
+"plain-text contexts write" for running text (its words stay the same).
+
+- **Running text names with prose pills.** Every visible sentence that
+  names a station, shot or line (the Merge, Create Loop Closure, Detach,
+  Remove Closure, shown-identity, Delete Shot, Delete Shots, Delete Line,
+  Split Line Here, Combine, Reverse, Swap Comments and Insert Station
+  dialogs, the Station details sentences, the Warnings tab, the undo and
+  redo rows, the conversion notice, the identity and removed-closure toasts,
+  the map legends' "from" lines, the far-GPS-fix notice, the Plan endpoint
+  sentences and the import wizards' connection lines) draws each name as a
+  `ProsePill`: the link pill's dot, muted context, bare name, home-line dot,
+  loop mark and superscript Station ID, inline. A screen reader reads the
+  sentence exactly as plain text wrote it (the drawing is aria-hidden, the
+  plain words sit beside it as sr-only text), and below the Full level the
+  pill is that plain text. Plain-text contexts keep the plain label:
+  aria-labels, tooltips, native dialogs, the clipboard, exports, files, logs,
+  telemetry, option labels, dialog titles, button labels and backend error
+  strings (`CommandResult.error` also feeds logs and the catch-all toast).
+- **One token form for frontend sentences.** `useProse()` mirrors the
+  plain labels (`prose.station(ref, true)` for `labels.station(ref, true)`)
+  and gives a token: the part as URI-encoded JSON between U+0001 and U+0002.
+  A token is a string, so it passes through `t()` interpolation, `listNames`
+  and the toast store, and `<Prose text>` splits it back; en.json is
+  unchanged and no node is concatenated. `proseToPlain` gives the plain words
+  for a plain sink.
+- **Structured parts from the backend, beside the plain string.** A
+  backend text that names something carries `Vec<ProsePart>`
+  (`models::prose`): `ProjectWarning.messageParts`, `ValidationWarning.parts`
+  (removed closures, per-shot checks after Reverse Line and Create Shot),
+  `UndoHistoryItem.descriptionParts`, `ConversionNoticeView.change_parts` and
+  `detail_parts`. Builders mark names in their `format!`
+  (`Project::slot_marked`, `shot_marked`, `station_marked`, `line_marked`)
+  and split at the boundary, so the plain string is byte-identical to before
+  and is the parts' words concatenated (tested per producer). A marked string
+  never reaches a plain sink. Left plain: Create Line and import validation
+  warnings (they name a chain position on a line that does not exist yet),
+  the "(keeps 12)" and delete-span names inside history labels, the history
+  preview popup's key-value rows, the closure refusal sentence (its dialog
+  data comes from the opener) and every command error.
+- **History format version 3.** A history label is persisted, so its parts
+  are too: `label_parts` beside `label`, without slots (stable ids only).
+  Version 2 entries are still read and render plain; parts that do not fit
+  (a cut label, words that differ, an unknown kind) are dropped on read,
+  never the entry. An older build drops a history holding version 3 entries
+  with its banner, as any version bump does.
+- **No pill shape: a soft radial tint.** Measured in the real app (this
+  worktree's debug build through the agent harness, a synthetic survey of
+  seven lines in near-white, near-black, yellow, blue, grey, magenta and
+  green with long line and station names, four foreign junction slots and a
+  loop end; 19 surfaces) with the first design, a bordered fill: an inline
+  fill covers the font's whole content area, 19 px in a 20 px line at 14 px
+  and 16 px in a 16 px line at 12 px, so of 69 pairs of pills stacked on
+  adjacent lines 54 (78%) stood 1 px or less apart and 2 touched (0 px), and
+  77 of 94 superscript Station IDs rose up to 2.06 px above the fill. Two
+  lines of pills read as one block, so per the user's instruction the prose
+  pill paints no fill shape and no border: a `radial-gradient(farthest-side)`
+  of the line's tint per line fragment (`box-decoration-break: clone`), solid
+  to 45% of the radius and transparent at the fragment's edge. Its half-alpha
+  band is 13.8 px of a 19 px fragment and 11.6 px of a 16 px one, so the
+  tints of two stacked lines stay 6.2 px (20 px lines) and 4.4 px (16 px
+  lines) apart and never form an edge. The superscript now sits inside the
+  text's height (at most 0.41 px above the content box, inside the
+  half-leading).
+- **The tint is a translucent overlay.** An opaque tint computed for the
+  panel read as a dark smudge on the lighter accent and warning boxes; the
+  overlay (`proseTintOf`) composites to exactly the swept tint over the
+  panel and moves any other surface the same way. Its centre is the link
+  pill's hover tint, and since it fades to the bare surface,
+  `prosePillColors` holds text at 7:1, muted parts at 4.5:1 and the dot (or
+  its ring) and the home-line dot at 3:1 on both the tint and the panel, on
+  every theme over the link pill's colour sweep.
+- **Line pitch, measured.** In the running app every pill-bearing block was
+  measured with pills and again as plain text (highlighting off, same
+  element): line tops from the text's client rects, clustered into lines.
+  Dark and light themes at 1440x900 and 860x900: 103 blocks, 141 pills;
+  the 38 (1440) and 37 (860) blocks that wrap and were the same element both
+  ways gave 114 and 124 line gaps, every one equal to the block's
+  line-height (largest deviation 0 px); the identity toast keeps 20 px. The
+  blocks React rebuilt on the level change (9 and 10) were not paired.
+  `e2e-playwright/prose-line-pitch.spec.ts` repeats the measurement on the
+  Bulk Delete summary and a Warnings tab message (within 0.5 px); a
+  superscript given `vertical-align: super` fails it (1.66 px).
+- **Wrapping.** A pill wraps between its words, each line's fragment tinted
+  on its own; the dot stays with the first word, a shot's arrow with its far
+  end and the marks and Station ID with the last word, so no fragment is a
+  lone dot or arrow. The outer span paints nothing, so the sr-only words
+  never open an empty painted fragment.
+- **Accessible names of labels.** Chromium puts spaces around an absolutely
+  positioned sr-only span in an accessible name computed from content
+  ("Keep Side / 2 , Station ID 9"); an inline technique that avoided it
+  (`font-size: 0`) risks screen readers skipping the words. The sr-only
+  span stays, and the radios whose label is a prose sentence (collision
+  answers, Detach's lines that come off together) carry the plain sentence
+  as their `aria-label`.

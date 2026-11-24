@@ -398,7 +398,7 @@ undo(&mut project, &entry.changes)?;           // Err: refused, project untouche
 | Part | Form |
 |---|---|
 | Project fields | `[before, after]` per changed field (settings whole). |
-| Stations | whole images of the stations only one side has (`add`, `del`), and per field (`name`, `comment`, `archived`, `external`) one column `[id runs, [before...], [after...]]`; a record carries every field, its owner (`into`) included. `HISTORY_FORMAT_VERSION` is 2 (kept stations): an entry of version 1 is dropped with the banner. |
+| Stations | whole images of the stations only one side has (`add`, `del`), and per field (`name`, `comment`, `archived`, `external`) one column `[id runs, [before...], [after...]]`; a record carries every field, its owner (`into`) included. `HISTORY_FORMAT_VERSION` is 3 (2: kept stations; 3: the label's prose parts, RS-PROSE): an entry of version 1 is dropped with the banner. |
 | Line order | list hunks over the line ids (create, delete, reorder). |
 | Lines | per touched line, ascending id: field-level metadata `[before, after]` pairs; and when its shots changed (or it exists on one side only), a **side** per state: shot count, content hash, the line image for a side-only line, and **segments**. |
 | Segments | a copy run `[line, at, n, mode, anchor, {edits}]` takes `n` shots of a touched line of the other state from `at` (forwards, or backwards for the reversed modes), transforms them (`0` as they are, `1` reversed, `2` reversed and flipped as Reverse Line flips a shot, `3` the same with left and right swapped), then writes the field-level exceptions; literal rows `{"u": [uuids], "f": {columns}}` carry shots the other state does not hold. A run out of another line records its first shot's uuid as an anchor, checked on apply. |
@@ -420,15 +420,24 @@ file's `history.undo` / `history.redo` lists (already in the format's
 canonical form, so `RawJson::parse` leaves it unchanged):
 
 ```text
-{"v":1,"t":"2026-11-20T12:59:00.000000000Z","k":"update_shot","label":"...",
+{"v":3,"t":"2026-11-20T12:59:00.000000000Z","k":"update_shot","label":"...","label_parts":[...],
  "refs":{"lines":[..],"stations":[..],"shots":["uuid"],"closures":[..],"sections":[..]},
  "preview":{"rows":[["Length","3.50","4.00"]],"more":2},
  "ops":{...the changeset...}}
 ```
 
-- `v` is `HISTORY_FORMAT_VERSION` (1). Any other version decodes to
-  `EntryError::Version`: drop the history whole with the existing banner.
-  Bump it with any change to the layout or to the line hash.
+- `v` is `HISTORY_FORMAT_VERSION` (3). This build reads versions 2 and 3
+  (`OLDEST_HISTORY_FORMAT_VERSION`): a version 2 entry is the same layout
+  without `label_parts`, and its label reads plain. Any other version
+  decodes to `EntryError::Version`: drop the history whole with the existing
+  banner. Bump it with any change to the layout or to the line hash.
+- `label_parts` (version 3, RS-PROSE) is the label's words as prose parts
+  (`models::prose::ProsePart`), so the history rows draw its stations, shots
+  and lines as prose pills: their words concatenated are exactly `label`,
+  and they name stable ids only (a line id, a Station ID), never a slot.
+  Absent when the label names nothing. Parts that do not fit (a cut label,
+  words that differ from the label, an unknown kind) are dropped on read,
+  never the entry.
 - `t` is RFC 3339 UTC with nanoseconds (the format reads it for the
   SpeleoDB watermark cut).
 - `k`, `label`, `refs`, `preview` are the core's: the command kind (icon),

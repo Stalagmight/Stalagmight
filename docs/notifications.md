@@ -79,6 +79,12 @@ regions). Read the comment blocks in those two files plus
   dedup window collapses them. Register a new key there first.
 - **All toast strings go through i18n** (`t()` / `en.json`), like any other UI
   string. Hardcoded English in a `showToast` call is a defect.
+- **A toast names stations, shots and lines as prose pills** (RS-PROSE): word
+  the message with prose tokens (`currentProse()` / `useProse()`, or
+  `backendProse` of a backend text and its parts) and `ToastStack` draws each
+  name as a pill. The live regions and the dismiss button's label read the
+  plain words (`proseToPlain`), so a screen reader hears the sentence plain
+  text writes; never slice or trim a message that holds tokens.
 - **Nothing critical or must-act rides a toast.** Toasts auto-dismiss; a message the
   user cannot afford to miss, or that carries a required action, is a dialog or
   banner (Carbon: actionable notifications must persist). Toasts here have no action
@@ -174,7 +180,8 @@ regions). Read the comment blocks in those two files plus
   station, showed a station under another name or joined comments shows the
   one-time conversion notice (`conversion-notice-banner`) until dismissed: one
   lead, the changes the backend words with their counts (a long list of
-  renamed stations behind Details), and one sentence on saving that is true
+  renamed stations behind Details; each station a clause or a Details row
+  names is a prose pill, from `change_parts` / `detail_parts`), and one sentence on saving that is true
   now ("the next time you save", or "Saved in the new format"; "the original
   file is kept": Recent Projects, right-click, Restore an earlier copy; for a
   legacy SpeleoDB revision converted on download, "the original revision is
@@ -209,7 +216,8 @@ regions). Read the comment blocks in those two files plus
   `CommandResult.warnings`; `notifyRemovedClosures` (`utils/closureRemovalToast.ts`,
   called by the `deleteShot` / `deleteShotRangeShift` store actions) turns them
   into ONE warning toast (key `closure-removed`) in the backend's words, the way
-  the `command-failed` catch-all shows `result.error`. A toast, not a dialog: the
+  the `command-failed` catch-all shows `result.error`; the stations the
+  warning names arrive as its `parts` and are drawn as prose pills. A toast, not a dialog: the
   delete did what was asked, nothing needs deciding, and one Undo restores the
   closure with the shots.
 - **Names an action changed on its own are one notice per action** (kept and
@@ -220,7 +228,8 @@ regions). Read the comment blocks in those two files plus
   closure's hidden end show its own name again. The backend reports these on
   `CommandResult.identities`; `notifyIdentityChanges`
   (`utils/identityNotice.ts`, called by `executeCommand` on every success)
-  names each in ONE warning toast (key `station-identities`). The four dialogs
+  names each in ONE warning toast (key `station-identities`), each station a
+  prose pill by its home line. The four dialogs
   that ask (Merge Stations, Create Loop Closure, Detach Line from Station,
   Remove Closure) send the user's own answers, which are not reported; imports
   report theirs only in the receipt.
