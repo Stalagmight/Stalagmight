@@ -14,6 +14,7 @@ default-run = "stalagmight"
 members = [
     "crates/core",
     "crates/export",
+    "crates/legacy",
     "crates/models",
     "crates/parsers",
     "crates/persistence",
@@ -54,6 +55,7 @@ svg2pdf = "0.12"
 usvg = "0.43"
 resvg = "0.43"
 sha2 = "0.10"
+ryu = "1"
 uuid = "1"
 # Pinned exact - rationale on the speleodb member's entry (crates/speleodb).
 ureq = "=3.1.4"
@@ -325,6 +327,9 @@ stalagmight-models = { path = "crates/models", features = ["test-support"] }
 stalagmight-parsers = { path = "crates/parsers", features = ["test-support"] }
 stalagmight-persistence = { path = "crates/persistence", features = ["test-support"] }
 stalagmight-speleodb = { path = "crates/speleodb", features = ["test-support"] }
+# The frozen 0.6.0 writer (`write_v18`): tests that need an old SQLite
+# `.stalx` produce "what an old build wrote" through it.
+stalagmight-legacy = { path = "crates/legacy", features = ["writer"] }
 tempfile = { workspace = true }
 # The config round-trip assertions in tests/integration_tests.rs parse the
 # saved file themselves; the config I/O itself lives in stalagmight-core now.

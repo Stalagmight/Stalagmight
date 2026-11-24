@@ -5,18 +5,21 @@ use ts_rs::TS;
 use crate::commands::event_sink::tauri_sink;
 use crate::config::GasConfig;
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
+use crate::core::state::export_views::ExportViews;
 use crate::core::AppState;
+use crate::export::color_scale::{ExportValueKind, ValueHistogram};
 use crate::export::{ExportImageOptions, ProfileFormat};
-use crate::models::{Cylinder, Diver, PlanSegment, Project, StationRef};
+use crate::models::survey::Project;
+use crate::models::{Cylinder, Diver, PlanSegment, StationId, StationRef};
 
 /// True when `target` resolves to the same file on disk as the open project's
 /// `.stalx` at `existing`. Every export replaces its target wholesale
-/// (`write_atomic`), so exporting over the live project database would destroy
-/// it. `existing` always exists (it is the open DB); `target` may not exist yet
-/// (a fresh export destination), so when it can't be canonicalized directly,
-/// compare its canonicalized parent directory + file name against the
-/// canonicalized project path. Errs toward catching the exact open-DB path
-/// rather than rejecting unrelated destinations.
+/// (`write_atomic`), so exporting over the open project file would destroy
+/// it. `existing` always exists (it is the open file); `target` may not exist
+/// yet (a fresh export destination), so when it can't be canonicalized
+/// directly, compare its canonicalized parent directory + file name against
+/// the canonicalized project path. Errs toward catching the exact open-file
+/// path rather than rejecting unrelated destinations.
 fn is_open_project_file(target: &Path, existing: &Path) -> bool {
     let Ok(existing_canon) = std::fs::canonicalize(existing) else {
         return false;
@@ -58,6 +61,9 @@ fn is_project_owned_file(target: &Path, project: &Project) -> bool {
         || is_open_project_file(target, &open_path.with_extension("plnx"))
 }
 
+/// The refusal every export answers for a target the open project owns.
+const OWNED_FILE_REFUSAL: &str = "Cannot export over the open project file";
+
 /// Generic helper that handles the shared export logic for all text-based formats.
 fn export_format_impl(
     state: &AppState,
@@ -79,6 +85,9 @@ fn export_format_impl(
 /// at this decision, and the alternative - a `tracing::warn` nobody reads - let
 /// a file go out claiming something about its bearings that the project does
 /// not say. The frontend raises one toast per note.
+///
+/// The exporter runs on a snapshot of the open survey (one clone, outside the
+/// project lock, so a large export never stalls an edit).
 fn export_format_with_notes(
     state: &AppState,
     path: PathBuf,
@@ -96,8 +105,8 @@ fn export_format_with_notes(
     })?;
 
     // Never clobber a file the open project owns (same guard as the image export): a text export
-    // named to the open DB would overwrite it with CSV/JSON/TML, and one named to the `.plnx`
-    // sibling would take every saved dive plan with it.
+    // named to the open project file would overwrite it with CSV/JSON/TML, and one named to the
+    // `.plnx` sibling would take every saved dive plan with it.
     if is_project_owned_file(&path, &project) {
         tracing::warn!(
             path = ?path,
@@ -105,7 +114,7 @@ fn export_format_with_notes(
             format = format,
             "Refused to export over a file the open project owns"
         );
-        return Err("Cannot export over the open project file".to_string());
+        return Err(OWNED_FILE_REFUSAL.to_string());
     }
 
     tracing::info!(
@@ -145,7 +154,7 @@ pub fn export_csv(state: State<AppState>, path: PathBuf) -> Result<(), String> {
 }
 
 pub(crate) fn export_csv_impl(state: &AppState, path: PathBuf) -> Result<(), String> {
-    export_format_impl(state, path, "csv", crate::export::export_csv)
+    export_format_impl(state, path, "csv", crate::export::survey::export_csv)
 }
 
 /// Export project data to JSON
@@ -155,7 +164,7 @@ pub fn export_json(state: State<AppState>, path: PathBuf) -> Result<(), String> 
 }
 
 pub(crate) fn export_json_impl(state: &AppState, path: PathBuf) -> Result<(), String> {
-    export_format_impl(state, path, "json", crate::export::export_json)
+    export_format_impl(state, path, "json", crate::export::survey::export_json)
 }
 
 /// Export project data to Ariane TML/TMLU.
@@ -169,118 +178,44 @@ pub fn export_tml(state: State<AppState>, path: PathBuf) -> Result<Vec<String>, 
 }
 
 pub(crate) fn export_tml_impl(state: &AppState, path: PathBuf) -> Result<Vec<String>, String> {
-    export_format_with_notes(state, path, "tml", crate::export::export_tml)
+    export_format_with_notes(state, path, "tml", crate::export::survey::export_tml)
+}
+
+/// The open project and its views for an image (or its preview, or its
+/// Levels histogram), with the reference-leg flag taken from the live config.
+///
+/// Server-populated (#27): the export must colour its distance ramp and label
+/// its penetration with the same graph the app is showing, so the flag comes
+/// from the config, never from whatever the frontend sent.
+fn image_views(state: &AppState, options: &mut ExportImageOptions) -> Result<ExportViews, String> {
+    options.include_reference_legs = state.get_config().gas.include_reference_legs;
+    // The memoised Closures Computed View, so the image matches the on-screen
+    // (adjusted) map; where nothing is adjusted it is the measured layout.
+    state
+        .export_views()
+        .ok_or_else(|| "No project open".to_string())
 }
 
 /// Export map image with progress events via shared loading-progress infrastructure.
 ///
-/// This command runs heavy export work (SVG generation, PNG rasterization, PDF conversion)
-/// in a blocking thread pool to prevent freezing the UI and ensure progress events propagate.
-/// Progress is emitted using the shared ProgressEmitter (loading-progress events) for
-/// integration with the LoadingProgress component.
+/// This command runs heavy export work (the Computed View solve on a cache miss, SVG
+/// generation, PNG rasterization, PDF conversion) in a blocking thread pool to prevent freezing
+/// the UI and ensure progress events propagate. Progress is emitted using the shared
+/// ProgressEmitter (loading-progress events) for integration with the LoadingProgress component.
 #[tauri::command]
 pub async fn export_image(
-    state: State<'_, AppState>,
     app_handle: AppHandle,
     path: PathBuf,
-    mut options: ExportImageOptions,
+    options: ExportImageOptions,
 ) -> Result<(), String> {
-    // Server-populated (#27): the export must colour its distance ramp and
-    // label its penetration with the same graph the app is showing, so this
-    // comes from the live config, never from whatever the frontend sent.
-    options.include_reference_legs = state.get_config().gas.include_reference_legs;
-    let project = state.get_project_state().ok_or_else(|| {
-        tracing::warn!(
-            path = ?path,
-            purpose = "export map image for sharing",
-            format = ?options.format,
-            "Export requested with no project open"
-        );
-        "No project open".to_string()
-    })?;
-
-    // Never let an image export clobber a file the open project owns: the export
-    // renamed into place by `export/image.rs` would replace the live database, or the
-    // `.plnx` sibling holding every saved dive plan.
-    //
-    // `is_project_owned_file`, not `is_open_project_file`: this arm used the
-    // narrower `.stalx`-only predicate while the text exports and the dive
-    // profile used the wider one, so a PNG/SVG/PDF aimed at `<project>.plnx`
-    // was written - and the doc comment on `is_project_owned_file` already
-    // claimed the gap was closed.
-    if is_project_owned_file(&path, &project) {
-        tracing::warn!(
-            path = ?path,
-            open_project = ?project.file_path,
-            purpose = "protect the open project database",
-            "Refusing to export an image over a file the open project owns"
-        );
-        return Err("Cannot export over the open project file".to_string());
-    }
-
     let format = options.format;
     let log_path = path.clone();
-
-    // Run heavy export work in spawn_blocking to avoid freezing UI
-    // and ensure progress events are delivered during processing
     tauri::async_runtime::spawn_blocking(move || {
-        tracing::info!(
-            path = ?path,
-            purpose = "export map image for sharing",
-            format = ?options.format,
-            "Starting image export"
-        );
-        // Render from the memoized closure-adjusted solve so the saved image
-        // matches the on-screen (adjusted) map; falls back to measured
-        // coordinates when there are no eligible closures. Fetch before the
-        // emitter consumes `app_handle`.
-        let adjusted = app_handle
-            .state::<AppState>()
-            .inner()
-            .get_adjusted_stations();
-
-        // Use shared ProgressEmitter for consistent progress events
-        let mut emitter = ProgressEmitter::new_for_export(tauri_sink(app_handle));
-
-        // Start preparing phase
-        emitter.start_phase(LoadingPhase::ExportPreparing);
-
-        // Generate phase (SVG generation, rasterization)
-        emitter.start_phase(LoadingPhase::ExportGenerating);
-
-        // Perform the actual export
-        let result = match adjusted {
-            Some(stations) => {
-                crate::export::export_image_with_stations(&project, &path, &options, stations)
-            }
-            None => crate::export::export_image(&project, &path, &options),
-        };
-
-        if result.is_ok() {
-            // Writing phase
-            emitter.start_phase(LoadingPhase::ExportWriting);
-            emitter.complete_phase(LoadingPhase::ExportWriting);
-
-            // Complete phase
-            emitter.start_phase(LoadingPhase::ExportComplete);
-            emitter.complete_phase(LoadingPhase::ExportComplete);
-            tracing::info!(
-                path = ?path,
-                purpose = "export map image for sharing",
-                format = ?options.format,
-                "Image export completed"
-            );
-        } else if let Err(ref e) = result {
-            tracing::error!(
-                path = ?path,
-                purpose = "export map image for sharing",
-                format = ?options.format,
-                reason = %format_args!("{e:#}"),
-                "Image export failed"
-            );
-        }
-
-        result.map_err(|e| format!("{e:#}"))
+        let state = app_handle.state::<AppState>();
+        let sink = tauri_sink(app_handle.clone());
+        write_image_export(state.inner(), &path, options, || {
+            ProgressEmitter::new_for_export(sink)
+        })
     })
     .await
     .map_err(|e| {
@@ -295,44 +230,78 @@ pub async fn export_image(
     })?
 }
 
+/// [`export_image`] without progress events (the IPC-level tests).
 #[cfg(test)]
 pub(crate) fn export_image_impl(
     state: &AppState,
     path: PathBuf,
-    mut options: ExportImageOptions,
+    options: ExportImageOptions,
 ) -> Result<(), String> {
-    // See the `export_image` command: config wins over the wire (#27).
-    options.include_reference_legs = state.get_config().gas.include_reference_legs;
-    let project = state.get_project_state().ok_or_else(|| {
+    write_image_export(state, &path, options, || None::<ProgressEmitter>)
+}
+
+/// The image export: the views, the never-clobber guard, then the render and
+/// the write, with the export's progress phases on the emitter `progress`
+/// makes once the checks have passed (a refused export emits nothing).
+fn write_image_export<E: Into<Option<ProgressEmitter>>>(
+    state: &AppState,
+    path: &Path,
+    mut options: ExportImageOptions,
+    progress: impl FnOnce() -> E,
+) -> Result<(), String> {
+    let views = image_views(state, &mut options).inspect_err(|_| {
         tracing::warn!(
             path = ?path,
             purpose = "export map image for sharing",
             format = ?options.format,
             "Export requested with no project open"
         );
-        "No project open".to_string()
     })?;
 
-    // Mirror the live command's guard: never clobber a file the open project owns.
-    if is_project_owned_file(&path, &project) {
-        return Err("Cannot export over the open project file".to_string());
+    // Never let an image export clobber a file the open project owns: the export renamed into
+    // place would replace the project file, or the `.plnx` sibling holding every saved dive plan.
+    if is_project_owned_file(path, &views.project) {
+        tracing::warn!(
+            path = ?path,
+            open_project = ?views.project.file_path,
+            purpose = "protect the open project file",
+            "Refusing to export an image over a file the open project owns"
+        );
+        return Err(OWNED_FILE_REFUSAL.to_string());
     }
 
     tracing::info!(
         path = ?path,
         purpose = "export map image for sharing",
         format = ?options.format,
-        "Exporting map image"
+        "Starting image export"
     );
-    match crate::export::export_image(&project, &path, &options) {
+    let mut emitter: Option<ProgressEmitter> = progress().into();
+    if let Some(emitter) = emitter.as_mut() {
+        emitter.start_phase(LoadingPhase::ExportPreparing);
+        emitter.start_phase(LoadingPhase::ExportGenerating);
+    }
+    let result = crate::export::survey::export_image_with_positions(
+        &views.project,
+        path,
+        &options,
+        views.adjusted.as_ref(),
+        &views.raw,
+    );
+    match &result {
         Ok(()) => {
+            if let Some(emitter) = emitter.as_mut() {
+                emitter.start_phase(LoadingPhase::ExportWriting);
+                emitter.complete_phase(LoadingPhase::ExportWriting);
+                emitter.start_phase(LoadingPhase::ExportComplete);
+                emitter.complete_phase(LoadingPhase::ExportComplete);
+            }
             tracing::info!(
                 path = ?path,
                 purpose = "export map image for sharing",
                 format = ?options.format,
-                "Map image export completed"
+                "Image export completed"
             );
-            Ok(())
         }
         Err(e) => {
             tracing::error!(
@@ -340,11 +309,11 @@ pub(crate) fn export_image_impl(
                 purpose = "export map image for sharing",
                 format = ?options.format,
                 reason = %format_args!("{e:#}"),
-                "Map image export failed"
+                "Image export failed"
             );
-            Err(format!("{e:#}"))
         }
     }
+    result.map_err(|e| format!("{e:#}"))
 }
 
 /// The plan inputs a dive-profile export needs - the same tuple `compute_gas_reach_field` takes,
@@ -369,21 +338,18 @@ pub struct DiveProfileRequest {
     pub stage_drop_overrides: Vec<Option<StationRef>>,
 }
 
-/// Recompute the reach field for `request` and render its profile in `format`.
+/// Recompute the reach for `request` and render its profile in `format`.
 ///
 /// Runs `validate_plan_inputs` and `validate_plan_segments` exactly as `compute_gas_reach_field`
 /// does. Skipping them would make
 /// this the one entry point where a NaN RMV or an uncapped way-point list reaches the engine - and
 /// unlike the compute, which would just show nothing, this path renders a document the diver
 /// carries underwater.
-/// Takes the project by reference so ONE snapshot serves the whole command.
 ///
-/// `AppState::get_project_state` is a whole-`Project` deep clone, which is multi-second on a large
-/// survey; going through `AppState::gas_reach_field` (which clones again internally) on top of a
-/// snapshot taken for the name and another for the clobber guard meant three clones per export
-/// click. Calling the `Project` method directly on one clone also removes a real correctness wart:
-/// with three snapshots, the name, the guard and the computed field could each come from a
-/// different project state if a load landed between them.
+/// The slots resolve to stations exactly as the compute does (`gas_reach_field_wire`: a slot that
+/// names no station is `None`, which the engine treats as the compute does), so the profile is the
+/// route on screen. Takes the project by reference so ONE snapshot serves the whole command: the
+/// name, the clobber guard and the route all come from the same project state.
 fn render_profile_for(
     project: &Project,
     request: DiveProfileRequest,
@@ -396,18 +362,27 @@ fn render_profile_for(
         request.gas_config,
     )?;
     crate::commands::gas::validate_plan_segments(&request.segments, request.waypoints.len())?;
-    let field = project.compute_gas_reach_field_with_overrides(
-        request.origin.as_ref(),
-        request.endpoint.as_ref(),
-        &request.waypoints,
+    let station = |slot: &StationRef| project.station_at(*slot);
+    let waypoints: Vec<Option<StationId>> = request.waypoints.iter().map(station).collect();
+    let overrides: Vec<Option<StationId>> = request
+        .stage_drop_overrides
+        .iter()
+        .map(|slot| slot.as_ref().and_then(station))
+        .collect();
+    let reach = project.gas_reach(
+        request.origin.as_ref().and_then(station),
+        request.endpoint.as_ref().and_then(station),
+        &waypoints,
         &request.segments,
         &diver,
         &cylinders,
         &gas_config,
-        &request.stage_drop_overrides,
+        &overrides,
     );
-    crate::export::render_dive_profile(
-        &field,
+    crate::export::survey::render_dive_profile(
+        project,
+        &reach,
+        &request.waypoints,
         format,
         &crate::export::ProfileContext {
             project_name: &project.name,
@@ -430,55 +405,64 @@ pub async fn export_dive_profile(
     request: DiveProfileRequest,
 ) -> Result<(), String> {
     // Parse BEFORE anything else logs it. `format` is arbitrary caller input, and the refusal
-    // branch below records it with Display - a newline-bearing value would forge log records.
+    // branch records it with Display - a newline-bearing value would forge log records.
     let format = ProfileFormat::from_wire(&format).map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
-        let project = state
-            .get_project_state()
-            .ok_or_else(|| "No project open".to_string())?;
-        let refuse = |path: &PathBuf| {
-            tracing::warn!(
-                path = ?path,
-                open_project = ?project.file_path,
-                format = format.label(),
-                "Refused to export a dive profile over a file the open project owns"
-            );
-            "Cannot export over the open project file".to_string()
-        };
-        if is_project_owned_file(&path, &project) {
-            return Err(refuse(&path));
-        }
-        let rendered = render_profile_for(&project, request, format)?;
-        tracing::info!(
-            path = ?path,
-            purpose = "export the planned dive profile",
-            format = format.label(),
-            "Exporting dive profile"
-        );
-        // Re-check immediately before the write. Rendering runs the whole multi-Dijkstra compute, so
-        // unlike the sibling exports - which check and write adjacently - this path would otherwise
-        // leave a wide window in which `path` could be swapped for a symlink to the open project.
-        if is_project_owned_file(&path, &project) {
-            return Err(refuse(&path));
-        }
-        crate::export::write_atomic(&path, |w| {
-            std::io::Write::write_all(w, rendered.as_bytes())?;
-            Ok(())
-        })
-        .map_err(|e| {
-            tracing::error!(path = ?path, reason = %e, "Dive profile export failed");
-            format!("{e:#}")
-        })?;
-        tracing::info!(
-            path = ?path,
-            format = format.label(),
-            "Dive profile export completed"
-        );
-        Ok(())
+        export_dive_profile_impl(state.inner(), &path, format, request)
     })
     .await
     .map_err(|e| format!("Dive profile export task panicked: {e}"))?
+}
+
+fn export_dive_profile_impl(
+    state: &AppState,
+    path: &Path,
+    format: ProfileFormat,
+    request: DiveProfileRequest,
+) -> Result<(), String> {
+    let project = state
+        .get_project_state()
+        .ok_or_else(|| "No project open".to_string())?;
+    let refuse = |path: &Path| {
+        tracing::warn!(
+            path = ?path,
+            open_project = ?project.file_path,
+            format = format.label(),
+            "Refused to export a dive profile over a file the open project owns"
+        );
+        OWNED_FILE_REFUSAL.to_string()
+    };
+    if is_project_owned_file(path, &project) {
+        return Err(refuse(path));
+    }
+    let rendered = render_profile_for(&project, request, format)?;
+    tracing::info!(
+        path = ?path,
+        purpose = "export the planned dive profile",
+        format = format.label(),
+        "Exporting dive profile"
+    );
+    // Re-check immediately before the write. Rendering runs the whole multi-Dijkstra compute, so
+    // unlike the sibling exports - which check and write adjacently - this path would otherwise
+    // leave a wide window in which `path` could be swapped for a symlink to the open project.
+    if is_project_owned_file(path, &project) {
+        return Err(refuse(path));
+    }
+    crate::export::write_atomic(path, |w| {
+        std::io::Write::write_all(w, rendered.as_bytes())?;
+        Ok(())
+    })
+    .map_err(|e| {
+        tracing::error!(path = ?path, reason = %e, "Dive profile export failed");
+        format!("{e:#}")
+    })?;
+    tracing::info!(
+        path = ?path,
+        format = format.label(),
+        "Dive profile export completed"
+    );
+    Ok(())
 }
 
 /// Render the planned dive profile as text WITHOUT writing it, for the clipboard (#299).
@@ -489,60 +473,69 @@ pub async fn render_dive_profile_text(
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
-        let project = state
-            .get_project_state()
-            .ok_or_else(|| "No project open".to_string())?;
-        render_profile_for(&project, request, ProfileFormat::PlainText)
+        render_dive_profile_text_impl(state.inner(), request)
     })
     .await
     .map_err(|e| format!("Dive profile render task panicked: {e}"))?
+}
+
+fn render_dive_profile_text_impl(
+    state: &AppState,
+    request: DiveProfileRequest,
+) -> Result<String, String> {
+    let project = state
+        .get_project_state()
+        .ok_or_else(|| "No project open".to_string())?;
+    render_profile_for(&project, request, ProfileFormat::PlainText)
 }
 
 /// Generate the SVG markup that `export_image` would write, without
 /// touching the filesystem. Used by the export dialog so the preview is
 /// pixel-for-pixel identical to what export will produce.
 ///
-/// Runs the (potentially heavy: bounds + Dijkstra + polyline emission)
-/// work in `spawn_blocking` so the slider can drag without stalling the
-/// Tauri main thread on large surveys - mirroring `export_image`.
+/// Runs the (potentially heavy: the Computed View solve on a cache miss,
+/// bounds + Dijkstra + polyline emission) work in `spawn_blocking` so the
+/// slider can drag without stalling the Tauri main thread on large surveys -
+/// mirroring `export_image`.
 #[tauri::command]
 pub async fn preview_svg_export(
     app_handle: AppHandle,
-    mut options: ExportImageOptions,
+    options: ExportImageOptions,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
-        // Same config-wins rule as the export itself, so the preview cannot
-        // disagree with the file it is previewing (#27).
-        options.include_reference_legs = state.get_config().gas.include_reference_legs;
-        let project = state
-            .get_project_state()
-            .ok_or_else(|| "No project open".to_string())?;
-        // Render from the memoized closure-adjusted solve so the preview matches
-        // the on-screen (adjusted) map; falls back to measured coordinates when
-        // there are no eligible closures.
-        match state.inner().get_adjusted_stations() {
-            Some(stations) => {
-                crate::export::generate_svg_string_with_stations(&project, &options, stations)
-            }
-            None => crate::export::generate_svg_string(&project, &options),
-        }
-        .map_err(|e| e.to_string())
+        preview_svg_export_impl(state.inner(), options)
     })
     .await
     .map_err(|e| format!("Preview task panicked: {e}"))?
 }
 
+fn preview_svg_export_impl(
+    state: &AppState,
+    mut options: ExportImageOptions,
+) -> Result<String, String> {
+    // Same views and config-wins rule as the export itself, so the preview
+    // cannot disagree with the file it is previewing (#27).
+    let views = image_views(state, &mut options)?;
+    crate::export::survey::generate_svg_string_with_positions(
+        &views.project,
+        &options,
+        views.adjusted.as_ref(),
+        &views.raw,
+    )
+    .map_err(|e| e.to_string())
+}
+
 /// Bin the values an image export would colour for `kind` (depth, or
 /// penetration distance from the entrance) over the export's own auto range,
 /// for the Export panel's Levels slider. Uses exactly the export's data: the
-/// adjusted solve when there is one (depth), the measured network (distance).
+/// Computed View the image draws (depth), the measured network (distance).
 #[tauri::command]
 pub async fn export_value_histogram(
     app_handle: AppHandle,
-    kind: crate::export::color_scale::ExportValueKind,
+    kind: ExportValueKind,
     bins: u32,
-) -> Result<crate::export::color_scale::ValueHistogram, String> {
+) -> Result<ValueHistogram, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         export_value_histogram_impl(state.inner(), kind, bins)
@@ -553,22 +546,18 @@ pub async fn export_value_histogram(
 
 pub(crate) fn export_value_histogram_impl(
     state: &AppState,
-    kind: crate::export::color_scale::ExportValueKind,
+    kind: ExportValueKind,
     bins: u32,
-) -> Result<crate::export::color_scale::ValueHistogram, String> {
-    let include_reference_legs = state.get_config().gas.include_reference_legs;
-    let project = state
-        .get_project_state()
-        .ok_or_else(|| "No project open".to_string())?;
-    let stations = state
-        .get_adjusted_stations()
-        .unwrap_or_else(|| project.compute_station_coordinates());
-    Ok(crate::export::color_scale::export_value_histogram(
-        &project,
-        &stations,
+) -> Result<ValueHistogram, String> {
+    let mut options = ExportImageOptions::default();
+    let views = image_views(state, &mut options)?;
+    Ok(crate::export::survey::export_value_histogram(
+        &views.project,
+        views.adjusted.as_ref(),
+        &views.raw,
         kind,
         bins as usize,
-        include_reference_legs,
+        options.include_reference_legs,
     ))
 }
 
@@ -648,23 +637,8 @@ mod tests {
         assert!(ok(&[], zero).is_err());
     }
 
-    /// The export path must actually CALL the validator, not merely have one available.
-    ///
-    /// `render_profile_for` is a second door into the gas engine, and the engine validates nothing -
-    /// its contract says the COMMAND owns that. This is the test that fails if the call is dropped:
-    /// an over-cap way-point list must come back as the CAP error. Without the validator the same
-    /// request reaches the engine and fails later with the no-route message instead, so the two
-    /// outcomes are distinguishable and the assertion cannot pass vacuously.
-    ///
-    /// Reachable as a unit test only because `render_profile_for` takes a `&Project` rather than an
-    /// `AppHandle` - the tuple `Project::new` builds is enough, since validation runs before any
-    /// survey data is touched.
-    #[test]
-    fn the_export_path_actually_runs_the_validator() {
-        use crate::core::state::dive_plan::MAX_WAYPOINTS;
-
-        let project = Project::new("Cave".to_string(), None);
-        let request = |waypoints: Vec<StationRef>| DiveProfileRequest {
+    fn request(waypoints: Vec<StationRef>) -> DiveProfileRequest {
+        DiveProfileRequest {
             origin: None,
             endpoint: None,
             waypoints,
@@ -676,7 +650,25 @@ mod tests {
             cylinders: Vec::new(),
             gas_config: GasConfig::default(),
             stage_drop_overrides: Vec::new(),
-        };
+        }
+    }
+
+    /// The export path must actually CALL the validator, not merely have one available.
+    ///
+    /// `render_profile_for` is a second door into the gas engine, and the engine validates nothing -
+    /// its contract says the COMMAND owns that. This is the test that fails if the call is dropped:
+    /// an over-cap way-point list must come back as the CAP error. Without the validator the same
+    /// request reaches the engine and fails later with the no-route message instead, so the two
+    /// outcomes are distinguishable and the assertion cannot pass vacuously.
+    ///
+    /// Reachable as a unit test only because `render_profile_for` takes a `&Project` rather than an
+    /// `AppHandle` - an empty survey is enough, since validation runs before any survey data is
+    /// touched.
+    #[test]
+    fn the_export_path_actually_runs_the_validator() {
+        use crate::core::state::dive_plan::MAX_WAYPOINTS;
+
+        let project = Project::new("Cave", None);
 
         let err = render_profile_for(
             &project,
@@ -724,27 +716,378 @@ mod tests {
     /// that never happened.
     #[test]
     fn a_plan_with_no_swimmable_leg_is_refused_by_both_formats() {
-        let project = Project::new("Cave".to_string(), None);
+        let project = Project::new("Cave", None);
         for format in [ProfileFormat::PlainText, ProfileFormat::SubsurfaceXml] {
-            let err = render_profile_for(
-                &project,
-                DiveProfileRequest {
-                    origin: None,
-                    endpoint: None,
-                    waypoints: Vec::new(),
-                    segments: Vec::new(),
-                    diver: Diver {
-                        rmv_l_per_min: 20.0,
-                        label: None,
-                    },
-                    cylinders: Vec::new(),
-                    gas_config: GasConfig::default(),
-                    stage_drop_overrides: Vec::new(),
-                },
-                format,
-            )
-            .unwrap_err();
+            let err = render_profile_for(&project, request(Vec::new()), format).unwrap_err();
             assert!(err.contains("no route to export"), "{format:?}: {err}");
         }
+    }
+}
+
+/// Every export command on a v2 project opened from its file: each writes
+/// what `export::survey` writes for the open project, images and the Levels
+/// histogram from the memoised Closures Computed View, and each refuses a
+/// file the open project owns and a state with no project.
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod v2_tests {
+    use super::*;
+    use crate::export::color_scale::ExportValueKind;
+    use crate::export::ImageFormat;
+    use crate::models::survey::{ClosureStrategy, LineMeta, StartAt, ZeroDatum};
+    use crate::models::{CylRole, GpsCoordinates, LineId, ShotData, TankMaterial};
+    use crate::test_helpers::{app_state_with_project_db, TestDb};
+    use tempfile::TempDir;
+
+    fn shot(length: f64, azimuth: f64, depth_in: f64, depth_out: f64) -> ShotData {
+        ShotData {
+            length,
+            azimuth_in: azimuth,
+            azimuth_out: azimuth,
+            depth_in,
+            depth_out,
+            ..ShotData::default()
+        }
+    }
+
+    fn line_meta(name: &str) -> LineMeta {
+        LineMeta {
+            name: Some(name.to_string()),
+            color: "#336699".to_string(),
+            ..LineMeta::default()
+        }
+    }
+
+    /// "Export Cave": Main, a square loop surveyed with a 1 m misclosure and
+    /// closed by a Batch closure (so the Computed View moves it), its start
+    /// held by a datum; Branch starts on Main's station 1, a junction with a
+    /// station comment.
+    fn cave() -> (Project, LineId) {
+        let mut p = Project::new("Export Cave", None);
+        let main = p
+            .add_line(
+                line_meta("Main"),
+                StartAt::New,
+                vec![
+                    shot(10.0, 0.0, 1.0, 2.0),
+                    shot(10.0, 90.0, 2.0, 3.0),
+                    shot(10.0, 180.0, 3.0, 2.5),
+                    shot(9.0, 270.0, 2.5, 1.0),
+                ],
+            )
+            .unwrap();
+        let chain: Vec<StationId> = p.line(main).unwrap().stations().collect();
+        p.add_line(
+            line_meta("Branch"),
+            StartAt::Station(chain[1]),
+            vec![shot(5.0, 45.0, 2.0, 4.0), shot(5.0, 45.0, 4.0, 6.0)],
+        )
+        .unwrap();
+        p.datums.push(ZeroDatum {
+            via: Some(main),
+            ..ZeroDatum::new(chain[0], GpsCoordinates::new(20.5, -87.25, 0.0).unwrap())
+        });
+        p.push_closure(
+            chain[4],
+            Some(main),
+            chain[0],
+            Some(main),
+            ClosureStrategy::Batch,
+        );
+        p.station_mut(chain[1]).unwrap().comment = Some("junction".to_string());
+        assert!(p.validate().is_empty(), "{:?}", p.validate());
+        (p, main)
+    }
+
+    /// The cave written as a v2 `.stalx` and opened from it, with the project
+    /// as the app holds it.
+    fn opened() -> (AppState, TestDb, Project, LineId) {
+        let (project, main) = cave();
+        let (state, db) = app_state_with_project_db(project).unwrap();
+        let open = state.get_project_state().unwrap();
+        assert_eq!(
+            open.file_path.as_deref(),
+            Some(db.path()),
+            "opened from its file"
+        );
+        (state, db, open, main)
+    }
+
+    fn svg_options() -> ExportImageOptions {
+        ExportImageOptions {
+            format: ImageFormat::Svg,
+            ..ExportImageOptions::default()
+        }
+    }
+
+    /// The two views the image commands must draw: the open project's
+    /// Computed View under the live config, and its measured layout.
+    fn views_of(state: &AppState, open: &Project) -> (Arc<AdjustedPositions>, RawPositions) {
+        let config = state.get_config();
+        (
+            Arc::new(open.adjusted_positions(&config.closure_adjustment)),
+            open.raw_positions(),
+        )
+    }
+
+    use crate::models::survey::{AdjustedPositions, RawPositions};
+    use std::sync::Arc;
+
+    fn plan(main: LineId, waypoints: Vec<StationRef>) -> DiveProfileRequest {
+        DiveProfileRequest {
+            origin: Some(StationRef::new(main, 0)),
+            endpoint: Some(StationRef::new(main, 3)),
+            waypoints,
+            segments: Vec::new(),
+            diver: Diver::new(20.0, None).unwrap(),
+            cylinders: vec![Cylinder::new(
+                11.1,
+                207.0,
+                200.0,
+                TankMaterial::Aluminium,
+                CylRole::BackGas,
+                None,
+            )
+            .unwrap()],
+            gas_config: GasConfig::default(),
+            stage_drop_overrides: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn csv_writes_the_survey_exporters_rows_of_the_open_project() {
+        let (state, _db, open, _) = opened();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("cave.csv");
+        export_csv_impl(&state, path.clone()).unwrap();
+        let mut expected = Vec::new();
+        crate::export::survey::write_csv(&open, &mut expected).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), expected);
+        // The junction is one station: its Station ID ends Main's first row
+        // and starts Branch's (declared change, plan 12.2). Columns: line,
+        // from, to, from_id, to_id, ...
+        let junction = open.lines()[0].shots[0].to.to_string();
+        let text = String::from_utf8(expected).unwrap();
+        let ids: Vec<(&str, &str, &str)> = text
+            .lines()
+            .skip(1)
+            .map(|row| {
+                let fields: Vec<&str> = row.split(',').collect();
+                (fields[0], fields[3], fields[4])
+            })
+            .collect();
+        let start = open.lines()[0].start.to_string();
+        assert_eq!(
+            ids[0],
+            ("Main", start.as_str(), junction.as_str()),
+            "{text}"
+        );
+        assert_eq!(ids[4].0, "Branch", "{text}");
+        assert_eq!(ids[4].1, junction, "Branch starts on the junction: {text}");
+    }
+
+    #[test]
+    fn json_writes_the_survey_exporters_records_of_the_open_project() {
+        let (state, _db, open, _) = opened();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("cave.json");
+        export_json_impl(&state, path.clone()).unwrap();
+        let written = std::fs::read(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&written).unwrap();
+        assert_eq!(value["project"]["name"], "Export Cave");
+        let at =
+            chrono::DateTime::parse_from_rfc3339(value["project"]["exported_at"].as_str().unwrap())
+                .unwrap()
+                .with_timezone(&chrono::Utc);
+        let mut expected = Vec::new();
+        crate::export::survey::write_json(&open, at, &mut expected).unwrap();
+        assert_eq!(written, expected);
+    }
+
+    #[test]
+    fn tml_writes_the_survey_exporters_document_of_the_open_project() {
+        let (state, _db, open, _) = opened();
+        let dir = TempDir::new().unwrap();
+        for name in ["cave.tmlu", "cave.tml"] {
+            let path = dir.path().join(name);
+            let notes = export_tml_impl(&state, path.clone()).unwrap();
+            assert!(
+                notes.is_empty(),
+                "an ordinary project has no notes: {notes:?}"
+            );
+            let reference = dir.path().join(format!("reference-{name}"));
+            crate::export::survey::export_tml(&open, &reference).unwrap();
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                std::fs::read(&reference).unwrap(),
+                "{name}"
+            );
+        }
+        // Ariane ids are Station IDs (plan X1): the START is Main's start.
+        let text = std::fs::read_to_string(dir.path().join("cave.tmlu")).unwrap();
+        let start = open.lines()[0].start;
+        assert!(text.contains(&format!("<ID>{start}</ID>")), "{text}");
+    }
+
+    #[test]
+    fn the_image_and_its_preview_draw_the_memoised_computed_view() {
+        let (state, _db, open, _) = opened();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("cave.svg");
+        // The frontend's reference-leg flag is ignored: the config's wins (#27).
+        let include = state.get_config().gas.include_reference_legs;
+        let sent = ExportImageOptions {
+            include_reference_legs: !include,
+            ..svg_options()
+        };
+        export_image_impl(&state, path.clone(), sent.clone()).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        let preview = preview_svg_export_impl(&state, sent).unwrap();
+        assert_eq!(preview, written, "the preview is the file");
+
+        let (adjusted, raw) = views_of(&state, &open);
+        let options = ExportImageOptions {
+            include_reference_legs: include,
+            ..svg_options()
+        };
+        let expected = crate::export::survey::generate_svg_string_with_positions(
+            &open,
+            &options,
+            adjusted.as_ref(),
+            &raw,
+        )
+        .unwrap();
+        assert_eq!(written, expected);
+        let measured = crate::export::survey::generate_svg_string(&open, &options).unwrap();
+        assert_ne!(
+            written, measured,
+            "the loop is adjusted, so the image is not the measured layout"
+        );
+
+        // The raster writer runs from the same views.
+        let png = dir.path().join("cave.png");
+        let options = ExportImageOptions {
+            format: ImageFormat::Png,
+            dpi: 72,
+            ..ExportImageOptions::default()
+        };
+        export_image_impl(&state, png.clone(), options).unwrap();
+        assert!(std::fs::read(&png).unwrap().starts_with(b"\x89PNG"));
+    }
+
+    #[test]
+    fn the_levels_histogram_bins_the_computed_view() {
+        let (state, _db, open, _) = opened();
+        let (adjusted, raw) = views_of(&state, &open);
+        let include = state.get_config().gas.include_reference_legs;
+        for (kind, bins) in [(ExportValueKind::Depth, 16), (ExportValueKind::Distance, 4)] {
+            let got = export_value_histogram_impl(&state, kind, bins).unwrap();
+            let expected = crate::export::survey::export_value_histogram(
+                &open,
+                adjusted.as_ref(),
+                &raw,
+                kind,
+                bins as usize,
+                include,
+            );
+            assert_eq!(got, expected, "{kind:?}");
+            assert_eq!(got.counts.len(), bins as usize);
+        }
+        let depth = export_value_histogram_impl(&state, ExportValueKind::Depth, 16).unwrap();
+        assert_eq!(
+            depth.counts.iter().sum::<u32>(),
+            7,
+            "one count per station: Main's 5 and Branch's 2 (its start is the junction)"
+        );
+    }
+
+    #[test]
+    fn the_dive_profile_renders_and_writes_the_route_of_the_open_project() {
+        let (state, _db, _open, main) = opened();
+        let text = render_dive_profile_text_impl(&state, plan(main, Vec::new())).unwrap();
+        assert!(text.contains("Export Cave"), "{text}");
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("dive.txt");
+        export_dive_profile_impl(
+            &state,
+            &path,
+            ProfileFormat::PlainText,
+            plan(main, Vec::new()),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+
+        let xml = dir.path().join("dive.ssrf");
+        export_dive_profile_impl(
+            &state,
+            &xml,
+            ProfileFormat::SubsurfaceXml,
+            plan(main, vec![StationRef::new(main, 2)]),
+        )
+        .unwrap();
+        assert!(std::fs::read_to_string(&xml).unwrap().starts_with("<?xml"));
+    }
+
+    #[test]
+    fn every_export_refuses_a_file_the_open_project_owns() {
+        let (state, db, _open, main) = opened();
+        let plnx = db.path().with_extension("plnx");
+        std::fs::write(&plnx, b"dive plans").unwrap();
+        for target in [db.path().to_path_buf(), plnx] {
+            let before = std::fs::read(&target).unwrap();
+            let refusals = [
+                export_csv_impl(&state, target.clone()).err(),
+                export_json_impl(&state, target.clone()).err(),
+                export_tml_impl(&state, target.clone()).err(),
+                export_image_impl(&state, target.clone(), svg_options()).err(),
+                export_dive_profile_impl(
+                    &state,
+                    &target,
+                    ProfileFormat::PlainText,
+                    plan(main, Vec::new()),
+                )
+                .err(),
+            ];
+            for refusal in refusals {
+                assert_eq!(refusal.as_deref(), Some(OWNED_FILE_REFUSAL), "{target:?}");
+            }
+            assert_eq!(
+                std::fs::read(&target).unwrap(),
+                before,
+                "{target:?} untouched"
+            );
+        }
+    }
+
+    #[test]
+    fn every_export_needs_an_open_project() {
+        let state = AppState::new().unwrap();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("out");
+        let main = 1;
+        let errors = [
+            export_csv_impl(&state, path.clone()).err(),
+            export_json_impl(&state, path.clone()).err(),
+            export_tml_impl(&state, path.clone()).err(),
+            export_image_impl(&state, path.clone(), svg_options()).err(),
+            preview_svg_export_impl(&state, svg_options()).err(),
+            export_value_histogram_impl(&state, ExportValueKind::Depth, 8).err(),
+            render_dive_profile_text_impl(&state, plan(main, Vec::new())).err(),
+            export_dive_profile_impl(
+                &state,
+                &path,
+                ProfileFormat::PlainText,
+                plan(main, Vec::new()),
+            )
+            .err(),
+        ];
+        for error in errors {
+            assert_eq!(error.as_deref(), Some("No project open"));
+        }
+        assert!(!path.exists());
     }
 }

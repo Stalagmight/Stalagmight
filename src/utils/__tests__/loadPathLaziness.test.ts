@@ -96,7 +96,7 @@ function makeEnvelope(nLines: number, shotsPer: number): BinaryEnvelope {
     // Keep in sync with BINARY_FORMAT_VERSION / EXPECTED_VERSION. This fixture
     // feeds buildResult() directly, bypassing the envelope-version gate, so a
     // stale value here rots silently rather than failing.
-    version: 8,
+    version: 9,
     loading_id: 1,
     is_remote: false,
     project_header: {
@@ -111,7 +111,6 @@ function makeEnvelope(nLines: number, shotsPer: number): BinaryEnvelope {
       station_merges: [],
       zero_datums: [],
       loop_closures: [],
-      line_offsets: [],
       station_offsets: [],
       station_comments_map: [],
       imported_file_hashes: [],

@@ -7,6 +7,7 @@ import { beforeEach, describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import DeleteShotImpactDetails, { type ShotImpactRelationships } from './DeleteShotImpactDetails';
 import { useProjectStore } from '../../store/projectStore';
+import { accessibleText } from '../../test/accessibleText';
 
 // Names that differ from the positional indices: a label built from the
 // handles (`0:1`) can never pass for one built from the names.
@@ -24,11 +25,7 @@ beforeEach(() => {
 const none: ShotImpactRelationships = {
   removed_merges: [],
   removed_closures: [],
-  replacement_merges: [],
-  replacement_closure_updates: [],
   closure_to_merge: [],
-  merge_rewire_skipped: false,
-  closure_rewire_skipped: false,
 };
 
 describe('DeleteShotImpactDetails - closures across one shot (#737)', () => {
@@ -52,7 +49,8 @@ describe('DeleteShotImpactDetails - closures across one shot (#737)', () => {
     expect(block).toHaveTextContent(
       'Close Gap & Delete removes these loop closures (they would span a single shot)'
     );
-    expect(block).toHaveTextContent('#3: Main Line / A1 <-> Main Line / A5');
+    // Full highlighting: line pills, the line as the context.
+    expect(block).toHaveTextContent(/#3: Main Line: A1( Station ID \d+)? <-> Main Line: A5/);
     expect(block.textContent).not.toMatch(/\d+:\d+ /);
     // Not mixed up with the closures removed because a station goes.
     expect(screen.queryByText('Removed closures')).toBeNull();
@@ -86,5 +84,71 @@ describe('DeleteShotImpactDetails - closures across one shot (#737)', () => {
     expect(container).toBeEmptyDOMElement();
     rerender(<DeleteShotImpactDetails impact={none} />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe('DeleteShotImpactDetails - the station graph (plan 5.4)', () => {
+  it('says the line leaves a station it shared, and which closures join their stations', () => {
+    render(
+      <DeleteShotImpactDetails
+        impact={{
+          ...none,
+          removed_merges: [{ station_a: { line_id: 0, station_index: 5 }, station_b: { line_id: 0, station_index: 1 } }],
+          closure_to_merge: [{ station_a: { line_id: 0, station_index: 1 }, station_b: { line_id: 0, station_index: 5 } }],
+        }}
+      />
+    );
+    expect(screen.getByText('No longer shared with another line')).toBeInTheDocument();
+    expect(screen.getByText('Loop closures that join their two stations into one')).toBeInTheDocument();
+    // Nothing is re-wired on the station graph: no replacement rows exist.
+    expect(screen.queryByText(/Replacement/)).toBeNull();
+    expect(screen.queryByText(/could not be/)).toBeNull();
+  });
+});
+
+/**
+ * Package RS-FX1 (farm 7a5ed348b262, 56ce8638669d): what the delete does to
+ * station names and comments on its own (RS 4.3, 12), and, when Split is
+ * offered too, what Split would do, in the notice's words before the user
+ * confirms. Injection: dropping either block fails its assertion.
+ */
+describe('DeleteShotImpactDetails - station names and comments (RS-FX1)', () => {
+  it('says what the delete and the Split choice do to names and comments', () => {
+    render(
+      <DeleteShotImpactDetails
+        impact={{
+          ...none,
+          identities: {
+            lettered: [],
+            restored: [],
+            unarchived: [],
+            hidden: [{ id: 5, name: 'A5', home_line: 0, comment: 'Sump' }],
+          },
+          split_identities: {
+            lettered: [],
+            restored: [],
+            unarchived: [],
+            hidden: [{ id: 1, name: 'A1', home_line: 0, comment: 'Low air' }],
+          },
+        }}
+      />
+    );
+    // Each station is a prose pill (RS-PROSE); the sentence reads as plain
+    // text wrote it.
+    const sentence = (id: string) => screen.getByTestId(id).querySelector('p:not(.font-medium)')!;
+    expect(sentence('impact-identities').querySelector('.sh-ppill[data-prose-kind="station"]')).not.toBeNull();
+    expect(accessibleText(sentence('impact-identities'))).toBe(
+      'Main Line / A5\'s comment ("Sump") is hidden: Undo brings it back.'
+    );
+    expect(screen.getByTestId('impact-split-identities')).toHaveTextContent('If you choose Split Line instead');
+    expect(sentence('impact-split-identities').querySelector('.sh-ppill[data-prose-kind="station"]')).not.toBeNull();
+    expect(accessibleText(sentence('impact-split-identities'))).toBe(
+      'Main Line / A1\'s comment ("Low air") is hidden: Undo brings it back.'
+    );
+  });
+
+  it('says nothing when the delete changes no name or comment', () => {
+    render(<DeleteShotImpactDetails impact={none} />);
+    expect(screen.queryByTestId('impact-identities')).toBeNull();
   });
 });

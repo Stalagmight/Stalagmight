@@ -11,10 +11,8 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::image::{
-    depth_gradient_color, depth_range, distance_gradient_color, distance_ramp_at, DepthRamp,
-    DIST_UNREACHABLE,
+    depth_gradient_color, distance_gradient_color, distance_ramp_at, DepthRamp, DIST_UNREACHABLE,
 };
-use crate::models::Project;
 
 /// Most entries a baked palette may carry (the frontend sends 256).
 pub const MAX_PALETTE_ENTRIES: usize = 4096;
@@ -217,48 +215,6 @@ pub(super) fn distance_color(
     scale.color_at(t).unwrap_or_else(|| distance_ramp_at(t))
 }
 
-/// Bin counts for the export's Levels slider for `kind`, over the export's own
-/// auto range: station depths over the extent the export normalises across
-/// (stations and shot depth readings), distance from the entrance over the
-/// measured network.
-pub fn export_value_histogram(
-    project: &Project,
-    stations: &[crate::models::Station],
-    kind: ExportValueKind,
-    bins: usize,
-    include_reference_legs: bool,
-) -> ValueHistogram {
-    let ((min, max), counts) = match kind {
-        ExportValueKind::Depth => {
-            let extent = depth_range(project, stations);
-            (
-                extent,
-                bin_values(stations.iter().map(|s| s.coordinates.z), extent, bins),
-            )
-        }
-        ExportValueKind::Distance => {
-            let field = project.distance_field_from_with(
-                &project.compute_station_coordinates(),
-                None,
-                include_reference_legs,
-            );
-            let extent = (
-                0.0,
-                if field.max_reachable > 0.0 {
-                    field.max_reachable
-                } else {
-                    1.0
-                },
-            );
-            (
-                extent,
-                bin_values(field.distances.iter().filter_map(|d| *d), extent, bins),
-            )
-        }
-    };
-    ValueHistogram { min, max, counts }
-}
-
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
@@ -342,19 +298,18 @@ mod tests {
         }
     }
 
-    fn sloping_project() -> Project {
-        let mut project = Project::new("Scale".to_string(), None);
-        project.add_line(crate::models::LineData {
-            name: Some("A".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![shot(10.0, 0.0, 10.0), shot(10.0, 10.0, 20.0)],
-            ..Default::default()
-        });
-        project
+    fn sloping_project() -> crate::models::survey::Project {
+        let mut survey = crate::export::survey::test_helpers::Survey::new("Scale");
+        survey.named(
+            "A",
+            "#000000",
+            vec![shot(10.0, 0.0, 10.0), shot(10.0, 10.0, 20.0)],
+        );
+        survey.build()
     }
 
     fn render(depth_scale: Option<ExportColorScale>) -> String {
-        crate::export::generate_svg_string(
+        crate::export::survey::generate_svg_string(
             &sloping_project(),
             &crate::export::ExportImageOptions {
                 format: crate::export::ImageFormat::Png,
@@ -417,14 +372,27 @@ mod tests {
         );
     }
 
+    /// The depth histogram spans what the render normalises across (every
+    /// station's depth and every shot reading: 0..20 m here) and counts every
+    /// station once.
     #[test]
     fn the_depth_histogram_covers_the_export_range() {
         let project = sloping_project();
-        let stations = project.compute_station_coordinates();
-        let h = export_value_histogram(&project, &stations, ExportValueKind::Depth, 8, false);
-        assert_eq!((h.min, h.max), depth_range(&project, &stations));
+        let raw = project.raw_positions();
+        let h = crate::export::survey::export_value_histogram(
+            &project,
+            &raw,
+            &raw,
+            ExportValueKind::Depth,
+            8,
+            false,
+        );
+        assert_eq!((h.min, h.max), (0.0, 20.0));
         assert_eq!(h.counts.len(), 8);
-        assert_eq!(h.counts.iter().sum::<u32>() as usize, stations.len());
+        assert_eq!(
+            h.counts.iter().sum::<u32>() as usize,
+            project.stations.len()
+        );
     }
 
     #[test]

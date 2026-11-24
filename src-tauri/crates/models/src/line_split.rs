@@ -1,5 +1,5 @@
-//! Arguments for Split Line Here (#335): where to cut a line, and what
-//! each half gets of the station the cut duplicates.
+//! Arguments for Split Line Here (#335): where to cut a line, and the
+//! names and colours of the two halves (which share the split station).
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -18,7 +18,9 @@ pub enum SplitAt {
     Shot { shot_id: ShotId, distance: f64 },
 }
 
-/// Which half of the split keeps something that sat on the split station.
+/// A half of a split, as [`SplitPreview::moved_side`] names it (0.6.0's
+/// dialog also used it to say which half kept the split station's comment
+/// and datum; the halves now share that station).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum SplitSide {
@@ -26,7 +28,7 @@ pub enum SplitSide {
     A,
     /// The new second half.
     B,
-    /// Both halves get a copy. Not allowed for a zero datum.
+    /// Both halves.
     Both,
 }
 
@@ -59,7 +61,10 @@ pub struct SplitPreview {
     pub removed_already_one_point: Vec<ClosurePair>,
 }
 
-/// The choices the Split Line Here dialog sends.
+/// The choices the Split Line Here dialog sends. The halves share the split
+/// station, so its name, comment and datums stay on that one station: there
+/// is no side to choose (plan S9; 0.6.0's `comment_side` / `datum_side` left
+/// the wire).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct SplitLineOptions {
     pub name_a: String,
@@ -68,22 +73,11 @@ pub struct SplitLineOptions {
     pub color_a: String,
     /// `#rrggbb`.
     pub color_b: String,
-    /// Which half keeps a comment on the split station.
-    pub comment_side: SplitSide,
-    /// Which half keeps a zero datum on the split station: `A` or `B`.
-    pub datum_side: SplitSide,
 }
 
-impl SplitLineOptions {
-    /// Why these choices cannot make a split, if they cannot: a half with no
-    /// name (empty or only whitespace), or a zero datum asked to stay on both
-    /// halves. The model, the command and the dialog's preview all refuse on
-    /// it, so they agree.
-    pub fn refusal(&self) -> Option<String> {
-        if self.name_a.trim().is_empty() || self.name_b.trim().is_empty() {
-            return Some("Each half of a split needs a name".to_string());
-        }
-        (self.datum_side == SplitSide::Both)
-            .then(|| "A zero datum can stay on only one half of a split".to_string())
-    }
-}
+/// Minimum length (meters) either child of a split may end up with (issue
+/// #59). A split is only accepted when both `distance` and
+/// `shot.length - distance` are at least this floor, so a shot must be at
+/// least `2 * MIN_SPLIT_CHILD_LENGTH_M` long to be splittable at all. Mirrored
+/// on the frontend in `src/utils/shotSplit.ts`.
+pub const MIN_SPLIT_CHILD_LENGTH_M: f64 = 0.01;

@@ -5,6 +5,8 @@ import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
+import { EntityBlob } from '../common/EntityBlob';
+import { Prose } from '../common/Prose';
 import { DialogWrapper } from './DialogWrapper';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -22,7 +24,9 @@ import type { GpsCoordinates } from '../../types/project';
 import type { StationRef } from '../../types/project';
 import type { DatumGap } from '../../types/ipc/DatumGap';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
-import { stationNameProblem, stationNameProblemMessage } from '../../utils/nameValidation';
+import { useProse } from '../../hooks/useProse';
+import { stationRenameProblem, stationNameProblemMessage } from '../../utils/nameValidation';
+import { editNeedsOwnerPrompt, ShownIdentityPrompt } from './ShownIdentityPrompt';
 
 const DIALOG_ID = 'edit-station';
 
@@ -37,6 +41,7 @@ export default function EditStationDialog() {
   const { closeDialog, dialogData } = useUIStore();
   const { stations, project, setZeroDatum, removeZeroDatum, updateStationComment, setStationName } = useProjectStore();
   const labels = useIdentityLabels();
+  const prose = useProse();
   // Every save path here mutates; the Closures Computed View and Plan/Export
   // have no server backstop, so the gate lives in the UI (useEditingBlocked).
   const editingBlocked = useEditingBlocked();
@@ -53,14 +58,14 @@ export default function EditStationDialog() {
 
   const lineName = stationRef ? labels.lineName(stationRef.line_id) : '';
   const storedName = stationRef ? labels.stationName(stationRef) : '';
-  const stationId = stationRef ? labels.stationId(stationRef) : null;
+  // The Station ID the slot shows (RS 6): a foreign slot or a loop end shows
+  // its kept station's.
+  const stationId = stationRef ? labels.shownStationId(stationRef) : null;
+  const shownSlot = stationRef ? labels.shown(stationRef) : undefined;
 
   // The datum already stored on this station, if any: its role and accuracy.
-  const storedDatum = project?.zero_datums.find(
-    (d) =>
-      d.station_ref.line_id === stationRef?.line_id &&
-      d.station_ref.station_index === stationRef?.station_index
-  );
+  // On a junction it may be listed on another of the station's slots.
+  const storedDatum = stationRef ? labels.datumOf(project?.zero_datums, stationRef) : undefined;
   const storedAccuracy = storedDatum?.accuracy_m ?? DEFAULT_DATUM_ACCURACY_M;
 
   // Form state
@@ -73,20 +78,35 @@ export default function EditStationDialog() {
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [accuracyInput, setAccuracyInput] = useState(() => String(storedAccuracy));
   const [comment, setComment] = useState('');
-  // The station's name (SPEC 4.1): required, unique within its line. Checked
+  // The station's name (SPEC 4.1): required, unique on each of its lines. Checked
   // inline as typed; a backend refusal lands on the same field.
   const [name, setName] = useState(storedName);
   const [nameRefusal, setNameRefusal] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A rename or comment edit through a foreign slot or a loop end says whose
+  // station it changes first (RS 5.4); Save then shows the prompt instead of
+  // saving, and going on saves.
+  const [askingOwner, setAskingOwner] = useState(false);
   const gpsInputRef = useRef<HTMLInputElement>(null);
 
   const accuracy = parseDatumAccuracy(accuracyInput);
 
   const nameChanged = name.trim() !== storedName;
-  const nameProblem =
-    stationRef && nameChanged ? stationNameProblem(name, labels.lineStationNames(stationRef.line_id), stationRef.station_index) : null;
-  const nameError = nameProblem ? stationNameProblemMessage(nameProblem, lineName, name) : nameRefusal;
+  // The name must be free among the native slots of every line the shown
+  // station is native on (plan 5.3, RS-FX5), so the message names the line
+  // the name is taken on.
+  const nameTakenOn = stationRef && nameChanged ? labels.stationNameTakenOn(stationRef, name.trim()) : null;
+  const nameProblem = stationRef && nameChanged ? stationRenameProblem(name, nameTakenOn) : null;
+  const nameError = nameProblem
+    ? stationNameProblemMessage(nameProblem, nameTakenOn !== null ? labels.lineName(nameTakenOn) : lineName, name)
+    : nameRefusal;
+  // The same message as the field shows it: the line it names as a pill (the
+  // Save button's tooltip and the field's description read the plain words).
+  const takenLine = nameTakenOn ?? stationRef?.line_id;
+  const nameErrorProse = nameProblem
+    ? stationNameProblemMessage(nameProblem, takenLine === undefined ? '' : prose.line(takenLine), name)
+    : nameRefusal;
 
   // What this datum would do, as soon as valid GPS is entered (#741).
   const preview = useZeroDatumPreview(
@@ -173,7 +193,9 @@ export default function EditStationDialog() {
     }
   }, []);
 
-  const handleSave = async () => {
+  const commentChanged = station ? comment !== (station.comment ?? '') : false;
+
+  const handleSave = async (ownerConfirmed = false) => {
     if (!stationRef || !station || isLoading) return;
     if (isEditingBlockedNow()) {
       setError(t('dialogs.editStation.editingDisabled'));
@@ -181,6 +203,11 @@ export default function EditStationDialog() {
     }
 
     if (nameProblem !== null) return;
+    if (!ownerConfirmed && (nameChanged || commentChanged) && editNeedsOwnerPrompt(shownSlot)) {
+      setAskingOwner(true);
+      return;
+    }
+    setAskingOwner(false);
 
     // Every check the dialog can make runs BEFORE anything is sent, so a Save
     // with a field to fix changes nothing (no rename landing ahead of a
@@ -309,7 +336,7 @@ export default function EditStationDialog() {
     gpsInput !== originalGpsInput ||
     (isZeroDatum && showAccuracy && accuracyInput.trim() !== String(storedAccuracy)) ||
     (isZeroDatum && entranceToSend !== undefined) ||
-    comment !== (station.comment ?? '') ||
+    commentChanged ||
     nameChanged
   ) : false;
 
@@ -350,7 +377,7 @@ export default function EditStationDialog() {
           />
           {nameError ? (
             <p id="station-name-error" className="text-xs text-error" data-testid="station-name-error">
-              {nameError}
+              <Prose text={nameErrorProse ?? nameError} />
             </p>
           ) : (
             <p className="text-xs text-text-secondary">{t('dialogs.editStation.nameHint')}</p>
@@ -373,11 +400,17 @@ export default function EditStationDialog() {
 
         {station.merged_with.length > 0 && (
           <div className="border-t border-border pt-3">
-            <span className="text-sm text-text-secondary">Merged with:</span>
-            <ul className="mt-1">
+            {/* Every line shows the junction's one station (RS 6): the
+                other lines are named, not their names for it. */}
+            <span className="text-sm text-text-secondary">{t('detailPanel.station.alsoOn')}:</span>
+            <ul className="mt-1" data-testid="edit-station-also-on">
+              {/* A list of names, not a sentence: each a line pill, as the
+                  detail panel's Also on list draws them. */}
               {station.merged_with.map((ref, i) => (
                 <li key={i} className="text-sm">
-                  {labels.station(ref, true)}
+                  <EntityBlob entity="line" lineId={ref.line_id}>
+                    {labels.lineName(ref.line_id)}
+                  </EntityBlob>
                 </li>
               ))}
             </ul>
@@ -486,6 +519,11 @@ export default function EditStationDialog() {
                   )}
                 </>
               )}
+              {shownSlot?.loop_end && (
+                <p className="text-xs text-text-secondary pt-1" data-testid="station-datum-loop-end">
+                  <Prose text={t('dialogs.editStation.loopEndDatum', { station: prose.station(stationRef, true) })} />
+                </p>
+              )}
               {storedDatum && (
                 <p className="text-xs text-text-secondary pt-1" data-testid="station-datum-role">
                   {t('dialogs.editStation.roleLabel')}{' '}
@@ -529,13 +567,25 @@ export default function EditStationDialog() {
           )}
         </div>
 
+        {askingOwner ? (
+          <div className="pt-4 border-t border-border">
+            <ShownIdentityPrompt
+              stationRef={stationRef}
+              edit={nameChanged && commentChanged ? 'both' : nameChanged ? 'name' : 'comment'}
+              newName={nameChanged ? name.trim() : undefined}
+              onProceed={() => void handleSave(true)}
+              onCancel={() => setAskingOwner(false)}
+              busy={isLoading}
+            />
+          </div>
+        ) : (
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={closeDialog} disabled={isLoading} data-testid="edit-station-cancel">
             Cancel
           </Button>
           <Button
             variant="primary"
-            onClick={handleSave}
+            onClick={() => void handleSave()}
             disabled={isLoading || editingBlocked || nameProblem !== null}
             title={editingBlocked ? t('dialogs.editStation.editingDisabled') : (nameError ?? undefined)}
             data-testid="edit-station-save"
@@ -543,6 +593,7 @@ export default function EditStationDialog() {
             {isLoading ? 'Saving...' : 'Save'}
           </Button>
         </div>
+        )}
       </div>
     </DialogWrapper>
   );

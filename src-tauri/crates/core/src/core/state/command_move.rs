@@ -1,265 +1,190 @@
-use super::AppState;
-use crate::core::CommandResult;
-use crate::models::{normalize_azimuth, Coordinates, LineId, StationRef};
+//! The move family: Move Line / Move Segment (translate a free piece's
+//! `Placement`) and Move Station (rewrite the shots incident to one station),
+//! plan 4.4, on the model's `move_line` / `move_segment` / `move_station`.
+//!
+//! Refusals keep 0.6.0's words: a non-finite offset, a missing line or slot,
+//! a piece (rigid group) that holds a zero datum, a zero datum station, a
+//! rewrite that would leave a shot without length. A move by nothing (every
+//! axis within 1e-9 m) changes nothing, so the pipeline records no entry.
+//!
+//! A batch that moves several slots of ONE station (the map's co-located
+//! drag: a junction is shown on each of its lines) moves that station once
+//! (plan 9.1, [`StationMoves`]).
 
-impl AppState {
-    pub(super) fn move_line(&self, line_id: LineId, offset: Coordinates) -> CommandResult {
-        // "Adjust Position" on a line moves the WHOLE rigid group it belongs to
-        // (its merge partners and aligned-closure-connected lines), not just this
-        // one line. A merged line is rigidly bound to its partner: moving it
-        // alone would shove its merged station off the partner's, and the
-        // post-command geometry reconcile would then either snap it back (silently
-        // discarding the move when this isn't the group's min-id anchor) or drag the
-        // partner along. Moving the rigid group as one body keeps every merge aligned,
-        // so the move sticks. For a standalone line the rigid group is just itself,
-        // so this is identical to the previous single-line move. Delegating to
-        // `move_segment` also upgrades the datum guard from "this line holds a
-        // datum" to "the group holds a datum" (a partner's datum now blocks too).
-        self.move_segment(line_id, offset)
+use super::commands::{Applied, Record};
+use crate::core::Command;
+use crate::models::survey::changeset::PreviewRow;
+use crate::models::survey::{OpError, Project, SegmentMoved};
+use crate::models::{Coordinates, LineId, StationId, StationRef};
+
+/// 0.6.0's Move Station refusal of a NaN or infinite offset (its Move
+/// Segment refusal, the model's [`OpError::NonFiniteOffset`], is worded
+/// differently).
+const STATION_OFFSET_NOT_FINITE: &str = "Move offset has a non-finite (NaN/inf) value";
+
+/// The execute pipeline's mutation for the move family (`commands.rs`
+/// dispatches here; plan 9.1). Runs inside `run_recorded`, which snapshots,
+/// validates, captures and records around it; `record` is the entry being
+/// recorded (worded before the edit). A move on its own records 0.6.0's
+/// preview rows (the offset, and the line or the number of lines moved); in
+/// a batch the batch's own rows stand.
+pub(super) fn apply(
+    project: &mut Project,
+    record: &mut Record,
+    cmd: &Command,
+) -> Result<Applied, String> {
+    let alone = record.kind == crate::core::command_kind(cmd);
+    match cmd {
+        Command::MoveLine { line_id, offset } => {
+            let line = project
+                .line(*line_id)
+                .map(|_| row("Line", project.line_label_of(*line_id)));
+            let moved = project
+                .move_line(*line_id, xyz(offset))
+                .map_err(|e| e.to_string())?;
+            log_segment_move(*line_id, &moved.value);
+            if alone {
+                record.preview.rows = line
+                    .into_iter()
+                    .chain([row("Offset", offset.display_offset())])
+                    .collect();
+            }
+            Ok(Applied::default())
+        }
+        Command::MoveSegment { line_id, offset } => {
+            let moved = project
+                .move_segment(*line_id, xyz(offset))
+                .map_err(|e| e.to_string())?;
+            log_segment_move(*line_id, &moved.value);
+            if alone {
+                record.preview.rows = vec![
+                    row("Offset", offset.display_offset()),
+                    row("Affected lines", moved.value.lines.len().to_string()),
+                ];
+            }
+            Ok(Applied::default())
+        }
+        Command::MoveStation {
+            station_ref,
+            offset,
+        } => {
+            move_station(project, *station_ref, offset)?;
+            if alone {
+                record.preview.rows = vec![row("Offset", offset.display_offset())];
+            }
+            Ok(Applied::default())
+        }
+        _ => Err(format!(
+            "{} is not a move command",
+            crate::core::command_kind(cmd)
+        )),
     }
+}
 
-    pub(super) fn move_segment(&self, line_id: LineId, offset: Coordinates) -> CommandResult {
-        self.with_project_mut(|project| {
-            if !offset.is_finite() {
-                return CommandResult::failure(
-                    "Move offset must be finite (no NaN/inf)".to_string(),
-                );
-            }
-            // Validate line exists
-            if !project.lines.iter().any(|s| s.id == line_id) {
-                return CommandResult::failure("Line not found".to_string());
-            }
-
-            // Get all connected line IDs (merges + closures), filtered to existing lines
-            let existing: std::collections::HashSet<LineId> =
-                project.lines.iter().map(|s| s.id).collect();
-            let connected: Vec<LineId> = project
-                .get_rigid_connected_line_ids(line_id)
-                .into_iter()
-                .filter(|id| existing.contains(id))
-                .collect();
-
-            // Guard the set actually being offset, not just this line's merge
-            // group. `connected` follows merges AND aligned closures, while
-            // `rigid_group_has_datum` walks merges only, so in principle a datum
-            // reachable over a closure-only edge could slip through.
-            //
-            // HARDENING, not a live bug fix: that state is currently unreachable.
-            // `convert_orphan_closures_to_merges` runs after every command and
-            // promotes any sole-bridge closure to a merge, skipping only the case
-            // where both endpoint groups are already zero-datum-anchored - and in
-            // THAT case the dragged line's own merge group holds a datum, so the
-            // narrow check catches it too. The point of widening it is to stop this
-            // guard depending on an invariant maintained in another module.
-            //
-            // Resolved once against `connected` rather than per line: calling
-            // rigid_group_has_datum for each member rebuilds a whole merge component
-            // and rescans the datum list every time, which is quadratic on a large
-            // merge-connected survey. Equivalent, because a merge edge is also a
-            // rigid edge, so every member's merge component is a subset of
-            // `connected`.
-            let connected_set: std::collections::HashSet<LineId> =
-                connected.iter().copied().collect();
-            let group_has_datum = project
-                .zero_datums
-                .iter()
-                .filter_map(|zd| project.resolve_key(&zd.station_ref))
-                .any(|sr| connected_set.contains(&sr.line_id));
-            if (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
-                && group_has_datum
-            {
-                return CommandResult::failure(
-                    "Cannot move a segment whose rigid group holds a zero datum".to_string(),
-                );
-            }
-
-            // Apply offset to every line in the connected set
-            // (uses the pre-filtered connected set, not adjust_rigid_group_offsets,
-            // because move_segment follows rigid + aligned-closure connectivity)
-            for sid in &connected {
-                project.adjust_line_offset(*sid, offset.x, offset.y);
-            }
-            project.touch();
-            tracing::info!(
-                ?line_id,
-                ?offset,
-                line_count = connected.len(),
-                purpose = "move connected segment as rigid group",
-                "Segment moved"
-            );
-            CommandResult::success()
-        })
+/// Move the station at `slot` by `offset`, with 0.6.0's refusals in its
+/// order: the offset, the line, the slot, then the model's (a datum on the
+/// station, a shot left without length).
+fn move_station(
+    project: &mut Project,
+    slot: StationRef,
+    offset: &Coordinates,
+) -> Result<(), String> {
+    if !offset.is_finite() {
+        return Err(STATION_OFFSET_NOT_FINITE.to_string());
     }
+    let station = moved_station(project, slot)?;
+    let moved = project
+        .move_station(station, xyz(offset))
+        .map_err(|e| match e {
+            OpError::NonFiniteOffset => STATION_OFFSET_NOT_FINITE.to_string(),
+            other => other.to_string(),
+        })?;
+    tracing::info!(
+        ?slot,
+        station,
+        shots_rewritten = moved.value.rewritten.len(),
+        placement_moved = moved.value.placement_moved,
+        hand_moves_folded = moved.value.hand_moves_folded.len(),
+        purpose = "adjust station position",
+        "Station moved (shot data updated)"
+    );
+    Ok(())
+}
 
-    pub(super) fn move_station(
-        &self,
-        station_ref: StationRef,
-        offset: Coordinates,
-    ) -> CommandResult {
-        self.with_project_mut(|project| {
-            // Reject a non-finite offset: move_station recomputes and writes raw
-            // shot geometry (length/azimuth/depth) from it, and the only numeric
-            // guard below is `new_len <= 0.0`, which is false for NaN and inf.
-            if !offset.x.is_finite() || !offset.y.is_finite() || !offset.z.is_finite() {
-                return CommandResult::failure(
-                    "Move offset has a non-finite (NaN/inf) value".to_string(),
-                );
-            }
-            if project
-                .zero_datums
-                .iter()
-                .any(|zd| project.key_is_ref(&zd.station_ref, station_ref))
-                && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
-            {
-                return CommandResult::failure("Cannot move a zero datum station".to_string());
-            }
+/// 0.6.0's log line of a segment move (ids and counts only).
+fn log_segment_move(line_id: LineId, moved: &SegmentMoved) {
+    tracing::info!(
+        line_id,
+        line_count = moved.lines.len(),
+        placements_moved = moved.placements.len(),
+        purpose = "move connected segment as rigid group",
+        "Segment moved"
+    );
+}
 
-            // Incorporate any existing station offset
-            let existing = project
-                .key_for_ref(station_ref)
-                .and_then(|key| project.station_offsets.get(&key).copied())
-                .unwrap_or((0.0, 0.0, 0.0));
-            let total_dx = existing.0 + offset.x;
-            let total_dy = existing.1 + offset.y;
-            let total_dz = existing.2 + offset.z;
+/// The station a Move Station addresses, or 0.6.0's refusal.
+fn moved_station(project: &Project, slot: StationRef) -> Result<StationId, String> {
+    if project.line(slot.line_id).is_none() {
+        return Err("Line not found".to_string());
+    }
+    project
+        .station_at(slot)
+        .ok_or_else(|| "Invalid station index".to_string())
+}
 
-            // Resolved before the `&mut` borrow below: the geometry here is in
-            // world space, so every read adds this and every write-back removes
-            // it again (#438).
-            let azimuth_reference = project.azimuth_reference_for_id(station_ref.line_id);
+/// One preview row, `field: -> new`, as 0.6.0's move previews wrote it.
+fn row(field: &str, new: String) -> PreviewRow {
+    PreviewRow {
+        field: field.to_string(),
+        old: String::new(),
+        new,
+    }
+}
 
-            // Find the line containing this station (mutable)
-            let Some(line) = project
-                .lines
-                .iter_mut()
-                .find(|s| s.id == station_ref.line_id)
-            else {
-                return CommandResult::failure("Line not found".to_string());
-            };
+fn xyz(offset: &Coordinates) -> [f64; 3] {
+    [offset.x, offset.y, offset.z]
+}
 
-            let idx = station_ref.station_index as usize;
+/// The run of consecutive Move Station sub-commands of one batch, so that
+/// a batch moving several slots of ONE station by the same offset moves it
+/// once (plan 9.1).
+///
+/// The map's station, shot and snap drags send one Move Station per
+/// co-located slot: every slot of a junction (one station on each of its
+/// lines) and the ends of aligned closures. In 0.6.0 each slot was a station
+/// of its own; on the station graph a junction's slots are one station, and
+/// moving it once per slot would carry it by a multiple of the offset. A
+/// repeat is the same station with the same offset (bit for bit) within one
+/// unbroken run of Move Station sub-commands; any other sub-command ends the
+/// run (it may change which station a slot addresses). Slots of different
+/// stations (an aligned closure's two ends) all move, as before.
+#[derive(Debug, Default)]
+pub(super) struct StationMoves {
+    run: Vec<(StationId, [u64; 3])>,
+}
 
-            // Validate station index (N shots → N+1 stations, indices 0..=N)
-            if idx > line.shots.len() {
-                return CommandResult::failure("Invalid station index".to_string());
-            }
-
-            // Pre-compute updates to avoid partial mutations on failure.
-            let mut prev_update: Option<(f64, f64, f64, f64)> = None; // len, azi, depth_out, pitch
-            if idx > 0 {
-                let shot = &line.shots[idx - 1];
-                let azi_rad = shot.average_azimuth_true_rad(azimuth_reference);
-                let old_horizontal = shot.horizontal_length();
-                let old_dx = old_horizontal * azi_rad.sin();
-                let old_dy = old_horizontal * azi_rad.cos();
-                let new_dx = old_dx + total_dx;
-                let new_dy = old_dy + total_dy;
-                let new_horizontal = (new_dx * new_dx + new_dy * new_dy).sqrt();
-                let new_depth_out = shot.depth_out + total_dz;
-                let new_dz = new_depth_out - shot.depth_in;
-                let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
-                if new_len <= 0.0 || !new_len.is_finite() {
-                    return CommandResult::failure(
-                        "Move would create zero-length shot".to_string(),
-                    );
-                }
-                let new_azi = if new_horizontal > 1e-9 {
-                    // Solved in world space; stored as a measured reading (#438).
-                    azimuth_reference
-                        .to_measured(normalize_azimuth(new_dx.atan2(new_dy).to_degrees()))
-                } else {
-                    shot.average_azimuth_measured()
-                };
-                let pitch = new_dz.atan2(new_horizontal).to_degrees();
-                prev_update = Some((new_len, new_azi, new_depth_out, pitch));
-            }
-
-            let mut next_update: Option<(f64, f64, f64, f64)> = None; // len, azi, depth_in, pitch
-            if let Some(shot) = line.shots.get(idx) {
-                let azi_rad = shot.average_azimuth_true_rad(azimuth_reference);
-                let old_horizontal = shot.horizontal_length();
-                let old_dx = old_horizontal * azi_rad.sin();
-                let old_dy = old_horizontal * azi_rad.cos();
-                let new_dx = old_dx - total_dx;
-                let new_dy = old_dy - total_dy;
-                let new_horizontal = (new_dx * new_dx + new_dy * new_dy).sqrt();
-                let new_depth_in = shot.depth_in + total_dz;
-                let new_dz = shot.depth_out - new_depth_in;
-                let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
-                if new_len <= 0.0 || !new_len.is_finite() {
-                    return CommandResult::failure(
-                        "Move would create zero-length shot".to_string(),
-                    );
-                }
-                let new_azi = if new_horizontal > 1e-9 {
-                    // Solved in world space; stored as a measured reading (#438).
-                    azimuth_reference
-                        .to_measured(normalize_azimuth(new_dx.atan2(new_dy).to_degrees()))
-                } else {
-                    shot.average_azimuth_measured()
-                };
-                let pitch = new_dz.atan2(new_horizontal).to_degrees();
-                next_update = Some((new_len, new_azi, new_depth_in, pitch));
-            }
-
-            // Special case: moving station 0 should move the line offset so the
-            // rest of the geometry stays in place. Shot 0 is adjusted below to
-            // compensate for the offset shift.
-            // Note: can't use project.adjust_line_offset() here because `line`
-            // is a live &mut borrow from project.lines - hence the associated
-            // `write_line_offset`, which takes the map (a disjoint field borrow)
-            // and drops the key when the move lands the offset back within dust of
-            // the origin, instead of leaving an inert entry behind (#413 finding 2,
-            // and the invariant on that function).
-            if idx == 0 && (total_dx != 0.0 || total_dy != 0.0) {
-                let current = project
-                    .line_offsets
-                    .get(&station_ref.line_id)
-                    .copied()
-                    .unwrap_or((0.0, 0.0));
-                crate::models::Project::write_line_offset(
-                    &mut project.line_offsets,
-                    station_ref.line_id,
-                    (current.0 + total_dx, current.1 + total_dy),
-                );
-            }
-
-            // Apply updates after validation
-            if let Some((new_len, new_azi, new_depth_out, pitch)) = prev_update {
-                if let Some(shot) = line.shots.get_mut(idx - 1) {
-                    shot.length = new_len;
-                    shot.azimuth_in = new_azi;
-                    shot.azimuth_out = new_azi;
-                    shot.depth_out = new_depth_out;
-                    shot.pitch_in = Some(pitch);
-                    shot.pitch_out = Some(pitch);
-                }
-            }
-
-            if let Some((new_len, new_azi, new_depth_in, pitch)) = next_update {
-                if let Some(shot) = line.shots.get_mut(idx) {
-                    shot.length = new_len;
-                    shot.azimuth_in = new_azi;
-                    shot.azimuth_out = new_azi;
-                    shot.depth_in = new_depth_in;
-                    shot.pitch_in = Some(pitch);
-                    shot.pitch_out = Some(pitch);
-                }
-            }
-
-            // Clear station offset (now incorporated into shot data)
-            if let Some(key) = project.key_for_ref(station_ref) {
-                project.station_offsets.remove(&key);
-            }
-            project.touch();
-
-            tracing::info!(
-                ?station_ref,
-                ?offset,
-                purpose = "adjust station position",
-                "Station moved (shot data updated)"
-            );
-            CommandResult::success()
-        })
+impl StationMoves {
+    /// Whether `cmd` repeats a station move this run already made (the
+    /// batch skips it); otherwise notes it, or ends the run for any other
+    /// command. A slot that does not resolve is not a repeat: its own apply
+    /// refuses it.
+    pub(super) fn repeats(&mut self, project: &Project, cmd: &Command) -> bool {
+        let Command::MoveStation {
+            station_ref,
+            offset,
+        } = cmd
+        else {
+            self.run.clear();
+            return false;
+        };
+        let Some(station) = project.station_at(*station_ref) else {
+            return false;
+        };
+        let key = (station, xyz(offset).map(f64::to_bits));
+        if self.run.contains(&key) {
+            return true;
+        }
+        self.run.push(key);
+        false
     }
 }

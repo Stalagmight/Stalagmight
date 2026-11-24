@@ -1,11 +1,15 @@
 //! Native Stalagmight downloads and cache installation.
+//!
+//! Every download is read into memory and checked before anything is replaced
+//! (`speleodb_cache_install::PreparedDownload`): a version 2 file decoded, a
+//! legacy SQLite revision migrated, the link and the history rule applied. The
+//! cache file a pull or a fast-forward installs is always version 2.
 use super::speleodb::{local_dto, validate_project_id};
-use super::speleodb_cache::{
-    preserved_undo_mode, restore_display_settings, InheritedUndo, LocalEditsPolicy,
-};
+use super::speleodb_cache::{read_cache_file, CacheFile, InheritedUndo, LocalEditsPolicy};
 use super::speleodb_cached::copy_recorded_for_other_account;
 use super::speleodb_revisions::validate_hexsha;
 use super::AppState;
+use crate::persistence::stalx_v2::DecodeOptions;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::models::SpeleoProjectSummary;
 use crate::speleodb::{
@@ -26,15 +30,23 @@ pub(super) fn usable_tip(tip: Option<String>, project_id: &str) -> Option<String
     None
 }
 
+/// The largest single value an untrusted legacy (SQLite) download may hold, and
+/// the deadline its SQLite reads run under (the revision undo-mode probe).
 pub(super) const DOWNLOADED_VALUE_LIMIT: i32 = 64 * 1024 * 1024;
 pub(super) const DOWNLOADED_PROCESSING_DEADLINE: std::time::Duration =
     std::time::Duration::from_secs(30);
 
-const DOWNLOADED_LIMITS: (i32, std::time::Duration) =
-    (DOWNLOADED_VALUE_LIMIT, DOWNLOADED_PROCESSING_DEADLINE);
+/// The decoder's limits for a downloaded version 2 file: the decoder's count
+/// caps, and no file larger than an untrusted download may be.
+pub(super) fn download_decode_options() -> DecodeOptions {
+    DecodeOptions {
+        max_file_bytes: DOWNLOADED_VALUE_LIMIT.unsigned_abs().into(),
+        ..DecodeOptions::default()
+    }
+}
 
 struct DownloadOptions {
-    limits: (i32, std::time::Duration),
+    limits: DecodeOptions,
     /// The session generation the download was reserved under. The install refuses
     /// once a newer open or login has moved it (`replace_cache_for_session`).
     generation: u64,
@@ -42,7 +54,7 @@ struct DownloadOptions {
 impl DownloadOptions {
     fn for_session(generation: u64) -> Self {
         Self {
-            limits: DOWNLOADED_LIMITS,
+            limits: download_decode_options(),
             generation,
         }
     }
@@ -65,8 +77,12 @@ fn offline_open_result(
     ) {
         return None;
     }
-    let db = crate::persistence::Database::open_for_metadata(dest).ok()?;
-    let link = db.load_speleo_link().ok()??;
+    let CacheFile::Read {
+        link: Some(link), ..
+    } = read_cache_file(dest)
+    else {
+        return None;
+    };
     if link.project_id != project_id || link.endpoint != endpoint {
         return None;
     }
@@ -126,8 +142,12 @@ fn signed_out_open_result(
     project_id: &str,
     reason: SpeleoReadOnlyOpen,
 ) -> Option<SpeleoOpenResult> {
-    let db = crate::persistence::Database::open_for_metadata(dest).ok()?;
-    let link = db.load_speleo_link().ok()??;
+    let CacheFile::Read {
+        link: Some(link), ..
+    } = read_cache_file(dest)
+    else {
+        return None;
+    };
     if link.project_id != project_id {
         return None;
     }
@@ -305,7 +325,7 @@ impl AppState {
         let _ = latest_commit_sha; // A list hint cannot date an unpinned download.
         let link = crate::models::SpeleoLink {
             endpoint: endpoint.clone(),
-            project_id: project_id.clone(),
+            project_id,
             project_name: project_name.clone(),
             base_commit_sha: base_sha,
             has_unpushed_edits: false,
@@ -361,6 +381,14 @@ impl AppState {
         }
         signed_out_open_result(dest, project_id, SpeleoReadOnlyOpen::SessionExpired)
     }
+    /// Download the server copy at `tip` (the undated HEAD when `None`) and
+    /// reload the open project from it in place: BASE = tip, clean, the undo
+    /// history and the Unwind chain empty (a fast-forward, Take remote, the
+    /// return to the tip). `transition` is the policy over un-pushed local work,
+    /// the session generation the caller read the open link under, and the
+    /// project revision the caller's consent was taken over (a discard, #303):
+    /// an edit or a reopen since either refuses with `SessionMoved` before the
+    /// download replaces anything.
     pub(super) fn speleodb_fast_forward(
         &self,
         endpoint: &str,
@@ -368,26 +396,21 @@ impl AppState {
         insecure_http: bool,
         link: &crate::models::SpeleoLink,
         tip: Option<&str>,
-        transition: (LocalEditsPolicy, u64, Option<Vec<u8>>),
+        transition: (LocalEditsPolicy, u64, Option<u64>),
     ) -> Result<String, SpeleoDbError> {
-        let (policy, generation, expected_snapshot) = transition;
-        let bytes = {
-            let project = self
+        let (policy, generation, expected_revision) = transition;
+        let consent = {
+            let _project = self
                 .project
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if generation != self.speleodb_session_generation() {
-                return Err(SpeleoDbError::SessionMoved);
-            }
-            let bytes =
-                serde_json::to_vec(&*project).map_err(|e| SpeleoDbError::Io(e.to_string()))?;
-            if expected_snapshot
-                .as_ref()
-                .is_some_and(|expected| expected != &bytes)
+            let token = self.open_project_token_locked();
+            if token.generation != generation
+                || expected_revision.is_some_and(|expected| expected != token.revision)
             {
                 return Err(SpeleoDbError::SessionMoved);
             }
-            bytes
+            token
         };
         let was_editing = self.edit_enabled();
         let project_id = &link.project_id;
@@ -409,7 +432,7 @@ impl AppState {
         if policy == LocalEditsPolicy::Protect {
             self.guard_local_edits(project_id, &dest)?;
         }
-        let mut new_link = crate::models::SpeleoLink {
+        let new_link = crate::models::SpeleoLink {
             endpoint: endpoint.to_owned(),
             project_id: project_id.clone(),
             project_name: link.project_name.clone(),
@@ -419,80 +442,17 @@ impl AppState {
             last_verify_at: Some(chrono::Utc::now().to_rfc3339()),
             undo_mode: None,
         };
-        {
-            let db = crate::persistence::Database::open_existing_untrusted(
-                native.path(),
-                DOWNLOADED_VALUE_LIMIT,
-                DOWNLOADED_PROCESSING_DEADLINE,
-            )
-            .map_err(super::speleodb_cache_install::downloaded_file_error)?;
-            db.load_project()
-                .map_err(|e| SpeleoDbError::Parse(format!("invalid downloaded project: {e}")))?;
-            new_link.undo_mode = Some(self.effective_undo_mode(preserved_undo_mode(&db)));
-            db.save_speleo_link(Some(&new_link))
-                .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
-        }
-        let staged = super::speleodb_cache_install::stage_download(
+        // The installed copy carries no Unwind position or watermark (the prepared
+        // download keeps no per-machine state), so the reopened project starts
+        // with neither.
+        let prepared = self.prepare_download(
             native.path(),
-            &dest,
+            new_link,
             InheritedUndo::Drop,
-            super::speleodb_cache_install::sync_staged_file,
+            &download_decode_options(),
         )?;
-        {
-            let db = crate::persistence::Database::open_existing(&staged)
-                .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
-            restore_display_settings(
-                &db,
-                &super::speleodb_cache::preserved_display_settings(&dest),
-            );
-        }
-        super::speleodb_cache_install::sync_staged_file(&staged)?;
-        let result = self
-            .open_project_download(
-                staged.to_path_buf(),
-                dest.clone(),
-                (generation, bytes),
-                was_editing,
-            )
-            .map_err(|e| SpeleoDbError::Io(e.message))?;
-        if !result.success {
-            return Err(SpeleoDbError::Io(
-                result
-                    .error
-                    .unwrap_or_else(|| "Could not reload project".into()),
-            ));
-        }
-        self.speleodb_set_unwound_from(None);
-        self.speleodb_set_inherited_through(None);
+        self.open_project_download(prepared, dest.clone(), consent, was_editing)?;
         Ok(dest.to_string_lossy().into_owned())
-    }
-
-    /// Validate the downloaded file at `source` and stamp `link` into it, before it
-    /// can replace a working cache. A failed link write must never turn a remote
-    /// project into an editable local file.
-    pub(super) fn stamp_downloaded_link(
-        &self,
-        source: &std::path::Path,
-        link: crate::models::SpeleoLink,
-    ) -> Result<crate::models::SpeleoLink, SpeleoDbError> {
-        self.stamp_downloaded_link_within(source, link, DOWNLOADED_LIMITS)
-    }
-
-    fn stamp_downloaded_link_within(
-        &self,
-        source: &std::path::Path,
-        mut link: crate::models::SpeleoLink,
-        limits: (i32, std::time::Duration),
-    ) -> Result<crate::models::SpeleoLink, SpeleoDbError> {
-        let db = crate::persistence::Database::open_existing_untrusted(source, limits.0, limits.1)
-            .map_err(super::speleodb_cache_install::downloaded_file_error)?;
-        // Decode the complete project before any working bytes are replaced.
-        db.load_project()
-            .map_err(|e| SpeleoDbError::Parse(format!("invalid downloaded project: {e}")))?;
-        link.undo_mode = Some(self.effective_undo_mode(preserved_undo_mode(&db)));
-        db.save_speleo_link(Some(&link))
-            .map_err(|e| SpeleoDbError::Io(format!("could not link downloaded project: {e}")))?;
-        Ok(link)
     }
 
     fn install_linked_download_with_limits(
@@ -504,19 +464,9 @@ impl AppState {
         undo: InheritedUndo,
         options: DownloadOptions,
     ) -> Result<(), SpeleoDbError> {
-        let link = self.stamp_downloaded_link_within(source, link, options.limits)?;
-        let preserved_view = self.replace_cache_for_session(
-            source,
-            dest,
-            &link.project_id,
-            policy,
-            undo,
-            options.generation,
-        )?;
-        let db = crate::persistence::Database::open_existing(dest)
-            .map_err(|e| SpeleoDbError::Io(format!("could not reopen downloaded project: {e}")))?;
-        restore_display_settings(&db, &preserved_view);
-        Ok(())
+        let project_id = link.project_id.clone();
+        let prepared = self.prepare_download(source, link, undo, &options.limits)?;
+        self.replace_cache_for_session(prepared, dest, &project_id, policy, options.generation)
     }
 }
 
@@ -528,8 +478,12 @@ impl AppState {
 )]
 mod tests {
     use super::*;
-    use crate::models::{Project, SpeleoLink, UndoMode};
-    use crate::persistence::Database;
+    use crate::core::state::stalx_fixtures::{
+        display_at, extras_for, link_on_disk, name_at, relink, set_display, write_file, write_v2,
+    };
+    use crate::models::survey::Project;
+    use crate::models::{SpeleoLink, UndoMode};
+    use crate::persistence::stalx_v2::temp_path;
 
     fn link() -> SpeleoLink {
         SpeleoLink {
@@ -550,12 +504,8 @@ mod tests {
             let dir = tempfile::tempdir().expect("temp");
             let source = dir.path().join("download.stalx");
             let dest = dir.path().join("working.stalx");
-            for (path, name) in [(&source, "Remote"), (&dest, "Local")] {
-                let mut db = Database::open(path).expect("database");
-                db.save_project(&Project::new(name.into(), None))
-                    .expect("project");
-                db.save_speleo_link(Some(&link())).expect("link");
-            }
+            write_v2(&source, "Remote", Some(&link()));
+            write_v2(&dest, "Local", Some(&link()));
             let state = AppState::new().expect("state");
             assert!(state.open_project(dest.clone()).success);
             let generation = state.reserve_download_generation();
@@ -583,10 +533,7 @@ mod tests {
             let dir = tempfile::tempdir().expect("temp");
             let source = dir.path().join("download.stalx");
             let dest = dir.path().join("working.stalx");
-            Database::open(&source)
-                .expect("db")
-                .save_project(&Project::new("New remote".into(), None))
-                .expect("project");
+            write_v2(&source, "New remote", None);
             let state = AppState::new().expect("state");
             let older = state.reserve_download_generation();
             let newer = state.reserve_download_generation();
@@ -623,43 +570,59 @@ mod tests {
         crate::test_helpers::with_isolated_config(|| {
             let dir = tempfile::tempdir().expect("temp");
             let dest = dir.path().join("working.stalx");
-            Database::open(&dest)
-                .expect("database")
-                .save_project(&Project::new("Unpushed local work".into(), None))
-                .expect("project");
+            write_v2(&dest, "Unpushed local work", None);
             let before = std::fs::read(&dest).expect("bytes");
             let state = AppState::new().expect("state");
-            for case in ["invalid", "schema", "value", "deadline", "future"] {
+            for case in [
+                "invalid",
+                "bom",
+                "truncated",
+                "nan",
+                "size",
+                "count",
+                "future",
+                "legacy",
+            ] {
                 let source = dir.path().join(format!("{case}.stalx"));
-                if case == "invalid" {
-                    std::fs::write(&source, b"not SQLite").expect("invalid");
-                } else {
-                    Database::open(&source)
-                        .expect("database")
-                        .save_project(&Project::new("X".repeat(4096), None))
-                        .expect("project");
-                    if case == "future" {
-                        rusqlite::Connection::open(&source)
-                            .expect("connection")
-                            .pragma_update(
-                                None,
-                                "user_version",
-                                crate::persistence::SCHEMA_VERSION + 1,
-                            )
-                            .expect("newer schema");
+                let mut limits = download_decode_options();
+                match case {
+                    "invalid" => std::fs::write(&source, b"not a project").expect("invalid"),
+                    "bom" => {
+                        let mut bytes = b"\xef\xbb\xbf".to_vec();
+                        write_v2(&source, "X", None);
+                        bytes.extend(std::fs::read(&source).expect("seed"));
+                        std::fs::write(&source, bytes).expect("bom");
                     }
-                    if case == "schema" {
-                        rusqlite::Connection::open(&source)
-                            .expect("connection")
-                            .execute_batch("CREATE VIEW hostile AS SELECT 1;")
-                            .expect("schema");
+                    "truncated" => {
+                        write_v2(&source, "X", None);
+                        let bytes = std::fs::read(&source).expect("seed");
+                        std::fs::write(&source, &bytes[..bytes.len() - 12]).expect("cut");
                     }
+                    "nan" => {
+                        write_v2(&source, "X", None);
+                        let text = std::fs::read_to_string(&source).expect("seed");
+                        let text = text.replacen("\"settings\":{", "\"settings\":{\"x\":NaN,", 1);
+                        std::fs::write(&source, text).expect("nan");
+                    }
+                    "size" => {
+                        write_v2(&source, &"X".repeat(4096), None);
+                        limits.max_file_bytes = 1024;
+                    }
+                    "count" => {
+                        write_file(
+                            &source,
+                            &crate::core::state::stalx_fixtures::line_survey("X"),
+                            &extras_for(None),
+                        );
+                        limits.limits.shots = 1;
+                    }
+                    "future" => std::fs::write(
+                        &source,
+                        b"{\"format\":\"stalx\",\"version\":3,\"requires\":[],\"end\":true}\n",
+                    )
+                    .expect("newer"),
+                    _ => std::fs::write(&source, b"SQLite format 3\0truncated").expect("legacy"),
                 }
-                let limits = match case {
-                    "value" => (1024, DOWNLOADED_PROCESSING_DEADLINE),
-                    "deadline" => (DOWNLOADED_VALUE_LIMIT, std::time::Duration::ZERO),
-                    _ => (DOWNLOADED_VALUE_LIMIT, DOWNLOADED_PROCESSING_DEADLINE),
-                };
                 let error = state
                     .install_linked_download_with_limits(
                         &source,
@@ -675,12 +638,13 @@ mod tests {
                     .expect_err("download must be refused");
                 if case == "future" {
                     let SpeleoDbError::NewerSchema(newer) = error else {
-                        panic!("newer-schema payload lost: {error:?}");
+                        panic!("newer-format payload lost: {error:?}");
                     };
                     assert_eq!(newer.file, "project.stalx");
-                    assert_eq!(newer.found, crate::persistence::SCHEMA_VERSION + 1);
+                    assert_eq!(newer.found, 3);
                 }
                 assert_eq!(std::fs::read(&dest).expect("cache bytes"), before, "{case}");
+                assert!(!temp_path(&dest).exists(), "{case}: no staging left behind");
             }
         });
     }
@@ -691,12 +655,8 @@ mod tests {
             let dir = tempfile::tempdir().expect("temp");
             let source = dir.path().join("download.stalx");
             let dest = dir.path().join("working.stalx");
-            for (path, name) in [(&source, "Remote replacement"), (&dest, "Newer local open")] {
-                let mut db = Database::open(path).expect("database");
-                db.save_project(&Project::new(name.into(), None))
-                    .expect("project");
-                db.save_speleo_link(Some(&link())).expect("link");
-            }
+            write_v2(&source, "Remote replacement", Some(&link()));
+            write_v2(&dest, "Newer local open", Some(&link()));
             let state = AppState::new().expect("state");
             let generation = state.speleodb_session_generation();
             let (download_started, started) = std::sync::mpsc::channel();
@@ -741,10 +701,7 @@ mod tests {
             let source = dir.path().join("download.stalx");
             let dest = dir.path().join("working.stalx");
             for path in [&source, &dest] {
-                let mut db = Database::open(path).expect("database");
-                db.save_project(&Project::new("Synthetic".into(), None))
-                    .expect("project");
-                db.save_speleo_link(Some(&link())).expect("link");
+                write_v2(path, "Synthetic", Some(&link()));
             }
             let state = AppState::new().expect("state");
             let generation = state.speleodb_session_generation();
@@ -772,10 +729,7 @@ mod tests {
             let source = dir.path().join("download.stalx");
             let dest = dir.path().join("working.stalx");
             for path in [&source, &dest] {
-                let mut db = Database::open(path).expect("database");
-                db.save_project(&Project::new("Synthetic".into(), None))
-                    .expect("project");
-                db.save_speleo_link(Some(&link())).expect("link");
+                write_v2(path, "Synthetic", Some(&link()));
             }
             let state = AppState::new().expect("state");
             let generation = state.speleodb_session_generation();
@@ -803,10 +757,8 @@ mod tests {
         let dest = dir.path().join("project.stalx");
         let mut cached_link = link();
         cached_link.has_unpushed_edits = true;
-        let mut db = Database::open(&dest).expect("cache");
-        db.save_project(&Project::new("Cached".into(), None))
-            .expect("project");
-        db.save_speleo_link(Some(&cached_link)).expect("link");
+        cached_link.last_edit_at = Some("2026-07-27T10:00:00+00:00".into());
+        write_v2(&dest, "Cached", Some(&cached_link));
         for cause in [
             TransportCause::Refused,
             TransportCause::Timeout,
@@ -882,12 +834,10 @@ mod tests {
             .is_none());
         }
         assert!(
-            db.load_speleo_link()
-                .expect("preserved link")
-                .expect("linked")
-                .has_unpushed_edits
+            link_on_disk(&dest).expect("linked").has_unpushed_edits,
+            "the probe never writes the copy"
         );
-        db.save_speleo_link(None).expect("unlink");
+        relink(&dest, None);
         assert!(offline_open_result(
             &dest,
             &cached_link.endpoint,
@@ -914,11 +864,7 @@ mod tests {
         cached_link.endpoint = endpoint.into();
         let dir = tempfile::tempdir().expect("temp");
         let dest = dir.path().join("project.stalx");
-        let mut db = Database::open(&dest).expect("cache");
-        db.save_project(&Project::new("Cached".into(), None))
-            .expect("project");
-        db.save_speleo_link(Some(&cached_link)).expect("link");
-        drop(db);
+        write_v2(&dest, "Cached", Some(&cached_link));
 
         let refused = client::download_stalx(endpoint, "token", false, &cached_link.project_id)
             .expect_err("a plain-http hostname is refused without the override");
@@ -955,10 +901,7 @@ mod tests {
             let dir = tempfile::tempdir().expect("temp");
             let source = dir.path().join("download.stalx");
             let dest = dir.path().join("cache/speleodb/new-project/project.stalx");
-            Database::open(&source)
-                .expect("download")
-                .save_project(&Project::new("First download".into(), None))
-                .expect("project");
+            write_v2(&source, "First download", None);
             assert!(!dest.parent().expect("cache directory").exists());
 
             let state = AppState::new().expect("state");
@@ -973,32 +916,25 @@ mod tests {
                 )
                 .expect("first download installs without a pre-existing cache");
 
-            let db = Database::open_existing(&dest).expect("installed SQLite");
-            assert_eq!(db.load_project().expect("project").name, "First download");
-            let installed = db.load_speleo_link().expect("link").expect("linked");
+            assert_eq!(name_at(&dest), "First download");
+            let installed = link_on_disk(&dest).expect("linked");
             assert_eq!(installed.project_id, link().project_id);
             assert_eq!(installed.endpoint, link().endpoint);
         });
     }
 
     #[test]
-    fn failed_download_link_write_keeps_the_previous_project_open_and_untouched() {
+    fn a_failed_install_keeps_the_previous_project_open_and_untouched() {
         crate::test_helpers::with_isolated_config(|| {
             let dir = tempfile::tempdir().expect("temp");
             let source = dir.path().join("download.stalx");
             let dest = dir.path().join("project.stalx");
-            for (path, name) in [(&source, "Downloaded"), (&dest, "Previous")] {
-                Database::open(path)
-                    .expect("database")
-                    .save_project(&Project::new(name.into(), None))
-                    .expect("project");
-            }
-            // A readable database can still reject the link upsert, just as a full
-            // disk or write failure can. No trigger or external fixture is needed.
-            rusqlite::Connection::open(&source)
-                .expect("download")
-                .execute_batch("ALTER TABLE speleo_link ADD COLUMN required_value TEXT NOT NULL")
-                .expect("make link inserts fail");
+            write_v2(&source, "Downloaded", None);
+            write_v2(&dest, "Previous", None);
+            // The install's write is refused (a directory holds its temp's name),
+            // as a full disk or a permission denial would refuse it.
+            std::fs::create_dir(temp_path(&dest)).expect("block the temp");
+            std::fs::write(temp_path(&dest).join("keep"), b"x").expect("non-empty");
             let state = AppState::new().expect("state");
             assert!(state.open_project(dest.clone()).success);
             let before = std::fs::read(&dest).expect("previous bytes");
@@ -1007,14 +943,13 @@ mod tests {
                     &source,
                     &dest,
                     link(),
-                    LocalEditsPolicy::Protect,
+                    LocalEditsPolicy::Discard,
                     InheritedUndo::Drop,
                     DownloadOptions::for_session(state.speleodb_session_generation()),
                 )
-                .expect_err("a remote project must not open without its link");
+                .expect_err("a remote project must not half-install");
             assert!(
-                err.to_string()
-                    .contains("could not link downloaded project"),
+                err.to_string().contains("could not replace the project"),
                 "{err}"
             );
             assert_eq!(std::fs::read(&dest).expect("unchanged cache"), before);
@@ -1031,22 +966,16 @@ mod tests {
             let dir = tempfile::tempdir().expect("temp");
             let source = dir.path().join("download.stalx");
             let dest = dir.path().join("project.stalx");
-            {
-                let mut db = Database::open(&source).expect("download");
-                db.save_project(&Project::new("Downloaded".into(), None))
-                    .expect("project");
-                let mut old_link = link();
-                old_link.endpoint = "https://old.example.com".into();
-                old_link.undo_mode = Some(UndoMode::Disabled);
-                db.save_speleo_link(Some(&old_link))
-                    .expect("old identity and undo policy");
-            }
-            {
-                let mut db = Database::open(&dest).expect("cache");
-                db.save_project(&Project::new("Previous".into(), None))
-                    .expect("project");
-                db.save_display_setting("test_view", "local").expect("view");
-            }
+            let mut old_link = link();
+            old_link.endpoint = "https://old.example.com".into();
+            old_link.undo_mode = Some(UndoMode::Disabled);
+            write_file(
+                &source,
+                &Project::new("Downloaded", None),
+                &extras_for(Some(&old_link)),
+            );
+            write_v2(&dest, "Previous", None);
+            set_display(&dest, "test_view", "local");
             let state = AppState::new().expect("state");
             state
                 .install_linked_download_with_limits(
@@ -1058,16 +987,12 @@ mod tests {
                     DownloadOptions::for_session(state.speleodb_session_generation()),
                 )
                 .expect("install");
-            let db = Database::open_existing(&dest).expect("installed");
-            let actual = db.load_speleo_link().expect("link").expect("linked");
+            let actual = link_on_disk(&dest).expect("linked");
             assert_eq!(actual.endpoint, "https://example.com");
             assert_eq!(actual.base_commit_sha.as_deref(), Some("abc123"));
             assert_eq!(actual.undo_mode, Some(UndoMode::Disabled));
             assert_eq!(
-                db.load_display_settings()
-                    .expect("view")
-                    .get("test_view")
-                    .map(String::as_str),
+                display_at(&dest).get("test_view").map(String::as_str),
                 Some("local")
             );
         });

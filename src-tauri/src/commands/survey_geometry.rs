@@ -9,15 +9,16 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::models::{GpsCoordinates, LineId, Project, ShotKind, StationRef};
-use crate::persistence::Database;
+use crate::models::survey::Project;
+use crate::models::{GpsCoordinates, LineId, ShotKind, StationId};
+use crate::persistence::stalx_v2::{self, DecodeOptions, Fingerprint, Format};
 
 /// Minimum cosine value to avoid division by near-zero at extreme latitudes.
 /// This corresponds to latitudes beyond ±89.4° where the approximation breaks down.
 const MIN_COS_LAT: f64 = 0.01;
 
 /// A self-contained shot with GPS coordinates and metadata.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct GeometryShot {
     /// GPS coordinates of the from station [lng, lat] (MapLibre order)
     pub from: [f64; 2],
@@ -32,7 +33,7 @@ pub struct GeometryShot {
 }
 
 /// Survey geometry response containing GPS-transformed shot data.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct SurveyGeometry {
     /// Array of shots with GPS coordinates
     pub shots: Vec<GeometryShot>,
@@ -89,7 +90,7 @@ pub fn local_to_gps(
 /// Get survey geometry for a specific file path without loading into AppState.
 ///
 /// This is used by GlobalView for lazy loading geometry from arbitrary projects.
-/// Opens the database read-only, computes geometry, and closes it.
+/// Reads the file without writing to it, computes geometry, and drops it.
 ///
 /// # Returns
 /// - `Ok(SurveyGeometry)` with shots and origin
@@ -108,108 +109,94 @@ pub async fn get_survey_geometry_for_file(
 
 /// Internal implementation for file-based geometry loading.
 fn get_survey_geometry_for_file_impl(path: &Path) -> Result<SurveyGeometry, SurveyGeometryError> {
-    // Open database in read-only mode - never create or modify files
-    let db = Database::open_readonly(path).map_err(|e| SurveyGeometryError {
-        message: format!("Failed to open project: {e}"),
+    let project = read_survey(path).map_err(|message| SurveyGeometryError {
+        message: format!("Failed to open project: {message}"),
     })?;
-
-    // Load project from database
-    let mut project = db.load_project().map_err(|e| SurveyGeometryError {
-        message: format!("Failed to load project: {e}"),
-    })?;
-
-    // Assign IDs to any legacy closures with id=0 (in-memory only, read-only DB)
-    project.assign_closure_ids();
-    // Line offsets are derived: re-solve them so the GlobalView preview renders
-    // a drifted file the same way the workspace will after it redrives on open
-    // (otherwise the two views can disagree). In-memory only - the DB is read-only.
-    project.redrive_offsets_after_load();
-
-    // Compute geometry from project
     get_survey_geometry_for_project(&project)
+}
+
+/// The survey in the file at `path`, read the way the load reads it and
+/// never written: a version 2 file through the full decode (an invalid one is
+/// refused, as the load refuses it), a legacy SQLite file through the frozen
+/// 0.6.0 open and the conversion (in memory only).
+fn read_survey(path: &Path) -> Result<Project, String> {
+    if path.extension().and_then(|s| s.to_str()) != Some("stalx") {
+        return Err(format!(
+            "Not a Stalagmight project file: {}",
+            path.display()
+        ));
+    }
+    let options = DecodeOptions::default();
+    let (bytes, _) = Fingerprint::read(path, options.max_file_bytes).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!("File does not exist: {}", path.display())
+        } else {
+            e.to_string()
+        }
+    })?;
+    match stalx_v2::sniff(&bytes) {
+        // A file an earlier build of version 2 wrote reads as an open shows
+        // it (plan 2026-11-23 RS 8.2).
+        Format::V2 => stalx_v2::decode(&bytes, &options)
+            .map(|mut decoded| {
+                decoded.upgrade();
+                decoded.project
+            })
+            .map_err(|e| e.to_string()),
+        Format::Legacy => {
+            drop(bytes);
+            crate::persistence::migrate::migrate_path(path)
+                .map(|migrated| migrated.project)
+                .map_err(|e| e.to_string())
+        }
+        Format::Unknown => Err(format!(
+            "Not a Stalagmight project file: {}",
+            path.display()
+        )),
+    }
 }
 
 /// Compute survey geometry from a project struct.
 /// Shared implementation for the file-based command and its tests.
+///
+/// Positions are the measured layout (solver v1, `Project::raw_positions`)
+/// in local metres from the frame datum's GPS, which is exactly how the
+/// workspace map places stations (`metersToMapCoords` from the first datum's
+/// GPS), so a preview and the opened project agree.
 fn get_survey_geometry_for_project(
     project: &Project,
 ) -> Result<SurveyGeometry, SurveyGeometryError> {
-    // Find zero datum for GPS origin
-    let zero_datum = project
-        .zero_datums
-        .first()
+    let frame = project
+        .frame_datum()
+        .and_then(|index| project.datums.get(index))
         .ok_or_else(|| SurveyGeometryError {
             message: "Project has no GPS reference. Set a zero datum with GPS coordinates first."
                 .to_string(),
         })?;
-
-    let origin_gps = &zero_datum.gps;
+    let origin_gps = &frame.gps;
     let origin = [origin_gps.longitude, origin_gps.latitude];
-
-    // Compute station coordinates
-    let stations = project.compute_station_coordinates();
-
-    // Build a map for quick station lookup
-    let station_map: std::collections::HashMap<StationRef, &crate::models::Station> =
-        stations.iter().map(|s| (s.station_ref, s)).collect();
-
-    // Find the zero-datum station's local coordinates (x0, y0)
-    // All other coordinates are relative to this point. Resolve the stored
-    // anchor to its current positional ref for the lookup into station_map.
-    let datum_ref = project
-        .resolve_key(&zero_datum.station_ref)
-        .ok_or_else(|| SurveyGeometryError {
-            message: format!(
-                "Zero datum station {} anchor no longer resolves",
-                zero_datum.station_ref
-            ),
-        })?;
-    let datum_station = station_map
-        .get(&datum_ref)
-        .ok_or_else(|| SurveyGeometryError {
-            message: format!(
-                "Zero datum station {} not found in computed stations",
-                zero_datum.station_ref
-            ),
-        })?;
-    let x0 = datum_station.coordinates.x;
-    let y0 = datum_station.coordinates.y;
+    let positions = project.raw_positions();
+    let at = |station: StationId| {
+        positions.xy(station).ok_or_else(|| SurveyGeometryError {
+            message: format!("Station {station} has no computed position"),
+        })
+    };
 
     let mut shots = Vec::new();
-
-    // Iterate through lines and shots
-    for line in &project.lines {
-        for (shot_idx, shot) in line.shots.iter().enumerate() {
-            let from_ref = StationRef::new(line.id, shot_idx as u32);
-            let to_ref = StationRef::new(line.id, (shot_idx + 1) as u32);
-
-            let from_station = station_map
-                .get(&from_ref)
-                .ok_or_else(|| SurveyGeometryError {
-                    message: format!("Station {from_ref} not found in computed stations"),
-                })?;
-            let to_station = station_map
-                .get(&to_ref)
-                .ok_or_else(|| SurveyGeometryError {
-                    message: format!("Station {to_ref} not found in computed stations"),
-                })?;
-
-            // Compute coordinates relative to zero-datum station (x0, y0)
-            let from_east = from_station.coordinates.x - x0;
-            let from_north = from_station.coordinates.y - y0;
-            let to_east = to_station.coordinates.x - x0;
-            let to_north = to_station.coordinates.y - y0;
-
-            // Convert local coordinates to GPS
+    for line in project.lines() {
+        let mut from = line.start;
+        for shot in &line.shots {
+            let [from_east, from_north] = at(from)?;
+            let [to_east, to_north] = at(shot.to)?;
             let from_gps = local_to_gps(from_east, from_north, origin_gps)?;
             let to_gps = local_to_gps(to_east, to_north, origin_gps)?;
-
             shots.push(GeometryShot {
                 from: [from_gps.0, from_gps.1],
                 to: [to_gps.0, to_gps.1],
                 kind: shot.kind,
                 line_id: line.id,
             });
+            from = shot.to;
         }
     }
 
@@ -221,9 +208,58 @@ fn get_survey_geometry_for_project(
 mod tests {
     use super::*;
     use crate::models::gps_to_local;
-    use crate::models::{LineData, Project, ShotData, StationRef, ZeroDatum};
-    use crate::persistence::Database;
+    use crate::models::survey::{LineMeta, StartAt, ZeroDatum};
+    use crate::models::ShotData;
+    use crate::persistence::stalx_v2::{Extras, Mode};
     use tempfile::TempDir;
+
+    fn shot(length: f64, azimuth: f64, kind: ShotKind) -> ShotData {
+        ShotData {
+            azimuth_in: azimuth,
+            azimuth_out: azimuth,
+            length,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            kind,
+            ..Default::default()
+        }
+    }
+
+    /// One line of `shots` from a fresh station, placed (no datum) at the origin.
+    fn one_line(name: &str, shots: Vec<ShotData>) -> (Project, LineId) {
+        let mut project = Project::new(name, None);
+        let line = project
+            .add_line(LineMeta::default(), StartAt::New, shots)
+            .unwrap();
+        let start = project.line(line).unwrap().start;
+        project.set_placement(start, 0.0, 0.0).unwrap();
+        (project, line)
+    }
+
+    /// Replace `line`'s placement with a datum at its start station.
+    fn tie_to_gps(
+        project: &mut Project,
+        line: LineId,
+        gps: GpsCoordinates,
+        correction: Option<[f64; 2]>,
+    ) {
+        let start = project.line(line).unwrap().start;
+        project.placements.clear();
+        project.push_datum(ZeroDatum {
+            station: start,
+            via: None,
+            gps,
+            accuracy_m: None,
+            entrance: None,
+            correction,
+        });
+        assert!(project.validate().is_empty(), "{:?}", project.validate());
+    }
+
+    fn write_v2(path: &Path, project: &Project) {
+        let bytes = stalx_v2::encode(project, &Extras::default(), Mode::Normal).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
 
     // Test vector data from coordinate_transform_vectors.json
     // These tests verify the local_to_gps function matches expected values
@@ -364,76 +400,39 @@ mod tests {
 
     #[test]
     fn test_get_survey_geometry_requires_zero_datum() {
-        let mut project = Project::new("No Datum".to_string(), None);
-        project.add_line(LineData {
-            shots: vec![ShotData {
-                azimuth_in: 0.0,
-                azimuth_out: 0.0,
-                length: 10.0,
-                depth_in: 0.0,
-                depth_out: 0.0,
-                ..Default::default()
-            }],
-            ..Default::default()
-        });
+        let (project, _) = one_line("No Datum", vec![shot(10.0, 0.0, ShotKind::Normal)]);
 
         let result = get_survey_geometry_for_project(&project);
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("no GPS reference"));
     }
 
+    /// The preview places stations where the workspace map does: local metres
+    /// from the frame datum's GPS. A frame datum with a stored correction
+    /// (a converted file whose datum piece sat off its GPS) puts its station
+    /// at that offset, not on the GPS.
     #[test]
-    fn test_get_survey_geometry_errors_for_missing_datum_station() {
-        let mut project = Project::new("Missing Station".to_string(), None);
-        let line_id = project
-            .add_line(LineData {
-                shots: vec![ShotData {
-                    azimuth_in: 0.0,
-                    azimuth_out: 0.0,
-                    length: 5.0,
-                    depth_in: 0.0,
-                    depth_out: 0.0,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
-            .id;
+    fn test_get_survey_geometry_keeps_the_frame_datums_correction() {
+        let (mut project, line) = one_line("Corrected", vec![shot(10.0, 90.0, ShotKind::Normal)]);
+        let gps = GpsCoordinates::new(20.0, -87.0, 0.0).unwrap();
+        tie_to_gps(&mut project, line, gps, Some([3.0, 4.0]));
 
-        project.zero_datums.push(ZeroDatum {
-            station_ref: StationRef::new(line_id, 3).into(),
-            gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
-            accuracy_m: None,
-            entrance: None,
-        });
+        let geometry = get_survey_geometry_for_project(&project).unwrap();
 
-        let result = get_survey_geometry_for_project(&project);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().message.contains("Zero datum station"));
+        assert_eq!(geometry.origin, [-87.0, 20.0]);
+        let (lng, lat) = local_to_gps(3.0, 4.0, &gps).unwrap();
+        assert!((geometry.shots[0].from[0] - lng).abs() < 1e-9);
+        assert!((geometry.shots[0].from[1] - lat).abs() < 1e-9);
+        let (lng, lat) = local_to_gps(13.0, 4.0, &gps).unwrap();
+        assert!((geometry.shots[0].to[0] - lng).abs() < 1e-9);
+        assert!((geometry.shots[0].to[1] - lat).abs() < 1e-9);
     }
 
     #[test]
     fn test_get_survey_geometry_includes_reference_shots_and_origin() {
-        let mut project = Project::new("Geometry".to_string(), None);
-        let shot = ShotData {
-            azimuth_in: 0.0,
-            azimuth_out: 0.0,
-            length: 10.0,
-            depth_in: 0.0,
-            depth_out: 0.0,
-            kind: ShotKind::Jump,
-            ..Default::default()
-        };
-        let line_id = project
-            .add_line(LineData {
-                shots: vec![shot.clone()],
-                ..Default::default()
-            })
-            .id;
-
+        let (mut project, line_id) = one_line("Geometry", vec![shot(10.0, 0.0, ShotKind::Jump)]);
         let gps = GpsCoordinates::new(0.0, 0.0, 0.0).unwrap();
-        project
-            .set_zero_datum(StationRef::new(line_id, 0), gps)
-            .unwrap();
+        tie_to_gps(&mut project, line_id, gps, None);
 
         let geometry = get_survey_geometry_for_project(&project).unwrap();
         assert_eq!(geometry.origin, [0.0, 0.0]);
@@ -445,11 +444,43 @@ mod tests {
         assert!((geom_shot.from[0]).abs() < 1e-9);
         assert!((geom_shot.from[1]).abs() < 1e-9);
 
-        let (east, north) =
-            Project::shot_displacement(&shot, crate::models::AzimuthReference::default());
-        let (lng, lat) = local_to_gps(east, north, &gps).unwrap();
+        // 10 m due north, level.
+        let (lng, lat) = local_to_gps(0.0, 10.0, &gps).unwrap();
         assert!((geom_shot.to[0] - lng).abs() < 1e-6);
         assert!((geom_shot.to[1] - lat).abs() < 1e-6);
+    }
+
+    /// Every shot of every line, from the station before it to its `to`, a
+    /// junction shared by both lines.
+    #[test]
+    fn test_get_survey_geometry_walks_every_line_through_a_junction() {
+        let (mut project, main) = one_line(
+            "Junction",
+            vec![
+                shot(10.0, 0.0, ShotKind::Normal),
+                shot(10.0, 0.0, ShotKind::Normal),
+            ],
+        );
+        let junction = project.line(main).unwrap().station(1).unwrap();
+        let branch = project
+            .add_line(
+                LineMeta::default(),
+                StartAt::Station(junction),
+                vec![shot(5.0, 90.0, ShotKind::Reference)],
+            )
+            .unwrap();
+        let gps = GpsCoordinates::new(10.0, 10.0, 0.0).unwrap();
+        tie_to_gps(&mut project, main, gps, None);
+
+        let geometry = get_survey_geometry_for_project(&project).unwrap();
+
+        assert_eq!(geometry.shots.len(), 3);
+        let on_branch = geometry.shots.iter().find(|s| s.line_id == branch).unwrap();
+        assert_eq!(on_branch.kind, ShotKind::Reference);
+        assert_eq!(
+            on_branch.from, geometry.shots[0].to,
+            "the junction is one point"
+        );
     }
 
     #[test]
@@ -465,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_survey_geometry_for_file_rejects_corrupted_database() {
+    fn test_get_survey_geometry_for_file_rejects_corrupted_file() {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("corrupted.stalx");
         std::fs::write(&path, b"not a sqlite database").unwrap();
@@ -473,7 +504,34 @@ mod tests {
         let result = get_survey_geometry_for_file_impl(&path);
         assert!(result.is_err());
         let message = result.unwrap_err().message;
-        assert!(message.contains("Failed to open project"));
+        assert!(message.contains("Failed to open project"), "{message}");
+        assert!(
+            message.contains("Not a Stalagmight project file"),
+            "{message}"
+        );
+    }
+
+    /// A version 2 file the load would refuse (here: a piece without an
+    /// anchor) is refused here too, and never written.
+    #[test]
+    fn test_get_survey_geometry_for_file_rejects_an_invalid_v2_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("invalid.stalx");
+        let (project, _) = one_line("Invalid", vec![shot(10.0, 0.0, ShotKind::Normal)]);
+        let bytes = stalx_v2::encode(&project, &Extras::default(), Mode::Normal).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        let start = text.find("\"placements\":[").unwrap();
+        let end = start + text[start..].find("],\n").unwrap() + 3;
+        let broken = format!("{}{}", &text[..start], &text[end..]);
+        std::fs::write(&path, &broken).unwrap();
+
+        let message = get_survey_geometry_for_file_impl(&path)
+            .unwrap_err()
+            .message;
+
+        assert!(message.starts_with("Failed to open project"), "{message}");
+        assert!(message.contains("inconsistent"), "{message}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
     }
 
     #[test]
@@ -493,26 +551,82 @@ mod tests {
     fn test_get_survey_geometry_for_file_requires_zero_datum() {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("no-datum.stalx");
-
-        let mut project = Project::new("No Datum".to_string(), None);
-        project.add_line(LineData {
-            shots: vec![ShotData {
-                azimuth_in: 0.0,
-                azimuth_out: 0.0,
-                length: 10.0,
-                depth_in: 0.0,
-                depth_out: 0.0,
-                ..Default::default()
-            }],
-            ..Default::default()
-        });
-
-        let mut db = Database::open(&path).unwrap();
-        db.save_project(&project).unwrap();
-        drop(db);
+        let (project, _) = one_line("No Datum", vec![shot(10.0, 0.0, ShotKind::Normal)]);
+        write_v2(&path, &project);
 
         let result = get_survey_geometry_for_file_impl(&path);
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("no GPS reference"));
+    }
+
+    /// A version 2 file with a datum: one shot per shot, from the file.
+    #[test]
+    fn test_get_survey_geometry_for_file_reads_a_v2_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("v2.stalx");
+        let (mut project, line) = one_line(
+            "V2",
+            vec![
+                shot(10.0, 0.0, ShotKind::Normal),
+                shot(4.0, 180.0, ShotKind::Normal),
+            ],
+        );
+        tie_to_gps(
+            &mut project,
+            line,
+            GpsCoordinates::new(1.0, 2.0, 0.0).unwrap(),
+            None,
+        );
+        write_v2(&path, &project);
+        let before = std::fs::read(&path).unwrap();
+
+        let geometry = get_survey_geometry_for_file_impl(&path).unwrap();
+
+        assert_eq!(geometry.origin, [2.0, 1.0]);
+        assert_eq!(geometry.shots.len(), 2);
+        assert_eq!(geometry, get_survey_geometry_for_project(&project).unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), before, "only read");
+    }
+
+    /// A legacy SQLite file is converted in memory (the original is only
+    /// read) and previewed like any other.
+    #[test]
+    fn test_get_survey_geometry_for_file_reads_a_legacy_file() {
+        use stalagmight_legacy::models as old;
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("legacy.stalx");
+        let mut legacy = stalagmight_legacy::LegacyProject::new("Legacy".to_string(), None);
+        let line = legacy
+            .add_line(old::LineData {
+                shots: vec![old::ShotData {
+                    length: 10.0,
+                    azimuth_in: 90.0,
+                    azimuth_out: 90.0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .id;
+        let gps = GpsCoordinates::new(0.0, 0.0, 0.0).unwrap();
+        legacy
+            .set_zero_datum(
+                old::StationRef::new(line, 0),
+                old::GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+            )
+            .unwrap();
+        let bytes =
+            stalagmight_legacy::write_v18(&legacy, &stalagmight_legacy::LegacyExtras::default())
+                .unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        let before = std::fs::read(&path).unwrap();
+
+        let geometry = get_survey_geometry_for_file_impl(&path).unwrap();
+
+        assert_eq!(geometry.origin, [0.0, 0.0]);
+        assert_eq!(geometry.shots.len(), 1);
+        let (lng, lat) = local_to_gps(10.0, 0.0, &gps).unwrap();
+        assert!((geometry.shots[0].to[0] - lng).abs() < 1e-6);
+        assert!((geometry.shots[0].to[1] - lat).abs() < 1e-6);
+        assert_eq!(std::fs::read(&path).unwrap(), before, "only read");
     }
 }

@@ -241,6 +241,21 @@ fn rect_vector_preserves_partial_lrud() {
     assert_eq!(v.down, None, "omitted down must stay None");
 }
 
+/// Each station carries its Walls name as its external id (plan 10.5).
+#[test]
+fn every_station_carries_its_walls_name() {
+    let srv = "#UNITS meters ORDER=DA Tape=SS\n\
+               A B 21.1 339 13 13\n\
+               B C 8.1 62 13 11.9\n";
+    let (configs, _, _w) = convert_one(parse_srv(srv));
+    let names: Vec<(u32, &str)> = configs[0]
+        .station_external
+        .iter()
+        .map(|(i, name)| (*i, name.as_str()))
+        .collect();
+    assert_eq!(names, [(0, "A"), (1, "B"), (2, "C")]);
+}
+
 #[test]
 fn depth_gauge_conversion_keeps_gauge_depths() {
     let srv = "#UNITS meters ORDER=DA Tape=SS\n\

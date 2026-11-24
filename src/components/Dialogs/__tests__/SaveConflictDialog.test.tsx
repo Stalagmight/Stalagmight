@@ -1,0 +1,215 @@
+/**
+ * The save prompt for a file another program changed (`.stalx` v2, plan 6.5):
+ * keep my version (overwrite), save as a new file, or use the file's version;
+ * and for one it moved or deleted (`FILE_MISSING`), or a file that appeared
+ * where a first save goes (`FILE_EXISTS`), only the first two.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+
+const saveProjectAs = vi.fn();
+vi.mock('../../../utils/projectActions', () => ({ saveProjectAs: () => saveProjectAs() }));
+const surfaceSaveFailure = vi.fn();
+vi.mock('../../../utils/saveFeedback', () => ({
+  surfaceSaveFailure: (...args: unknown[]) => surfaceSaveFailure(...args),
+}));
+const invokeIpc = vi.fn();
+vi.mock('../../../utils/ipc', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../utils/ipc')>()),
+  invokeIpc: (...args: unknown[]) => invokeIpc(...args),
+}));
+
+import '../../../i18n';
+import { useProjectStore } from '../../../store/projectStore';
+import { useUIStore } from '../../../store/uiStore';
+import { useSpeleoStore } from '../../../store/speleoStore';
+import SaveConflictDialog from '../SaveConflictDialog';
+
+const saveProjectOverwriting = vi.fn();
+const loadProject = vi.fn();
+const closeProject = vi.fn();
+const closeDialog = vi.fn();
+const openDialog = vi.fn();
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  saveProjectOverwriting.mockResolvedValue({ success: true });
+  loadProject.mockResolvedValue({ success: true });
+  closeProject.mockResolvedValue({ success: true });
+  // The prompt itself sends no IPC: the reload is the store's `loadProject`.
+  invokeIpc.mockImplementation(async (command: string) => {
+    throw new Error(`unexpected IPC ${command}`);
+  });
+  useProjectStore.setState({
+    project: { file_path: '/caves/Main Sump.stalx', lines: [] },
+    saveProjectOverwriting,
+    loadProject,
+    closeProject,
+  } as never);
+  useUIStore.setState({
+    closeDialog,
+    openDialog,
+    dialogData: { error: 'EXTERNALLY_MODIFIED: /caves/Main Sump.stalx was changed by another program since it was opened' },
+  } as never);
+  useSpeleoStore.setState({ link: null } as never);
+});
+
+describe('SaveConflictDialog', () => {
+  it('names the file and offers the three answers', () => {
+    render(<SaveConflictDialog />);
+    expect(screen.getByTestId('save-conflict-lead')).toHaveTextContent(
+      'Another program changed Main Sump.stalx after Stalagmight opened it.'
+    );
+    expect(screen.getByTestId('save-conflict-overwrite')).toHaveTextContent('Keep my version');
+    expect(screen.getByTestId('save-conflict-save-as')).toHaveTextContent('Save as a new file...');
+    expect(screen.getByTestId('save-conflict-reload')).toHaveTextContent("Use the file's version");
+  });
+
+  it('overwrites the file with "Keep my version"', async () => {
+    render(<SaveConflictDialog />);
+    fireEvent.click(screen.getByTestId('save-conflict-overwrite'));
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+    expect(saveProjectOverwriting).toHaveBeenCalledOnce();
+    expect(surfaceSaveFailure).not.toHaveBeenCalled();
+  });
+
+  it('routes another failure of the overwrite to the usual save failure surface', async () => {
+    saveProjectOverwriting.mockResolvedValue({ success: false, error: 'FS_PATH_NOT_FOUND: gone' });
+    render(<SaveConflictDialog />);
+    fireEvent.click(screen.getByTestId('save-conflict-overwrite'));
+    await waitFor(() => expect(surfaceSaveFailure).toHaveBeenCalledWith('FS_PATH_NOT_FOUND: gone', openDialog));
+  });
+
+  it('steps aside for Save As, and reopens the file for "Use the file\'s version"', async () => {
+    const { unmount } = render(<SaveConflictDialog />);
+    fireEvent.click(screen.getByTestId('save-conflict-save-as'));
+    await waitFor(() => expect(saveProjectAs).toHaveBeenCalledOnce());
+    expect(closeDialog).toHaveBeenCalled();
+    unmount();
+
+    useUIStore.setState({ activeDialog: 'save-conflict' } as never);
+    render(<SaveConflictDialog />);
+    fireEvent.click(screen.getByTestId('save-conflict-reload'));
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+    // One backend operation reads the file and replaces the session with it:
+    // nothing is closed first.
+    expect(loadProject).toHaveBeenCalledWith('/caves/Main Sump.stalx', { reload: true });
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(invokeIpc).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Pre-PR delta review finding 2: "Use the file's version" asked the backend
+   * whether the file opens, closed the session, then loaded the file. A sync
+   * client writing the file between those reads, or a load the frontend
+   * refused after the close, dropped the edits with neither version left. It
+   * is one reload now, and a reload that fails keeps the session, its
+   * unsaved changes and the prompt. Injection: closing the session before the
+   * reload (the old order) calls closeProject here.
+   */
+  it('a reload that fails keeps the session, the changes and the prompt, and says why', async () => {
+    loadProject.mockResolvedValue({ success: false, error: 'File not found: /caves/Main Sump.stalx' });
+    render(<SaveConflictDialog />);
+    fireEvent.click(screen.getByTestId('save-conflict-reload'));
+    await waitFor(() =>
+      expect(screen.getByTestId('save-conflict-error')).toHaveTextContent(
+        "The file can't be opened as it is now, so your unsaved changes were kept: File not found: /caves/Main Sump.stalx"
+      )
+    );
+    expect(loadProject).toHaveBeenCalledWith('/caves/Main Sump.stalx', { reload: true });
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(closeDialog).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Pre-PR review finding 1: a save refused because the file was moved or
+   * deleted (`FILE_MISSING` after the guard's code) said "Another program
+   * changed ..." and offered "Use the file's version", whose close dropped the
+   * edits before the reopen failed. It says what happened and offers only the
+   * two answers that keep the edits. Injection: deriving `missing` as false
+   * shows the reload button (and the changed-file wording) here.
+   */
+  it('says a moved or deleted file is gone, offers no reopen, and never closes the session', () => {
+    useUIStore.setState({
+      dialogData: {
+        error: 'EXTERNALLY_MODIFIED: FILE_MISSING: /caves/Main Sump.stalx was moved or deleted by another program since it was opened',
+      },
+    } as never);
+    render(<SaveConflictDialog />);
+    expect(screen.getByTestId('save-conflict-lead')).toHaveTextContent(
+      'Main Sump.stalx was moved or deleted by another program after Stalagmight opened it.'
+    );
+    expect(screen.getByTestId('save-conflict-lead')).not.toHaveTextContent('Another program changed');
+    expect(screen.getByText('The project file was moved or deleted')).toBeInTheDocument();
+    expect(screen.queryByTestId('save-conflict-reload')).toBeNull();
+    expect(screen.getByTestId('save-conflict-overwrite')).toHaveTextContent('Save it where it was');
+    expect(screen.getByTestId('save-conflict-save-as')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('save-conflict-cancel'));
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(loadProject).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Pre-PR delta review finding 5: a FIRST save that found a file at its path
+   * (`FILE_EXISTS` after the guard's code: another program put a file where
+   * the project was to be saved) read as a changed file and offered "Use the
+   * file's version", which would open that stranger's file in the project's
+   * place. It says a file appeared there and offers only Save As and
+   * Overwrite. Injection: deriving the variant without `isFileExistsError`
+   * shows the reload button (and the changed-file wording) here.
+   */
+  it('says a file appeared where a first save goes, and offers no reopen of it', () => {
+    useUIStore.setState({
+      dialogData: { error: 'EXTERNALLY_MODIFIED: FILE_EXISTS: /caves/Main Sump.stalx already exists' },
+    } as never);
+    render(<SaveConflictDialog />);
+    expect(screen.getByTestId('save-conflict-lead')).toHaveTextContent(
+      'A file named Main Sump.stalx appeared at this location'
+    );
+    expect(screen.getByTestId('save-conflict-lead')).not.toHaveTextContent('Another program changed');
+    expect(screen.getByText('Another file is in the way')).toBeInTheDocument();
+    expect(screen.queryByTestId('save-conflict-reload')).toBeNull();
+    expect(screen.getByTestId('save-conflict-overwrite')).toHaveTextContent('Keep my version');
+    expect(screen.getByTestId('save-conflict-save-as')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('save-conflict-cancel'));
+    expect(invokeIpc).not.toHaveBeenCalled();
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(loadProject).not.toHaveBeenCalled();
+  });
+
+  it('keeps the prompt when the reload is turned away without a reason', async () => {
+    loadProject.mockResolvedValue({ success: false });
+    render(<SaveConflictDialog />);
+    fireEvent.click(screen.getByTestId('save-conflict-reload'));
+    await waitFor(() => expect(screen.getByTestId('save-conflict-error')).toHaveTextContent('That did not work'));
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(closeDialog).not.toHaveBeenCalled();
+  });
+
+  it('steps aside without closing a question the reload raised itself', async () => {
+    loadProject.mockImplementation(async () => {
+      useUIStore.setState({ activeDialog: 'unrecognised-shot-kind' } as never);
+      return { success: true };
+    });
+    render(<SaveConflictDialog />);
+    fireEvent.click(screen.getByTestId('save-conflict-reload'));
+    await waitFor(() => expect(loadProject).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId('save-conflict-reload')).not.toBeDisabled());
+    expect(closeDialog).not.toHaveBeenCalled();
+  });
+
+  it('offers only the overwrite for a SpeleoDB copy, whose reload is the sync\'s', () => {
+    useSpeleoStore.setState({ link: { projectId: 'p' } } as never);
+    render(<SaveConflictDialog />);
+    expect(screen.getByTestId('save-conflict-overwrite')).toBeInTheDocument();
+    expect(screen.queryByTestId('save-conflict-save-as')).toBeNull();
+    expect(screen.queryByTestId('save-conflict-reload')).toBeNull();
+  });
+
+  it('decides later without saving anything', () => {
+    render(<SaveConflictDialog />);
+    fireEvent.click(screen.getByTestId('save-conflict-cancel'));
+    expect(closeDialog).toHaveBeenCalled();
+    expect(saveProjectOverwriting).not.toHaveBeenCalled();
+  });
+});

@@ -1,212 +1,159 @@
-use super::AppState;
-use crate::core::{Command, CommandResult, CommentHolder};
-use crate::models::{Project, StationRef};
+//! The comment family: Set Station Comment (the station's one comment,
+//! shared by every slot of a junction) and Move Comment (move or swap a
+//! comment between two holders, stations or shots, as one undo step).
+//!
+//! An empty comment is no comment (`None`), on stations and shots alike;
+//! comments are stored as typed (not trimmed), as in 0.6.0.
 
-impl AppState {
-    pub(super) fn set_station_comment(
-        &self,
-        station_ref: StationRef,
-        comment: Option<String>,
-    ) -> CommandResult {
-        self.with_project_mut(|project| {
-            // Validate station exists
-            let line = match project.get_line(station_ref.line_id) {
-                Some(s) => s,
-                None => {
-                    return CommandResult::failure(crate::models::LINE_GONE.to_string());
-                }
-            };
+use super::commands::{Applied, Record};
+use crate::core::{Command, CommentHolder};
+use crate::models::survey::Project;
+use crate::models::{LineId, StationId, StationRef, LINE_GONE, SHOT_GONE};
 
-            let max_station_index = line.shots.len() as u32;
-            if station_ref.station_index > max_station_index {
-                return CommandResult::failure(format!(
-                    "Station index {} out of range (line has {} stations)",
-                    station_ref.station_index,
-                    max_station_index + 1
-                ));
-            }
-
-            match comment {
-                Some(text) if !text.is_empty() => {
-                    if let Some(key) = project.key_for_ref(station_ref) {
-                        project.station_comments.insert(key, text);
-                    }
-                }
-                _ => {
-                    if let Some(key) = project.key_for_ref(station_ref) {
-                        project.station_comments.remove(&key);
-                    }
-                }
-            }
-
-            project.touch();
+/// The execute pipeline's mutation for the comment family (`commands.rs`
+/// dispatches here; plan 9.1). Runs inside `run_recorded`, which snapshots,
+/// validates, captures and records around it.
+pub(super) fn apply(
+    project: &mut Project,
+    _record: &mut Record,
+    cmd: &Command,
+) -> Result<Applied, String> {
+    match cmd {
+        Command::SetStationComment {
+            station_ref,
+            comment,
+        } => {
+            let station = commented_station(project, *station_ref)?;
+            write(project, Holder::Station(station), comment.clone());
             tracing::info!(
                 ?station_ref,
+                station,
                 purpose = "set station comment",
                 "Station comment updated"
             );
-            CommandResult::success()
+            Ok(Applied::default())
+        }
+        Command::MoveComment {
+            source,
+            target,
+            swap,
+        } => {
+            move_comment(project, source, target, *swap)?;
+            tracing::info!(
+                swap,
+                purpose = "move comment atomically",
+                "Move comment completed"
+            );
+            Ok(Applied::default())
+        }
+        _ => Err(format!(
+            "{} is not a comment command",
+            crate::core::command_kind(cmd)
+        )),
+    }
+}
+
+/// A comment holder resolved on the model: a station (every slot of a
+/// junction is the one station), or a shot by its position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Holder {
+    Station(StationId),
+    Shot { line: LineId, index: usize },
+}
+
+/// The station Set Station Comment addresses, or 0.6.0's refusal: the
+/// identity the slot shows (RS 5.4: a loop end's comment is its closure's
+/// kept end's; the data table and Edit Station ask first whose station it
+/// is, through `preview_station_identity`).
+fn commented_station(project: &Project, slot: StationRef) -> Result<StationId, String> {
+    let line = project
+        .line(slot.line_id)
+        .ok_or_else(|| LINE_GONE.to_string())?;
+    let last = line.shots.len();
+    project
+        .station_at(slot)
+        .map(|station| project.shown(station))
+        .ok_or_else(|| {
+            format!(
+                "Station index {} out of range (line has {} stations)",
+                slot.station_index,
+                last + 1
+            )
         })
-    }
+}
 
-    /// Execute a move-comment operation as a single atomic undo/redo unit.
-    /// Handles its own undo push (like `execute_batch` / `execute_delete_shot_and_split`).
-    pub(super) fn execute_move_comment(
-        &self,
-        source: CommentHolder,
-        target: CommentHolder,
-        swap: bool,
-        cmd: Command,
-    ) -> CommandResult {
-        // [Track B] (#191, D-B6) This is reached ONLY via execute()'s
-        // `Command::MoveComment` arm (early `return self.execute_move_comment(..)`),
-        // already under execute()'s command_lock AND past its read-only edit gate
-        // (MoveComment is not a lifecycle pass-through). It takes no command_lock
-        // of its own, so it inherits the guard rather than calling it directly. If
-        // a future DIRECT caller is added, it MUST route through guard_mutation -
-        // the chokepoint enumeration test fails if MoveComment leaks past execute.
-        debug_assert!(
-            self.edit_enabled(),
-            "execute_move_comment reached with edit disabled - it must run only via execute()'s gate"
-        );
-        // Step 1: Take BEFORE snapshot
-        let before_snapshot = match self.capture_project_snapshot() {
-            Ok(s) => s,
-            Err(result) => return result,
-        };
-
-        // Step 2: Read source and target comments, then mutate
-        {
-            let Ok(mut proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
-            let Some(project) = proj_guard.as_mut() else {
-                return CommandResult::failure("No project open".to_string());
-            };
-
-            let source_comment = match Self::get_holder_comment(project, &source) {
-                Ok(c) => c,
-                Err(e) => return CommandResult::failure(e),
-            };
-            let target_comment = match Self::get_holder_comment(project, &target) {
-                Ok(c) => c,
-                Err(e) => return CommandResult::failure(e),
-            };
-
-            // Source must have a comment
-            let Some(comment_text) = source_comment else {
-                return CommandResult::failure("Source has no comment to move".to_string());
-            };
-
-            // Set target = source's comment
-            if let Err(e) = Self::set_holder_comment(project, &target, Some(comment_text)) {
-                return CommandResult::failure(e);
+/// Resolve a Move Comment holder, or 0.6.0's refusal.
+fn resolve(project: &Project, holder: &CommentHolder) -> Result<Holder, String> {
+    match holder {
+        CommentHolder::Station { station_ref } => {
+            if project.line(station_ref.line_id).is_none() {
+                return Err(LINE_GONE.to_string());
             }
-
-            // Set source = target's comment (swap) or None (move)
-            let new_source_comment = if swap { target_comment } else { None };
-            if let Err(e) = Self::set_holder_comment(project, &source, new_source_comment) {
-                return CommandResult::failure(e);
-            }
-
-            project.touch();
+            project
+                .station_at(*station_ref)
+                .map(|station| Holder::Station(project.shown(station)))
+                .ok_or_else(|| format!("Station index {} out of range", station_ref.station_index))
         }
-
-        // Step 3: Take AFTER snapshot
-        let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
-            Ok(s) => s,
-            Err(result) => return result,
-        };
-
-        // Step 4: Push single undo entry
-        self.push_snapshot_undo(cmd, before_snapshot, after_snapshot);
-        // Dirty-bit flip (#191, D-B16): moving a comment mutated a remote project.
-        // Set-only; no-op for local-only.
-        self.mark_remote_forward_edit();
-
-        tracing::info!(
-            swap = swap,
-            purpose = "move comment atomically",
-            "Move comment completed"
-        );
-        CommandResult::success()
+        CommentHolder::Shot { line_id, shot_id } => {
+            let line = project
+                .line(*line_id)
+                .ok_or_else(|| LINE_GONE.to_string())?;
+            let index = line
+                .shots
+                .iter()
+                .position(|s| s.id == *shot_id)
+                .ok_or_else(|| SHOT_GONE.to_string())?;
+            Ok(Holder::Shot {
+                line: *line_id,
+                index,
+            })
+        }
     }
+}
 
-    /// Read the comment from a CommentHolder (station or shot)
-    fn get_holder_comment(
-        project: &Project,
-        holder: &CommentHolder,
-    ) -> Result<Option<String>, String> {
-        match holder {
-            CommentHolder::Station { station_ref } => {
-                // Validate station exists
-                let line = project
-                    .get_line(station_ref.line_id)
-                    .ok_or_else(|| crate::models::LINE_GONE.to_string())?;
-                let max_station_index = line.shots.len() as u32;
-                if station_ref.station_index > max_station_index {
-                    return Err(format!(
-                        "Station index {} out of range",
-                        station_ref.station_index
-                    ));
-                }
-                Ok(project
-                    .key_for_ref(*station_ref)
-                    .and_then(|key| project.station_comments.get(&key).cloned()))
+/// The comment `holder` has.
+fn read(project: &Project, holder: Holder) -> Option<String> {
+    match holder {
+        Holder::Station(station) => project.stations.get(&station)?.comment.clone(),
+        Holder::Shot { line, index } => project.line(line)?.shots.get(index)?.comment.clone(),
+    }
+}
+
+/// Give `holder` `comment`; an empty one is none.
+fn write(project: &mut Project, holder: Holder, comment: Option<String>) {
+    let comment = comment.filter(|text| !text.is_empty());
+    match holder {
+        Holder::Station(station) => {
+            if let Some(s) = project.stations.get_mut(&station) {
+                s.comment = comment;
             }
-            CommentHolder::Shot { line_id, shot_id } => {
-                let line = project
-                    .get_line(*line_id)
-                    .ok_or_else(|| crate::models::LINE_GONE.to_string())?;
-                let shot = line
-                    .get_shot(*shot_id)
-                    .ok_or_else(|| crate::models::SHOT_GONE.to_string())?;
-                Ok(shot.comment.clone())
+        }
+        Holder::Shot { line, index } => {
+            if let Some(shot) = project.line_mut(line).and_then(|l| l.shots.get_mut(index)) {
+                shot.comment = comment;
             }
         }
     }
+}
 
-    /// Set the comment on a CommentHolder (station or shot)
-    fn set_holder_comment(
-        project: &mut Project,
-        holder: &CommentHolder,
-        comment: Option<String>,
-    ) -> Result<(), String> {
-        match holder {
-            CommentHolder::Station { station_ref } => {
-                match comment {
-                    Some(text) if !text.is_empty() => {
-                        if let Some(key) = project.key_for_ref(*station_ref) {
-                            project.station_comments.insert(key, text);
-                        }
-                    }
-                    _ => {
-                        if let Some(key) = project.key_for_ref(*station_ref) {
-                            project.station_comments.remove(&key);
-                        }
-                    }
-                }
-                Ok(())
-            }
-            CommentHolder::Shot { line_id, shot_id } => {
-                let line = project
-                    .get_line_mut(*line_id)
-                    .ok_or_else(|| crate::models::LINE_GONE.to_string())?;
-                let shot = line
-                    .shots
-                    .iter_mut()
-                    .find(|s| s.id == *shot_id)
-                    .ok_or_else(|| crate::models::SHOT_GONE.to_string())?;
-                match comment {
-                    Some(text) if !text.is_empty() => {
-                        shot.comment = Some(text);
-                    }
-                    _ => {
-                        shot.comment = None;
-                    }
-                }
-                Ok(())
-            }
-        }
+/// Move the comment of `source` to `target` (the target's own comment is
+/// replaced), or swap the two. The source must have a comment. Two slots of
+/// one junction are one holder: moving a comment onto the station it is on
+/// changes nothing (0.6.0's two writes would have deleted it).
+fn move_comment(
+    project: &mut Project,
+    source: &CommentHolder,
+    target: &CommentHolder,
+    swap: bool,
+) -> Result<(), String> {
+    let from = resolve(project, source)?;
+    let to = resolve(project, target)?;
+    let moved = read(project, from).ok_or_else(|| "Source has no comment to move".to_string())?;
+    if from == to {
+        return Ok(());
     }
+    let replaced = read(project, to);
+    write(project, to, Some(moved));
+    write(project, from, if swap { replaced } else { None });
+    Ok(())
 }

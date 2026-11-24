@@ -1,33 +1,92 @@
-//! Stage downloaded files before the short, session-owned cache commit.
-use std::collections::HashMap;
-use std::path::Path;
+//! Read a downloaded project into memory and check it before the short,
+//! session-owned cache commit.
+//!
+//! A download is never installed as it came. [`AppState::prepare_download`]
+//! sniffs it (plan 6.1, 10.1): a version 2 file is decoded with the decoder's
+//! size and count limits and its invariants, a legacy (SQLite) revision is
+//! migrated in memory with the frozen 0.6.0 reader (plan 7). Either way the
+//! result is a [`PreparedDownload`]: the survey, the link the cache will carry
+//! (identity, BASE, a clean dirty bit, the project's undo policy), and the
+//! history rule applied ([`InheritedUndo`]). Only then is anything locked or
+//! written, and the cache file is always version 2: a legacy revision is
+//! upgraded on install (its original stays on the server). So is a version 2
+//! revision an earlier build wrote (no `archived-stations` feature, plan
+//! 2026-11-23 RS 8.2): the cache gets the upgraded survey, its notice points
+//! at the server's revision, and its history (of the survey before the
+//! upgrade) is dropped. Only a download that opens read-only keeps its bytes;
+//! its copy stays the earlier file, upgraded at every open.
 
-use super::speleodb_cache::{
-    drop_inherited_undo, preserved_display_settings, InheritedUndo, LocalEditsPolicy,
-};
-use super::speleodb_sidecars::SetAsideSidecars;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use super::conversion_notice::ConversionNotice;
+use super::open_file::FileState;
+use super::project_load::Opened;
+use super::speleodb_cache::{InheritedUndo, LocalEditsPolicy};
 use super::AppState;
-use crate::persistence::Database;
+use crate::core::HistoryDropped;
+use crate::models::survey::Project;
+use crate::models::SpeleoLink;
+use crate::persistence::migrate::{LegacyError, LegacyParity, MigrateError};
+use crate::persistence::stalx_v2::{
+    decode, encode, rewrite_local, sniff, DecodeError, DecodeNote, DecodeOptions, Extras,
+    Fingerprint, Format, History, LocalState, Mode,
+};
 use crate::speleodb::SpeleoDbError;
 
-/// Preserve the shared newer-schema refusal through hardened download opens.
-pub(super) fn downloaded_file_error(error: anyhow::Error) -> SpeleoDbError {
-    if let Some(newer) = error.downcast_ref::<crate::persistence::NewerSchema>() {
-        return SpeleoDbError::NewerSchema(crate::persistence::NewerSchema {
-            file: "project.stalx".into(),
-            ..newer.clone()
-        });
+/// The name a downloaded project goes by in a refusal the user reads.
+const DOWNLOADED_FILE: &str = "project.stalx";
+
+/// The refusal of a version 2 download the decoder would not take.
+fn decode_refusal(error: &DecodeError) -> SpeleoDbError {
+    match error {
+        DecodeError::NewerVersion { found, supported } => {
+            SpeleoDbError::NewerSchema(crate::models::NewerSchema {
+                file: DOWNLOADED_FILE.into(),
+                found: i32::try_from(*found).unwrap_or(i32::MAX),
+                supported: i32::try_from(*supported).unwrap_or(i32::MAX),
+            })
+        }
+        other => SpeleoDbError::Parse(format!("the downloaded project file was refused: {other}")),
     }
-    SpeleoDbError::Io(format!("could not open downloaded project: {error}"))
 }
 
-pub(super) fn sync_staged_file(path: &Path) -> Result<(), SpeleoDbError> {
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-        .and_then(|file| file.sync_all())
-        .map_err(|e| SpeleoDbError::Io(e.to_string()))
+/// The refusal of a legacy download the migration would not take.
+fn migrate_refusal(error: &MigrateError) -> SpeleoDbError {
+    match error {
+        MigrateError::Legacy(LegacyError::NewerSchema { found, supported }) => {
+            SpeleoDbError::NewerSchema(crate::models::NewerSchema {
+                file: DOWNLOADED_FILE.into(),
+                found: *found,
+                supported: *supported,
+            })
+        }
+        MigrateError::Legacy(LegacyError::Io(e)) => {
+            SpeleoDbError::Io(format!("could not read the downloaded project: {e}"))
+        }
+        other => {
+            tracing::warn!(
+                class = other.class(),
+                purpose = "install a downloaded legacy revision",
+                "speleodb: a downloaded legacy project could not be migrated"
+            );
+            SpeleoDbError::Parse(format!("the downloaded project file was refused: {other}"))
+        }
+    }
+}
+
+/// The caps a downloaded legacy revision is migrated under (review
+/// G-speleodb-4): any collaborator who can upload controls the bytes, so the
+/// frozen open runs under the limits 0.6.0 validated a download with, the
+/// download's own size cap and [`DOWNLOADED_PROCESSING_DEADLINE`] for the load's
+/// SQLite statements, not a local open's one hour.
+///
+/// [`DOWNLOADED_PROCESSING_DEADLINE`]: super::speleodb_pull::DOWNLOADED_PROCESSING_DEADLINE
+fn legacy_download_caps(options: &DecodeOptions) -> crate::persistence::migrate::UntrustedCaps {
+    crate::persistence::migrate::UntrustedCaps {
+        max_file_bytes: options.max_file_bytes,
+        sqlite_deadline: super::speleodb_pull::DOWNLOADED_PROCESSING_DEADLINE,
+    }
 }
 
 pub(super) fn sync_cache_directory(dest: &Path) {
@@ -41,41 +100,272 @@ pub(super) fn sync_cache_directory(dest: &Path) {
     let _ = dest;
 }
 
-pub(super) fn stage_download(
-    source: &Path,
-    dest: &Path,
-    undo: InheritedUndo,
-    sync: fn(&Path) -> Result<(), SpeleoDbError>,
-) -> Result<tempfile::TempPath, SpeleoDbError> {
-    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent).map_err(|e| SpeleoDbError::Io(e.to_string()))?;
-    let staged = tempfile::Builder::new()
-        .prefix(".speleodb-")
-        .suffix(".tmp")
-        .tempfile_in(parent)
-        .map_err(|e| SpeleoDbError::Io(e.to_string()))?
-        .into_temp_path();
-    std::fs::copy(source, &staged).map_err(|e| SpeleoDbError::Io(e.to_string()))?;
-    Database::check_schema_at(&staged).map_err(|e| {
-        SpeleoDbError::Parse(format!("the downloaded project file was refused: {e:#}"))
-    })?;
-    Database::check_not_newer_at(&staged).map_err(|newer| {
-        SpeleoDbError::NewerSchema(crate::persistence::NewerSchema {
-            file: dest
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-            ..newer
-        })
-    })?;
-    if matches!(undo, InheritedUndo::Drop) {
-        drop_inherited_undo(&staged)?;
+/// The conversion notice of a legacy revision a pull installed, waiting for
+/// the open of that copy (`AppState::pending_download_notice`).
+#[derive(Debug)]
+pub(super) struct PendingDownloadNotice {
+    /// The cache copy the pull installed.
+    pub(super) path: PathBuf,
+    /// The bytes it installed there: an open of other bytes at the path (a
+    /// later install, any rewrite since) is not the open the notice is for.
+    pub(super) installed: Fingerprint,
+    pub(super) notice: ConversionNotice,
+}
+
+/// A downloaded project, read and checked in memory, ready to install.
+#[derive(Debug)]
+pub(super) struct PreparedDownload {
+    /// The survey the download holds (load never mutates).
+    pub(super) project: Project,
+    /// What the cache file will hold besides the survey: the link stamped in,
+    /// no per-machine state from the machine that pushed it, the history the
+    /// [`InheritedUndo`] rule leaves.
+    pub(super) extras: Extras,
+    /// The bytes of a version 2 download: the installed copy takes their
+    /// survey members verbatim (`rewrite_local`), which also works for a file
+    /// that opens read-only (unknown content from a newer build). `None` for a
+    /// migrated legacy revision, which is encoded at install.
+    original: Option<Vec<u8>>,
+    /// The link the cache is stamped with.
+    pub(super) link: SpeleoLink,
+    /// Why the downloaded history was dropped when it was meant to be kept.
+    pub(super) history_dropped: Option<HistoryDropped>,
+    /// A migrated legacy revision's record parity (dive-plan pins, plan 10.3).
+    legacy_parity: Option<LegacyParity>,
+    /// A migrated legacy revision's conversion notice (stations the upgrade
+    /// moved), as a local upgrade raises it (review finding G-speleodb-1), or
+    /// an earlier version 2 revision's upgrade notice.
+    pub(super) conversion: Option<ConversionNotice>,
+    /// A read-only earlier version 2 revision: the cache copy keeps its
+    /// bytes, so the opened copy is still the earlier file (RS 8.2).
+    upgrade_pending: bool,
+}
+
+impl PreparedDownload {
+    /// The bytes the cache file gets, with `display` (the outgoing copy's view
+    /// toggles) as its per-machine view.
+    pub(super) fn cache_bytes(
+        &mut self,
+        display: BTreeMap<String, String>,
+    ) -> Result<Vec<u8>, SpeleoDbError> {
+        self.extras.local.display = display;
+        let bytes = match &self.original {
+            Some(original) => rewrite_local(original, &self.extras),
+            None => encode(&self.project, &self.extras, Mode::Normal),
+        };
+        bytes.map_err(|e| SpeleoDbError::Io(format!("could not write the downloaded project: {e}")))
     }
-    sync(&staged)?;
-    Ok(staged)
+
+    /// The opened project the prepared reload commits, now that its bytes are
+    /// at `dest` with `fingerprint`.
+    pub(super) fn into_opened(self, dest: PathBuf, fingerprint: Fingerprint) -> Opened {
+        let Self {
+            mut project,
+            extras,
+            mut history_dropped,
+            legacy_parity,
+            conversion,
+            upgrade_pending,
+            ..
+        } = self;
+        project.file_path = Some(dest);
+        let mut file = FileState::from_v2(extras, fingerprint, None);
+        file.legacy_parity = legacy_parity;
+        file.conversion = conversion;
+        file.upgrade_pending = upgrade_pending;
+        let mut history = file.saved_history.clone();
+        // A read-only earlier revision (RS 8.2) opens upgraded over a copy
+        // that still holds the earlier survey: its history (the Unwind's
+        // waiver keeps one) describes that survey, so it is not loaded (the
+        // banner says so) and the copy keeps it, as a local open of such a
+        // file does (data review finding data-4).
+        if upgrade_pending {
+            if !history.is_empty() {
+                history_dropped = Some(HistoryDropped::EarlierVersion);
+            }
+            history = History::default();
+        }
+        Opened {
+            project,
+            file,
+            history,
+            history_dropped,
+            unrecognised_shot_kinds: Vec::new(),
+            replacing: None,
+        }
+    }
 }
 
 impl AppState {
+    /// Read the download at `source` and check it (see the module docs), then
+    /// stamp `link` into it: the project's own undo policy from the download
+    /// (materialized with this machine's default when the download has none,
+    /// #303), a clean dirty bit, and none of the pushing machine's per-machine
+    /// state. `undo` decides the downloaded history: [`InheritedUndo::Drop`]
+    /// empties it, the Unwind's waiver keeps the undo entries (a push never
+    /// carries redo). Nothing on disk changes.
+    pub(super) fn prepare_download(
+        &self,
+        source: &Path,
+        mut link: SpeleoLink,
+        undo: InheritedUndo,
+        options: &DecodeOptions,
+    ) -> Result<PreparedDownload, SpeleoDbError> {
+        let (bytes, _) =
+            Fingerprint::read(source, options.max_file_bytes).map_err(|e| match e.kind() {
+                std::io::ErrorKind::InvalidData => {
+                    SpeleoDbError::Parse(format!("the downloaded project file was refused: {e}"))
+                }
+                _ => SpeleoDbError::Io(format!("could not read the downloaded project: {e}")),
+            })?;
+        let mut conversion = None;
+        let mut upgrade_pending = false;
+        let (project, mut extras, original, unreadable, legacy_parity) = match sniff(&bytes) {
+            Format::V2 => {
+                let mut decoded = decode(&bytes, options).map_err(|e| decode_refusal(&e))?;
+                let mut unreadable = decoded
+                    .notes
+                    .iter()
+                    .any(|n| matches!(n, DecodeNote::HistoryDropped { .. }))
+                    .then_some(HistoryDropped::Unreadable);
+                let read_only = decoded.read_only().is_some();
+                if let Some(reason) = decoded.read_only() {
+                    tracing::warn!(
+                        features = ?reason.unknown_features,
+                        unknown_content = reason.unknown_content_total,
+                        purpose = "install a downloaded project",
+                        "speleodb: the download was made with a newer Stalagmight; it opens read-only"
+                    );
+                }
+                let mut original = Some(bytes);
+                if let Some(report) = decoded.upgrade() {
+                    tracing::info!(
+                        records = report.records,
+                        swapped = report.swapped.len(),
+                        closures_archived = report.closures_archived,
+                        read_only,
+                        purpose = "install a downloaded revision an earlier build wrote",
+                        "speleodb: upgraded the revision to kept stations in memory"
+                    );
+                    if read_only {
+                        // Nothing this build does not understand may be lost:
+                        // the copy keeps the earlier bytes, upgraded at open.
+                        upgrade_pending = true;
+                        conversion = ConversionNotice::of_upgrade(&report);
+                    } else {
+                        // Converted on install, as a legacy revision is: the
+                        // cache gets the upgraded survey, and its history (of
+                        // the survey before the upgrade) is dropped.
+                        original = None;
+                        conversion =
+                            ConversionNotice::of_upgrade(&report).map(ConversionNotice::downloaded);
+                        if !decoded.extras.history.is_empty() {
+                            unreadable = Some(HistoryDropped::EarlierVersion);
+                        }
+                        decoded.extras.history = History::default();
+                        decoded.extras.generator = super::project_io::generator();
+                    }
+                }
+                (decoded.project, decoded.extras, original, unreadable, None)
+            }
+            Format::Legacy => {
+                drop(bytes);
+                let config = self.get_config();
+                let migrated = crate::persistence::migrate::migrate_untrusted_path_for_app(
+                    source,
+                    &config.closure_adjustment,
+                    legacy_download_caps(options),
+                )
+                .map_err(|e| migrate_refusal(&e))?;
+                tracing::info!(
+                    stations = migrated.report.stations,
+                    clean = migrated.report.verification.is_clean(),
+                    moved = migrated.report.verification.moved().slots,
+                    purpose = "install a downloaded legacy revision",
+                    "speleodb: migrated a legacy revision in memory; the cache gets version 2"
+                );
+                // The cache copy is version 2 at once and nothing local keeps
+                // the original: the notice points at the server's revision.
+                conversion =
+                    ConversionNotice::of_migration(&migrated.report, &migrated.extras.changes)
+                        .map(ConversionNotice::downloaded);
+                let mut project = migrated.project;
+                if !migrated.extras.validation_stored {
+                    project.settings.validation = config.validation;
+                }
+                let mut file = FileState::default();
+                file.set_speleo_link(migrated.extras.speleo_link.as_ref());
+                let mut extras = file.extras;
+                extras.ignored_warnings = migrated.extras.ignored_warnings;
+                extras.generator = super::project_io::generator();
+                (
+                    project,
+                    extras,
+                    None,
+                    migrated
+                        .had_history
+                        .then_some(HistoryDropped::EarlierVersion),
+                    Some(migrated.extras.legacy_parity),
+                )
+            }
+            Format::Unknown => {
+                return Err(SpeleoDbError::Parse(
+                    "the downloaded project file was refused: it is not a Stalagmight project"
+                        .to_owned(),
+                ))
+            }
+        };
+        // [#303] The project's undo policy rides the server copy (it is project
+        // state, not machine state), so the downloaded value is the authority; a
+        // copy that has none gets this machine's default, made explicit.
+        let downloaded_mode = extras.speleodb.as_ref().and_then(|l| l.undo_mode);
+        link.undo_mode = Some(self.effective_undo_mode(downloaded_mode));
+        // Nothing per-machine from the machine that pushed it: its view, its sync
+        // state, its Unwind position and watermark (a push never carries `local`,
+        // so this only matters for a file that reached the server another way).
+        extras.local = LocalState::default();
+        let mut file = FileState {
+            extras,
+            ..FileState::default()
+        };
+        file.set_speleo_link(Some(&link));
+        let mut extras = file.extras;
+        // The Unwind's waiver is the only caller that keeps the undo entries
+        // (`undo_history_keep_is_unwind_only` counts the sites that ask for it).
+        let history_dropped = if undo == InheritedUndo::Drop {
+            extras.history = History::default();
+            None
+        } else {
+            extras.history.redo.clear();
+            unreadable
+        };
+        Ok(PreparedDownload {
+            project,
+            extras,
+            original,
+            link,
+            history_dropped,
+            legacy_parity,
+            conversion,
+            upgrade_pending,
+        })
+    }
+
+    /// Whether a download reserved under `generation` can no longer install:
+    /// a newer open or login moved the session, or a native open is loading.
+    fn download_is_stale(&self, generation: u64) -> bool {
+        let _project = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.speleodb_session_generation() != generation
+            || self
+                .active_loading
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+    }
+
     pub(super) fn reserve_download_generation(&self) -> u64 {
         let _project = self
             .project
@@ -85,21 +375,33 @@ impl AppState {
         self.speleodb_session_generation()
     }
 
-    /// Network and validation happen before this commit. A newer open or login
-    /// invalidates the download; pending native readers exclude replacement too.
+    /// Install a prepared download at `dest` without opening it (the pull: the
+    /// frontend opens the cache path afterwards). Network and validation happen
+    /// before this commit. A newer open or login invalidates the download
+    /// (`generation`); a pending native reader excludes replacement too. When
+    /// `dest` is the open project it is closed, under the same `project`
+    /// acquisition as the write, so nothing can land between the two.
     pub(super) fn replace_cache_for_session(
         &self,
-        source: &Path,
+        mut prepared: PreparedDownload,
         dest: &Path,
         project_id: &str,
         policy: LocalEditsPolicy,
-        undo: InheritedUndo,
         generation: u64,
-    ) -> Result<HashMap<String, String>, SpeleoDbError> {
+    ) -> Result<(), SpeleoDbError> {
+        // A download the session has already moved past is refused as such, before
+        // the guard reads the copy: there is nothing to ask the user about.
+        if self.download_is_stale(generation) {
+            return Err(SpeleoDbError::SessionMoved);
+        }
         if policy == LocalEditsPolicy::Protect {
             self.guard_local_edits(project_id, dest)?;
         }
-        let staged = stage_download(source, dest, undo, sync_staged_file)?;
+        // The view toggles of the copy on disk, read before any lock is taken: a
+        // legacy copy the cheap read declines is read through the migration, which
+        // must not run under the `project` guard. Another install cannot land in between: it would move
+        // the session generation, which the commit below checks.
+        let on_disk_display = super::speleodb_cache::file_display(dest);
         let _lock_ops = self.speleodb_lock_ops_guard();
         let mut project = self
             .project
@@ -112,20 +414,15 @@ impl AppState {
         if self.speleodb_session_generation() != generation || loading.is_some() {
             return Err(SpeleoDbError::SessionMoved);
         }
+        drop(loading);
         let replaces_open = project
             .as_ref()
             .and_then(|p| p.file_path.as_deref())
             .is_some_and(|path| super::project_io::same_file(path, dest));
         if replaces_open && policy == LocalEditsPolicy::Protect {
-            let database = self
-                .database
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let link = database
-                .as_ref()
-                .ok_or_else(|| SpeleoDbError::Io("open cache has no database".into()))?
-                .load_speleo_link()
-                .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
+            // The open project's link in memory is the authority for its own file:
+            // an edit since the guard above read the disk counts.
+            let link = self.speleo_link();
             if link.as_ref().is_none_or(|link| link.has_unpushed_edits) {
                 return Err(SpeleoDbError::WouldDiscardLocalEdits {
                     project_id: project_id.into(),
@@ -134,49 +431,36 @@ impl AppState {
                 });
             }
         }
-        let view = preserved_display_settings(dest);
-        // Windows needs the file handle closed before rename. Retain the in-memory
-        // project and undo stack until rename succeeds, so failure needs no reload.
-        if replaces_open {
-            self.database
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-        }
-        let reopen_original = || -> Result<(), SpeleoDbError> {
-            if replaces_open {
-                let original_database = Database::open_existing(dest).map_err(|e| SpeleoDbError::Io(format!("cache replacement failed and its original database could not be reopened: {e}")))?;
-                *self
-                    .database
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(original_database);
-            }
-            Ok(())
+        // The open copy's toggles in memory are the authority for its own file.
+        let display = if replaces_open {
+            self.with_file(|file| file.display_settings().clone())
+        } else {
+            on_disk_display
         };
-        // No connection of ours is left on `dest` (closed above, or it was never
-        // the open project), so whatever sidecar sits beside it is the outgoing
-        // file's and must not be replayed into the incoming one.
-        let sidecars = match SetAsideSidecars::take(dest) {
-            Ok(sidecars) => sidecars,
-            Err(error) => {
-                reopen_original()?;
-                return Err(error);
-            }
-        };
-        if let Err(error) = std::fs::rename(&staged, dest) {
-            sidecars.restore();
-            reopen_original()?;
-            return Err(SpeleoDbError::Io(error.to_string()));
-        }
-        sidecars.discard();
+        let bytes = prepared.cache_bytes(display)?;
+        super::speleodb_reload::install_cache_bytes(dest, &bytes)?;
+        // The frontend opens the cache path next; the file is version 2 by
+        // then, so the open has nothing to compare: hand it the notice, for
+        // exactly these bytes (any other copy at the path never shows it).
+        *self
+            .pending_download_notice
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            prepared
+                .conversion
+                .take()
+                .map(|notice| PendingDownloadNotice {
+                    path: dest.to_path_buf(),
+                    installed: Fingerprint::of(&bytes, None),
+                    notice,
+                });
         if replaces_open {
             self.close_open_project_locked(&mut project);
         } else {
             // Installing a cache is itself a completed mutation, even from home.
             self.bump_speleodb_session();
         }
-        sync_cache_directory(dest);
-        Ok(view)
+        Ok(())
     }
 }
 
@@ -184,25 +468,152 @@ impl AppState {
 #[expect(clippy::expect_used, reason = "synthetic cache durability tests")]
 mod tests {
     use super::*;
-    use crate::models::Project;
+    use crate::core::state::stalx_fixtures::{
+        extras_for, fixture_link, history_counts, line_survey, link_on_disk, name_at,
+        seed_with_history, write_file, write_v2,
+    };
+    use crate::persistence::stalx_v2::temp_path;
 
     #[test]
-    fn failed_stage_sync_preserves_the_cache_and_cleans_the_stage() {
+    fn a_legacy_download_is_migrated_under_the_untrusted_caps() {
+        // Review G-speleodb-4: 0.6.0 read a download under a 64 MiB value cap and a
+        // 30 s SQLite deadline; the migration had fallen back to a local open's
+        // 1 GiB and one hour. Injection: call `migrate_path_for_app` in the legacy
+        // arm again and the tripwire below fails (the caps themselves are pinned
+        // behaviourally in `migrate_tests::an_untrusted_file_is_migrated_under_its_caps`).
+        let caps =
+            legacy_download_caps(&crate::core::state::speleodb_pull::download_decode_options());
+        assert_eq!(caps.max_file_bytes, 64 * 1024 * 1024);
+        assert_eq!(caps.sqlite_deadline, std::time::Duration::from_secs(30));
+        let src = include_str!("speleodb_cache_install.rs");
+        let body = src
+            .split_once("pub(super) fn prepare_download(")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("\n    pub(super) fn ").next())
+            .expect("prepare_download is defined");
+        assert!(body.contains("migrate_untrusted_path_for_app("));
+        assert!(body.contains("legacy_download_caps(options)"));
+        assert!(!body.contains("migrate_path_for_app("));
+
+        // And a legacy revision still installs under them.
+        let dir = tempfile::tempdir().expect("temp");
+        let source = crate::core::state::stalx_fixtures::legacy_linked_project(
+            &dir.path().join("download.stalx"),
+            Some(&fixture_link("https://x", false)),
+        );
+        let state = AppState::new().expect("state");
+        let prepared = state
+            .prepare_download(
+                &source,
+                fixture_link("https://x", false),
+                InheritedUndo::Drop,
+                &crate::core::state::speleodb_pull::download_decode_options(),
+            )
+            .expect("a legacy revision migrates under the caps");
+        assert_eq!(prepared.project.lines().len(), 1);
+    }
+
+    #[test]
+    fn a_failed_install_preserves_the_cache_and_cleans_the_stage() {
         let dir = tempfile::tempdir().expect("temp");
         let source = dir.path().join("source.stalx");
         let dest = dir.path().join("working.stalx");
-        for path in [&source, &dest] {
-            Database::open(path)
-                .expect("database")
-                .save_project(&Project::new("Synthetic".into(), None))
-                .expect("project");
-        }
+        write_v2(
+            &source,
+            "Synthetic",
+            Some(&fixture_link("https://x", false)),
+        );
+        write_v2(&dest, "Working", Some(&fixture_link("https://x", false)));
         let before = std::fs::read(&dest).expect("old bytes");
-        let result = stage_download(&source, &dest, InheritedUndo::Keep, |_| {
-            Err(SpeleoDbError::Io("synthetic sync failure".into()))
-        });
+        // A directory where the install writes its temp: the write fails before the
+        // rename, as a full disk or a permission denial would.
+        std::fs::create_dir(temp_path(&dest)).expect("block the temp");
+        std::fs::write(temp_path(&dest).join("keep"), b"x").expect("non-empty");
+        let state = AppState::new().expect("state");
+        let prepared = state
+            .prepare_download(
+                &source,
+                fixture_link("https://x", false),
+                InheritedUndo::Keep,
+                &DecodeOptions::default(),
+            )
+            .expect("prepare");
+        let result = state.replace_cache_for_session(
+            prepared,
+            &dest,
+            crate::core::state::stalx_fixtures::FIXTURE_ID,
+            LocalEditsPolicy::Discard,
+            state.speleodb_session_generation(),
+        );
         assert!(result.is_err());
         assert_eq!(std::fs::read(&dest).expect("unchanged"), before);
-        assert_eq!(std::fs::read_dir(dir.path()).expect("directory").count(), 2);
+    }
+
+    #[test]
+    fn a_version_2_download_keeps_its_survey_members_byte_for_byte() {
+        let dir = tempfile::tempdir().expect("temp");
+        let source = dir.path().join("source.stalx");
+        let mut server = fixture_link("https://server.example", false);
+        server.base_commit_sha = None;
+        write_file(
+            &source,
+            &line_survey("Surveyed"),
+            &extras_for(Some(&server)),
+        );
+        let state = AppState::new().expect("state");
+        let mut prepared = state
+            .prepare_download(
+                &source,
+                fixture_link("https://x", false),
+                InheritedUndo::Drop,
+                &DecodeOptions::default(),
+            )
+            .expect("prepare");
+        let bytes = prepared.cache_bytes(BTreeMap::new()).expect("bytes");
+        let original = std::fs::read(&source).expect("source");
+        let body = |text: &[u8]| {
+            let text = String::from_utf8_lossy(text).into_owned();
+            // Top-level members start a physical line (plan 6.2); the summary also
+            // has a `stations` key, so the newline is what finds the member.
+            let start = text
+                .find("\n\"sections\"")
+                .or_else(|| text.find("\n\"stations\""));
+            start.map(|at| text[at..].to_owned()).unwrap_or_default()
+        };
+        assert!(!body(&original).is_empty());
+        assert_eq!(body(&bytes), body(&original), "the body is copied verbatim");
+    }
+
+    #[test]
+    fn the_prepared_link_takes_the_downloads_undo_policy_and_drops_machine_state() {
+        let dir = tempfile::tempdir().expect("temp");
+        let source = dir.path().join("source.stalx");
+        let mut server = fixture_link("https://old.example", true);
+        server.undo_mode = Some(crate::models::UndoMode::Disabled);
+        seed_with_history(&source, "Pushed", &server, 3, 1);
+        let state = AppState::new().expect("state");
+        let mut prepared = state
+            .prepare_download(
+                &source,
+                fixture_link("https://example.com", false),
+                InheritedUndo::Drop,
+                &DecodeOptions::default(),
+            )
+            .expect("prepare");
+        assert_eq!(
+            prepared.link.undo_mode,
+            Some(crate::models::UndoMode::Disabled),
+            "the project's own policy, not this machine's default"
+        );
+        let dest = dir.path().join("cache").join("project.stalx");
+        let bytes = prepared.cache_bytes(BTreeMap::new()).expect("bytes");
+        super::super::speleodb_reload::install_cache_bytes(&dest, &bytes).expect("install");
+        let link = link_on_disk(&dest).expect("linked");
+        assert_eq!(link.endpoint, "https://example.com");
+        assert_eq!(link.base_commit_sha.as_deref(), Some("abc123"));
+        assert!(!link.has_unpushed_edits);
+        assert_eq!(link.undo_mode, Some(crate::models::UndoMode::Disabled));
+        assert_eq!(history_counts(&dest), (0, 0));
+        assert_eq!(name_at(&dest), "Pushed");
     }
 }

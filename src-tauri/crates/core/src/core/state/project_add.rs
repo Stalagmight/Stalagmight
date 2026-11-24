@@ -1,29 +1,42 @@
-//! "Add .stalx to current project" (#674): append another project file's
-//! survey into the OPEN project, as one undoable command.
+//! "Add .stalx to current project" (#674; plan 5.8): append another project
+//! file's survey into the OPEN project, as one undoable command.
 //!
-//! The source is read by [`read_source_project`] and copied by
-//! [`append_project`] (which also places a georeferenced source by its datum),
-//! the two routines "Merge projects" uses too. What this file adds around them
-//! is what only an add needs: carrying the source's dedup hashes and ignored
-//! warnings, refusing corruption without a whole-project snapshot, and the
-//! receipt.
+//! A recipe behind `execute`'s edit gates: the source is read OUTSIDE the
+//! project lock (`read_source_project`: a version 2 file decoded, a legacy
+//! one migrated), then one `run_recorded` step copies it with the model's
+//! `append_project` (station ids offset, lines and closures re-minted,
+//! Sections and line names made unique, colliding shot uuids re-minted, the
+//! copy moved rigidly by `place_by_datum`'s vector) and extends what only an
+//! add carries:
+//! - the source's import hashes and its own identity
+//!   (`stalx-project:<created_at>`), so adding it again, or re-importing the
+//!   file it was built from, warns;
+//! - the source's ignored warnings, re-keyed onto the copy's (re-minted)
+//!   shot uuids, into the open file's in-memory ignores (they ride the next
+//!   save; an undo leaves them matching nothing, and the save drops those);
+//! - the receipt (counts and warnings) on `CommandResult::import_receipt`,
+//!   and the added lines on `CommandResult::line_ids` for the orphan
+//!   placement dialog.
+//!
+//! The undo entry is the generic changeset of the step (what the add brought
+//! in, nothing else), with 0.6.0's preview rows: the file, the lines and the
+//! shots added.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use super::project_append::{append_project, AppendOutcome};
+use super::commands::Record;
+use super::conversion_notice::{ConversionNotice, ConversionSource};
 use super::project_io::same_file;
-use super::project_source::{read_source_project, SourceProject};
+use super::project_source::SourceProject;
 use super::AppState;
 use crate::core::command::{sanitize_display_text, ImportReceipt, MAX_FILE_NAME_LEN};
-use crate::core::{
-    extend_unique_hashes, AddedContent, CarriedIgnore, Command, CommandResult, UndoData,
-};
+use crate::core::{Command, CommandResult};
+use crate::models::survey::{AppendSummary, Project};
 use crate::models::{
-    live_shot_uuid_for_stored, warning_is_ignorable, LineId, Project, FEATURE_ID_STRIDE,
-    MAX_LINES_IN_ID_SPACE, MAX_LINE_ID,
+    warning_is_ignorable, FEATURE_ID_STRIDE, MAX_LINES_IN_ID_SPACE, MAX_LINE_ID, MAX_STATION_ID,
 };
-use crate::persistence::ResolvedWarning;
+use crate::persistence::stalx_v2::IgnoredWarning;
 
 /// The import-dedup entry an add records for its source, in
 /// `Project::imported_file_hashes` beside the content hashes the importers
@@ -31,175 +44,218 @@ use crate::persistence::ResolvedWarning;
 ///
 /// Keyed on the source PROJECT's identity (`created_at`, stable across every
 /// edit and save of that project), not on the file's bytes: a `.stalx` is
-/// rewritten on every save - `modified_at`, the undo history - so a byte hash
-/// would miss exactly the common case of adding the same project again after it
-/// was opened and saved. A Save As copy keeps the identity, and holds the same
-/// survey, so it warns too.
+/// rewritten on every save, so a byte hash would miss exactly the common
+/// case of adding the same project again after it was opened and saved. A
+/// Save As copy keeps the identity, and holds the same survey, so it warns
+/// too. The spelling is 0.6.0's (`to_rfc3339`), so an entry a 0.6.0 add
+/// recorded still matches.
 const STALX_IDENTITY_PREFIX: &str = "stalx-project:";
 
 fn stalx_identity(project: &Project) -> String {
     format!("{STALX_IDENTITY_PREFIX}{}", project.created_at.to_rfc3339())
 }
 
-/// Re-key the source's ignored warnings onto the copied lines, by shot uuid.
-/// A legacy position-keyed row is resolved through the source shot at that
-/// position. Rows an ignore can never honor (error severity) and rows whose
-/// shot is gone are dropped.
-fn remap_ignores(
-    source: &Project,
-    rows: &[ResolvedWarning],
-    outcome: &AppendOutcome,
-) -> Vec<CarriedIgnore> {
-    let shots = ShotIndex::of(source, rows.iter().map(|row| row.line_id));
-    let mut carried = IgnoreList::default();
-    for row in rows {
-        if !warning_is_ignorable(&row.warning_code) {
-            continue;
-        }
-        let Some(&line_id) = outcome.line_id_map.get(&row.line_id) else {
-            continue;
-        };
-        let shot_uuid = match row.shot_uuid.as_deref() {
-            Some(uuid) => shots.live_uuid(row.line_id, uuid),
-            None => shots.uuid_of(row.line_id, row.shot_id).map(str::to_string),
-        };
-        let Some(shot_uuid) = shot_uuid else {
-            continue;
-        };
-        carried.push(CarriedIgnore {
-            line_id,
-            shot_uuid: outcome.target_uuid(line_id, &shot_uuid),
-            warning_code: row.warning_code.clone(),
-            resolved_at: row.resolved_at,
-            resolved_comment: row.resolved_comment.clone(),
-        });
-    }
-    carried.items
-}
-
-/// The shots of some lines, indexed both ways, built once so a pass over N
-/// ignore rows costs O(N) rather than a shot scan per row (a hostile source
-/// controls both counts). The FIRST shot wins a key, as a linear scan would.
-#[derive(Default)]
-struct ShotIndex<'a> {
-    id_by_uuid: HashMap<(LineId, &'a str), u32>,
-    uuid_by_id: HashMap<(LineId, u32), Option<&'a str>>,
-}
-
-impl<'a> ShotIndex<'a> {
-    fn of(project: &'a Project, lines: impl IntoIterator<Item = LineId>) -> Self {
-        let mut index = Self::default();
-        let wanted: HashSet<LineId> = lines.into_iter().collect();
-        for line_id in wanted {
-            let Some(line) = project.get_line(line_id) else {
-                continue;
-            };
-            for shot in &line.shots {
-                if let Some(uuid) = shot.uuid.as_deref() {
-                    index.id_by_uuid.entry((line_id, uuid)).or_insert(shot.id);
-                }
-                index
-                    .uuid_by_id
-                    .entry((line_id, shot.id))
-                    .or_insert(shot.uuid.as_deref());
-            }
-        }
-        index
-    }
-
-    /// The id of the shot carrying `uuid` in `line_id`.
-    fn id_of(&self, line_id: LineId, uuid: &str) -> Option<u32> {
-        self.id_by_uuid.get(&(line_id, uuid)).copied()
-    }
-
-    /// The uuid a stored row's `uuid` names in `line_id` now: itself, or the
-    /// id the source's load gave that shot when it renamed a cross-line
-    /// repeat (`live_shot_uuid_for_stored`). `None` when neither is there.
-    fn live_uuid(&self, line_id: LineId, uuid: &str) -> Option<String> {
-        live_shot_uuid_for_stored(line_id, uuid, |id| self.id_of(line_id, id).is_some())
-    }
-
-    /// The uuid of the shot with `shot_id` in `line_id`, if it has one.
-    fn uuid_of(&self, line_id: LineId, shot_id: u32) -> Option<&'a str> {
-        self.uuid_by_id.get(&(line_id, shot_id)).copied().flatten()
-    }
-}
-
-/// Carried ignores in first-seen order, one per (line, shot, warning).
-#[derive(Default)]
-struct IgnoreList {
-    items: Vec<CarriedIgnore>,
-    seen: HashSet<(LineId, String, String)>,
-}
-
-impl IgnoreList {
-    fn push(&mut self, ignore: CarriedIgnore) {
-        let key = (
-            ignore.line_id,
-            ignore.shot_uuid.clone(),
-            ignore.warning_code.clone(),
-        );
-        if self.seen.insert(key) {
-            self.items.push(ignore);
+/// Append each of `items` to `list` unless `list` already holds it.
+fn extend_unique(list: &mut Vec<String>, items: &[String]) {
+    let mut held: BTreeSet<String> = list.iter().cloned().collect();
+    for item in items {
+        if held.insert(item.clone()) {
+            list.push(item.clone());
         }
     }
 }
 
-/// What happened during the append, for the receipt.
-struct AppendReport {
-    outcome: AppendOutcome,
-    closures_created: u32,
-    ignores: Vec<CarriedIgnore>,
+/// The name a file goes by in the receipt and in every refusal: its own name,
+/// no directory, sanitized and clamped (as `Command::add_project_file`).
+fn file_label(path: &Path) -> String {
+    path.file_name()
+        .map(|n| sanitize_display_text(&n.to_string_lossy(), MAX_FILE_NAME_LEN))
+        .unwrap_or_default()
+}
+
+/// What the copy did, for the receipt and the history entry.
+struct AddReport {
+    summary: AppendSummary,
+    /// Why the source is a survey this project already holds, if it is.
     duplicate: Option<&'static str>,
+    shot_count: usize,
+}
+
+/// The copy itself and the dedup state it carries; on `Err` the caller
+/// (`run_recorded`) restores the project.
+fn append_into(project: &mut Project, source: &SourceProject) -> Result<AddReport, String> {
+    // The id budgets, checked before anything is copied and worded for the
+    // user (the model refuses the same cases with a terser text).
+    let incoming = source.project.lines().len();
+    let spent = project.next_line_id() as usize;
+    if incoming.saturating_add(spent) > MAX_LINES_IN_ID_SPACE {
+        return Err(format!(
+            "Add refused: the file holds {incoming} lines and this project has \
+             already used {spent} line ids, past the limit of \
+             {MAX_LINES_IN_ID_SPACE} for one project. Shot ids encode as \
+             line_id * {FEATURE_ID_STRIDE} + position in 32 bits, so line ids \
+             past {MAX_LINE_ID} cannot hold shots. No changes were made."
+        ));
+    }
+    // E5: the copy keeps its Station IDs, offset past this project's; when
+    // they do not fit the add is refused (0.6.0 renumbered every station).
+    let base = u64::from(project.counters.next_station_id);
+    let needed = u64::from(source.project.counters.next_station_id);
+    if base.saturating_add(needed) > u64::from(MAX_STATION_ID) {
+        return Err(format!(
+            "Add refused: the file's Station IDs run to {needed} and this project has \
+             already used {base}, past the limit of {MAX_STATION_ID} Station IDs for \
+             one project. No changes were made."
+        ));
+    }
+
+    let identity = stalx_identity(&source.project);
+    let duplicate = if identity == stalx_identity(project) {
+        Some("is a copy of the open project")
+    } else if project.imported_file_hashes.contains(&identity) {
+        Some("was already added to this project")
+    } else {
+        None
+    };
+    let summary = project
+        .append_project(&source.project)
+        .map_err(|e| e.to_string())?
+        .value;
+    // The source's dedup state, so re-importing the Ariane/DMP file it was
+    // built from is still caught here, plus its own identity.
+    extend_unique(
+        &mut project.imported_file_hashes,
+        &source.project.imported_file_hashes,
+    );
+    extend_unique(
+        &mut project.imported_line_hashes,
+        &source.project.imported_line_hashes,
+    );
+    extend_unique(
+        &mut project.imported_file_hashes,
+        std::slice::from_ref(&identity),
+    );
+    let shot_count = summary
+        .new_lines()
+        .iter()
+        .filter_map(|id| project.line(*id))
+        .map(|line| line.shots.len())
+        .sum();
+    Ok(AddReport {
+        summary,
+        duplicate,
+        shot_count,
+    })
+}
+
+/// The source's ignores the copy honours, keyed by the copy's shot uuids:
+/// an ignore the source could never honour (error severity) and one whose
+/// shot the source does not hold are dropped, one per (shot, code).
+fn carried_ignores(source: &SourceProject, summary: &AppendSummary) -> Vec<IgnoredWarning> {
+    let renamed: BTreeMap<&str, &str> = summary
+        .shot_uuid_renames
+        .iter()
+        .map(|r| (r.source.as_str(), r.target.as_str()))
+        .collect();
+    let mut seen = BTreeSet::new();
+    let mut carried = Vec::new();
+    for ignore in &source.ignores {
+        if !warning_is_ignorable(&ignore.code)
+            || source.project.shot_by_uuid(&ignore.shot).is_none()
+        {
+            continue;
+        }
+        let shot = renamed
+            .get(ignore.shot.as_str())
+            .map_or_else(|| ignore.shot.clone(), |target| (*target).to_string());
+        if seen.insert((shot.clone(), ignore.code.clone())) {
+            carried.push(IgnoredWarning {
+                shot,
+                ..ignore.clone()
+            });
+        }
+    }
+    carried
+}
+
+/// The note a converted source gets (RS 8.2, 8.3): which older file it was
+/// and what the conversion changed, counted (the copy renumbers lines and
+/// Station IDs, so no station is named). The source file is left as it was.
+pub(super) fn converted_source_note(label: &str, notice: &ConversionNotice) -> String {
+    let older = match notice.source {
+        ConversionSource::OldFormat => "is in the old file format",
+        ConversionSource::EarlierVersion2 => "was written by an earlier version",
+    };
+    format!(
+        "'{label}' {older} and was converted as it was read (the file itself is unchanged): {}",
+        notice.counts().join(", ")
+    )
+}
+
+fn add_receipt(label: &str, source: &SourceProject, report: &AddReport) -> ImportReceipt {
+    let mut warnings = Vec::new();
+    if let Some(why) = report.duplicate {
+        warnings.push(format!("'{label}' {why}; its lines were added again"));
+    }
+    if let Some(name) = &source.link_name {
+        let name = sanitize_display_text(name, MAX_FILE_NAME_LEN);
+        warnings.push(format!(
+            "'{label}' is linked to SpeleoDB project '{name}'; its data was copied, \
+             that project is unchanged"
+        ));
+    }
+    if let Some((incoming, existing)) = report.summary.elevation_conflict {
+        warnings.push(format!(
+            "'{label}' has an entrance elevation of {incoming:.2} m, which differs from \
+             this project's {existing:.2} m; kept {existing:.2} m"
+        ));
+    }
+    if source.project.lines().is_empty() {
+        warnings.push(format!("'{label}' holds no survey lines"));
+    }
+    let info = source
+        .converted
+        .as_ref()
+        .map(|notice| converted_source_note(label, notice))
+        .into_iter()
+        .collect();
+    let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    let mut receipt = ImportReceipt {
+        source_format: "Stalagmight".to_string(),
+        file_name: label.to_string(),
+        lines_found: count(source.project.lines().len()),
+        lines_imported: count(report.summary.line_map.len()),
+        shot_count: count(report.shot_count),
+        closures_requested: count(source.project.closures.len()),
+        closures_created: count(report.summary.closure_map.len()),
+        unit_conversion: None,
+        warnings,
+        info,
+        zero_datum_created: None,
+        line_problems: None,
+    };
+    receipt.cap_warnings();
+    receipt
 }
 
 impl AppState {
-    /// The slot generation an add's undo stub was captured against, which
-    /// `execute` hands the forward step. `None` when no stub was captured (no
-    /// project was open).
-    pub(super) fn add_slot_generation(undo_data: &UndoData) -> Option<u64> {
-        match undo_data {
-            UndoData::AddedProjectContent(stub) => stub.slot_generation(),
-            _ => None,
+    /// `Command::AddProjectFile` (reached through `execute`, after its edit
+    /// gates). Refuses with nothing changed when no project is open, when the
+    /// open file is read-only, when `path` is the open project's own file,
+    /// when the file cannot be read, when an id space would run out, and when
+    /// another project was opened while the file was being read.
+    pub(super) fn execute_add_project_file(&self, cmd: &Command) -> CommandResult {
+        let Command::AddProjectFile { path, .. } = cmd else {
+            return CommandResult::failure("Not an add of a project file".to_string());
+        };
+        let label = file_label(path);
+        if let Err(refused) = self.guard_file_writable() {
+            return refused;
         }
-    }
-
-    /// `Command::AddProjectFile`'s forward step (reached only through
-    /// `execute`, so the read-only gate, the geometry epilogue and the undo push
-    /// all apply). Refuses with nothing changed when no project is open, when
-    /// `path` is the open project's own file, or when the file cannot be read.
-    ///
-    /// Bound to `slot_generation`, the generation `execute`'s undo stub was
-    /// captured under: a project load does not take `command_lock`, so another
-    /// project can be committed into the slot between that capture and either
-    /// of the two `project` locks below, and every slot commit bumps the
-    /// generation (local projects included - see `bump_speleodb_session` and the
-    /// bump-site tripwire in `speleodb_session`). Appending into that successor
-    /// would pair it with the first project's baseline, so its undo would delete
-    /// the successor's own lines. `push_add_undo` closes the same window after
-    /// the append.
-    pub(super) fn add_project_file(
-        &self,
-        path: &Path,
-        slot_generation: Option<u64>,
-    ) -> CommandResult {
-        let label = path
-            .file_name()
-            .map(|n| sanitize_display_text(&n.to_string_lossy(), MAX_FILE_NAME_LEN))
-            .unwrap_or_default();
-        let Some(slot_generation) = slot_generation else {
-            return CommandResult::failure("No project is open to add the file to".to_string());
-        };
-        let slot_moved = || {
-            CommandResult::failure(format!(
-                "The open project changed while '{label}' was being added, so it was not \
-                 added. No changes were made."
-            ))
-        };
-        add_window(self, AddWindow::BeforeFirstLock);
-
-        // The refusals that need no file read come first.
-        let open_path = {
+        // The project the add goes into, by its slot generation: a project
+        // load does not take `command_lock`, so another project can be
+        // committed while the source is read, and every commit bumps it.
+        let (generation, open_path) = {
             let guard = self
                 .project
                 .lock()
@@ -207,415 +263,116 @@ impl AppState {
             let Some(project) = guard.as_ref() else {
                 return CommandResult::failure("No project is open to add the file to".to_string());
             };
-            if self.speleodb_session_generation() != slot_generation {
-                return slot_moved();
-            }
-            project.file_path.clone()
+            (
+                self.speleodb_session_generation(),
+                project.file_path.clone(),
+            )
         };
-        if open_path
-            .as_deref()
-            .is_some_and(|open| same_file(open, path))
-        {
+        if open_path.is_some_and(|open| same_file(&open, path)) {
             return CommandResult::failure(format!(
                 "'{label}' is the open project itself, so it cannot be added to it"
             ));
         }
 
-        let source = match read_source_project(path, &label, "added") {
+        let source = match self.read_source_project(path, &label, "added") {
             Ok(source) => source,
             Err(e) => return CommandResult::failure(e),
         };
         add_window(self, AddWindow::DuringRead);
 
-        let mut guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(project) = guard.as_mut() else {
-            return CommandResult::failure("No project is open to add the file to".to_string());
-        };
-        // The project the add was started against left the slot during the
-        // read. Nothing has been changed yet. (A SpeleoDB sign-in or sign-out in
-        // the window bumps the generation too; refusing then is conservative,
-        // and the user simply adds again.)
-        if self.speleodb_session_generation() != slot_generation {
-            return slot_moved();
-        }
-        let report = match Self::append_into_open(project, &source) {
+        let mut carried: Vec<(String, String)> = Vec::new();
+        let outcome = self.run_recorded(
+            |project| Record::of(project, cmd),
+            |project, record| {
+                // The project the add was started against left the slot
+                // during the read (a SpeleoDB sign-in or sign-out bumps the
+                // generation too; refusing then is conservative).
+                if self.speleodb_session_generation() != generation {
+                    return Err(format!(
+                        "The open project changed while '{label}' was being added, so it \
+                         was not added. No changes were made."
+                    ));
+                }
+                let report = append_into(project, &source)?;
+                record.refs.lines = report.summary.new_lines();
+                record.preview = super::labels::add_project_file_preview(
+                    &label,
+                    report.summary.line_map.len(),
+                    report.shot_count,
+                );
+                // Under the same project guard as the copy, so a save never
+                // sees the lines without their ignores (lock order: project,
+                // then file).
+                let ignores = carried_ignores(&source, &report.summary);
+                carried = self.hold_carried_ignores(ignores);
+                Ok(report)
+            },
+        );
+        let report = match outcome {
             Ok(report) => report,
-            Err(e) => return CommandResult::failure(e),
+            Err(failure) => {
+                self.drop_carried_ignores(&carried);
+                return failure;
+            }
         };
-        // Under the same project guard as the copy, so a save can never see the
-        // lines without their ignores (the save reads both under it).
-        self.add_pending_ignores(project, &report.ignores);
-        let shot_count: u32 = report
-            .outcome
-            .new_line_ids
-            .iter()
-            .filter_map(|id| project.get_line(*id))
-            .map(|s| s.shots.len() as u32)
-            .sum();
-        drop(guard);
-
         tracing::info!(
-            lines = report.outcome.new_line_ids.len(),
-            ignores = report.ignores.len(),
+            lines = report.summary.line_map.len(),
+            ignores = carried.len(),
+            renamed_uuids = report.summary.shot_uuid_renames.len(),
             purpose = "add a project file into the open project",
             "Added a .stalx file's survey to the open project"
         );
-        let receipt = Self::add_receipt(&label, &source, &report, shot_count);
+        let receipt = add_receipt(&label, &source, &report);
         CommandResult::success()
-            .with_line_ids(report.outcome.new_line_ids)
+            .with_line_ids(report.summary.new_lines())
             .with_import_receipt(receipt)
     }
 
-    /// The copy and everything that settles it. On any failure the project is
-    /// returned to exactly what it was, by the same removal the undo runs.
-    fn append_into_open(
-        project: &mut Project,
-        source: &SourceProject,
-    ) -> Result<AppendReport, String> {
-        // Line-id budget (#555), before a single line is appended: shot
-        // ids encode as `line_id * FEATURE_ID_STRIDE + position` in 32 bits,
-        // and `Line::new` computes that unchecked.
-        let incoming = source.project.lines.len();
-        let spent = project.next_line_id as usize;
-        if incoming.saturating_add(spent) > MAX_LINES_IN_ID_SPACE {
-            return Err(format!(
-                "Add refused: the file holds {incoming} lines and this project has \
-                 already used {spent} line ids, past the limit of \
-                 {MAX_LINES_IN_ID_SPACE} for one project. Shot ids encode as \
-                 line_id * {FEATURE_ID_STRIDE} + position in 32 bits, so line ids \
-                 past {MAX_LINE_ID} cannot hold shots. No changes were made."
-            ));
-        }
-        let identity = stalx_identity(&source.project);
-        let duplicate = if identity == stalx_identity(project) {
-            Some("is a copy of the open project")
-        } else if project.imported_file_hashes.contains(&identity) {
-            Some("was already added to this project")
-        } else {
-            None
-        };
-        let pre_critical = project.has_critical_integrity_violations();
-        let closures_before = project.loop_closures.len();
-        let baseline = AddedContent::stub(project, None);
-        // A refused add must leave no trace, so beyond the removal the undo
-        // runs it also winds back what that removal deliberately keeps: the id
-        // allocators (a refused add must not spend the line-id budget an
-        // exact-fit add needs) and the modification time.
-        let (next_line_id, next_closure_id, modified_at) = (
-            project.next_line_id,
-            project.next_closure_id,
-            project.modified_at,
-        );
-        let roll_back = |project: &mut Project, baseline: AddedContent| {
-            if let Some(added) = baseline.finalize(project, Vec::new()) {
-                added.remove_from(project);
+    /// Add `ignores` to the open file's ignores, keeping one already held
+    /// for the same shot and code. Returns the (shot, code) keys it added.
+    fn hold_carried_ignores(&self, ignores: Vec<IgnoredWarning>) -> Vec<(String, String)> {
+        self.with_file(|file| {
+            let list = &mut file.extras.ignored_warnings;
+            let mut held: BTreeSet<(String, String)> = list
+                .iter()
+                .map(|i| (i.shot.clone(), i.code.clone()))
+                .collect();
+            let mut added = Vec::new();
+            for ignore in ignores {
+                let key = (ignore.shot.clone(), ignore.code.clone());
+                if held.insert(key.clone()) {
+                    list.push(ignore);
+                    added.push(key);
+                }
             }
-            project.next_line_id = next_line_id;
-            project.next_closure_id = next_closure_id;
-            project.modified_at = modified_at;
-        };
-
-        let outcome = match append_project(project, &source.project) {
-            Ok(outcome) => outcome,
-            Err(e) => {
-                roll_back(project, baseline);
-                return Err(e);
-            }
-        };
-        project.assign_closure_ids();
-        // The append stores transitional positional keys; give them the stable
-        // anchors an open would, before anything can renumber a station.
-        project.reanchor_station_refs();
-
-        // Carry the source's dedup state, so re-importing the Ariane/DMP file it
-        // was built from is still caught here, plus its own identity.
-        extend_unique_hashes(
-            &mut project.imported_file_hashes,
-            &source.project.imported_file_hashes,
-        );
-        extend_unique_hashes(
-            &mut project.imported_line_hashes,
-            &source.project.imported_line_hashes,
-        );
-        extend_unique_hashes(
-            &mut project.imported_file_hashes,
-            std::slice::from_ref(&identity),
-        );
-
-        // Block corruption at the source without a whole-project snapshot: the
-        // append only ever ADDS, so taking out what it added is an exact
-        // rollback. An already-critical project (opened that way) is not
-        // blocked, matching `execute`'s guard.
-        if !pre_critical && project.has_critical_integrity_violations() {
-            roll_back(project, baseline);
-            return Err(
-                "Blocked: the file's survey has integrity problems that would corrupt \
-                        this project. Open it, repair it, and add it again. No changes were made."
-                    .to_string(),
-            );
-        }
-
-        let ignores = source
-            .ignores
-            .as_deref()
-            .map(|rows| remap_ignores(&source.project, rows, &outcome))
-            .unwrap_or_default();
-        Ok(AppendReport {
-            closures_created: project.loop_closures.len().saturating_sub(closures_before) as u32,
-            outcome,
-            ignores,
-            duplicate,
+            list.sort();
+            added
         })
     }
 
-    fn add_receipt(
-        label: &str,
-        source: &SourceProject,
-        report: &AppendReport,
-        shot_count: u32,
-    ) -> ImportReceipt {
-        let mut warnings = Vec::new();
-        if let Some(why) = report.duplicate {
-            warnings.push(format!("'{label}' {why}; its lines were added again"));
+    /// Take back what [`Self::hold_carried_ignores`] added (the add was
+    /// refused after the copy).
+    fn drop_carried_ignores(&self, keys: &[(String, String)]) {
+        if keys.is_empty() {
+            return;
         }
-        if let Some(link) = &source.link {
-            let name = sanitize_display_text(&link.project_name, MAX_FILE_NAME_LEN);
-            warnings.push(format!(
-                "'{label}' is linked to SpeleoDB project '{name}'; its data was copied, \
-                 that project is unchanged"
-            ));
-        }
-        if let Some((incoming, existing)) = report.outcome.elevation_conflict {
-            warnings.push(format!(
-                "'{label}' has an entrance elevation of {incoming:.2} m, which differs from \
-                 this project's {existing:.2} m; kept {existing:.2} m"
-            ));
-        }
-        if source.ignores.is_none() {
-            warnings.push(format!(
-                "The ignored warnings in '{label}' could not be read and were not carried over"
-            ));
-        }
-        if source.project.lines.is_empty() {
-            warnings.push(format!("'{label}' holds no survey lines"));
-        }
-        let mut receipt = ImportReceipt {
-            source_format: "Stalagmight".to_string(),
-            file_name: label.to_string(),
-            lines_found: source.project.lines.len() as u32,
-            lines_imported: report.outcome.new_line_ids.len() as u32,
-            shot_count,
-            closures_requested: source.project.loop_closures.len() as u32,
-            closures_created: report.closures_created,
-            unit_conversion: None,
-            warnings,
-            info: Vec::new(),
-            zero_datum_created: None,
-            line_problems: None,
-        };
-        receipt.cap_warnings();
-        receipt
-    }
-
-    /// Finalize the add's undo record and push it, under ONE `project` guard
-    /// and only while the slot still holds the project the stub was captured
-    /// against (lock order: `project` outranks `undo_stack`, as a load's own
-    /// commit takes them). When another project was committed since - after the
-    /// append, during `execute`'s epilogue - the record would measure that
-    /// project's lines as the add's and its undo would delete them, so
-    /// nothing is pushed and the command reports failure: the project the add
-    /// went into has left the slot, and the one there now is untouched.
-    ///
-    /// Returns that failure, or `None` once the entry is pushed.
-    pub(super) fn push_add_undo(
-        &self,
-        cmd: &Command,
-        undo_data: UndoData,
-    ) -> Option<CommandResult> {
-        add_window(self, AddWindow::BeforePush);
-        let guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let bound = Self::add_slot_generation(&undo_data);
-        let project = match guard.as_ref() {
-            Some(project) if bound == Some(self.speleodb_session_generation()) => project,
-            _ => {
-                tracing::warn!(
-                    purpose = "bind an add's undo record to its project",
-                    "The open project changed before the add was recorded; not pushing its undo entry"
-                );
-                let label = match cmd {
-                    Command::AddProjectFile { file_name, .. } => file_name.as_str(),
-                    _ => "",
-                };
-                return Some(CommandResult::failure(format!(
-                    "The open project changed while '{label}' was being added, so the add \
-                     was not recorded. The project open now was not changed."
-                )));
-            }
-        };
-        let final_undo_data = self.finalize_add_undo(project, undo_data);
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            // As `execute`'s generic push: an entry undo cannot apply never
-            // enters the stack, but the forward command still invalidates redo.
-            if matches!(final_undo_data, UndoData::None) {
-                undo_stack.clear_redo();
-            } else {
-                undo_stack.push_with_data(cmd.clone(), final_undo_data);
-            }
-        }
-        drop(guard);
-        None
-    }
-
-    // === Ignores carried by an add, until a save persists them ===
-    //
-    // `resolved_warnings` lives in the open file's database with a FOREIGN KEY
-    // on `lines(id)`, and an added line is not in that table until the
-    // next save - so an ignore carried in for it cannot be written there yet.
-    // It waits here, is honored by `compute_project_warnings` meanwhile, and is
-    // written by the save that writes its line. Lock order: `project`
-    // outranks this one, and nothing is ever taken while holding it.
-
-    /// The carried ignores not yet in the database.
-    pub(super) fn pending_ignores(&self) -> Vec<ResolvedWarning> {
-        self.pending_ignores
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-    }
-
-    /// Forget every pending ignore: a save wrote them, or the project they
-    /// belonged to left the slot.
-    pub(super) fn clear_pending_ignores(&self) {
-        self.pending_ignores
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
-    }
-
-    /// Hold `ignores` until the next save, keyed by the live shot's id.
-    pub(super) fn add_pending_ignores(&self, project: &Project, ignores: &[CarriedIgnore]) {
-        let shots = ShotIndex::of(project, ignores.iter().map(|i| i.line_id));
-        let mut pending = self
-            .pending_ignores
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut held: HashSet<(LineId, String, String)> = pending
-            .iter()
-            .filter_map(|row| {
-                let uuid = row.shot_uuid.clone()?;
-                Some((row.line_id, uuid, row.warning_code.clone()))
-            })
-            .collect();
-        for ignore in ignores {
-            let Some(shot_id) = shots.id_of(ignore.line_id, &ignore.shot_uuid) else {
-                continue;
-            };
-            let key = (
-                ignore.line_id,
-                ignore.shot_uuid.clone(),
-                ignore.warning_code.clone(),
-            );
-            if held.insert(key) {
-                pending.push(ResolvedWarning {
-                    line_id: ignore.line_id,
-                    shot_id,
-                    warning_code: ignore.warning_code.clone(),
-                    resolved_at: ignore.resolved_at,
-                    resolved_comment: ignore.resolved_comment.clone(),
-                    shot_uuid: Some(ignore.shot_uuid.clone()),
-                });
-            }
-        }
-    }
-
-    /// Drop the pending ignores of `lines` (the undo of an add). Rows a save
-    /// already wrote stay in the database: they name lines the undo just
-    /// removed, so they match nothing, and the next save drops them - while a
-    /// close WITHOUT saving keeps the file and its ignores consistent.
-    pub(super) fn remove_pending_ignores(&self, lines: &HashSet<LineId>) {
-        self.pending_ignores
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|row| !lines.contains(&row.line_id));
-    }
-
-    /// Un-ignore (#57) of a pending row; true when one was removed.
-    pub(super) fn forget_pending_ignore(
-        &self,
-        line_id: LineId,
-        shot_id: u32,
-        warning_code: &str,
-        shot_uuid: Option<&str>,
-    ) -> bool {
-        let mut pending = self
-            .pending_ignores
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let before = pending.len();
-        pending.retain(|row| {
-            // Every pending row is uuid-keyed; the in-session id is only the
-            // address a caller with no uuid has.
-            let same_shot = match shot_uuid {
-                Some(uuid) => row.shot_uuid.as_deref() == Some(uuid),
-                None => row.shot_id == shot_id,
-            };
-            !(row.line_id == line_id && row.warning_code == warning_code && same_shot)
+        let keys: BTreeSet<&(String, String)> = keys.iter().collect();
+        self.with_file(|file| {
+            file.extras
+                .ignored_warnings
+                .retain(|i| !keys.contains(&(i.shot.clone(), i.code.clone())));
         });
-        pending.len() != before
-    }
-
-    /// Every uuid-keyed ignore currently in force on `lines` - pending or
-    /// already saved - as an add's undo records them, so the redo puts back the
-    /// ignores the undo found rather than the ones the add first brought.
-    pub(super) fn ignores_on_lines(&self, lines: &HashSet<LineId>) -> Vec<CarriedIgnore> {
-        let saved = {
-            let db = self
-                .database
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            db.as_ref()
-                .and_then(|db| db.load_resolved_warnings_verbatim().ok())
-                .unwrap_or_default()
-        };
-        let mut found = IgnoreList::default();
-        for row in self.pending_ignores().iter().chain(saved.iter()) {
-            let Some(uuid) = row.shot_uuid.clone() else {
-                continue;
-            };
-            if !lines.contains(&row.line_id) {
-                continue;
-            }
-            found.push(CarriedIgnore {
-                line_id: row.line_id,
-                shot_uuid: uuid,
-                warning_code: row.warning_code.clone(),
-                resolved_at: row.resolved_at,
-                resolved_comment: row.resolved_comment.clone(),
-            });
-        }
-        found.items
     }
 }
 
-/// The windows in which no `project` guard is held during an add, where a
+/// The window in which no `project` guard is held during an add, where a
 /// project load (which does not take `command_lock`) can commit another
 /// project into the slot.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum AddWindow {
-    /// After `execute` captured the undo stub, before the forward step's first
-    /// `project` lock.
-    BeforeFirstLock,
-    /// Between the forward step's two `project` locks, where the source file
-    /// is read.
+    /// Between the add's first `project` lock and its recorded step, where
+    /// the source file is read.
     DuringRead,
-    /// After the append and `execute`'s epilogue, before the undo push.
-    BeforePush,
 }
 
 /// A no-op outside tests.
@@ -654,19 +411,4 @@ thread_local! {
 #[cfg(test)]
 pub(super) fn set_add_window_hook(window: AddWindow, hook: impl FnOnce(&AppState) + 'static) {
     ADD_WINDOW_HOOK.with(|slot| *slot.borrow_mut() = Some((window, Box::new(hook))));
-}
-
-/// Test-only: the append step on an in-memory source, bypassing the file read
-/// and its load-time heals. The post-append integrity guard is defense in
-/// depth - the reader sanitizes non-finite shots, the load re-mints duplicate
-/// uuids and the append skips references that do not resolve, so no loadable
-/// file is known to trip it - and this is the way to exercise its rollback.
-#[cfg(test)]
-pub(super) fn append_in_memory(project: &mut Project, source: Project) -> Result<(), String> {
-    let source = SourceProject {
-        project: source,
-        ignores: None,
-        link: None,
-    };
-    AppState::append_into_open(project, &source).map(|_| ())
 }

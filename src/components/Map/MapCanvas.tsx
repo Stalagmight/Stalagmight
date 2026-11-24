@@ -45,6 +45,7 @@ import { getBounds, getBoundsFromStationCoords, metersToMapCoords, mapCoordsToMe
 import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tileProtocol';
 import { getTileConfig } from '../../utils/tileConfig';
 import { useMapTools } from '../../hooks/useMapTools';
+import { currentIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useGasPlanPointMarkers } from './useGasPlanPointMarkers';
 import { useGasPlanDropMarkers } from './useGasPlanDropMarkers';
 import { useStationHighlights } from './useStationHighlights';
@@ -1342,7 +1343,10 @@ function MapCanvas() {
 
       showToast(t('map.toasts.mergeChecking'), TOAST_KEYS.MERGE_CHECK, 'info');
       try {
-        const result = await checkMergeConnectivity(originStation, targetStation);
+        const result = await checkMergeConnectivity(originStation, targetStation)
+          // The check is over either way: its toast must not linger behind the
+          // dialog it opens (demo finding I-9).
+          .finally(() => useUIStore.getState().dismissToastsByKey(TOAST_KEYS.MERGE_CHECK));
         const extra = moveCallbacks
           ? { onBeforeConfirm: moveCallbacks.onBeforeConfirm, onCancel: moveCallbacks.onCancel, preCommands: moveCallbacks.preCommands }
           : {};
@@ -1351,6 +1355,7 @@ function MapCanvas() {
             stationA: originStation,
             stationB: targetStation,
             datumShift: result.datum_shift,
+            mergePreview: result.merge_preview,
             ...extra,
           });
         } else if (result.connected) {
@@ -1360,6 +1365,7 @@ function MapCanvas() {
             preview: result.preview,
             reason: result.reason,
             closureRefusal: result.closure_refusal,
+            fromMerge: true,
             ...extra,
           });
         } else {
@@ -1490,8 +1496,9 @@ function MapCanvas() {
         setSnappedStation(null);
         snapMergeDialogPendingRef.current = true;
 
-        // Build move commands for batching with merge/closure (single undo entry)
-        const colocated = stationDragColocatedRefsRef.current;
+        // Build move commands for batching with merge/closure (single undo entry),
+        // one per station: a junction's slots are one station (plan 9.3).
+        const colocated = currentIdentityLabels().onePerStation(stationDragColocatedRefsRef.current);
         const moveCommands: BatchCommand[] = colocated.map(ref => ({
           type: 'move_station' as const, station_ref: ref, offset: snapOffset,
         }));
@@ -1556,8 +1563,9 @@ function MapCanvas() {
         });
         surveyLayerRef.current?.commitDragPreview();
 
-        // Move all co-located stations (merged/closured at same coordinates)
-        const colocated = stationDragColocatedRefsRef.current;
+        // Move all co-located stations (closured at the same coordinates), one
+        // move per station: a junction's slots are one station (plan 9.3).
+        const colocated = currentIdentityLabels().onePerStation(stationDragColocatedRefsRef.current);
         stationDragColocatedRefsRef.current = [];
         const res = colocated.length > 1
           ? await executeBatch(
@@ -1595,8 +1603,9 @@ function MapCanvas() {
         });
         surveyLayerRef.current?.commitDragPreview();
 
-        // Move all co-located stations (includes both shot endpoints + merged/closured)
-        const colocated = stationDragColocatedRefsRef.current;
+        // Move all co-located stations (both shot endpoints + closured), one move
+        // per station: a junction's slots are one station (plan 9.3).
+        const colocated = currentIdentityLabels().onePerStation(stationDragColocatedRefsRef.current);
         stationDragColocatedRefsRef.current = [];
         const res = await executeBatch(
           colocated.map(ref => ({ type: 'move_station' as const, station_ref: ref, offset }))

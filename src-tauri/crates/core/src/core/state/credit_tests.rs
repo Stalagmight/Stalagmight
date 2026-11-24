@@ -1,11 +1,19 @@
-//! Per-shot survey credit through the command path: `EditShotCredit`, its one
-//! undo step, the legacy line-level surveyor/date, inheritance by new shots,
-//! and old undo payloads that still carry a line surveyor.
+//! Per-shot survey credit through the command path on the station graph:
+//! `EditShotCredit`, its one undo step (the pipeline's changeset, which keys
+//! shots by uuid and interns each credit once), the legacy line-level
+//! surveyor/date, and inheritance by new shots.
+//!
+//! History labels and preview rows are the history-labels package's
+//! (`history_labels_tests.rs`); these tests pin what the edit does.
+
+use std::sync::Arc;
 
 use chrono::NaiveDate;
 
+use super::commands::Record;
 use super::AppState;
-use crate::core::{Command, UndoData};
+use crate::core::{Command, CommandResult};
+use crate::models::survey::{Project, ShotPlace};
 use crate::models::{
     CreditEdit, CreditTargets, ImportLineConfig, ImportPlacement, LineId, LineUpdates, Person,
     ShotData, ShotId, SurveyCredit,
@@ -49,10 +57,10 @@ fn state_with_project() -> AppState {
     state
 }
 
-fn create_line(state: &AppState, surveyor: Option<&str>, shots: Vec<ShotData>) -> LineId {
+fn create_line(state: &AppState, surveyor: Option<String>, shots: Vec<ShotData>) -> LineId {
     let r = state.execute(Command::CreateLine {
         name: Some("S".to_string()),
-        surveyor: surveyor.map(str::to_string),
+        surveyor,
         date: None,
         color: "#123456".to_string(),
         direction: None,
@@ -63,21 +71,23 @@ fn create_line(state: &AppState, surveyor: Option<&str>, shots: Vec<ShotData>) -
     r.line_id.unwrap()
 }
 
+fn project(state: &AppState) -> Project {
+    state.get_project_state().unwrap()
+}
+
 fn credits(state: &AppState, line_id: LineId) -> Vec<SurveyCredit> {
-    let project = state.get_project_state().unwrap();
-    project
-        .get_line(line_id)
+    project(state)
+        .line(line_id)
         .unwrap()
         .shots
         .iter()
-        .map(|s| s.credit().clone())
+        .map(|s| s.credit.as_deref().cloned().unwrap_or_default())
         .collect()
 }
 
 fn shot_ids(state: &AppState, line_id: LineId) -> Vec<ShotId> {
-    let project = state.get_project_state().unwrap();
-    project
-        .get_line(line_id)
+    project(state)
+        .line(line_id)
         .unwrap()
         .shots
         .iter()
@@ -87,6 +97,55 @@ fn shot_ids(state: &AppState, line_id: LineId) -> Vec<ShotId> {
 
 fn undo_len(state: &AppState) -> usize {
     state.get_undo_stack().len()
+}
+
+fn edit_shots(state: &AppState, shots: Vec<(LineId, ShotId)>, edit: CreditEdit) -> CommandResult {
+    state.execute(Command::EditShotCredit {
+        targets: CreditTargets::Shots { shots },
+        edit,
+    })
+}
+
+/// Run a shot operation of the model through the execute pipeline as one
+/// recorded edit (the shot family's commands are another package's).
+fn run_model(
+    state: &AppState,
+    f: impl FnOnce(&mut Project) -> Result<(), String>,
+) -> CommandResult {
+    let recorded = state.run_recorded(
+        |_| Record {
+            kind: "create_shot".to_string(),
+            label: "Create shot".to_string(),
+            ..Record::default()
+        },
+        |p, _| f(p),
+    );
+    match recorded {
+        Ok(()) => CommandResult::success(),
+        Err(failure) => failure,
+    }
+}
+
+fn add_shot(state: &AppState, line: LineId, data: ShotData, place: ShotPlace) {
+    let r = run_model(state, |p| {
+        p.create_shot(line, data, place)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    });
+    assert!(r.success, "{:?}", r.error);
+}
+
+/// The canonical text of the newest undo entry (what a save writes).
+fn newest_entry_text(state: &AppState) -> String {
+    state
+        .undo_stack
+        .lock()
+        .unwrap()
+        .peek_undo()
+        .unwrap()
+        .raw()
+        .as_str()
+        .to_string()
 }
 
 #[test]
@@ -111,31 +170,39 @@ fn a_line_wide_edit_is_one_undo_step_and_round_trips() {
         .iter()
         .all(|c| c == &credit(&["Ann", "Bo"], &[], day(3))));
     assert_eq!(undo_len(&state), steps + 1, "one step for three shots");
-
-    let top = &state.get_undo_stack()[0];
-    assert_eq!(top.description, "Edit survey credit (3 shots)");
-    assert_eq!(top.command_type, "edit_shot_credit");
-    let rows: Vec<(&str, &str, &str)> = top
-        .preview_data
-        .as_ref()
-        .unwrap()
-        .changes
-        .iter()
-        .map(|c| (c.field.as_str(), c.old_value.as_str(), c.new_value.as_str()))
-        .collect();
-    assert_eq!(
-        rows,
-        [
-            ("Surveyors", "", "Ann, Bo"),
-            ("Date", "", "2024-05-03"),
-            ("Shots", "", "3"),
-        ]
-    );
+    assert_eq!(state.get_undo_stack()[0].command_type, "edit_shot_credit");
 
     assert!(state.undo().success);
     assert_eq!(credits(&state, sid), before);
     assert!(state.redo().success);
     assert_eq!(credits(&state, sid), after);
+}
+
+/// Shots that held one credit before share one allocation after, as an
+/// import's do (#719 review, item 5a).
+#[test]
+fn a_line_wide_edit_stores_one_shared_credit() {
+    let state = state_with_project();
+    let sid = create_line(
+        &state,
+        Some("Ann".to_string()),
+        vec![shot(1.0), shot(2.0), shot(3.0)],
+    );
+    let r = state.execute(Command::EditShotCredit {
+        targets: CreditTargets::Line { line_id: sid },
+        edit: CreditEdit {
+            set_date: Some(day(8)),
+            ..Default::default()
+        },
+    });
+    assert!(r.success, "{:?}", r.error);
+    let p = project(&state);
+    let shots = &p.line(sid).unwrap().shots;
+    let first = shots[0].credit.as_ref().unwrap();
+    assert!(shots
+        .iter()
+        .all(|s| s.credit.as_ref().is_some_and(|c| Arc::ptr_eq(c, first))));
+    assert_eq!(**first, credit(&["Ann"], &[], day(8)));
 }
 
 /// A data-table paste of credit cells: one `EditShotCredit` per shot inside
@@ -200,15 +267,7 @@ fn a_rename_and_a_credit_edit_batch_into_one_undo_step() {
         label: None,
     });
     assert!(r.success, "{:?}", r.error);
-    let name = |state: &AppState| {
-        state
-            .get_project_state()
-            .unwrap()
-            .get_line(sid)
-            .unwrap()
-            .name
-            .clone()
-    };
+    let name = |state: &AppState| project(state).line(sid).unwrap().name.clone();
     assert_eq!(name(&state).as_deref(), Some("Renamed"));
     assert!(credits(&state, sid)
         .iter()
@@ -222,29 +281,29 @@ fn a_rename_and_a_credit_edit_batch_into_one_undo_step() {
 }
 
 #[test]
-fn explicit_targets_touch_only_those_shots_and_label_the_role() {
+fn explicit_targets_touch_only_those_shots() {
     let state = state_with_project();
-    let sid = create_line(&state, Some("Old"), vec![shot(1.0), shot(2.0), shot(3.0)]);
+    let sid = create_line(
+        &state,
+        Some("Old".to_string()),
+        vec![shot(1.0), shot(2.0), shot(3.0)],
+    );
     let ids = shot_ids(&state, sid);
-    let r = state.execute(Command::EditShotCredit {
-        targets: CreditTargets::Shots {
-            shots: vec![(sid, ids[0]), (sid, ids[2]), (sid, ids[0])],
-        },
-        edit: CreditEdit {
+    let r = edit_shots(
+        &state,
+        vec![(sid, ids[0]), (sid, ids[2]), (sid, ids[0])],
+        CreditEdit {
             remove_surveyors: Some(vec![person("old")]),
             add_surveyors: Some(vec![person("New")]),
             ..Default::default()
         },
-    });
+    );
     assert!(r.success, "{:?}", r.error);
+    assert_eq!(r.line_ids, vec![sid]);
     let now = credits(&state, sid);
     assert_eq!(now[0], credit(&["New"], &[], None));
     assert_eq!(now[1], credit(&["Old"], &[], None));
     assert_eq!(now[2], credit(&["New"], &[], None));
-    assert_eq!(
-        state.get_undo_stack()[0].description,
-        "Edit surveyors (2 shots)"
-    );
     assert!(state.undo().success);
     assert!(credits(&state, sid)
         .iter()
@@ -258,28 +317,41 @@ fn an_unknown_target_fails_and_records_nothing() {
     let state = state_with_project();
     let sid = create_line(&state, None, vec![shot(1.0)]);
     let steps = undo_len(&state);
-    let r = state.execute(Command::EditShotCredit {
-        targets: CreditTargets::Shots {
-            shots: vec![(sid, 999_999)],
-        },
-        edit: CreditEdit {
+    let r = edit_shots(
+        &state,
+        vec![(sid, 999_999)],
+        CreditEdit {
             set_date: Some(day(1)),
             ..Default::default()
         },
-    });
-    assert!(!r.success);
+    );
+    assert_eq!(r.error.as_deref(), Some(crate::models::SHOT_GONE));
     let r = state.execute(Command::EditShotCredit {
         targets: CreditTargets::Line { line_id: 77 },
         edit: CreditEdit::default(),
     });
-    assert!(!r.success);
+    assert_eq!(r.error.as_deref(), Some(crate::models::LINE_GONE));
+    let r = edit_shots(&state, vec![(77, 0)], CreditEdit::default());
+    assert_eq!(r.error.as_deref(), Some(crate::models::LINE_GONE));
     assert_eq!(undo_len(&state), steps);
+}
+
+#[test]
+fn an_oversized_selection_is_refused() {
+    let state = state_with_project();
+    let sid = create_line(&state, None, vec![shot(1.0)]);
+    let id = shot_ids(&state, sid)[0];
+    let r = edit_shots(&state, vec![(sid, id); 100_001], CreditEdit::default());
+    assert_eq!(
+        r.error.as_deref(),
+        Some("A credit edit can name at most 100000 shots")
+    );
 }
 
 #[test]
 fn an_edit_that_changes_nothing_pushes_no_undo_step() {
     let state = state_with_project();
-    let sid = create_line(&state, Some("Ann"), vec![shot(1.0)]);
+    let sid = create_line(&state, Some("Ann".to_string()), vec![shot(1.0)]);
     let steps = undo_len(&state);
     let r = state.execute(Command::EditShotCredit {
         targets: CreditTargets::Line { line_id: sid },
@@ -288,50 +360,49 @@ fn an_edit_that_changes_nothing_pushes_no_undo_step() {
             ..Default::default()
         },
     });
-    assert!(r.success);
+    assert!(r.success, "{:?}", r.error);
     assert_eq!(undo_len(&state), steps);
 }
 
 #[test]
-fn the_undo_record_addresses_shots_by_uuid_and_survives_json() {
+fn a_shotless_lines_credit_edit_succeeds_and_changes_nothing() {
+    let state = state_with_project();
+    let sid = create_line(&state, None, Vec::new());
+    let steps = undo_len(&state);
+    let r = state.execute(Command::EditShotCredit {
+        targets: CreditTargets::Line { line_id: sid },
+        edit: CreditEdit {
+            set_date: Some(day(2)),
+            ..Default::default()
+        },
+    });
+    assert!(r.success, "{:?}", r.error);
+    assert!(r.line_ids.is_empty(), "no shot was named");
+    assert_eq!(undo_len(&state), steps);
+}
+
+/// The entry never names a session shot id (a reload mints new ones; the
+/// changeset addresses shots by position under each line's content hash)
+/// and writes each credit once however many shots it covers.
+#[test]
+fn the_undo_record_holds_no_session_ids_and_writes_each_credit_once() {
     let state = state_with_project();
     let sid = create_line(&state, None, vec![shot(1.0), shot(2.0)]);
-    assert!(
-        state
-            .execute(Command::EditShotCredit {
-                targets: CreditTargets::Line { line_id: sid },
-                edit: CreditEdit {
-                    set_explorers: Some(vec![person("Ex")]),
-                    ..Default::default()
-                },
-            })
-            .success
+    let r = state.execute(Command::EditShotCredit {
+        targets: CreditTargets::Line { line_id: sid },
+        edit: CreditEdit {
+            set_explorers: Some(vec![person("Explorer Ex")]),
+            ..Default::default()
+        },
+    });
+    assert!(r.success, "{:?}", r.error);
+    let text = newest_entry_text(&state);
+    assert_eq!(
+        text.matches("Explorer Ex").count(),
+        1,
+        "the credit is interned once: {text}"
     );
-    let undo_data = state
-        .undo_stack
-        .lock()
-        .unwrap()
-        .peek_undo_data()
-        .cloned()
-        .unwrap();
-    let UndoData::ShotCredits { changes, .. } = &undo_data else {
-        panic!("expected ShotCredits, got {}", undo_data.variant_name());
-    };
-    // Both shots of the line, changed alike: one run, anchored on the first.
-    assert_eq!(changes.len(), 1);
-    assert_eq!((changes[0].start, changes[0].len), (Some(0), 2));
-    assert!(!changes[0].anchor.is_empty());
-    let json = serde_json::to_string(&undo_data).unwrap();
-    assert!(
-        !json.contains("shot_id"),
-        "in-session ids are not persisted: {json}"
-    );
-    let back: UndoData = serde_json::from_str(&json).unwrap();
-    let UndoData::ShotCredits { changes: back, .. } = back else {
-        panic!("round trip changed the variant");
-    };
-    assert_eq!(back, *changes);
-    assert_eq!(back[0].after, credit(&[], &["Ex"], None));
+    assert!(!text.contains("shot_id"), "no session ids: {text}");
 }
 
 #[test]
@@ -343,18 +414,16 @@ fn a_legacy_line_surveyor_edit_sets_every_shot_and_undoes_exactly() {
     for (i, id) in ids.iter().enumerate() {
         let name = format!("P{i}");
         assert!(
-            state
-                .execute(Command::EditShotCredit {
-                    targets: CreditTargets::Shots {
-                        shots: vec![(sid, *id)],
-                    },
-                    edit: CreditEdit {
-                        set_surveyors: Some(vec![person(&name)]),
-                        set_date: Some(day(u32::try_from(i).unwrap() + 1)),
-                        ..Default::default()
-                    },
-                })
-                .success
+            edit_shots(
+                &state,
+                vec![(sid, *id)],
+                CreditEdit {
+                    set_surveyors: Some(vec![person(&name)]),
+                    set_date: Some(day(u32::try_from(i).unwrap() + 1)),
+                    ..Default::default()
+                },
+            )
+            .success
         );
     }
     let before = credits(&state, sid);
@@ -375,30 +444,22 @@ fn a_legacy_line_surveyor_edit_sets_every_shot_and_undoes_exactly() {
             &credit(&["ds"], &["nh"], day(u32::try_from(i).unwrap() + 1))
         );
     }
-
-    // The history shows the legacy edit like any line edit, its old value
-    // read off the per-shot record.
-    let top = &state.get_undo_stack()[0];
-    assert_eq!(top.command_type, "update_line_metadata");
-    let preview = top.preview_data.as_ref().unwrap();
-    let surveyor = preview
-        .changes
-        .iter()
-        .find(|c| c.field == "Surveyor")
-        .unwrap();
-    assert_eq!(surveyor.old_value, "P0, P1, P2");
-    assert_eq!(surveyor.new_value, "nh / ds");
+    assert_eq!(
+        state.get_undo_stack()[0].command_type,
+        "update_line_metadata"
+    );
 
     assert!(state.undo().success);
     assert_eq!(credits(&state, sid), before);
-    let project = state.get_project_state().unwrap();
-    assert_eq!(project.get_line(sid).unwrap().name.as_deref(), Some("S"));
+    assert_eq!(
+        project(&state).line(sid).unwrap().name.as_deref(),
+        Some("S")
+    );
 
     assert!(state.redo().success);
     assert_eq!(credits(&state, sid), after);
-    let project = state.get_project_state().unwrap();
     assert_eq!(
-        project.get_line(sid).unwrap().name.as_deref(),
+        project(&state).line(sid).unwrap().name.as_deref(),
         Some("Renamed")
     );
 }
@@ -406,7 +467,7 @@ fn a_legacy_line_surveyor_edit_sets_every_shot_and_undoes_exactly() {
 #[test]
 fn a_legacy_date_edit_sets_every_shot() {
     let state = state_with_project();
-    let sid = create_line(&state, Some("A"), vec![shot(1.0), shot(2.0)]);
+    let sid = create_line(&state, Some("A".to_string()), vec![shot(1.0), shot(2.0)]);
     assert!(
         state
             .execute(Command::UpdateLineMetadata {
@@ -436,66 +497,36 @@ fn a_new_shot_inherits_its_neighbours_credit() {
     let second = credit(&["Second"], &["X"], day(2));
     for (id, c) in [(ids[0], &first), (ids[1], &second)] {
         assert!(
-            state
-                .execute(Command::EditShotCredit {
-                    targets: CreditTargets::Shots {
-                        shots: vec![(sid, id)],
-                    },
-                    edit: CreditEdit {
-                        set_surveyors: Some(c.surveyors.clone()),
-                        set_explorers: Some(c.explorers.clone()),
-                        set_date: Some(c.date),
-                        ..Default::default()
-                    },
-                })
-                .success
+            edit_shots(
+                &state,
+                vec![(sid, id)],
+                CreditEdit {
+                    set_surveyors: Some(c.surveyors.clone()),
+                    set_explorers: Some(c.explorers.clone()),
+                    set_date: Some(c.date),
+                    ..Default::default()
+                },
+            )
+            .success
         );
     }
 
     // Append: the previous (last) shot.
-    let appended = state.execute(Command::CreateShot {
-        line_id: sid,
-        shot: shot(3.0),
-        after_shot_id: None,
-        before_shot_id: None,
-    });
-    assert!(appended.success);
+    add_shot(&state, sid, shot(3.0), ShotPlace::End);
     // Insert after the first: the first.
-    assert!(
-        state
-            .execute(Command::CreateShot {
-                line_id: sid,
-                shot: shot(4.0),
-                after_shot_id: Some(ids[0]),
-                before_shot_id: None,
-            })
-            .success
-    );
+    add_shot(&state, sid, shot(4.0), ShotPlace::After(ids[0]));
     // Insert before the first: the next one, i.e. the old first.
-    assert!(
-        state
-            .execute(Command::CreateShot {
-                line_id: sid,
-                shot: shot(5.0),
-                after_shot_id: None,
-                before_shot_id: Some(ids[0]),
-            })
-            .success
-    );
+    add_shot(&state, sid, shot(5.0), ShotPlace::Before(ids[0]));
     // An explicit credit is kept.
     let own = credit(&["Own"], &[], None);
-    assert!(
-        state
-            .execute(Command::CreateShot {
-                line_id: sid,
-                shot: ShotData {
-                    credit: Some(own.clone().into()),
-                    ..shot(6.0)
-                },
-                after_shot_id: None,
-                before_shot_id: None,
-            })
-            .success
+    add_shot(
+        &state,
+        sid,
+        ShotData {
+            credit: Some(own.clone().into()),
+            ..shot(6.0)
+        },
+        ShotPlace::End,
     );
     // Order now: 5.0(new), 1.0, 4.0(new), 2.0, 3.0(new), 6.0(own)
     let now = credits(&state, sid);
@@ -520,9 +551,17 @@ fn a_new_shot_inherits_its_neighbours_credit() {
 #[test]
 fn a_split_gives_both_pieces_the_shots_credit() {
     let state = state_with_project();
-    let sid = create_line(&state, Some("Split Person"), vec![shot(4.0), shot(4.0)]);
+    let sid = create_line(
+        &state,
+        Some("Split Person".to_string()),
+        vec![shot(4.0), shot(4.0)],
+    );
     let ids = shot_ids(&state, sid);
-    let r = state.execute_split_shot_at_distance(sid, ids[0], 1.5);
+    let r = run_model(&state, |p| {
+        p.split_shot_at_distance(sid, ids[0], 1.5, None)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    });
     assert!(r.success, "{:?}", r.error);
     let now = credits(&state, sid);
     assert_eq!(now.len(), 3);
@@ -531,56 +570,27 @@ fn a_split_gives_both_pieces_the_shots_credit() {
         .all(|c| c == &credit(&["Split Person"], &[], None)));
 }
 
-#[test]
-fn an_old_snapshot_with_a_line_surveyor_restores_people_onto_shots() {
-    let state = state_with_project();
-    let sid = create_line(&state, None, vec![shot(1.0), shot(2.0)]);
-    let snapshot = state.capture_project_snapshot_text().unwrap();
-    let mut json: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
-    // What a build before per-shot credit wrote: line-level text, shots bare.
-    let line = json["lines"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|s| s["id"] == sid)
-        .unwrap();
-    line["surveyor"] = serde_json::json!("nh / ds");
-    line["date"] = serde_json::json!("2019-07-01");
-    let old = json.to_string();
-
-    let mut slot = None;
-    assert!(AppState::restore_snapshot_into(&mut slot, &old));
-    let project = slot.unwrap();
-    let line = project.get_line(sid).unwrap();
-    assert!(line.legacy_surveyor.is_none());
-    for shot in &line.shots {
-        assert_eq!(
-            shot.credit(),
-            &credit(&["ds"], &["nh"], NaiveDate::from_ymd_opt(2019, 7, 1))
-        );
+fn import_config(shots: Vec<ShotData>, surveyors: Option<Vec<Person>>) -> ImportLineConfig {
+    ImportLineConfig {
+        cave_section: None,
+        line_index: 0,
+        name: Some("Imported".to_string()),
+        surveyor: None,
+        date: None,
+        surveyors,
+        explorers: None,
+        override_date: None,
+        color: "#ffffff".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots,
+        placement: ImportPlacement::Origin,
+        station_comments: Vec::new(),
+        station_names: Vec::new(),
+        station_external: Vec::new(),
+        reverse: false,
+        azimuth_reference: None,
     }
-}
-
-#[test]
-fn an_old_created_line_entry_with_a_surveyor_restores_people_onto_shots() {
-    let state = state_with_project();
-    let sid = create_line(&state, None, vec![shot(1.0)]);
-    // The redo of a `CreateLine` entry persisted before per-shot credit:
-    // its `LineData` still carries the line-level surveyor.
-    let r = state.restore_line(
-        sid + 1,
-        crate::models::LineData {
-            surveyor: Some("Doe, John".to_string()),
-            shots: vec![shot(2.0)],
-            ..Default::default()
-        },
-        &crate::models::LineIdentity::default(),
-    );
-    assert!(r.success, "{:?}", r.error);
-    assert_eq!(
-        credits(&state, sid + 1),
-        vec![credit(&["Doe, John"], &[], None)]
-    );
 }
 
 #[test]
@@ -589,23 +599,8 @@ fn import_overrides_replace_every_shots_credit() {
     let mut file_shot = shot(1.0);
     file_shot.credit = Some(credit(&["From File"], &["Ex"], day(1)).into());
     let config = ImportLineConfig {
-        cave_section: None,
-        line_index: 0,
-        name: Some("Imported".to_string()),
-        surveyor: None,
-        date: None,
-        surveyors: Some(vec![person("Dialog")]),
-        explorers: None,
         override_date: day(20),
-        color: "#ffffff".to_string(),
-        direction: None,
-        quality: 1.0,
-        shots: vec![file_shot, shot(2.0)],
-        placement: ImportPlacement::Origin,
-        station_comments: Vec::new(),
-        station_names: Vec::new(),
-        reverse: false,
-        azimuth_reference: None,
+        ..import_config(vec![file_shot, shot(2.0)], Some(vec![person("Dialog")]))
     };
     let r = state.execute_import_lines(
         vec![config],
@@ -626,6 +621,44 @@ fn import_overrides_replace_every_shots_credit() {
     );
 }
 
+/// #719 review, item 5a: an import that gives every shot of a survey ONE
+/// credit (a Compass or Walls team line) costs one allocation.
+#[test]
+fn an_imported_team_credit_stays_one_shared_allocation() {
+    for overrides in [false, true] {
+        let state = state_with_project();
+        let team = Arc::new(credit(&["Ann Smith", "Bo"], &[], day(3)));
+        let shots: Vec<ShotData> = (1..=4)
+            .map(|i| ShotData {
+                credit: Some(Arc::clone(&team)),
+                ..shot(f64::from(i))
+            })
+            .collect();
+        let config = import_config(shots, overrides.then(|| vec![person("Dialog")]));
+        let r = state.execute_import_lines(
+            vec![config],
+            Vec::new(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            crate::core::VirtualShotMode::Auto,
+        );
+        assert!(r.success, "{:?}", r.error);
+        let p = project(&state);
+        let line = p.line(r.line_ids[0]).unwrap();
+        let first = line.shots[0].credit.as_ref().unwrap();
+        assert!(
+            line.shots
+                .iter()
+                .all(|s| s.credit.as_ref().is_some_and(|c| Arc::ptr_eq(c, first))),
+            "overrides: {overrides}"
+        );
+        if !overrides {
+            assert!(Arc::ptr_eq(first, &team));
+        }
+    }
+}
+
 #[test]
 fn a_credit_edit_undoes_after_save_and_reopen() {
     let _config = crate::test_helpers::isolated_config();
@@ -633,34 +666,38 @@ fn a_credit_edit_undoes_after_save_and_reopen() {
     let path = temp.path().join("credit.stalx");
     let (sid, before, after) = {
         let state = state_with_project();
-        let sid = create_line(&state, Some("nh / ds"), vec![shot(1.0), shot(2.0)]);
+        let sid = create_line(
+            &state,
+            Some("nh / ds".to_string()),
+            vec![shot(1.0), shot(2.0)],
+        );
         let before = credits(&state, sid);
         let ids = shot_ids(&state, sid);
         assert!(
-            state
-                .execute(Command::EditShotCredit {
-                    targets: CreditTargets::Shots {
-                        shots: vec![(sid, ids[1])],
-                    },
-                    edit: CreditEdit {
-                        add_explorers: Some(vec![Person::new("Mail", Some("m@x.org")).unwrap()]),
-                        set_date: Some(day(7)),
-                        ..Default::default()
-                    },
-                })
-                .success
+            edit_shots(
+                &state,
+                vec![(sid, ids[1])],
+                CreditEdit {
+                    add_explorers: Some(vec![Person::new("Mail", Some("m@x.org")).unwrap()]),
+                    set_date: Some(day(7)),
+                    ..Default::default()
+                },
+            )
+            .success
         );
         let after = credits(&state, sid);
-        let saved = state.save_project(Some(path.clone()));
+        let saved = state.execute(Command::SaveProject {
+            path: Some(path.clone()),
+        });
         assert!(saved.success, "save failed: {:?}", saved.error);
         (sid, before, after)
     };
 
     let state = AppState::new().unwrap();
-    let opened = state.open_project(path);
+    let opened = state.execute(Command::OpenProject { path });
     assert!(opened.success, "open failed: {:?}", opened.error);
     assert_eq!(credits(&state, sid), after, "the credit survives the file");
-    // Shot ids were renumbered by the load; the entry resolves by uuid.
+    // Session shot ids are minted anew by the load; the entry keys by uuid.
     assert!(state.undo().success);
     assert_eq!(credits(&state, sid), before);
     assert!(state.redo().success);
@@ -668,10 +705,8 @@ fn a_credit_edit_undoes_after_save_and_reopen() {
 }
 
 /// A selection across lines - out of order, with gaps, over shots with
-/// different previous credits - is recorded as runs of consecutive shots
-/// changed alike, one credit pair each written once, and it undoes and
-/// redoes exactly after a save and a reopen, where every shot id is new and
-/// only the positions and the anchors' uuids carry over.
+/// different previous credits - undoes and redoes exactly after a save and
+/// a reopen, where every session shot id is new.
 #[test]
 fn a_credit_edit_over_runs_undoes_exactly_after_save_and_reopen() {
     let _config = crate::test_helpers::isolated_config();
@@ -685,17 +720,15 @@ fn a_credit_edit_over_runs_undoes_exactly_after_save_and_reopen() {
         // Shots 4..8 of the middle line start from another credit.
         let middle = shot_ids(&state, lines[1]);
         assert!(
-            state
-                .execute(Command::EditShotCredit {
-                    targets: CreditTargets::Shots {
-                        shots: middle[4..8].iter().map(|id| (lines[1], *id)).collect(),
-                    },
-                    edit: CreditEdit {
-                        set_surveyors: Some(vec![person("Earlier")]),
-                        ..Default::default()
-                    },
-                })
-                .success
+            edit_shots(
+                &state,
+                middle[4..8].iter().map(|id| (lines[1], *id)).collect(),
+                CreditEdit {
+                    set_surveyors: Some(vec![person("Earlier")]),
+                    ..Default::default()
+                },
+            )
+            .success
         );
         let mut targets: Vec<(LineId, ShotId)> = Vec::new();
         for line in lines.iter().rev() {
@@ -705,62 +738,35 @@ fn a_credit_edit_over_runs_undoes_exactly_after_save_and_reopen() {
             targets.extend(ids[1..6].iter().map(|id| (*line, *id)));
         }
         let before: Vec<Vec<SurveyCredit>> = lines.iter().map(|l| credits(&state, *l)).collect();
-        assert!(
-            state
-                .execute(Command::EditShotCredit {
-                    targets: CreditTargets::Shots { shots: targets },
-                    edit: CreditEdit {
-                        add_surveyors: Some(vec![person("Runs")]),
-                        set_date: Some(day(9)),
-                        ..Default::default()
-                    },
-                })
-                .success
+        let r = edit_shots(
+            &state,
+            targets,
+            CreditEdit {
+                add_surveyors: Some(vec![person("Runs")]),
+                set_date: Some(day(9)),
+                ..Default::default()
+            },
+        );
+        assert!(r.success, "{:?}", r.error);
+        let mut touched = r.line_ids;
+        touched.sort_unstable();
+        assert_eq!(touched, lines, "every line the selection names");
+        let text = newest_entry_text(&state);
+        assert_eq!(
+            text.matches("\"Earlier\"").count(),
+            2,
+            "each distinct credit is written once per side: {text}"
         );
         let after: Vec<Vec<SurveyCredit>> = lines.iter().map(|l| credits(&state, *l)).collect();
-        {
-            let stack = state.undo_stack.lock().unwrap();
-            let entry = stack.undo_entries().next().unwrap();
-            let UndoData::ShotCredits { changes, .. } = &entry.undo_data else {
-                panic!(
-                    "expected ShotCredits, got {}",
-                    entry.undo_data.variant_name()
-                );
-            };
-            // Lines 0 and 2: shots 1..6 and 7..11. Line 1: its shots 1..6
-            // split at 4 by the earlier credit, and 7 (earlier) apart from
-            // 8..11.
-            let shape: Vec<(LineId, Option<usize>, usize)> = changes
-                .iter()
-                .map(|r| (r.line_id, r.start, r.len))
-                .collect();
-            assert_eq!(
-                shape,
-                vec![
-                    (lines[0], Some(1), 5),
-                    (lines[0], Some(7), 4),
-                    (lines[1], Some(1), 3),
-                    (lines[1], Some(4), 2),
-                    (lines[1], Some(7), 1),
-                    (lines[1], Some(8), 3),
-                    (lines[2], Some(1), 5),
-                    (lines[2], Some(7), 4),
-                ]
-            );
-            let (_, payload) = crate::core::UndoStack::serialize_entry(entry).unwrap();
-            assert_eq!(
-                payload.matches("\"Earlier\"").count(),
-                2,
-                "each credit pair is written once: {payload}"
-            );
-        }
-        let saved = state.save_project(Some(path.clone()));
+        let saved = state.execute(Command::SaveProject {
+            path: Some(path.clone()),
+        });
         assert!(saved.success, "save failed: {:?}", saved.error);
         (lines, before, after)
     };
 
     let state = AppState::new().unwrap();
-    assert!(state.open_project(path).success);
+    assert!(state.execute(Command::OpenProject { path }).success);
     let now = |state: &AppState| -> Vec<Vec<SurveyCredit>> {
         lines.iter().map(|l| credits(state, *l)).collect()
     };
@@ -773,63 +779,13 @@ fn a_credit_edit_over_runs_undoes_exactly_after_save_and_reopen() {
     assert_eq!(now(&state), before);
 }
 
-/// A run whose first shot no longer holds its anchor is not written: the
-/// state is not the one the entry was recorded against, and writing by
-/// position would credit other shots. A row written before positions were
-/// recorded (a uuid per shot) still reads and still finds its shots by uuid.
-#[test]
-fn a_credit_run_checks_its_anchor_and_an_older_row_still_reads() {
-    use crate::core::ShotCreditRun;
-
-    let state = state_with_project();
-    let id = create_line(&state, None, vec![shot(1.0), shot(2.0), shot(3.0)]);
-    let uuids: Vec<String> = state
-        .get_project_state()
-        .unwrap()
-        .get_line(id)
-        .unwrap()
-        .shots
-        .iter()
-        .map(|s| s.uuid.clone().unwrap())
-        .collect();
-    let marked = credit(&["Marked"], &[], None);
-    let stale = ShotCreditRun {
-        line_id: id,
-        start: Some(1),
-        len: 2,
-        anchor: uuids[0].clone(),
-        before: SurveyCredit::default(),
-        after: marked.clone(),
-    };
-    assert!(state.write_recorded_credits(&[stale], true).success);
-    assert_eq!(credits(&state, id), vec![SurveyCredit::default(); 3]);
-
-    let older = format!(
-        r#"{{"ShotCredits":{{"changes":[{{"s":{id},"b":{{}},"a":{{"surveyors":[{{"name":"Marked"}}]}},"u":["{}","{}"]}}]}}}}"#,
-        uuids[2], uuids[0]
-    );
-    let UndoData::ShotCredits { changes, .. } = serde_json::from_str::<UndoData>(&older).unwrap()
-    else {
-        panic!("an older row reads as ShotCredits");
-    };
-    assert_eq!(changes.len(), 2);
-    assert!(changes
-        .iter()
-        .all(|run| run.start.is_none() && run.len == 1));
-    assert!(state.write_recorded_credits(&changes, true).success);
-    assert_eq!(
-        credits(&state, id),
-        vec![marked.clone(), SurveyCredit::default(), marked]
-    );
-}
-
 #[test]
 fn a_shotless_line_keeps_its_surveyor_until_its_first_shot_takes_it() {
     let state = state_with_project();
-    let sid = create_line(&state, Some("nh / ds"), Vec::new());
+    let sid = create_line(&state, Some("nh / ds".to_string()), Vec::new());
     let legacy = |state: &AppState| {
-        let project = state.get_project_state().unwrap();
-        let line = project.get_line(sid).unwrap();
+        let p = project(state);
+        let line = p.line(sid).unwrap();
         (line.legacy_surveyor.clone(), line.legacy_date)
     };
     assert_eq!(legacy(&state), (Some("nh / ds".to_string()), None));
@@ -852,13 +808,7 @@ fn a_shotless_line_keeps_its_surveyor_until_its_first_shot_takes_it() {
     assert_eq!(legacy(&state), (Some("nh / ds".to_string()), None));
 
     // The first shot takes the pair as its credit; the line lets it go.
-    let appended = state.execute(Command::CreateShot {
-        line_id: sid,
-        shot: shot(1.0),
-        after_shot_id: None,
-        before_shot_id: None,
-    });
-    assert!(appended.success, "{:?}", appended.error);
+    add_shot(&state, sid, shot(1.0), ShotPlace::End);
     assert_eq!(credits(&state, sid), vec![credit(&["ds"], &["nh"], None)]);
     assert_eq!(legacy(&state), (None, None));
 
@@ -868,165 +818,4 @@ fn a_shotless_line_keeps_its_surveyor_until_its_first_shot_takes_it() {
     assert!(state.redo().success);
     assert_eq!(credits(&state, sid), vec![credit(&["ds"], &["nh"], None)]);
     assert_eq!(legacy(&state), (None, None));
-}
-
-/// Shots with no uuid (a file written before uuids existed) still get an exact
-/// undo of a legacy surveyor edit: the edit mints their identities first, so the
-/// undo record can address every one of them.
-#[test]
-fn a_legacy_surveyor_edit_of_uuidless_shots_undoes_exactly() {
-    let state = state_with_project();
-    let sid = create_line(&state, None, vec![shot(1.0), shot(2.0)]);
-    let ids = shot_ids(&state, sid);
-    assert!(
-        state
-            .execute(Command::EditShotCredit {
-                targets: CreditTargets::Shots {
-                    shots: vec![(sid, ids[0])],
-                },
-                edit: CreditEdit {
-                    set_surveyors: Some(vec![person("Own")]),
-                    ..Default::default()
-                },
-            })
-            .success
-    );
-    // Strip every uuid, as a pre-uuid file loads.
-    let mut project = state.get_project_state().unwrap();
-    for shot in &mut project.get_line_mut(sid).unwrap().shots {
-        shot.uuid = None;
-    }
-    project.rebuild_shot_uuid_index();
-    state.set_project_for_tests(project);
-    let before = credits(&state, sid);
-
-    assert!(
-        state
-            .execute(Command::UpdateLineMetadata {
-                line_id: sid,
-                updates: LineUpdates {
-                    surveyor: Some(Some("Everyone".to_string())),
-                    ..Default::default()
-                },
-            })
-            .success
-    );
-    assert!(credits(&state, sid)
-        .iter()
-        .all(|c| c == &credit(&["Everyone"], &[], None)));
-    assert!(state.undo().success);
-    assert_eq!(credits(&state, sid), before);
-}
-
-/// Review of #719, item 2: an undo or redo replays credits recorded in the
-/// undo stack, which is read back from the file. A recorded credit with a
-/// control character, an over-long name or more than the role cap is stored
-/// normalized, like every other way into a shot.
-#[test]
-fn a_replayed_undo_credit_is_normalized() {
-    use crate::core::ShotCreditRun;
-    use crate::models::{MAX_PEOPLE_PER_ROLE, MAX_PERSON_TEXT_CHARS};
-
-    let state = state_with_project();
-    let id = create_line(&state, None, vec![shot(3.0)]);
-    let uuid = state
-        .get_project_state()
-        .unwrap()
-        .get_line(id)
-        .unwrap()
-        .shots[0]
-        .uuid
-        .clone()
-        .unwrap();
-    let raw = |name: &str| Person {
-        name: name.to_string(),
-        email: Some("x\u{1}@y.org".to_string()),
-    };
-    let recorded = SurveyCredit {
-        surveyors: (0..MAX_PEOPLE_PER_ROLE + 20)
-            .map(|i| raw(&format!("P{i}")))
-            .collect(),
-        explorers: vec![
-            raw("Bell\u{7}Ringer"),
-            raw(&"z".repeat(MAX_PERSON_TEXT_CHARS * 2)),
-        ],
-        date: day(9),
-    };
-    let change = ShotCreditRun {
-        line_id: id,
-        start: Some(0),
-        len: 1,
-        anchor: uuid,
-        before: SurveyCredit::default(),
-        after: recorded,
-    };
-    assert!(state.write_recorded_credits(&[change], true).success);
-    let stored = &credits(&state, id)[0];
-    assert_eq!(stored.surveyors.len(), MAX_PEOPLE_PER_ROLE);
-    assert_eq!(stored.explorers[0].name, "BellRinger");
-    assert_eq!(stored.explorers[0].email.as_deref(), Some("x@y.org"));
-    assert_eq!(
-        stored.explorers[1].name.chars().count(),
-        MAX_PERSON_TEXT_CHARS
-    );
-    assert!(stored.is_storable());
-}
-
-/// #719 review, item 5a: an import that gives every shot of a survey ONE
-/// credit (a Compass or Walls team line) costs one allocation: the imported
-/// shots share it, with or without the dialog's overrides, instead of a copy
-/// each.
-#[test]
-fn an_imported_team_credit_stays_one_shared_allocation() {
-    for overrides in [false, true] {
-        let state = state_with_project();
-        let team = std::sync::Arc::new(credit(&["Ann Smith", "Bo"], &[], day(3)));
-        let shots: Vec<ShotData> = (1..=4)
-            .map(|i| ShotData {
-                credit: Some(std::sync::Arc::clone(&team)),
-                ..shot(f64::from(i))
-            })
-            .collect();
-        let config = ImportLineConfig {
-            cave_section: None,
-            line_index: 0,
-            name: Some("Team".to_string()),
-            surveyor: None,
-            date: None,
-            surveyors: overrides.then(|| vec![person("Dialog")]),
-            explorers: None,
-            override_date: None,
-            color: "#ffffff".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots,
-            placement: ImportPlacement::Origin,
-            station_comments: Vec::new(),
-            station_names: Vec::new(),
-            reverse: false,
-            azimuth_reference: None,
-        };
-        let r = state.execute_import_lines(
-            vec![config],
-            Vec::new(),
-            None,
-            Vec::new(),
-            Vec::new(),
-            crate::core::VirtualShotMode::Auto,
-        );
-        assert!(r.success, "{:?}", r.error);
-        let project = state.get_project_state().unwrap();
-        let line = project.get_line(r.line_ids[0]).unwrap();
-        let first = line.shots[0].credit.as_ref().unwrap();
-        assert!(
-            line.shots.iter().all(|s| s
-                .credit
-                .as_ref()
-                .is_some_and(|c| std::sync::Arc::ptr_eq(c, first))),
-            "overrides: {overrides}"
-        );
-        if !overrides {
-            assert!(std::sync::Arc::ptr_eq(first, &team));
-        }
-    }
 }

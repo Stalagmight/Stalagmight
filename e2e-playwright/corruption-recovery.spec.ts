@@ -8,7 +8,7 @@ import { recoveryBackupItems } from './helpers/testIds';
  * Tests the recovery flow when a project file fails integrity checks:
  * - Dialog renders with three recovery options
  * - "Attempt Repair" triggers repair IPC and shows result
- * - "Restore from Backup" lists backups and allows selection
+ * - "Restore from Backup" lists backups in words; a row only selects, Restore restores
  * - "Export Salvageable Data" triggers salvage export
  * - Cancel closes the dialog
  * - Error states in each recovery path
@@ -21,7 +21,8 @@ async function openRecoveryDialog(page: Page, errorMessage?: string): Promise<vo
       if (!e2e) return;
       e2e.uiStore.getState().openDialog('corruption-recovery', {
         corruptPath: '/mock/corrupt-project.stalx',
-        errorMessage: errorMsg ?? 'Database integrity check failed: index corruption detected.',
+        errorMessage:
+          errorMsg ?? 'The project breaks an invariant and cannot be opened normally: shot 3 of line Main ends at an unknown station.',
       });
     },
     { errorMsg: errorMessage },
@@ -36,19 +37,22 @@ function setupRecoveryMocks(page: Page): Promise<void> {
 
     overrides.attempt_repair = {
       success: true,
-      message: 'Repair complete. REINDEX and VACUUM applied successfully.',
+      message:
+        'Repair succeeded: 1 fix(es): dropped a closure to an unknown station. The damaged original is kept as corrupt-project.stalx.backup.',
     };
 
     overrides.list_backups = [
       {
-        path: '/mock/corrupt-project.stalx.bak.1',
-        modifiedAt: '2026-02-05 14:30:00',
+        path: '/mock/corrupt-project.stalx.backup.1',
+        modifiedAt: '2026-02-05T14:30:00.000Z',
         sizeBytes: 51200,
+        kind: 'backup',
       },
       {
-        path: '/mock/corrupt-project.stalx.bak.2',
-        modifiedAt: '2026-02-04 10:15:00',
+        path: '/mock/app-data/backups/corrupt-project.0123456789ab.20260204T101500.123456789Z.pre-v2.stalx',
+        modifiedAt: '2026-02-04T10:15:00.000Z',
         sizeBytes: 48000,
+        kind: 'pre_upgrade',
       },
     ];
 
@@ -93,7 +97,7 @@ test.describe('Corruption Recovery Dialog', () => {
 
     const dialog = page.getByTestId('corruption-recovery-dialog');
     await expect(dialog).toContainText('File Corruption Detected');
-    await expect(dialog).toContainText('integrity check failed');
+    await expect(dialog).toContainText('cannot be opened normally');
   });
 
   test('dialog shows three recovery action buttons', async ({ page }) => {
@@ -109,7 +113,8 @@ test.describe('Corruption Recovery Dialog', () => {
 
     const repairBtn = page.getByTestId('recovery-attempt-repair');
     await expect(repairBtn).toContainText('Attempt Repair');
-    await expect(repairBtn).toContainText('REINDEX');
+    await expect(repairBtn).toContainText('Keeps a copy of the damaged file');
+    await expect(repairBtn).not.toContainText('REINDEX');
   });
 
   test('Restore from Backup button has description text', async ({ page }) => {
@@ -147,7 +152,7 @@ test.describe('Corruption Recovery Dialog', () => {
     // Should show result with success message
     const dialog = page.getByTestId('corruption-recovery-dialog');
     await expect(dialog).toContainText('Repair Succeeded', { timeout: 5000 });
-    await expect(dialog).toContainText('REINDEX and VACUUM');
+    await expect(dialog).toContainText('The damaged original is kept');
 
     // Should have "Open Project" button on success
     await expect(dialog.getByRole('button', { name: /Open Project/i })).toBeVisible();
@@ -160,29 +165,38 @@ test.describe('Corruption Recovery Dialog', () => {
 
     // Should show backup list
     const dialog = page.getByTestId('corruption-recovery-dialog');
-    await expect(dialog).toContainText('Select a backup', { timeout: 5000 });
+    await expect(dialog).toContainText('Choose the copy to put back', { timeout: 5000 });
 
     // Should show backup items
     const backupItems = recoveryBackupItems(page);
     await expect(backupItems).toHaveCount(2);
 
-    // Should show filenames and dates
-    await expect(dialog).toContainText('.bak.1');
-    await expect(dialog).toContainText('.bak.2');
+    // Each copy in words, its file name in the row's tooltip
+    await expect(page.getByTestId('recovery-backup-row-0')).toContainText('Backup');
+    await expect(page.getByTestId('recovery-backup-row-0')).toHaveAttribute('title', 'corrupt-project.stalx.backup.1');
+    await expect(page.getByTestId('recovery-backup-row-1')).toContainText('Original before the upgrade to the new format');
+    await expect(page.getByTestId('recovery-backup-row-1')).toContainText('Feb 4, 2026');
   });
 
-  test('clicking a backup triggers restore and shows success', async ({ page }) => {
+  test('picking a backup asks first, and Restore restores it', async ({ page }) => {
     await openRecoveryDialog(page);
 
     await page.getByTestId('recovery-restore-backup').click();
 
     // Wait for backup list
     const dialog = page.getByTestId('corruption-recovery-dialog');
-    await expect(dialog).toContainText('Select a backup', { timeout: 5000 });
+    await expect(dialog).toContainText('Choose the copy to put back', { timeout: 5000 });
+    await expect(page.getByTestId('recovery-backup-restore')).toBeDisabled();
 
-    // Click first backup
+    // Click first backup: it is selected, nothing is restored yet
     const firstBackup = recoveryBackupItems(page).first();
     await firstBackup.click();
+    await expect(firstBackup).toBeChecked();
+    await expect(page.getByTestId('recovery-backup-confirm')).toContainText(
+      'Replace the damaged corrupt-project.stalx with this copy? The damaged file is kept as corrupt-project.stalx.pre-restore',
+    );
+    await expect(dialog).not.toContainText('Restore Succeeded');
+    await page.getByTestId('recovery-backup-restore').click();
 
     // Should show restore success
     await expect(dialog).toContainText('Restore Succeeded', { timeout: 5000 });
@@ -195,7 +209,7 @@ test.describe('Corruption Recovery Dialog', () => {
     await page.getByTestId('recovery-restore-backup').click();
 
     const dialog = page.getByTestId('corruption-recovery-dialog');
-    await expect(dialog).toContainText('Select a backup', { timeout: 5000 });
+    await expect(dialog).toContainText('Choose the copy to put back', { timeout: 5000 });
 
     // Click Back
     await dialog.getByRole('button', { name: /Back/i }).click();
@@ -227,7 +241,8 @@ test.describe('Corruption Recovery Dialog', () => {
       const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.attempt_repair = {
         success: false,
-        message: 'Database corruption too severe for automatic repair.',
+        message:
+          'Repair could not rebuild the project (too severe: no line decodes). Nothing was changed. Try Restore from Backup or Export Salvageable Data instead.',
       };
       (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
     });

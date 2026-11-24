@@ -1,16 +1,15 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { saveDialog } from '../../utils/fileDialogs';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { invokeIpc } from '../../utils/ipc';
-import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { RestoreBackupPicker } from './RestoreBackupPicker';
 import type { RepairResult } from '../../types/ipc/RepairResult';
 import type { BackupInfo } from '../../types/ipc/BackupInfo';
 import type { SalvagedData } from '../../types/ipc/SalvagedData';
 import { trackDialogComplete, setProjectActionSource } from '../../utils/telemetry';
-import { recoveryBackupItemTestId } from '../../utils/testId';
 
 type Step = 'choose' | 'repairing' | 'listing-backups' | 'pick-backup' | 'restoring' | 'salvaging' | 'result';
 
@@ -27,10 +26,15 @@ export default function CorruptionRecoveryDialog() {
   const { loadProject } = useProjectStore();
 
   const filePath = dialogData.corruptPath as string;
-  const errorMessage = (dialogData.errorMessage as string) ?? 'Database integrity check failed.';
+  const errorMessage = (dialogData.errorMessage as string) ?? 'The project file is damaged and cannot be opened normally.';
+  // Opened from Recent Projects for a file that opens fine: only the restore,
+  // straight to the list of backups.
+  const restoreOnly = dialogData.mode === 'restore';
 
-  const [step, setStep] = useState<Step>('choose');
+  const [step, setStep] = useState<Step>(restoreOnly ? 'listing-backups' : 'choose');
   const [backups, setBackups] = useState<BackupInfo[]>([]);
+  // The copy picked in the list. Picking only selects: Restore restores.
+  const [selectedBackup, setSelectedBackup] = useState<string | null>(null);
   const [result, setResult] = useState<ResultInfo | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -40,7 +44,7 @@ export default function CorruptionRecoveryDialog() {
     setBusy(true);
     try {
       const res = await invokeIpc<RepairResult>('attempt_repair', { path: filePath }, {
-        purpose: 'repair corrupt database',
+        purpose: 'repair a damaged project file',
       });
       setResult({
         success: res.success,
@@ -70,11 +74,13 @@ export default function CorruptionRecoveryDialog() {
         purpose: 'list backup files',
       });
       setBackups(list);
+      setSelectedBackup(null);
       if (list.length === 0) {
         setResult({
           success: false,
           title: 'No Backups Found',
-          message: 'No backup files were found alongside this project.',
+          // Beside the project, and the originals kept from before an upgrade.
+          message: 'No backups of this project were found.',
           canReopen: false,
         });
         setStep('result');
@@ -123,13 +129,21 @@ export default function CorruptionRecoveryDialog() {
     }
   }, [filePath]);
 
+  // Restore-only: list the backups once, on open.
+  const listedOnOpen = useRef(false);
+  useEffect(() => {
+    if (!restoreOnly || listedOnOpen.current) return;
+    listedOnOpen.current = true;
+    void handleListBackups();
+  }, [restoreOnly, handleListBackups]);
+
   // ── Export Salvageable Data ─────────────────────────────────────
   const handleSalvage = useCallback(async () => {
     setStep('salvaging');
     setBusy(true);
     try {
       const data = await invokeIpc<SalvagedData>('export_salvageable_data', { path: filePath }, {
-        purpose: 'salvage data from corrupt database',
+        purpose: 'salvage data from a damaged project file',
       });
 
       // Prompt user for save location
@@ -192,8 +206,13 @@ export default function CorruptionRecoveryDialog() {
   // ── Result: go back to choose ───────────────────────────────────
   const handleBackToChoose = useCallback(() => {
     setResult(null);
+    if (restoreOnly) {
+      // Nothing else to choose for a file that opens fine.
+      closeDialog();
+      return;
+    }
     setStep('choose');
-  }, []);
+  }, [restoreOnly, closeDialog]);
 
   // ── Render ──────────────────────────────────────────────────────
   const renderContent = () => {
@@ -215,7 +234,10 @@ export default function CorruptionRecoveryDialog() {
             >
               <div className="font-medium">Attempt Repair</div>
               <div className="text-sm text-text-tertiary mt-0.5">
-                Creates a backup, then runs REINDEX + VACUUM to fix common corruption issues.
+                {/* Both file formats: a version 2 file is rebuilt from what decodes
+                    (the damaged original kept as `.backup`); an old SQLite file
+                    gets 0.6.0's backup, REINDEX and VACUUM. */}
+                Keeps a copy of the damaged file, then rebuilds the project from what can still be read.
               </div>
             </button>
 
@@ -267,37 +289,36 @@ export default function CorruptionRecoveryDialog() {
       );
     }
 
-    // Step: pick a backup
+    // Step: pick a backup. A row only selects it; the sentence under the list
+    // says what Restore does, and nothing is written until Restore is pressed
+    // (real-app demo I-2: one click on a row used to replace the project). The
+    // damaged-file mode gets the same confirm: a misclick there swaps the
+    // damaged file for the wrong copy just the same.
     if (step === 'pick-backup') {
       return (
         <div className="space-y-4">
-          <p className="text-text-secondary">Select a backup to restore:</p>
-          <div className="space-y-1 max-h-60 overflow-auto">
-            {backups.map((backup, index) => {
-              // sizeBytes comes as bigint from ts-rs but may arrive as number from Tauri IPC
-              const sizeNum = typeof backup.sizeBytes === 'bigint'
-                ? Number(backup.sizeBytes)
-                : Number(backup.sizeBytes);
-              const sizeKb = (sizeNum / 1024).toFixed(1);
-              const filename = extractFilename(backup.path);
-              return (
-                <button
-                  key={backup.path}
-                  type="button"
-                  onClick={() => handleRestoreBackup(backup.path)}
-                  className="w-full text-left p-2 rounded border border-border hover:bg-surface-alt transition-colors"
-                  data-testid={recoveryBackupItemTestId(index)}
-                >
-                  <div className="font-mono text-sm">{filename}</div>
-                  <div className="text-xs text-text-tertiary mt-0.5">
-                    {sizeKb} KB &middot; {backup.modifiedAt}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-          <div className="flex justify-end pt-4 border-t border-border">
-            <Button onClick={handleBackToChoose} data-testid="recovery-backup-back">Back</Button>
+          <RestoreBackupPicker
+            projectPath={filePath}
+            backups={backups}
+            selectedPath={selectedBackup}
+            onSelect={setSelectedBackup}
+            damaged={!restoreOnly}
+          />
+          <div className="flex flex-wrap justify-end gap-2 pt-4 border-t border-border">
+            {restoreOnly ? (
+              <Button onClick={handleBackToChoose} data-testid="recovery-backup-cancel">Cancel</Button>
+            ) : (
+              <Button onClick={handleBackToChoose} data-testid="recovery-backup-back">Back</Button>
+            )}
+            <Button
+              variant="primary"
+              disabled={!selectedBackup}
+              title={selectedBackup ? undefined : 'Choose a copy first'}
+              onClick={() => { if (selectedBackup) void handleRestoreBackup(selectedBackup); }}
+              data-testid="recovery-backup-restore"
+            >
+              Restore
+            </Button>
           </div>
         </div>
       );
@@ -312,13 +333,12 @@ export default function CorruptionRecoveryDialog() {
           </h3>
           <p className="text-text-secondary whitespace-pre-wrap">{result.message}</p>
           <div className="flex justify-end gap-2 pt-4 border-t border-border">
-            {!result.success && (
+            {!result.success && !restoreOnly && (
               <Button onClick={handleBackToChoose} data-testid="recovery-result-retry">Try Another Option</Button>
             )}
-            {result.canReopen ? (
+            <Button onClick={() => { trackDialogComplete('corruption-recovery'); closeDialog(); }} data-testid="recovery-result-close">Close</Button>
+            {result.canReopen && (
               <Button variant="primary" onClick={handleReopen} data-testid="recovery-result-reopen">Open Project</Button>
-            ) : (
-              <Button onClick={() => { trackDialogComplete('corruption-recovery'); closeDialog(); }} data-testid="recovery-result-close">Close</Button>
             )}
           </div>
         </div>
@@ -330,7 +350,7 @@ export default function CorruptionRecoveryDialog() {
 
   return (
     <DialogWrapper
-      title="File Corruption Detected"
+      title={restoreOnly ? 'Restore an Earlier Copy' : 'File Corruption Detected'}
       onClose={closeDialog}
       size="lg"
       data-testid="corruption-recovery-dialog"

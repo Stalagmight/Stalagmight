@@ -6,6 +6,7 @@ import {
   waitForMapReady,
   waitForNoDialogs,
 } from './helpers/app';
+import { expectSpoken, prosePillKinds } from './helpers/proseText';
 
 type StationRef = { line_id: number; station_index: number };
 
@@ -354,14 +355,36 @@ test.describe('Context Menu Coverage', () => {
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
   });
 
-  test('station menu unmerges immediately when exactly one merge exists', async ({ page }) => {
-    const { targetRef } = await setupProjectWithMergedStation(page, 1);
+  // On the station graph a merge is ONE station two or more lines pass; any one
+  // line can be detached from it (plan 5.2). On two lines where either choice
+  // gives the same result (the clicked line keeps the station, the merged
+  // line gets back the station it had) the dialog offers no choice: it says
+  // which line comes off and detaches that one (N-2).
+  test('station menu detaches the line that comes off a two-line station', async ({ page }) => {
+    const { targetRef, mergeRefA } = await setupProjectWithMergedStation(page, 1);
 
     await openContextMenu(page, { type: 'station', ref: targetRef });
-    await expect(page.getByRole('button', { name: 'Unmerge Stations' })).toBeVisible();
-    await page.getByRole('button', { name: 'Unmerge Stations' }).click();
+    await expect(page.getByRole('button', { name: 'Unmerge Stations' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Detach Line from Station...' }).click();
 
-    await expect(page.getByTestId('unmerge-stations-dialog')).toBeHidden();
+    const dialog = page.getByTestId('unmerge-stations-dialog');
+    await expect(dialog).toBeVisible();
+    // RS-PROSE: the sentence draws its lines and the keeper's station as pills.
+    await expectSpoken(
+      page.getByTestId('unmerge-stations-naming'),
+      /^Merge B comes off: it gets back .+ \(Station ID \d+\); Merge A keeps .+\.$/,
+    );
+    expect(await prosePillKinds(page.getByTestId('unmerge-stations-naming'))).toEqual(['line', 'line', 'station']);
+    await expect(page.getByTestId(`unmerge-station-option-${targetRef.line_id}-${targetRef.station_index}`)).toHaveCount(0);
+    await page.getByTestId('unmerge-stations-confirm').click();
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+
+    // The pair form detaches its partner: Merge B, the line that came off.
+    const calls = await page.evaluate(() =>
+      (window as unknown as { __MOCK_GET_UNMERGE_STATION_PAIR_CALLS__: () => Array<{ stationB: StationRef }> })
+        .__MOCK_GET_UNMERGE_STATION_PAIR_CALLS__(),
+    );
+    expect(calls.map((c) => c.stationB)).toEqual([mergeRefA]);
 
     await expect.poll(async () => {
       return page.evaluate(() => {
@@ -371,46 +394,46 @@ test.describe('Context Menu Coverage', () => {
     }).toBe(0);
   });
 
-  test('station menu opens picker dialog when multiple merges exist', async ({ page }) => {
-    const { targetRef, mergeRefB } = await setupProjectWithMergedStation(page, 2);
+  test('station menu lets the user pick which line of a three-line station to detach', async ({ page }) => {
+    const { targetRef, mergeRefA, mergeRefB } = await setupProjectWithMergedStation(page, 2);
     if (!mergeRefB) {
       throw new Error('Expected second merge target');
     }
 
     await openContextMenu(page, { type: 'station', ref: targetRef });
-    await expect(page.getByRole('button', { name: 'Unmerge Stations' })).toBeVisible();
-    await page.getByRole('button', { name: 'Unmerge Stations' }).click();
+    await page.getByRole('button', { name: 'Detach Line from Station...' }).click();
 
-    const unmergeDialog = page.getByTestId('unmerge-stations-dialog');
-    await expect(unmergeDialog).toBeVisible();
+    const dialog = page.getByTestId('unmerge-stations-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('is where 3 lines meet');
 
     await page.getByTestId(`unmerge-station-option-${mergeRefB.line_id}-${mergeRefB.station_index}`).click();
     await page.getByTestId('unmerge-stations-confirm').click();
-    await expect(unmergeDialog).not.toBeVisible({ timeout: 5000 });
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
 
+    // The chosen line left; the other two are still one station.
     await expect.poll(async () => {
-      return page.evaluate(({ target, removed }) => {
+      return page.evaluate(({ target, kept, removed }) => {
         const state = (window as any).__E2E_TEST__.projectStore.getState();
-        const merges = state.project?.station_merges ?? [];
-        const hasRemovedPair = merges.some((merge: any) => {
-          const direct =
-            merge.station_a.line_id === target.line_id &&
-            merge.station_a.station_index === target.station_index &&
-            merge.station_b.line_id === removed.line_id &&
-            merge.station_b.station_index === removed.station_index;
-          const reverse =
-            merge.station_b.line_id === target.line_id &&
-            merge.station_b.station_index === target.station_index &&
-            merge.station_a.line_id === removed.line_id &&
-            merge.station_a.station_index === removed.station_index;
-          return direct || reverse;
-        });
+        const at = (ref: { line_id: number; station_index: number }) =>
+          state.stations.find(
+            (s: any) => s.station_ref.line_id === ref.line_id && s.station_ref.station_index === ref.station_index,
+          );
         return {
-          mergeCount: merges.length,
-          hasRemovedPair,
+          mergeCount: state.project?.station_merges?.length ?? 0,
+          targetWith: at(target)?.merged_with.map((r: any) => r.line_id) ?? null,
+          removedWith: at(removed)?.merged_with.length ?? null,
+          sharedId: at(target)?.id === at(kept)?.id,
+          detachedOwnId: at(removed)?.id !== at(target)?.id,
         };
-      }, { target: targetRef, removed: mergeRefB });
-    }).toEqual({ mergeCount: 1, hasRemovedPair: false });
+      }, { target: targetRef, kept: mergeRefA, removed: mergeRefB });
+    }).toEqual({
+      mergeCount: 1,
+      targetWith: [mergeRefA.line_id],
+      removedWith: 0,
+      sharedId: true,
+      detachedOwnId: true,
+    });
   });
 
   test('station menu removes closure immediately when exactly one direct closure exists', async ({ page }) => {

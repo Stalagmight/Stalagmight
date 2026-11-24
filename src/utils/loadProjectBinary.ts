@@ -26,6 +26,8 @@ import type { Person } from '../types/ipc/Person';
 import type { SurveyCredit } from '../types/ipc/SurveyCredit';
 import { noteLazyLineCredits } from './projectPeople';
 import type { StationRef } from '../types/ipc/StationRef';
+import type { ArchivedStation } from '../types/ipc/ArchivedStation';
+import type { ShownSlot } from '../types/ipc/ShownSlot';
 import type { ClosureRef } from '../types/ipc/ClosureRef';
 import type { GpsCoordinates } from '../types/ipc/GpsCoordinates';
 import type { LoopClosure } from '../types/ipc/LoopClosure';
@@ -86,8 +88,17 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
  * 8 adds station identity: the dense per-station `stations_ids` buffer (u32 LE,
  * the project-unique Station ID) and a `station_names` list that names every
  * station.
+ *
+ * 9 is the station-graph model (`.stalx` v2): the header's `line_offsets` is
+ * gone (positions are derived from placements and datums, nothing reads it),
+ * and a junction's slots share ONE Station ID, name and comment, so
+ * `stations_ids`, `station_names` and `station_comments` are no longer
+ * unique per slot (names and comments are the slot's shown identity's,
+ * RS 6); the sparse `station_archived` (a node's records, the stations
+ * merges archived in it) and `station_shown` (how a foreign slot or a loop
+ * end shows its node) lists are new. The layout is otherwise unchanged.
  */
-const EXPECTED_VERSION = 8;
+const EXPECTED_VERSION = 9;
 /** f32 fields per shot. Mirror of SHOT_FLOAT_FIELDS in Rust. */
 const SHOT_FLOAT_FIELDS = 12;
 /** u32 fields per shot. Mirror of SHOT_UINT_FIELDS in Rust. */
@@ -125,6 +136,13 @@ export interface BinaryEnvelope {
   station_names: Array<[number, string]>;
   /** Per-station u32 LE: the project-unique Station ID (v8). */
   stations_ids: Uint8Array;
+  /** Sparse: the records of a node (the stations merges archived in it,
+   *  RS 3), on every slot of it (v9). Optional so an envelope without the
+   *  key decodes as "none". */
+  station_archived?: Array<[number, ArchivedStation[]]>;
+  /** Sparse: foreign slots and loop ends (RS 6), with the Station ID shown,
+   *  the home-line dot and the loop mark (v9). Optional, as above. */
+  station_shown?: Array<[number, ShownSlot]>;
   stats: ProjectStats;
   warnings: ProjectWarning[];
   display_settings: DisplaySettings;
@@ -143,7 +161,6 @@ interface ProjectHeaderBinary {
   station_merges: StationMerge[];
   zero_datums: ZeroDatum[];
   loop_closures: LoopClosure[];
-  line_offsets: Array<[number, [number, number]]>;
   station_offsets: Array<[StationRef, [number, number, number]]>;
   station_comments_map: Array<[StationRef, string]>;
   imported_file_hashes: string[];
@@ -208,11 +225,26 @@ function isAlreadyOpen(e: unknown): boolean {
  * shape `load_project_full` returned. The frontend can swap one call for
  * the other without touching consumers.
  */
-export async function loadProjectFullBinary(path: string): Promise<LoadProjectFullResultWithSoa> {
+export function loadProjectFullBinary(path: string): Promise<LoadProjectFullResultWithSoa> {
+  return invokeBinaryLoad(() => invoke<ArrayBuffer>('load_project_full_binary', { path }));
+}
+
+/**
+ * Invoke `reload_project_full_binary` (the save prompt's "Use the file's
+ * version"): the backend reads the open project's own file and replaces the
+ * session with it only when it opens, in one operation, and answers with
+ * the payload a load answers with, decoded the same way. A rejection means
+ * nothing was replaced: the session and its unsaved changes are as they were.
+ */
+export function reloadProjectFullBinary(): Promise<LoadProjectFullResultWithSoa> {
+  return invokeBinaryLoad(() => invoke<ArrayBuffer>('reload_project_full_binary'));
+}
+
+async function invokeBinaryLoad(call: () => Promise<unknown>): Promise<LoadProjectFullResultWithSoa> {
   const tInvoke = performance.now();
   let raw: ArrayBuffer | Uint8Array | unknown;
   try {
-    raw = await invoke<ArrayBuffer>('load_project_full_binary', { path });
+    raw = await call();
   } catch (e) {
     // Still rethrown either way - only the level changes, so the expected
     // short-circuit stops masquerading as a load failure in the debug log.
@@ -396,12 +428,6 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     return line;
   });
 
-  // Reconstruct the line_offsets record: Vec<(LineId, (f64,f64))> -> Record<number, [number, number]>
-  const line_offsets: Record<number, [number, number]> = {};
-  for (const [sid, [x, y]] of env.project_header.line_offsets) {
-    line_offsets[sid] = [x, y];
-  }
-
   // Note: station_offsets and station_comments_map are on Project but TS
   // type generator skips them (#[ts(skip)]). They're carried in the
   // binary but we don't surface them on the LoadProjectFullResult.project
@@ -418,7 +444,6 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     loop_closures: env.project_header.loop_closures,
     file_path: env.project_header.file_path,
     next_line_id: env.project_header.next_line_id,
-    line_offsets,
     imported_file_hashes: env.project_header.imported_file_hashes,
     imported_line_hashes: env.project_header.imported_line_hashes,
     next_closure_id: BigInt(env.project_header.next_closure_id as unknown as number | bigint),
@@ -458,6 +483,10 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   for (const [i, c] of env.station_comments) commentByIdx.set(i, c);
   const nameByIdx = new Map<number, string>();
   for (const [i, n] of env.station_names) nameByIdx.set(i, n);
+  const archivedByIdx = new Map<number, ArchivedStation[]>();
+  for (const [i, a] of env.station_archived ?? []) archivedByIdx.set(i, a);
+  const shownByIdx = new Map<number, ShownSlot>();
+  for (const [i, sh] of env.station_shown ?? []) shownByIdx.set(i, sh);
 
   // Build the new SoA layout. This reuses the same typed-array views we
   // already created above; per-shot/station numeric fields aren't copied,
@@ -472,7 +501,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   //   - 1 Uint8Array `shotFlags` mapping the wire's u32 marker_or_max
   //     into the Int32Array `shotMarkerIndex` and bit-packed flags
   const surveyData = withGpsFixFlags(
-    buildSurveyData(env, shotsF32, shotsU32, shotsFlags, stationsF64, stationsU32, stationsFlags, shotCommentByIdx, gpsByIdx, mergedByIdx, closuresByIdx, commentByIdx, nameByIdx),
+    buildSurveyData(env, shotsF32, shotsU32, shotsFlags, stationsF64, stationsU32, stationsFlags, shotCommentByIdx, gpsByIdx, mergedByIdx, closuresByIdx, commentByIdx, nameByIdx, archivedByIdx, shownByIdx),
     env.project_header.zero_datums
   );
 
@@ -537,6 +566,8 @@ function buildSurveyData(
   stationClosures: Map<number, ClosureRef[]>,
   stationComments: Map<number, string>,
   stationNames: Map<number, string>,
+  stationArchived: Map<number, ArchivedStation[]>,
+  stationShown: Map<number, ShownSlot>,
 ): SurveyData {
   const N = env.shot_count;
   const shotIds = new Uint32Array(N);
@@ -660,6 +691,8 @@ function buildSurveyData(
     stationComments,
     stationNames,
     stationIds,
+    stationArchived,
+    stationShown,
   };
 }
 

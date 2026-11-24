@@ -1,4 +1,5 @@
 import type { TFunction } from 'i18next';
+import type { LoadingPhase } from '../types/ipc/LoadingPhase';
 
 /**
  * Map a backend `LoadingPhase` (snake_case, src-tauri/src/core/loading.rs) to a
@@ -17,9 +18,11 @@ export function formatPhaseLabel(
 ): string {
   if (!phase) return t('globalView.loading.phases.initializing');
 
-  const labels: Record<string, string> = {
+  // Keyed by the wire's phase names, so a renamed phase is a type error here
+  // rather than a raw phase name on screen.
+  const labels: Partial<Record<LoadingPhase | 'loading_taking_long', string>> = {
     // Project opening phases
-    opening_database: t('globalView.loading.phases.openingDatabase'),
+    opening_file: t('globalView.loading.phases.openingFile'),
     loading_project_data: t('globalView.loading.phases.loadingProjectData'),
     loading_lines: t('globalView.loading.phases.loadingSections'),
     computing_stations: t('globalView.loading.phases.computingStations'),
@@ -30,7 +33,7 @@ export function formatPhaseLabel(
     // Timeout message
     loading_taking_long: t('globalView.loading.phases.takingLong'),
     // Create project phases
-    creating_database: t('globalView.loading.phases.creatingDatabase'),
+    creating_file: t('globalView.loading.phases.creatingFile'),
     initializing_project: t('globalView.loading.phases.initializingProject'),
     saving_settings: t('globalView.loading.phases.savingSettings'),
     // Survey-file import phases
@@ -40,7 +43,7 @@ export function formatPhaseLabel(
     import_finalizing: t('globalView.loading.phases.importFinalizing'),
   };
 
-  const label = labels[phase] ?? phase;
+  const label = labels[phase as keyof typeof labels] ?? phase;
 
   if (phaseIndex !== undefined && phaseCount !== undefined && phaseCount > 0) {
     return t('globalView.loading.step', { current: phaseIndex + 1, total: phaseCount, label });

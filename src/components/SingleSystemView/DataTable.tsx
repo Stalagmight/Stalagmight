@@ -4,10 +4,10 @@ import { type Line, type Shot, type ShotData, type Station, type StationRef } fr
 import { useProjectStore } from '../../store/projectStore';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { useUIStore, type Selection } from '../../store/uiStore';
-import { useEditingBlocked } from '../../hooks/useEditingBlocked';
+import { notifyIfFileReadOnly, useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useShallow } from 'zustand/react/shallow';
 import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
-import { EntityBlob } from '../common/EntityBlob';
+import { EntityBlob, StationBlob } from '../common/EntityBlob';
 import { ChevronDownIcon, ExpandIcon } from '../common/icons';
 import type { ProjectWarning } from '../../types/commands';
 import { lineDisplayName } from '../../utils/stationIdentity';
@@ -26,7 +26,9 @@ import { invokeIpc } from '../../utils/ipc';
 import { buildShotColumns } from './dataTableShotColumns';
 import { CREDIT_COLUMN_KEYS, isCreditColumn } from './dataTableCreditColumns';
 import { useDataTableCredit } from './useDataTableCredit';
-import { buildStationColumns, stationRenameToSend } from './dataTableStationColumns';
+import { buildStationColumns } from './dataTableStationColumns';
+import { commitStationGridEdits, planStationGridEdits } from './stationGridEdits';
+import { shotEndMarks } from '../common/shotEndMarks';
 import { HEADER_HIDE_GROUPS, STATION_MENU_COLS } from './dataTableColumnGroups';
 import RawTableView from './RawTableView';
 import { DetailLink } from '../common/DetailLink';
@@ -49,7 +51,7 @@ import {
   completeDraftData,
   commitAnchorArgs,
 } from './dataTableDrafts';
-import type { CellEdit } from '../common/SpreadsheetGrid/types';
+import { EDIT_HELD, type CellEdit } from '../common/SpreadsheetGrid/types';
 
 interface DataTableProps {
   lines: Line[];
@@ -260,7 +262,20 @@ function RawTablePill({ name, trailing }: { name: string; trailing?: ReactNode }
   );
 }
 
-export default function DataTable({ lines }: DataTableProps) {
+/**
+ * The data table of the open project. Its view of one project - the line it
+ * shows, the grid's row and column selection and scroll, unsaved draft rows -
+ * starts over when another project opens (keyed on `projectOpenGeneration`):
+ * line ids are small per-project integers, so a kept line id used to open the
+ * next project on whichever of its lines had that id, at the old row and
+ * column (demo finding I-12).
+ */
+export default function DataTable(props: DataTableProps) {
+  const openGeneration = useProjectStore((s) => s.projectOpenGeneration);
+  return <ProjectDataTable key={openGeneration} {...props} />;
+}
+
+function ProjectDataTable({ lines }: DataTableProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
   const [selectedLineId, setSelectedLineId] = useState<number | null>(
@@ -544,12 +559,6 @@ export default function DataTable({ lines }: DataTableProps) {
     // refs/comments are unchanged, so comment editing still targets measured data.
     return activeStations.filter((s) => s.station_ref.line_id === selectedLineId);
   }, [activeStations, selectedLineId, tableView]);
-  // The shown line's station names by index, for the inline rename check.
-  const lineStationNames = useMemo(() => {
-    const names: string[] = [];
-    for (const s of lineStations) names[s.station_ref.station_index] = s.name;
-    return names;
-  }, [lineStations]);
 
   const handleViewChange = useCallback((value: 'shots' | 'stations') => {
     setTableView(value);
@@ -1064,6 +1073,7 @@ export default function DataTable({ lines }: DataTableProps) {
    *  longer leaves the rows with their selection gone. */
   const onShotDeleteRows = useCallback(
     (fromRow: number, toRow: number): boolean => {
+      if (editingBlocked) notifyIfFileReadOnly();
       if (!selectedLine || editingBlocked) return false;
       setSource('data-table');
       const inRange = rowEntries
@@ -1215,8 +1225,14 @@ export default function DataTable({ lines }: DataTableProps) {
           title={labels.shotAt(selectedLineId, shotIndex, true)}
           data-testid={`data-table-shot-row-label-${selectedLineId}-${shot.id}`}
         >
-          <EntityBlob entity="shot" className="min-w-0 max-w-full">
-            <span className="truncate">{labels.shotAt(selectedLineId, shotIndex)}</span>
+          <EntityBlob
+            entity="shot"
+            lineId={selectedLineId}
+            shotEnds={shotEndMarks(labels, selectedLineId, shotIndex)}
+            plain={labels.shotAt(selectedLineId, shotIndex)}
+            className="min-w-0 max-w-full"
+          >
+            {labels.shotPillAt(selectedLineId, shotIndex)}
           </EntityBlob>
         </span>
       ) : (
@@ -1228,26 +1244,22 @@ export default function DataTable({ lines }: DataTableProps) {
 
   // --- Stations view (SpreadsheetGrid) --------------------------------------
   // Stations are derived from shots, so only the name and the comment are
-  // editable - a single edit per commit (set_station_name / set_station_comment
-  // have no batch form, so the grid gets no onBatchEdit).
-  const onStationEdit = useCallback(
-    (rowIndex: number, colKey: string, value: unknown) => {
-      if (editingBlocked) return;
-      const station = lineStations[rowIndex];
-      if (!station) return;
-      if (colKey === 'name') {
-        const name = stationRenameToSend(value, station);
-        if (name === null) return;
-        setSource('data-table');
-        void setStationName(station.station_ref, name);
-        return;
-      }
-      if (colKey !== 'comment') return;
+  // editable. A commit over several cells is ONE batch (ui-2): its edits on
+  // foreign slots and loop ends share one whose-station prompt, and the
+  // native ones wait for its answer (`stationGridEdits`).
+  const onStationBatchEdit = useCallback(
+    (edits: CellEdit[]) => {
+      if (editingBlocked) return false;
+      const planned = planStationGridEdits(edits, lineStations);
+      if (planned.length === 0) return false;
       setSource('data-table');
-      const comment = typeof value === 'string' && value.trim() !== '' ? value : null;
-      void updateStationComment(station.station_ref, comment);
+      return commitStationGridEdits(planned, openDialog, { setStationName, updateStationComment });
     },
-    [editingBlocked, lineStations, updateStationComment, setStationName]
+    [editingBlocked, lineStations, updateStationComment, setStationName, openDialog]
+  );
+  const onStationEdit = useCallback(
+    (row: number, colKey: string, value: unknown) => (onStationBatchEdit([{ row, colKey, value }]) ? EDIT_HELD : undefined),
+    [onStationBatchEdit]
   );
 
   const onStationActiveCellChange = useCallback(
@@ -1394,9 +1406,8 @@ export default function DataTable({ lines }: DataTableProps) {
         onGpsCellClick: handleGpsCellClick,
         onConnectionsCellClick: handleConnectionsCellClick,
         labels,
-        lineStationNames,
       }),
-    [t, precision, editingBlocked, stationGpsOrigin, handleGpsCellClick, handleConnectionsCellClick, labels, lineStationNames]
+    [t, precision, editingBlocked, stationGpsOrigin, handleGpsCellClick, handleConnectionsCellClick, labels]
   );
 
   // Gutter shows the station's name pill (never its position); double-click
@@ -1412,9 +1423,11 @@ export default function DataTable({ lines }: DataTableProps) {
         title={labels.station(station.station_ref, true)}
         data-testid={`data-table-station-row-label-${station.station_ref.line_id}-${station.station_ref.station_index}`}
       >
-        <EntityBlob entity="station" className="min-w-0 max-w-full">
-          <span className="truncate">{labels.station(station.station_ref)}</span>
-        </EntityBlob>
+        <StationBlob
+          station={station.station_ref}
+          className="min-w-0 max-w-full"
+          testId={`data-table-station-pill-${station.station_ref.line_id}-${station.station_ref.station_index}`}
+        />
       </span>
     ),
     [triggerCenterOnStation, labels]
@@ -1428,7 +1441,7 @@ export default function DataTable({ lines }: DataTableProps) {
   const lastRawTableRef = useRef<string | null>(null);
   const fetchRawTableNames = useCallback(() => {
     invokeIpc<string[]>('get_raw_table_names', undefined, {
-      purpose: 'list raw sqlite tables for the data viewer',
+      purpose: 'list the saved project file members for the raw data viewer',
     })
       .then((names) => setRawTables(Array.isArray(names) ? names : 'unavailable'))
       .catch(() => setRawTables('unavailable'));
@@ -1437,7 +1450,8 @@ export default function DataTable({ lines }: DataTableProps) {
     if (dataTableFullScreen) fetchRawTableNames();
   }, [dataTableFullScreen, fetchRawTableNames]);
   // Re-list after a save (dirty → clean): the first save of a never-saved
-  // project creates the database, so a list that came back "unavailable" must
+  // project writes its file (and the first save of an old-format one upgrades
+  // it to the version 2 `.stalx`), so a list that came back "unavailable" must
   // refresh rather than stay stuck until the user exits and re-enters fullscreen.
   const prevDirtyRawRef = useRef(isDirty);
   useEffect(() => {
@@ -1678,11 +1692,13 @@ export default function DataTable({ lines }: DataTableProps) {
               onHoverOption={handleLineHover}
               onHoverTrigger={(over) => handleLineHover(over ? String(selectedLine.id) : null)}
               renderTrigger={({ open }) => (
-                <EntityBlob entity="line" className="min-w-0 max-w-full">
-                  <span className="truncate">
-                    {lineDisplayName(selectedLine.name)}
-                  </span>
-                  <PillChevron open={open} testId="data-table-line-menu" />
+                <EntityBlob
+                  entity="line"
+                  lineId={selectedLine.id}
+                  className="min-w-0 max-w-full"
+                  trailing={<PillChevron open={open} testId="data-table-line-menu" />}
+                >
+                  {lineDisplayName(selectedLine.name)}
                 </EntityBlob>
               )}
             />
@@ -1783,6 +1799,7 @@ export default function DataTable({ lines }: DataTableProps) {
                 onActiveCellChange={onShotActiveCellChange}
                 onRowHover={onShotRowHover}
                 onPasteReport={onShotPasteReport}
+                onLockedEdit={notifyIfFileReadOnly}
                 selectedRow={shotScrollToRow}
                 hoveredRow={shotHoveredRow}
                 rowClassName={shotRowClassName}
@@ -1818,6 +1835,9 @@ export default function DataTable({ lines }: DataTableProps) {
                 locale={numberLocale}
                 height={gridHeight}
                 onEdit={onStationEdit}
+                onBatchEdit={onStationBatchEdit}
+                allowCellMove={false}
+                onLockedEdit={notifyIfFileReadOnly}
                 onActiveCellChange={onStationActiveCellChange}
                 onRowHover={onStationRowHover}
                 selectedRow={stationScrollToRow}
@@ -1871,7 +1891,7 @@ export default function DataTable({ lines }: DataTableProps) {
                       type="station"
                       target={{ lineId: ref.line_id, position: ref.station_index }}
                       displayText={labels.station(ref, true)}
-                      pillLabel={labels.station(ref)}
+                      pillLabel={labels.stationPill(ref)}
                       onSelect={() => selectLinkedStation(ref)}
                       onHoverStart={() => setHoveredStation(ref)}
                       onHoverEnd={() => setHoveredStation(null)}
@@ -1904,7 +1924,7 @@ export default function DataTable({ lines }: DataTableProps) {
                       type="station"
                       target={{ lineId: c.station_ref.line_id, position: c.station_ref.station_index }}
                       displayText={labels.station(c.station_ref, true)}
-                      pillLabel={labels.station(c.station_ref)}
+                      pillLabel={labels.stationPill(c.station_ref)}
                       onSelect={() => selectLinkedStation(c.station_ref)}
                       onHoverStart={() => setHoveredStation(c.station_ref)}
                       onHoverEnd={() => setHoveredStation(null)}

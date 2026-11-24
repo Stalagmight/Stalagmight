@@ -1276,6 +1276,24 @@ export default function GlobalView() {
           >
             {t('globalView.contextMenu.showInFolder')}
           </button>
+          {/* The project's backups (beside it, and the original its first save in
+              the version 2 format kept): the recovery dialog's restore step, for
+              a file that opens fine. Restoring needs the project closed, which it
+              is from here. */}
+          {selectedCount < 2 && (
+            <button
+              className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 flex items-center gap-2"
+              onClick={() => {
+                const path = contextMenu.projectPath;
+                setContextMenu((prev) => ({ ...prev, visible: false }));
+                if (path) openDialog('corruption-recovery', { corruptPath: path, mode: 'restore' });
+              }}
+              role="menuitem"
+              data-testid="context-menu-restore-backup"
+            >
+              {t('globalView.contextMenu.restoreBackup')}
+            </button>
+          )}
           {/* Publish to SpeleoDB - only for a LOCAL recent, only while signed in,
               only on a single selection (publishing is per project). Same label
               and same dialog as the in-project hamburger item. */}

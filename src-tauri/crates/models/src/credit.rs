@@ -2,7 +2,7 @@
 //!
 //! Surveyors, explorers and the survey date live on every SHOT
 //! ([`crate::Shot::credit`]). A line holds none of them; it only aggregates
-//! its shots ([`crate::Line::credit_summary`]).
+//! its shots ([`LineCreditSummary::from_credits`]).
 //!
 //! People are stored BY VALUE - a name and an optional email, no registry ids -
 //! so a shot copied between projects carries its credit with it.
@@ -774,8 +774,7 @@ pub struct CreditedPerson {
     pub shots: u32,
 }
 
-/// What a line's shots say about who surveyed it and when
-/// ([`crate::Line::credit_summary`]).
+/// What a line's shots say about who surveyed it and when.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct LineCreditSummary {
     /// Every surveyor of any shot, in first-appearance order, with a count.

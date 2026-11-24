@@ -1,261 +1,220 @@
-//! [#756] Combine Lines beside a line held to the rest by loop
-//! closures alone, through `AppState`. The issue's survey cannot be opened:
-//! the open's orphan-closure sweep settles it first, which is why the issue
-//! is not reachable in the app. What a survey the app leaves can show is a
-//! snap torn into a part a zero datum holds, which the plan now gives the
-//! datum's reason, built here with the app's own commands.
+//! [#756] Combine Lines beside a line held to the rest by loop closures
+//! alone, through `AppState`, on the station graph. The issue's survey is
+//! not a valid model any more (a closure may tie two pieces only when both
+//! hold a datum, plan 2 invariant 7), so a `.stalx` v2 file cannot hold it:
+//! the encoder refuses it and so does an open. What a survey the app leaves
+//! can show is a snap torn into a part a zero datum holds, which the plan
+//! gives the datum's reason.
 //!
-//! All data is synthetic: the projects are built in memory (the issue's as
-//! a file can carry it; the app snaps only stations already connected), and
-//! each file written goes to a temporary directory.
+//! The model-level ports are `models::survey::edit::combine_port_misc_tests`
+//! (`the_issue_survey_is_refused_and_the_sweep_settles_it`,
+//! `a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum`).
+//!
+//! Fate of each 0.6.0 test: `the_issue_survey_written_to_a_file_opens_settled`
+//! is adapted as `the_issue_survey_cannot_be_written_or_opened_as_a_v2_file`
+//! (a load never heals, plan 6.6: the file is refused, not settled; a legacy
+//! file holding it is settled by the frozen 0.6.0 open the migration runs);
+//! `a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum_through_the_commands`
+//! is ported on a survey built with the model's own operations (the Create
+//! Line, Move, Merge, Set Zero Datum and snap commands are other packages').
+//!
+//! All data is synthetic: projects built in memory, files in a temporary
+//! directory.
 
-use super::AppState;
-use crate::models::{
-    ClosureStrategy, LineData, LineId, LoopClosure, Project, ShotData, StationRef,
+use super::topology_kit::{
+    apart, assert_undo_redo_exact, close, empty, gps, hold, line_at, line_from, open, positions,
+    project, save_close_reopen, shot, slot, snapshot, st,
 };
+use super::AppState;
+use crate::core::Command;
+use crate::models::survey::{ClosureStrategy, Project};
+use crate::models::{
+    CombineJoinEnds, CombineLinesOptions, CombinePick, LineEnd, LineId, ShotData, StationId,
+    TornTieKind, TornTieReason,
+};
+use crate::persistence::stalx_v2::{self, EncodeError, Extras, Mode};
 
-fn shot(azimuth: f64, length: f64) -> ShotData {
-    ShotData {
+fn raw(p: &Project, station: StationId) -> [f64; 2] {
+    p.raw_positions().xy(station).unwrap()
+}
+
+/// A one-shot line `name` from station `from` to where `to` is.
+fn bridge(p: &mut Project, name: &str, from: StationId, to: StationId) -> LineId {
+    let (a, b) = (raw(p, from), raw(p, to));
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let azimuth = dx.atan2(dy).to_degrees().rem_euclid(360.0);
+    let leg = ShotData {
         azimuth_in: azimuth,
         azimuth_out: azimuth,
-        length,
-        ..Default::default()
-    }
-}
-
-fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> LineId {
-    project
-        .add_line(LineData {
-            name: Some(name.to_string()),
-            shots,
-            ..Default::default()
-        })
-        .id
-}
-
-fn st(line: LineId, index: u32) -> StationRef {
-    StationRef::new(line, index)
-}
-
-fn xy(project: &Project, at: StationRef) -> (f64, f64) {
-    let c = project.compute_station_raw_coords(at).unwrap();
-    (c.x, c.y)
-}
-
-/// Move `id` so its station `index` sits exactly on `target`.
-fn place(project: &mut Project, id: LineId, index: u32, target: (f64, f64)) {
-    let now = xy(project, st(id, index));
-    project.adjust_line_offset(id, target.0 - now.0, target.1 - now.1);
-}
-
-/// A loop closure as a file stores it, measured off the current geometry.
-fn plant(project: &mut Project, a: StationRef, b: StationRef, strategy: ClosureStrategy) {
-    let id = project.next_closure_id;
-    project.next_closure_id += 1;
-    let (pa, pb) = (xy(project, a), xy(project, b));
-    let gap = (pa.0 - pb.0).hypot(pa.1 - pb.1);
-    project.loop_closures.push(LoopClosure {
-        id,
-        station_a: project.key_for_ref(a).unwrap(),
-        station_b: project.key_for_ref(b).unwrap(),
-        path_length: 10.0,
-        misclosure_distance: gap,
-        error_percentage: gap * 10.0,
-        horizontal_misclosure: gap,
-        vertical_misclosure: 0.0,
-        strategy,
-        is_aligned: strategy == ClosureStrategy::Move,
-    });
+        length: dx.hypot(dy),
+        ..ShotData::default()
+    };
+    line_from(p, name, from, vec![leg])
 }
 
 /// The issue's survey: K's end and O's start 5 mm apart, tied by a loop
-/// closure; N merged at K's start, M at O's end; Z snapped to O's station 1
-/// and merged to W, which an ordinary loop closure ties to M.
-fn survey() -> Project {
-    let mut p = Project::new("756".to_string(), None);
-    let k = add(&mut p, "K", vec![shot(90.0, 10.0), shot(80.0, 5.0)]);
-    let o = add(&mut p, "O", vec![shot(0.0, 4.0), shot(300.0, 6.0)]);
-    let n = add(&mut p, "N", vec![shot(0.0, 3.0)]);
-    let m = add(&mut p, "M", vec![shot(90.0, 3.0)]);
-    let z = add(&mut p, "Z", vec![shot(180.0, 5.0)]);
-    let w = add(&mut p, "W", vec![shot(90.0, 4.0)]);
-    p.set_line_offset(k, (100.0, -40.0));
-    let k2 = xy(&p, st(k, 2));
-    place(&mut p, o, 0, (k2.0 + 0.004, k2.1 - 0.003));
-    let k0 = xy(&p, st(k, 0));
-    place(&mut p, n, 0, k0);
-    p.merge_stations(st(k, 0), st(n, 0)).unwrap();
-    let o2 = xy(&p, st(o, 2));
-    place(&mut p, m, 0, o2);
-    p.merge_stations(st(o, 2), st(m, 0)).unwrap();
-    let o1 = xy(&p, st(o, 1));
-    place(&mut p, z, 0, o1);
-    let z1 = xy(&p, st(z, 1));
-    place(&mut p, w, 0, z1);
-    p.merge_stations(st(w, 0), st(z, 1)).unwrap();
-    plant(&mut p, st(o, 1), st(z, 0), ClosureStrategy::Move);
-    plant(&mut p, st(w, 1), st(m, 1), ClosureStrategy::Batch);
-    plant(&mut p, st(k, 2), st(o, 0), ClosureStrategy::Batch);
+/// closure; N on K's start, M on O's end (junctions); Z snapped to O's
+/// station 1 and W starting on Z's end, which an ordinary loop closure ties
+/// to M. K, O and Z are three pieces with no datum, held together by
+/// closures alone.
+fn issue_survey() -> Project {
+    let mut p = empty("756");
+    let k = line_at(
+        &mut p,
+        "K",
+        [100.0, -40.0],
+        vec![shot(90.0, 10.0), shot(80.0, 5.0)],
+    );
+    let k2 = raw(&p, st(&p, k, 2));
+    let o = line_at(
+        &mut p,
+        "O",
+        [k2[0] + 0.004, k2[1] - 0.003],
+        vec![shot(0.0, 4.0), shot(300.0, 6.0)],
+    );
+    let (k0, o2) = (st(&p, k, 0), st(&p, o, 2));
+    line_from(&mut p, "N", k0, vec![shot(0.0, 3.0)]);
+    let m = line_from(&mut p, "M", o2, vec![shot(90.0, 3.0)]);
+    let o1 = raw(&p, st(&p, o, 1));
+    let z = line_at(&mut p, "Z", o1, vec![shot(180.0, 5.0)]);
+    let z1 = st(&p, z, 1);
+    let w = line_from(&mut p, "W", z1, vec![shot(90.0, 4.0)]);
+    for (a, b, strategy) in [
+        (slot(o, 1), slot(z, 0), ClosureStrategy::Move),
+        (slot(w, 1), slot(m, 1), ClosureStrategy::Batch),
+        (slot(k, 2), slot(o, 0), ClosureStrategy::Batch),
+    ] {
+        let (sa, sb) = (
+            st(&p, a.line_id, a.station_index),
+            st(&p, b.line_id, b.station_index),
+        );
+        p.push_closure(sa, Some(a.line_id), sb, Some(b.line_id), strategy);
+    }
     p
 }
 
-fn project(state: &AppState) -> Project {
-    state.get_project_state().unwrap()
-}
-
-/// Why the issue's survey cannot be opened to reproduce it: written to a file
-/// (as a `loop_closures` row edited by hand would leave it) and opened, the
-/// open settles it before anything else. The snap and the join closure, each
-/// joining two parts no merge ties, become merges (the join's moving one side
-/// the 5 mm onto the other), and W's closure to M then closes a true loop. So
-/// the state the issue describes only reaches a combine planted in memory,
-/// never from a file.
+/// A load never heals (plan 6.6): the issue's survey breaks invariant 7, so
+/// the writer refuses to save it and a file that holds it anyway (edited by
+/// hand) is refused at open, untouched, by the corrupt-file route. The
+/// orphan-closure sweep settles it the way 0.6.0's open did (the snap and
+/// the join closure become junctions, W's closure to M stays), and the
+/// settled survey opens.
 #[test]
-fn the_issue_survey_written_to_a_file_opens_settled() {
-    let p = survey();
-    let merges = p.station_merges.len();
-    let w_to_m = p.loop_closures[1].id;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("planted.stalx");
-    crate::persistence::Database::open(&path)
-        .unwrap()
-        .save_project(&p)
-        .unwrap();
-    let state = AppState::new().unwrap();
-    assert!(state.open_project(path).success, "open");
-    let opened = project(&state);
-    assert_eq!(
-        opened.station_merges.len(),
-        merges + 2,
-        "the snap and the join closure open as merges"
+fn the_issue_survey_cannot_be_written_or_opened_as_a_v2_file() {
+    let p = issue_survey();
+    assert!(
+        !p.validate().is_empty(),
+        "the issue's survey is not a valid model"
     );
-    let closures: Vec<_> = opened
-        .loop_closures
+    let refused = stalx_v2::encode(&p, &Extras::default(), Mode::Normal);
+    assert!(
+        matches!(refused, Err(EncodeError::Invalid { .. })),
+        "{refused:?}"
+    );
+
+    let mut settled = p.clone();
+    let report = settled.sweep_orphan_closures();
+    assert_eq!(report.promoted.len(), 2, "the snap and the join closure");
+    assert!(settled.validate().is_empty(), "{:?}", settled.validate());
+    let w_to_m = p.closures[1].id;
+    assert_eq!(
+        settled.closures.iter().map(|c| c.id).collect::<Vec<_>>(),
+        [w_to_m]
+    );
+    let opened = open(&settled);
+    assert!(project(&opened.state).validate().is_empty());
+
+    // Edited by hand: the survey without its closures is valid (each piece
+    // has its placement); put the three closures into its file.
+    let mut bare = p.clone();
+    bare.closures.clear();
+    let bare = open(&bare);
+    let text = std::fs::read_to_string(&bare.path).unwrap();
+    let after_placements = {
+        let at = text.find("\"placements\":[\n").unwrap();
+        at + text[at..].find("\n],\n").unwrap() + "\n],\n".len()
+    };
+    let closures: Vec<String> = p
+        .closures
         .iter()
-        .map(|c| (c.id, c.strategy, c.is_aligned))
+        .map(|c| {
+            let strategy = if c.strategy == ClosureStrategy::Move { "move" } else { "batch" };
+            format!(
+                "{{\"id\":{},\"a\":{},\"a_via\":{},\"b\":{},\"b_via\":{},\"strategy\":\"{strategy}\"}}",
+                c.id,
+                c.a,
+                c.a_via.unwrap(),
+                c.b,
+                c.b_via.unwrap(),
+            )
+        })
         .collect();
-    assert_eq!(
-        closures,
-        [(w_to_m, ClosureStrategy::Batch, false)],
-        "W's closure to M stays"
+    let edited = format!(
+        "{}\"closures\":[\n{}\n],\n{}",
+        &text[..after_placements],
+        closures.join(",\n"),
+        &text[after_placements..]
     );
-}
-
-/// Every station's raw position, by line and index.
-fn positions(project: &Project) -> Vec<(StationRef, (f64, f64))> {
-    project
-        .lines
-        .iter()
-        .flat_map(|s| (0..=s.shots.len() as u32).map(move |i| st(s.id, i)))
-        .map(|at| (at, xy(project, at)))
-        .collect()
-}
-
-/// The one change a survey the app leaves can show (#756), built only with
-/// the commands the app sends: two surveys each held by a zero datum (N's
-/// station 1 on K's side, D's station 0 on O's side, D merged at O's end),
-/// D's far end moved onto O's station 1 and snapped there (Move Station and
-/// the snap dialog), and a loop closure from K's end to O's start (allowed
-/// between two surveys held by zero datums). Combining K and O keeping K, O
-/// moves and tears its merge to D, and the snap from O into D's part tears
-/// too. Its reason is the zero datum that holds D, and the dialog names D as
-/// the line that stays; it used to give the loop-closure reason. A save
-/// and a reopen settle nothing more and move nothing.
-#[test]
-fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum_through_the_commands() {
-    use crate::core::Command;
-    use crate::models::{
-        CombineJoinEnds, CombineLinesOptions, CombinePick, Coordinates, GpsCoordinates, LineEnd,
-        TornTieKind, TornTieReason,
-    };
+    let path = bare.path.with_file_name("hand-edited.stalx");
+    std::fs::write(&path, edited.as_bytes()).unwrap();
     let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Held".to_string(),
-        location: None,
-    });
-    let create = |name: &str, shots: Vec<ShotData>| -> LineId {
-        let created = state.execute(Command::CreateLine {
-            name: Some(name.to_string()),
-            surveyor: None,
-            date: None,
-            color: "#ff0000".to_string(),
-            direction: None,
-            shots,
-            cave_section_id: None,
-        });
-        assert!(created.success, "{:?}", created.error);
-        created.line_id.unwrap()
-    };
-    let at = |s: LineId, i: u32| xy(&project(&state), st(s, i));
-    let move_onto = |line: LineId, index: u32, target: StationRef| {
-        let (from, to) = (at(line, index), at(target.line_id, target.station_index));
-        let moved = state.execute(Command::MoveLine {
-            line_id: line,
-            offset: Coordinates {
-                x: to.0 - from.0,
-                y: to.1 - from.1,
-                z: 0.0,
-            },
-        });
-        assert!(moved.success, "{:?}", moved.error);
-    };
-    let merge = |a: StationRef, b: StationRef| {
-        let merged = state.execute(Command::MergeStations {
-            station_a: a,
-            station_b: b,
-        });
-        assert!(merged.success, "{:?}", merged.error);
-    };
-    let datum = |at: StationRef, latitude: f64| {
-        let set = state.execute(Command::SetZeroDatum {
-            station_ref: at,
-            coordinates: GpsCoordinates {
-                latitude,
-                longitude: -87.0,
-                depth_reference: 0.0,
-            },
-            accuracy_m: None,
-            entrance: None,
-        });
-        assert!(set.success, "{:?}", set.error);
-    };
-    let k = create("K", vec![shot(90.0, 10.0), shot(80.0, 5.0)]);
-    let n = create("N", vec![shot(0.0, 3.0)]);
-    let o = create("O", vec![shot(0.0, 4.0), shot(300.0, 6.0)]);
-    // From O's end back towards O's station 1, 10 cm short.
-    let d = create("D", vec![shot(120.0, 5.9)]);
-    move_onto(n, 0, st(k, 0));
-    merge(st(k, 0), st(n, 0));
-    datum(st(n, 1), 20.0);
-    move_onto(d, 0, st(o, 2));
-    merge(st(o, 2), st(d, 0));
-    datum(st(d, 0), 20.0001);
-    // Move Station: D's far end onto O's station 1, then the snap dialog.
-    let (from, to) = (at(d, 1), at(o, 1));
-    let moved = state.execute(Command::MoveStation {
-        station_ref: st(d, 1),
-        offset: Coordinates {
-            x: to.0 - from.0,
-            y: to.1 - from.1,
-            z: 0.0,
-        },
-    });
-    assert!(moved.success, "{:?}", moved.error);
-    let snapped = state.execute(Command::CreateLoopClosure {
-        station_a: st(d, 1),
-        station_b: st(o, 1),
-        closure_strategy: ClosureStrategy::Move,
-    });
-    assert!(snapped.success, "{:?}", snapped.error);
-    assert!(project(&state).loop_closures[0].is_aligned, "a snap");
-    let tied = state.execute(Command::CreateLoopClosure {
-        station_a: st(k, 2),
-        station_b: st(o, 0),
-        closure_strategy: ClosureStrategy::Batch,
-    });
-    assert!(tied.success, "{:?}", tied.error);
+    let r = state.execute(Command::OpenProject { path: path.clone() });
+    assert!(!r.success, "a hand-edited invalid file opens");
+    assert!(
+        r.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("cannot be opened normally"),
+        "{:?}",
+        r.error
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        edited,
+        "the file is untouched"
+    );
+    assert!(state.get_project_state().is_none());
+}
 
-    let candidates = state.combine_candidates(st(k, 2)).unwrap();
+/// The one change a survey the app leaves can show (#756): two surveys each
+/// held by a zero datum (N's far end on K's side, D's far end on O's side,
+/// D leaving O's end and coming back onto O's station 1, snapped there) and
+/// a loop closure from K's end to O's start (allowed between two surveys
+/// held by zero datums). Combining K and O keeping K, O moves and leaves the
+/// junction at its end, and the snap from O into D's part tears too. Its
+/// reason is the zero datum that holds D, and the dialog names D as the line
+/// that stays. One undo restores it exactly; a save and a reopen settle
+/// nothing more and move nothing.
+#[test]
+fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum() {
+    let mut p = empty("Held");
+    let k = line_at(
+        &mut p,
+        "K",
+        [100.0, -40.0],
+        vec![shot(90.0, 10.0), shot(80.0, 5.0)],
+    );
+    let k2 = raw(&p, st(&p, k, 2));
+    let o = line_at(
+        &mut p,
+        "O",
+        [k2[0] + 0.004, k2[1] - 0.003],
+        vec![shot(0.0, 4.0), shot(300.0, 6.0)],
+    );
+    let (k0, o1, o2) = (st(&p, k, 0), st(&p, o, 1), st(&p, o, 2));
+    let n = line_from(&mut p, "N", k0, vec![shot(0.0, 3.0)]);
+    let d = bridge(&mut p, "D", o2, o1);
+    let (n1, d1) = (st(&p, n, 1), st(&p, d, 1));
+    hold(&mut p, n1, gps(20.0, -87.0));
+    hold(&mut p, d1, gps(20.0001, -87.0));
+    close(&mut p, slot(k, 2), slot(o, 0), ClosureStrategy::Batch);
+    let snap = close(&mut p, slot(o, 1), slot(d, 1), ClosureStrategy::Move);
+    let aligned = p.closure_alignment(&p.raw_positions());
+    assert_eq!(aligned, [false, true], "setup: a snap");
+    let opened = open(&p);
+    let state = &opened.state;
+
+    let candidates = state.combine_candidates(slot(k, 2)).unwrap();
     let candidate = candidates
         .iter()
         .find(|c| [c.line_a, c.line_b] == [k, o])
@@ -281,14 +240,20 @@ fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum_through_the_command
     assert_eq!(
         torn,
         [
-            (TornTieKind::Merge, TornTieReason::ZeroDatum, Some(st(d, 0))),
+            (
+                TornTieKind::Merge,
+                TornTieReason::ZeroDatum,
+                Some(slot(d, 0))
+            ),
             (
                 TornTieKind::SnappedClosure,
                 TornTieReason::ZeroDatum,
-                Some(st(d, 1))
+                Some(slot(d, 1))
             ),
         ]
     );
+    let before = snapshot(state);
+
     let result = state.execute_combine_lines(
         k,
         o,
@@ -305,29 +270,30 @@ fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum_through_the_command
         },
     );
     assert!(result.success, "{:?}", result.error);
-    let combined = project(&state);
-    assert!(
-        combined.loop_closures.iter().all(|c| !c.is_aligned),
-        "the snap is an ordinary loop closure now"
+    let combined = project(state);
+    let torn_snap = combined.closures.iter().find(|c| c.id == snap).unwrap();
+    assert_eq!(
+        torn_snap.strategy,
+        ClosureStrategy::Batch,
+        "an ordinary closure now"
     );
+    assert!(
+        combined
+            .closure_alignment(&combined.raw_positions())
+            .iter()
+            .all(|a| !a),
+        "no snap is left"
+    );
+    let after = snapshot(state);
+    assert_undo_redo_exact(state, &before, &after, "datum-held snap");
 
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("held.stalx");
-    assert!(
-        state
-            .execute(Command::SaveProject {
-                path: Some(path.clone())
-            })
-            .success
-    );
-    let saved = project(&state);
-    assert!(state.execute(Command::CloseProject).success);
-    assert!(state.open_project(path).success, "reopen");
-    let reopened = project(&state);
-    assert_eq!(reopened.station_merges.len(), saved.station_merges.len());
-    assert_eq!(reopened.loop_closures.len(), saved.loop_closures.len());
-    for ((at, was), (_, now)) in positions(&saved).into_iter().zip(positions(&reopened)) {
-        let moved = (was.0 - now.0).hypot(was.1 - now.1);
-        assert!(moved < 1e-6, "the reopen moved {at:?} by {moved} m");
+    let saved = project(state);
+    save_close_reopen(state, &opened.path);
+    let reopened = project(state);
+    assert_eq!(reopened.closures, saved.closures);
+    let (was, now) = (positions(&saved), positions(&reopened));
+    assert_eq!(was.len(), now.len());
+    for ((at, p), (_, q)) in was.into_iter().zip(now) {
+        assert!(apart(p, q) < 1e-9, "the reopen moved {at:?}");
     }
 }

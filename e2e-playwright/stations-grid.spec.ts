@@ -7,14 +7,15 @@ import {
   waitForNoDialogs,
   type LineSeed,
 } from './helpers/app';
+import { expectSpoken, prosePillKinds } from './helpers/proseText';
 
 /**
  * E2E tests for the data table's stations view (SpreadsheetGrid migration).
  *
  * Stations are derived from shots, so X/Y/Depth and the Station ID are
- * read-only; the name (set_station_name, unique within the line) and the
- * comment (set_station_comment) are editable, one command per commit - no
- * batch. The station's name pill lives in the row gutter ("0"); never a
+ * read-only; the name (set_station_name, unique on every line through the
+ * station) and the comment (set_station_comment) are editable, one command
+ * per commit - no batch. The station's name pill lives in the row gutter ("0"); never a
  * positional `line:index` id (SPEC 4.1). The GPS cell opens the
  * Edit Station dialog: add-zero-datum mode (GPS input enabled + focused) for
  * plain stations, plain edit mode when the station already is a zero datum.
@@ -117,9 +118,13 @@ test.describe('Stations grid', () => {
   test('gutter shows station name pills and a read-only Station ID column; X/Y/Depth are read-only', async ({ page }) => {
     const lineId = await getLineId(page);
 
-    // The gutter names each station (seeded from its index: "0" ... "3").
-    await expect(page.getByTestId('grid-gutter-0')).toHaveText('0');
-    await expect(page.getByTestId('grid-gutter-3')).toHaveText('3');
+    // The gutter names each station (seeded from its index: "0" ... "3") in a
+    // line pill that ends with the Station ID the column below shows.
+    await expect(page.getByTestId('grid-gutter-0').locator('.sh-lpill-main')).toHaveText('0');
+    await expect(page.getByTestId('grid-gutter-0').locator('sup.sh-lpill-sid')).toHaveText(
+      `Station ID #${lineId * 100_000}`,
+    );
+    await expect(page.getByTestId('grid-gutter-3').locator('.sh-lpill-main')).toHaveText('3');
 
     // The Station ID column shows the project-unique id (the mock derives it
     // from the line and index) and never opens the editor.
@@ -174,7 +179,7 @@ test.describe('Stations grid', () => {
     await expect(page.getByTestId('grid-cell-2-name')).toHaveText('2');
     await expect(page.getByTestId('grid-cell-3-name')).toHaveText('10');
     // The gutter pill shows the same name.
-    await expect(page.getByTestId('grid-gutter-1')).toHaveText('8');
+    await expect(page.getByTestId('grid-gutter-1').locator('.sh-lpill-main')).toHaveText('8');
 
     // A name another station of the line holds is refused inline: the editor
     // stays open and nothing is sent.
@@ -191,7 +196,7 @@ test.describe('Stations grid', () => {
     await page.keyboard.press('Enter');
     await expect(editor).toHaveCount(0);
     await expect(page.getByTestId('grid-cell-1-name')).toHaveText('8b');
-    await expect(page.getByTestId('grid-gutter-1')).toHaveText('8b');
+    await expect(page.getByTestId('grid-gutter-1').locator('.sh-lpill-main')).toHaveText('8b');
     expect(await getStationName(page, lineId, 1)).toBe('8b');
 
     // Undo gives the old name back; redo the new one.
@@ -305,5 +310,209 @@ test.describe('Stations grid', () => {
     await expect(page.getByTestId('grid-header-_y')).toHaveCount(0);
     await expect(page.getByTestId('grid-header-_x')).toHaveCount(0);
     await expect(page.getByTestId('grid-header-_depth')).toBeVisible();
+  });
+});
+
+/**
+ * A junction (RS 4.1): Main Line's last station is Side's first - ONE
+ * station two lines pass, sharing its Station ID, and every line shows the
+ * kept station (the mock keeps Main Line's "3"; Side's own "0" is archived).
+ * A rename in Main Line's stations grid renames the kept station on every
+ * line it is shown on. A name Main Line, where the kept station is native,
+ * already shows is refused inline (the backend would refuse it too); Side's
+ * slot is foreign and counts for no name uniqueness (RS-FX5), so a name only
+ * Side shows is allowed and Side then shows it twice.
+ */
+test.describe('Stations grid at a junction', () => {
+  const junctionSeeds: LineSeed[] = [
+    lineSeeds[0]!,
+    {
+      name: 'Side Line',
+      direction: 'in',
+      shots: [
+        { azimuth_in: 180, azimuth_out: 180, length: 5, depth_in: -3, depth_out: -4 },
+        { azimuth_in: 200, azimuth_out: 200, length: 6, depth_in: -4, depth_out: -5 },
+      ],
+    },
+  ];
+
+  test.beforeEach(async ({ page }) => {
+    await setupMockedPage(page);
+    await createProject(page, 'Stations Grid Junction Test');
+    await seedProjectWithLines(page, junctionSeeds);
+    await waitForMapReady(page);
+    await waitForNoDialogs(page);
+  });
+
+  test('a rename through one line renames the kept station on every line', async ({ page }) => {
+    const [mainId, sideId] = await page.evaluate(() => {
+      const lines = (window as any).__E2E_TEST__.projectStore.getState().project.lines as Array<{ id: number }>;
+      return [lines[0]!.id, lines[1]!.id];
+    });
+    // Join Main's end (station 3) to Side's start, and give Side's far station
+    // a name Main Line does not have.
+    await page.evaluate(
+      async ({ mainId, sideId }) => {
+        const store = (window as any).__E2E_TEST__.projectStore;
+        await store
+          .getState()
+          .mergeStations({ line_id: mainId, station_index: 3 }, { line_id: sideId, station_index: 0 });
+        (window as any).__MOCK_SET_STATION_NAME__(sideId, 2, 'S2');
+        await store.getState().refreshProjectState();
+      },
+      { mainId, sideId },
+    );
+    // Both slots are the one station, the kept one.
+    expect(await getStationName(page, mainId, 3)).toBe('3');
+    expect(await getStationName(page, sideId, 0)).toBe('3');
+    expect(await getStationName(page, sideId, 2)).toBe('S2');
+
+    await openStationsView(page);
+    await page.getByTestId('data-table-columns-menu').click();
+    await page.getByTestId('data-table-columns-dropdown').getByTestId('col-vis-name').check();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('grid-cell-3-name')).toHaveText('3');
+
+    // "1" is a name Main Line shows: refused inline - the editor stays open
+    // and nothing is sent.
+    await page.getByTestId('grid-cell-3-name').dblclick();
+    const editor = page.getByTestId('grid-cell-editor');
+    await expect(editor).toBeVisible();
+    await editor.fill('1');
+    await page.keyboard.press('Enter');
+    await expect(editor).toBeVisible();
+    await expect(page.getByTestId('grid-invalid-flash')).toBeVisible();
+    expect(await getStationName(page, mainId, 3)).toBe('3');
+
+    // "S2" is Side Line's own name, but Side shows the junction through a
+    // foreign slot (Main Line's dot), which repeats no name (RS-FX5): both
+    // lines show the kept S2, and Side keeps its own S2 too.
+    await editor.fill('S2');
+    await page.keyboard.press('Enter');
+    await expect(editor).toHaveCount(0);
+    await expect(page.getByTestId('grid-cell-3-name')).toHaveText('S2');
+    await expect.poll(() => getStationName(page, mainId, 3)).toBe('S2');
+    await expect.poll(() => getStationName(page, sideId, 0)).toBe('S2');
+    expect(await getStationName(page, sideId, 2)).toBe('S2');
+  });
+
+  // RS 5.4: Side's slot shows Main Line's station (a foreign slot), so an
+  // edit there first says whose station it is; going on renames it on every
+  // line, Cancel sends nothing.
+  test("an edit through a foreign slot says whose station it is first", async ({ page }) => {
+    const [mainId, sideId] = await page.evaluate(() => {
+      const lines = (window as any).__E2E_TEST__.projectStore.getState().project.lines as Array<{ id: number }>;
+      return [lines[0]!.id, lines[1]!.id];
+    });
+    await page.evaluate(
+      async ({ mainId, sideId }) => {
+        const e2e = (window as any).__E2E_TEST__;
+        await e2e.projectStore
+          .getState()
+          .mergeStations({ line_id: mainId, station_index: 3 }, { line_id: sideId, station_index: 0 });
+        e2e.uiStore.getState().setSelection({ type: 'line', lineId: sideId });
+      },
+      { mainId, sideId },
+    );
+    // Side Line has three stations: open the view without the four-row check.
+    await page.keyboard.press('Control+3');
+    await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
+    await page.getByTestId('data-table-view-stations').click();
+    await expect(page.getByTestId('grid-row-2')).toBeVisible({ timeout: 5000 });
+    await page.getByTestId('data-table-columns-menu').click();
+    await page.getByTestId('data-table-columns-dropdown').getByTestId('col-vis-name').check();
+    await page.keyboard.press('Escape');
+    // The dotted row says whose station it shows (RS-FX6, P2-5).
+    await expect(page.getByTestId('grid-cell-0-name')).toHaveText('3 (Stations Test Line)');
+
+    await page.getByTestId('grid-cell-0-name').dblclick();
+    // The editor holds the bare name.
+    await expect(page.getByTestId('grid-cell-editor')).toHaveValue('3');
+    await page.getByTestId('grid-cell-editor').fill('J');
+    await page.keyboard.press('Enter');
+    const prompt = page.getByTestId('shown-identity-edit-dialog');
+    await expect(prompt).toBeVisible();
+    // RS-PROSE: the lead draws the slot and the home line as pills.
+    await expectSpoken(page.getByTestId('shown-identity-prompt-lead'), '3 belongs to Stations Test Line.', { exact: true });
+    expect(await prosePillKinds(page.getByTestId('shown-identity-prompt-lead'))).toEqual(['station', 'line']);
+    // One wording, with the new name and the lines (RS-FX6, P3-11).
+    await expect(page.getByTestId('shown-identity-prompt-proceed')).toHaveText(
+      'Rename Stations Test Line / 3 to J on Stations Test Line and Side Line',
+    );
+    // The button names the lines, so no sentence repeats it (RS-FX10).
+    await expect(page.getByTestId('shown-identity-prompt-lines')).toHaveCount(0);
+    await expect(page.getByTestId('shown-identity-prompt-detach')).toHaveText(
+      'Detach Side Line to get back its own station 0',
+    );
+    // Nothing is sent until going on.
+    expect(await getStationName(page, mainId, 3)).toBe('3');
+    await page.getByTestId('shown-identity-prompt-proceed').click();
+    await expect(prompt).toBeHidden();
+    await expect.poll(() => getStationName(page, mainId, 3)).toBe('J');
+    expect(await getStationName(page, sideId, 0)).toBe('J');
+
+    // A comment edit there, cancelled: nothing changes.
+    await page.getByTestId('grid-cell-0-comment').dblclick();
+    await page.getByTestId('grid-cell-editor').fill('Arch');
+    await page.keyboard.press('Enter');
+    await expect(prompt).toBeVisible();
+    await page.getByTestId('shown-identity-prompt-cancel').click();
+    await expect(prompt).toBeHidden();
+    expect(await getStationComment(page, sideId, 0)).toBeNull();
+  });
+
+  // ui-2: a paste over the comment column of Side Line covers its foreign slot
+  // (row 0, Main Line's station 3) and two native rows. It is ONE commit: one
+  // prompt lists the foreign station, and the native rows wait for the
+  // answer, so the paste is applied whole (going on) or dropped whole
+  // (Cancel). Before, the native rows were sent at once.
+  test('a paste over a foreign slot asks once and is applied or dropped whole', async ({ context, page }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    const [mainId, sideId] = await page.evaluate(() => {
+      const lines = (window as any).__E2E_TEST__.projectStore.getState().project.lines as Array<{ id: number }>;
+      return [lines[0]!.id, lines[1]!.id];
+    });
+    await page.evaluate(
+      async ({ mainId, sideId }) => {
+        const e2e = (window as any).__E2E_TEST__;
+        await e2e.projectStore
+          .getState()
+          .mergeStations({ line_id: mainId, station_index: 3 }, { line_id: sideId, station_index: 0 });
+        e2e.uiStore.getState().setSelection({ type: 'line', lineId: sideId });
+      },
+      { mainId, sideId },
+    );
+    await page.keyboard.press('Control+3');
+    await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
+    await page.getByTestId('data-table-view-stations').click();
+    await expect(page.getByTestId('grid-row-2')).toBeVisible({ timeout: 5000 });
+
+    const pasteComments = async () => {
+      await page.evaluate(() => navigator.clipboard.writeText('Arch\nWet\nLow'));
+      await page.getByTestId('grid-cell-0-comment').click();
+      await page.keyboard.press('Control+v');
+    };
+    const prompt = page.getByTestId('shown-identity-edit-dialog');
+
+    // Cancel drops every row of the paste.
+    await pasteComments();
+    await expect(prompt).toBeVisible();
+    await expectSpoken(page.getByTestId('shown-identity-batch-row-0'), 'On Side Line, 3 belongs to Stations Test Line.');
+    await expect(page.getByTestId('shown-identity-batch-row-1')).toHaveCount(0);
+    for (const i of [0, 1, 2]) expect(await getStationComment(page, sideId, i)).toBeNull();
+    await page.getByTestId('shown-identity-prompt-cancel').click();
+    await expect(prompt).toBeHidden();
+    for (const i of [0, 1, 2]) expect(await getStationComment(page, sideId, i)).toBeNull();
+
+    // Going on applies every row, the foreign one on every line it is on.
+    await pasteComments();
+    await expect(prompt).toBeVisible();
+    await expect(page.getByTestId('shown-identity-prompt-proceed')).toHaveText('Apply all 3 edits');
+    await page.getByTestId('shown-identity-prompt-proceed').click();
+    await expect(prompt).toBeHidden();
+    await expect.poll(() => getStationComment(page, sideId, 0)).toBe('Arch');
+    await expect.poll(() => getStationComment(page, mainId, 3)).toBe('Arch');
+    expect(await getStationComment(page, sideId, 1)).toBe('Wet');
+    expect(await getStationComment(page, sideId, 2)).toBe('Low');
   });
 });

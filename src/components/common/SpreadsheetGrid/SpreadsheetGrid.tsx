@@ -18,7 +18,7 @@ import {
   type GridSelection,
   type CellCoord,
   type CellEdit,
-  ROW_HEIGHT,
+  ROW_HEIGHT, EDIT_HELD,
 } from './types';
 import { parseLocaleNumber, parseTSV, serializeRangeToTSV } from './gridClipboard';
 import {
@@ -34,6 +34,7 @@ import { GridHeaderRow } from './GridHeaderRow';
 import { activateCellIn, directTypedValue, openEditorIn } from './gridActivate';
 import { measureColumnWidth, fillExtent } from './gridAutoFit';
 import { planClear } from './gridClear';
+import { oneLineCellText } from './gridCellText';
 import {
   arrowTarget,
   clamp,
@@ -73,10 +74,15 @@ export interface SpreadsheetGridProps<Row> {
   rows: Row[];
   /** Stable key per row (used for React keys only). */
   rowKey: (row: Row, index: number) => string | number; rowTestId?: (row: Row, index: number) => string | undefined; cellTestId?: (row: Row, index: number, colKey: string) => string | undefined;
-  /** Commit a single coerced cell value. */
-  onEdit: (rowIndex: number, colKey: string, value: unknown) => void;
+  /** Commit a single coerced cell value. Returning {@link EDIT_HELD} keeps
+   *  the active cell where it is (the host asks something first). */
+  onEdit: (rowIndex: number, colKey: string, value: unknown) => void | typeof EDIT_HELD;
   /** Commit many coerced edits as ONE undo unit (paste / fill / clear). */
   onBatchEdit?: (edits: CellEdit[]) => void;
+  /** Offer moving the selected cells by dragging the selection's edge (needs
+   *  `onBatchEdit`; default true). A host whose batch is not a move target
+   *  (the stations grid) turns it off. */
+  allowCellMove?: boolean;
   /** A REQUIRED cell (`kind: 'number'`) was emptied/deleted, so no value was
    *  emitted through {@link onEdit} - the grid just shows it as "missing" while
    *  the model keeps its last value. Hosts whose model is PROVISIONAL (draft
@@ -145,6 +151,10 @@ export interface SpreadsheetGridProps<Row> {
    *  committed, `clipped` fell past the grid's last row/column, `skipped` landed
    *  on read-only/unparseable cells. Let the host surface a notice. */
   onPasteReport?: (info: { written: number; clipped: number; skipped: number }) => void;
+  /** A key meant to edit a cell the grid will not write (typing, F2, a
+   *  double-click, Delete) - for a host whose whole grid is read-only to say
+   *  why instead of swallowing the key. */
+  onLockedEdit?: () => void;
   /** Fired with the row index under the pointer (null on leave) - for host-level
    *  hover effects (e.g. highlighting the corresponding map feature). */
   onRowHover?: (rowIndex: number | null) => void;
@@ -222,6 +232,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const {
     columns, rows, rowKey, rowTestId, cellTestId, onEdit,
     onBatchEdit,
+    allowCellMove = true,
     onClearMissing,
     locale = 'en-US',
     height = 400,
@@ -234,7 +245,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     onInsertRows, pasteGrowsRows,
     trailingPlaceholderRows = 0,
     onDeleteRows,
-    onPasteReport,
+    onPasteReport, onLockedEdit,
     onRowHover,
     selectedRow,
     hoveredRow,
@@ -663,6 +674,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const col = colAt(colIdx);
       // `noInlineEdit` blocks every way in (double-click, F2, type-to-edit)
       // without touching cellEditable, so paste/fill/clear still write it.
+      if (col && !cellEditable(rowIdx, col)) onLockedEdit?.();
       if (!col || col.noInlineEdit || col.openEditor || !cellEditable(rowIdx, col)) return;
       const row = rows[rowIdx];
       // Seed with the FULL-PRECISION value (not the rounded display string), so
@@ -678,7 +690,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       suppressBlurCommitRef.current = false; // a stale flag must not eat this session's blur-commit
       setEditing({ row: rowIdx, colKey: col.key, draft: seed ?? initial, initial });
     },
-    [colAt, cellEditable, rows, locale, isMissing, openCellEditor],
+    [colAt, cellEditable, rows, locale, isMissing, openCellEditor, onLockedEdit],
   );
 
   // Commit the editor's draft. Side effects run OUTSIDE setEditing (a state
@@ -731,7 +743,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
             return next;
           });
         }
-        onEdit(cur.row, cur.colKey, value);
+        // A held edit keeps the cursor on its cell while the host asks.
+        if (onEdit(cur.row, cur.colKey, value) === EDIT_HELD) advance = null;
       }
       if (advance) {
         const t = arrowTarget(cur.row, colIdx, advance === 'down' ? 1 : -1, 0, rowCount, colCount);
@@ -1263,7 +1276,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const typeToEdit = () => {
         if (ctrl || e.altKey || !PRINTABLE.test(e.key) || e.nativeEvent.isComposing) return;
         const col = colAt(colIdx);
-        if (!col || !cellEditable(row, col)) return;
+        if (!col || !cellEditable(row, col)) return void (col && onLockedEdit?.());
         // Consumed by the grid, so it must not ALSO fire a host shortcut bound
         // to that character (a reserved `?` overlay), as Delete / Ctrl+A do.
         if (col.openEditor) {
@@ -1334,8 +1347,13 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           // delete-selected-entity shortcut would fire on a plain cell clear.
           e.stopPropagation();
           const fullRows = rect.c0 === 0 && rect.c1 === colCount - 1;
+          const activeCol = colAt(colIdx);
           if (onDeleteRows && rowSelectIntent.current && fullRows) deleteRowsCollapsing(rect.r0, rect.r1);
-          else doClear();
+          else {
+            // Still clears the writable cells of a range whose active cell is locked.
+            if (!(activeCol && cellEditable(row, activeCol))) onLockedEdit?.();
+            doClear();
+          }
           return;
         }
         case 'Escape': {
@@ -1356,6 +1374,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       writableColIdxs, colIndexOf, moveFocusTo, dataEdgeTarget, beginEdit, commitEdit, cancelEdit,
       doCopy, doCut, schedulePasteFallback, doFill, doClear, onDeleteRows, deleteRowsCollapsing, colAt, cellEditable,
       rect, selection.active, onActiveCellChange, virtualizer, scrollColIntoView, copiedRect, cutRect, openCellEditor,
+      onLockedEdit,
     ],
   );
 
@@ -2184,7 +2203,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                               col.render(row, rowIdx)
                             ) : (
                               <span className="sg-cell-text" title={cellText || undefined}>
-                                {cellText}
+                                {col.multiline && cellText ? oneLineCellText(cellText) : cellText}
                               </span>
                             ))}
                         </div>
@@ -2235,7 +2254,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                 data-rect={`${rect.r0},${rect.c0},${rect.r1},${rect.c1}`}
               >
                 {/* Grab any edge (not the interior) to move the cells. */}
-                {!editing && onBatchEdit && (
+                {!editing && onBatchEdit && allowCellMove && (
                   <>
                     <div className="sg-move-edge" style={{ top: -3, left: 0, right: 0, height: 6 }} onMouseDown={onMoveBorderDown} />
                     <div className="sg-move-edge" style={{ bottom: -3, left: 0, right: 0, height: 6 }} onMouseDown={onMoveBorderDown} />

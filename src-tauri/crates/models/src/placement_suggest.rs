@@ -1166,7 +1166,7 @@ pub struct ExistingLine {
     pub shots: Vec<Shot>,
     /// The line's resolved north reference (#438), so its bearings can be
     /// compared with an import's in one frame. Callers get it from
-    /// [`Project::azimuth_reference_for`](crate::models::Project::azimuth_reference_for).
+    /// [`crate::survey::Project::azimuth_reference_for`].
     pub azimuth_reference: AzimuthReference,
 }
 

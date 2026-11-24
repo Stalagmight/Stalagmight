@@ -300,34 +300,6 @@ pub struct Shot {
     pub credit: Option<Arc<SurveyCredit>>,
 }
 
-/// A credit in the form a shot stores it ([`SurveyCredit::into_storable`])
-/// behind one allocation, for many shots to share ([`Shot::set_shared_credit`]):
-/// a line's legacy template, the fallback of every shot without a row. It
-/// is normalized once when made, so a long list over many shots is checked
-/// once, not once per shot.
-#[derive(Debug, Clone)]
-pub struct SharedCredit(Arc<SurveyCredit>);
-
-impl SharedCredit {
-    /// `credit` made storable, behind one allocation.
-    pub fn new(credit: SurveyCredit) -> Self {
-        Self(Arc::new(credit.into_storable()))
-    }
-
-    /// The shared allocation itself.
-    pub fn arc(&self) -> &Arc<SurveyCredit> {
-        &self.0
-    }
-}
-
-impl std::ops::Deref for SharedCredit {
-    type Target = SurveyCredit;
-
-    fn deref(&self) -> &SurveyCredit {
-        &self.0
-    }
-}
-
 /// How a shot stores a credit that may be shared: the same allocation when it
 /// already is storable (shots given one credit keep sharing it), else a
 /// normalized copy of its own ([`SurveyCredit::into_storable`]); `None` for
@@ -387,8 +359,8 @@ pub struct ShotData {
     /// reverse, a project merge, an undo/redo round trip.
     ///
     /// **Any future clone/duplicate-shot path MUST clear this field.** The
-    /// uniqueness repair ([`crate::Project::ensure_unique_shot_uuids`],
-    /// and the same rule in [`crate::Line::new`]) keeps the FIRST
+    /// uniqueness repair of 0.6.0 files (the migration, and
+    /// [`crate::survey::Project::add_line`]'s refusal of a taken uuid) keeps the FIRST
     /// occurrence, so a copy that kept its source's identity would get the
     /// original re-minted instead of the copy - silently moving every station
     /// cross-reference anchored on it.
@@ -620,6 +592,19 @@ impl ShotUpdates {
             .any(|o| matches!(o, Some(Some(v)) if !v.is_finite()))
     }
 
+    /// [`ShotData::measurement_refusal`] for the fields this update sets.
+    pub fn measurement_refusal(&self) -> Option<String> {
+        measurement_refusal(&[
+            ("length", self.length),
+            ("depth in", self.depth_in),
+            ("depth out", self.depth_out),
+            ("left", self.left.flatten()),
+            ("right", self.right.flatten()),
+            ("up", self.up.flatten()),
+            ("down", self.down.flatten()),
+        ])
+    }
+
     /// Returns true if this update touches any geometry fields
     /// (azimuth, length, depth, pitch).
     pub fn touches_geometry(&self) -> bool {
@@ -778,13 +763,6 @@ impl Shot {
         self.credit = stored_credit(credit.into_storable()).map(Arc::new);
     }
 
-    /// Give this shot a credit SHARED with other shots: one allocation for all
-    /// of them (an empty one is stored as `None`). The credit was made
-    /// storable once, when the [`SharedCredit`] was built, not once per shot.
-    pub fn set_shared_credit(&mut self, credit: &SharedCredit) {
-        self.credit = (!credit.is_empty()).then(|| Arc::clone(&credit.0));
-    }
-
     /// Apply partial updates to this shot
     pub fn apply_updates(&mut self, updates: &ShotUpdates) {
         if let Some(v) = updates.azimuth_in {
@@ -857,7 +835,7 @@ impl Shot {
     /// plus the line's declination correction (#438).
     ///
     /// `reference` is the line's resolved [`AzimuthReference`] - get it from
-    /// [`Project::azimuth_reference_for`](crate::models::Project::azimuth_reference_for)
+    /// [`crate::survey::Project::azimuth_reference_for`]
     /// once per line, not once per shot.
     pub fn average_azimuth_true(&self, reference: AzimuthReference) -> f64 {
         reference.to_true(self.average_azimuth_measured())
@@ -909,6 +887,64 @@ impl Shot {
     }
 }
 
+impl Shot {
+    /// Pure split math for Split Shot at Distance: given a distance from the
+    /// shot's start, validates the distance and returns the new "head" shot's
+    /// data (to insert before this one) plus the [`ShotUpdates`] this
+    /// ("tail") shot needs applied. No mutation happens here: this is the one
+    /// place the split math and its error messages live.
+    pub(crate) fn compute_split(&self, distance: f64) -> Result<(ShotData, ShotUpdates), String> {
+        let shot = self;
+        if !distance.is_finite() {
+            return Err("Distance must be finite".to_string());
+        }
+        if distance <= 0.0 || distance >= shot.length {
+            return Err(format!(
+                "Distance must be strictly between 0 and the shot's length ({:.2}m)",
+                shot.length
+            ));
+        }
+        let tail_length = shot.length - distance;
+        use crate::MIN_SPLIT_CHILD_LENGTH_M;
+        if distance < MIN_SPLIT_CHILD_LENGTH_M || tail_length < MIN_SPLIT_CHILD_LENGTH_M {
+            return Err(format!(
+                "Both sides of the split must be at least {MIN_SPLIT_CHILD_LENGTH_M:.2}m long"
+            ));
+        }
+
+        let t = distance / shot.length;
+        let mid_depth = shot.depth_in + t * (shot.depth_out - shot.depth_in);
+        // Every field of the parent that is not geometry or identity travels to
+        // the head piece, including any per-shot field added later: the struct
+        // update copies them all, and only the fields a split must change are
+        // named here.
+        let head_data = ShotData {
+            // The head child is a NEW shot; only the tail keeps the parent's
+            // identity (see this method's doc comment - it is what makes every
+            // existing `AfterShot` anchor keep resolving without a remap).
+            // Copying the parent's uuid here would make the line hold two
+            // shots with one id, and the FIRST-wins repair would then re-mint
+            // the tail - moving every anchor. See `ShotData::uuid`.
+            uuid: None,
+            length: distance,
+            depth_out: mid_depth,
+            // A comment and a marker annotate one physical spot, so they stay on
+            // the tail (the parent's identity) and are not duplicated.
+            comment: None,
+            marker_index: None,
+            // Everything else travels, credit included: both pieces were
+            // surveyed together, by the same people.
+            ..shot.to_shot_data()
+        };
+        let tail_updates = ShotUpdates {
+            length: Some(tail_length),
+            depth_in: Some(mid_depth),
+            ..Default::default()
+        };
+        Ok((head_data, tail_updates))
+    }
+}
+
 impl ShotData {
     /// The credit this data carries; the empty credit when it has none.
     pub fn credit(&self) -> &SurveyCredit {
@@ -939,6 +975,22 @@ impl ShotData {
             self.temperature,
         ];
         !opts.into_iter().flatten().any(|v| !v.is_finite())
+    }
+
+    /// The refusal for a distance past [`crate::survey::MAX_MEASUREMENT_M`]
+    /// (length, depths, passage dimensions), in the user's words; `None`
+    /// when every one is within it. Checked at the command doors next to
+    /// [`Self::all_finite`] (review finding B-derived-solver-3).
+    pub fn measurement_refusal(&self) -> Option<String> {
+        measurement_refusal(&[
+            ("length", Some(self.length)),
+            ("depth in", Some(self.depth_in)),
+            ("depth out", Some(self.depth_out)),
+            ("left", self.left),
+            ("right", self.right),
+            ("up", self.up),
+            ("down", self.down),
+        ])
     }
 
     /// Horizontal projection of the shot length (meters).
@@ -987,6 +1039,17 @@ impl From<Shot> for ShotData {
             credit: shot.credit.filter(|c| !c.is_empty()),
         }
     }
+}
+
+/// The first of `fields` (name, value) past [`crate::survey::MAX_MEASUREMENT_M`],
+/// worded for the user.
+fn measurement_refusal(fields: &[(&str, Option<f64>)]) -> Option<String> {
+    let bound = crate::survey::MAX_MEASUREMENT_M;
+    fields.iter().find_map(|&(name, value)| {
+        value.filter(|v| v.abs() > bound).map(|v| {
+            format!("A shot's {name} of {v} m is beyond the {bound} m a survey measurement may be")
+        })
+    })
 }
 
 #[cfg(test)]
@@ -1586,24 +1649,10 @@ mod tests {
         );
         check(imported.credit(), "ShotData");
 
-        let shared = SharedCredit::new(dirty());
-        let mut shot = Shot::new(3, ShotData::default());
-        shot.set_shared_credit(&shared);
-        check(shot.credit(), "SharedCredit");
-
         let mut wire = serde_json::to_value(Shot::new(4, ShotData::default())).unwrap();
         wire["credit"] = serde_json::to_value(dirty()).unwrap();
         let restored: Shot = serde_json::from_value(wire).unwrap();
         check(restored.credit(), "deserialized");
-
-        // A shared credit is one allocation for every shot given it.
-        let clean = SharedCredit::new(SurveyCredit {
-            surveyors: vec![raw("Ann")],
-            ..SurveyCredit::default()
-        });
-        let mut shot = Shot::new(5, ShotData::default());
-        shot.set_shared_credit(&clean);
-        assert!(Arc::ptr_eq(shot.credit.as_ref().unwrap(), clean.arc()));
     }
 
     #[test]

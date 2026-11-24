@@ -4,11 +4,13 @@ import { setUploadContinuation } from '../uploadContinuation';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
+import { invokeIpc } from '../ipc';
 vi.mock('../ipc', () => ({ invokeIpc: vi.fn(), getErrorMessage: String }));
 const link: SpeleoLinkState = { permission: 'READ_AND_WRITE', editState: 'editing', lockHolder: null,
   lockedByOther: false, hasUnpushedEdits: true, unwound: false, undoMode: 'full', remoteState: 'up_to_date', noAccess: false, serverError: null };
 const signedIn = { loggedIn: true, userEmail: 'me@example.com', endpoint: 'https://synthetic.example' };
 beforeEach(() => {
+  vi.mocked(invokeIpc).mockReset();
   setUploadContinuation(null);
   useProjectStore.setState({ project: { file_path: '/synthetic.stalx' } as never, isDirty: false, saveProject: vi.fn(async () => ({ success: true }) as never) });
   useSpeleoStore.setState({ link: null, session: signedIn as never });
@@ -29,6 +31,24 @@ it('reports no changes without creating an empty upload', async () => {
   useSpeleoStore.setState({ link: { ...link, hasUnpushedEdits: false } });
   await dispatchProjectSave();
   expect(useUIStore.getState().showToast).toHaveBeenCalledWith('No changes to upload', expect.any(String), 'info');
+  expect(useUIStore.getState().openDialog).not.toHaveBeenCalled();
+});
+/**
+ * Pre-PR delta review finding 4: a SpeleoDB copy with no unsaved edits and
+ * nothing to upload can still hold changes only the backend tracks (a 0.6.0
+ * copy's SpeleoDB name fold), which the exit prompt asks about. Ctrl+S said
+ * "No changes to upload" and saved nothing, so the user was then asked about
+ * unsaved changes they had just tried to save. Injection: dropping the
+ * backend ask shows the toast and saves nothing.
+ */
+it('nothing to upload but changes only the backend tracks: saves them on this computer', async () => {
+  vi.mocked(invokeIpc).mockImplementation((async (command: string) => command === 'has_unsaved_changes') as never);
+  useSpeleoStore.setState({ link: { ...link, hasUnpushedEdits: false } });
+  const result = await dispatchProjectSave();
+  expect(invokeIpc).toHaveBeenCalledWith('has_unsaved_changes', undefined, expect.anything());
+  expect(useProjectStore.getState().saveProject).toHaveBeenCalledOnce();
+  expect(result).toEqual({ success: true });
+  expect(useUIStore.getState().showToast).not.toHaveBeenCalledWith('No changes to upload', expect.anything(), expect.anything());
   expect(useUIStore.getState().openDialog).not.toHaveBeenCalled();
 });
 it('retains the close continuation across recovery', async () => {

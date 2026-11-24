@@ -56,7 +56,7 @@ describe('projectStore.deleteProject', () => {
   });
 
   it('closes the project when the deleted file is the OPEN one', async () => {
-    // The backend tears its own session down (project, SQLite handle, undo stack)
+    // The backend tears its own session down (project, file state, undo stack)
     // before handing the `.stalx` to the OS delete, and says so with
     // `session_closed`, so the frontend has to follow. Leaving `project` set kept
     // the UI rendering a project whose file is gone - and the next autosave tick
@@ -72,7 +72,6 @@ describe('projectStore.deleteProject', () => {
       databaseOpen: true,
       isDirty: true,
       stations: [{} as never],
-      integrityIssues: ['something'],
     } as never);
 
     const result = await useProjectStore.getState().deleteProject(PATH);
@@ -83,13 +82,12 @@ describe('projectStore.deleteProject', () => {
     expect(state.databaseOpen).toBe(false);
     expect(state.isDirty).toBe(false);
     expect(state.stations).toEqual([]);
-    expect(state.integrityIssues).toEqual([]);
   });
 
   it('closes the project when the delete FAILS after the backend already closed it', async () => {
-    // The backend closes BEFORE handing the file to the OS trash - it must, since
-    // SQLite holds the file open without FILE_SHARE_DELETE and the Windows trash
-    // would be denied while that handle lives. So a trash that is then denied for
+    // The backend closes BEFORE handing the file to the OS trash (0.6.0 had to:
+    // SQLite held the file open without FILE_SHARE_DELETE and the Windows trash
+    // was denied while that handle lived). So a trash that is then denied for
     // some other reason returns FAILURE with the session already gone, and the
     // backend sets `session_closed` on that failure result too. Guarding the
     // frontend teardown on `result.success` left a phantom project behind, and the

@@ -45,7 +45,7 @@ pub(crate) fn create_line_impl(
     cave_section_id: Option<SectionId>,
 ) -> CommandResult {
     // Line names are required and unique: refused here, on the UI path.
-    if let Some(refusal) = state.refuse_new_line_name(name.as_deref()) {
+    if let Some(refusal) = state.new_line_name_refusal(name.as_deref()) {
         return refusal;
     }
     state.execute(Command::CreateLine {
@@ -202,7 +202,7 @@ pub(crate) fn create_line_and_merge_impl(
     closure_strategy: ClosureStrategy,
     cave_section_id: Option<SectionId>,
 ) -> CommandResult {
-    if let Some(refusal) = state.refuse_new_line_name(name.as_deref()) {
+    if let Some(refusal) = state.new_line_name_refusal(name.as_deref()) {
         return refusal;
     }
     // Use a special internal execution that:
@@ -241,12 +241,10 @@ pub(crate) fn get_line_relationships_impl(
     let project = state
         .get_project_state()
         .ok_or_else(|| "No project open".to_string())?;
-
-    if project.get_line(line_id).is_none() {
+    if project.line(line_id).is_none() {
         return Err(crate::models::LINE_GONE.to_string());
     }
-
-    Ok(project.get_line_relationships(line_id))
+    Ok(project.line_relationships(line_id))
 }
 
 /// What the line ending at `station` can be combined with: one candidate

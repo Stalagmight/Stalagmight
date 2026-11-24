@@ -217,7 +217,7 @@ export default function LineAdjustDialog() {
         )}
 
         <div className="text-sm text-text-secondary mb-4">
-          Adjusting: <EntityBlob entity="line">{lineDisplayName(line.name)}</EntityBlob>
+          Adjusting: <EntityBlob entity="line" lineId={line.id}>{lineDisplayName(line.name)}</EntityBlob>
         </div>
 
         {connectedCount > 1 && (
@@ -225,8 +225,8 @@ export default function LineAdjustDialog() {
             className="p-2 bg-warning-10 border border-warning-20 rounded text-xs text-warning"
             data-testid="line-adjust-connected-note"
           >
-            Merged with {connectedCount - 1} other{connectedCount - 1 === 1 ? '' : 's'} - all {connectedCount} lines
-            move together so the merge stays aligned.
+            Joined to {connectedCount - 1} other line{connectedCount - 1 === 1 ? '' : 's'} - all {connectedCount} lines
+            move together so they stay joined.
           </div>
         )}
 

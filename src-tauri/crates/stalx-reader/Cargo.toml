@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Read-only reader for Stalagmight .stalx project files"
 repository = "https://github.com/Stalagmight/Stalagmight"
 readme = false
-keywords = ["cave", "survey", "speleology", "sqlite"]
+keywords = ["cave", "survey", "speleology", "sqlite", "json"]
 edition.workspace = true
 license.workspace = true
 
@@ -13,9 +13,18 @@ workspace = true
 
 [dependencies]
 stalagmight-models = { path = "../models", version = "=0.1.0" }
+# The `.stalx` v2 (JSON) decoder and the legacy migration.
 stalagmight-persistence = { path = "../persistence", version = "=0.1.0" }
+# The frozen 0.6.0 SQLite reader and load pipeline: an old (SQLite) file is
+# opened exactly as 0.6.0 opened it, then migrated. Published with this crate
+# and pinned exactly, like models and persistence.
+stalagmight-legacy = { path = "../legacy", version = "=0.1.0" }
 rusqlite = { workspace = true, features = ["bundled", "hooks", "limits"] }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-anyhow = { workspace = true }
+
+[dev-dependencies]
+# The 0.6.0 save path (`writer`), to write the synthetic SQLite inputs the
+# tests read.
+stalagmight-legacy = { path = "../legacy", features = ["writer"] }
 uuid = { workspace = true, features = ["v5"] }

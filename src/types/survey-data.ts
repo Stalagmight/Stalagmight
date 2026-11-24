@@ -30,6 +30,8 @@ import type { Shot } from './ipc/Shot';
 import type { ShotKind } from './ipc/ShotKind';
 import type { Station } from './ipc/Station';
 import type { StationRef } from './ipc/StationRef';
+import type { ArchivedStation } from './ipc/ArchivedStation';
+import type { ShownSlot } from './ipc/ShownSlot';
 import type { DatumRole } from './ipc/DatumRole';
 import type { ClosureRef } from './ipc/ClosureRef';
 import type { GpsCoordinates } from './ipc/GpsCoordinates';
@@ -128,8 +130,17 @@ export interface SurveyData {
    *  MNemo station number of a DMP import). Every station of a loaded project
    *  has one, so the map is dense; keyed by global station index. */
   stationNames: Map<number, string>;
-  /** The project-unique Station ID per global station index (dense). */
+  /** The node's Station ID per global station index (dense): what every
+   *  grouping, command, move, datum and selection keys on. A display of the
+   *  Station ID reads the shown one (`stationShown`, RS 6). */
   stationIds: Uint32Array;
+  /** The stations merges archived in a node (its records, RS 3, oldest
+   *  first), on every slot of it; sparse, only stations that have some. */
+  stationArchived: Map<number, ArchivedStation[]>;
+  /** How a foreign slot or a loop end shows its node (RS 6): the Station ID
+   *  shown, its home line and whether it is a loop end; sparse, absent on every
+   *  slot that shows its node's own identity natively. */
+  stationShown: Map<number, ShownSlot>;
 }
 
 /**
@@ -311,6 +322,10 @@ export function getStation(data: SurveyData, globalIndex: number): Station {
   const cmt = data.stationComments.get(globalIndex);
   if (cmt !== undefined) station.comment = cmt;
   station.name = data.stationNames.get(globalIndex) ?? '';
+  const archived = data.stationArchived.get(globalIndex);
+  if (archived !== undefined) station.archived = archived;
+  const shown = data.stationShown.get(globalIndex);
+  if (shown !== undefined) station.shown = shown;
   return station;
 }
 
@@ -519,6 +534,8 @@ export function surveyDataFromLegacy(
     stationComments: new Map(),
     stationNames: new Map(),
     stationIds: new Uint32Array(stations.length),
+    stationArchived: new Map(),
+    stationShown: new Map(),
   };
 
   const nullToNaN = (v: number | null | undefined): number => (v == null ? NaN : v);
@@ -584,6 +601,8 @@ export function surveyDataFromLegacy(
     if (s.comment) data.stationComments.set(i, s.comment);
     if (s.name) data.stationNames.set(i, s.name);
     data.stationIds[i] = s.id ?? 0;
+    if (s.archived && s.archived.length > 0) data.stationArchived.set(i, s.archived);
+    if (s.shown) data.stationShown.set(i, s.shown);
   });
 
   return data;
@@ -618,6 +637,8 @@ export function surveyDataWithAdjustedStations(
   const stationComments = new Map<number, string>();
   const stationNames = new Map<number, string>();
   const stationIds = new Uint32Array(SN);
+  const stationArchived = new Map<number, ArchivedStation[]>();
+  const stationShown = new Map<number, ShownSlot>();
 
   adjustedStations.forEach((s, i) => {
     stationLineIds[i] = s.station_ref.line_id;
@@ -634,6 +655,8 @@ export function surveyDataWithAdjustedStations(
     if (s.comment) stationComments.set(i, s.comment);
     if (s.name) stationNames.set(i, s.name);
     stationIds[i] = s.id ?? 0;
+    if (s.archived && s.archived.length > 0) stationArchived.set(i, s.archived);
+    if (s.shown) stationShown.set(i, s.shown);
   });
 
   return {
@@ -649,6 +672,8 @@ export function surveyDataWithAdjustedStations(
     stationComments,
     stationNames,
     stationIds,
+    stationArchived,
+    stationShown,
   };
 }
 
@@ -688,5 +713,7 @@ export function emptySurveyData(): SurveyData {
     stationComments: new Map(),
     stationNames: new Map(),
     stationIds: new Uint32Array(0),
+    stationArchived: new Map(),
+    stationShown: new Map(),
   };
 }

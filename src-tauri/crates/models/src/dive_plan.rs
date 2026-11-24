@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::config::GasConfig;
-use crate::{Cylinder, Diver, PlanSegment, Project, StationKey, StationRef};
+use crate::{Cylinder, Diver, PlanSegment, StationKey, StationRef};
 
 /// A station identified by the shots it SITS BETWEEN, rather than by its position or by which
 /// side of one shot it is on (#24).
@@ -45,7 +45,7 @@ pub struct PlanAnchor {
     /// reverse-UNSAFE, which is what `parity` below repairs.
     #[serde(default)]
     pub after_a: bool,
-    /// The line's [`Line::reverse_parity`] when this anchor was written.
+    /// The line's reverse parity (0.6.0's record parity) when this anchor was written.
     ///
     /// This is what makes the single-neighbour case correct. `after_a` is expressed in traversal
     /// terms, and a reverse flips traversal - so the same observable state ("`a` is at position
@@ -94,43 +94,22 @@ pub struct PlanAnchor {
     /// the thing this field exists to detect.
     #[serde(default)]
     pub terminal_shot_length_bits: Option<u64>,
-}
-
-impl PlanAnchor {
-    /// Position of a neighbour in the line as it stands now.
-    /// Position of a neighbour in the line as it stands now.
+    /// The Station ID of the pinned station when it was written (the station
+    /// graph's stable identity, plan 10.3). `None` on anchors 0.6.0 wrote.
     ///
-    /// Takes the project's shot-UUID index first, the way `Project::resolve_key` does, and only
-    /// falls back to a scan when the index is cold or stale. Without it every anchor cost a full
-    /// pass per neighbour - two per station - and a hand-edited `.plnx` full of UUIDs that match
-    /// nothing would scan the whole line every time.
-    pub fn position_of(
-        project: &Project,
-        line: &crate::Line,
-        uuid: &Option<String>,
-    ) -> Option<usize> {
-        let uuid = uuid.as_deref()?;
-        if let Some(&i) = project.shot_uuid_index.get(&(line.id, uuid.to_string())) {
-            // Re-check before trusting it, exactly as `Project::resolve_key` does: a stale
-            // entry then costs only the scan below and can never resolve to the wrong shot.
-            if line.shots.get(i as usize).and_then(|sh| sh.uuid.as_deref()) == Some(uuid) {
-                return Some(i as usize);
-            }
-        }
-        let position = |id: &str| {
-            line.shots
-                .iter()
-                .position(|s| s.uuid.as_deref() == Some(id))
-        };
-        position(uuid).or_else(|| {
-            // A plan saved against an id the load renamed (a cross-line
-            // repeat in a file saved before shot UUIDs were project-wide unique)
-            // still finds its shot through the derived id.
-            let live =
-                crate::live_shot_uuid_for_stored(line.id, uuid, |id| position(id).is_some())?;
-            position(&live)
-        })
-    }
+    /// The neighbours alone cannot say which END of a shot a one-neighbour
+    /// pin names once the line has been reversed: 0.6.0 told the two apart
+    /// with the record parity it kept in the project, and a station-graph
+    /// project keeps none. A station id needs no parity at all: a station
+    /// keeps its id through a reverse, an insert or delete elsewhere, a
+    /// split and a combine, and a merge keeps a retired id as an alias of
+    /// the survivor. `core::state::dive_plan` reads it first, trusting it
+    /// while the anchor's own shots still touch or hold that station (ids are
+    /// unique in one project's lineage only), and falls back to the
+    /// neighbours otherwise. Omitted when `None`, so a 0.6.0 row writes back
+    /// byte for byte and a 0.6.0 build ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub station: Option<crate::StationId>,
 }
 
 /// What a `.plnx` row can hold for one station.

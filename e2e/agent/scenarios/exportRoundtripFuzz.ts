@@ -63,8 +63,7 @@
  *   X9  Export mode forces closure-adjusted, read-only geometry and gives the
  *       previous state back.
  *
- * Per EPISODE: `check_project_integrity` after every oracle that imported, and
- * a teardown that ASSERTS rather than merely performs - `fuzz-shrink` reuses
+ * Per EPISODE: a teardown that ASSERTS rather than merely performs - `fuzz-shrink` reuses
  * ONE live session across ddmin candidates, so a candidate that leaves a
  * project open or a file on disk poisons the verdict of every candidate after
  * it, and ddmin would minimize toward the leak rather than toward the bug.
@@ -747,11 +746,6 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
   `);
 }
 
-interface Integrity {
-  messages: string[];
-  save_blocked: boolean;
-}
-
 // ---------------------------------------------------------------------------
 
 export const exportRoundtripFuzz: Scenario = {
@@ -851,21 +845,6 @@ export const exportRoundtripFuzz: Scenario = {
 
     const note = (line: string): void => {
       history.push(line);
-    };
-
-    const integrity = async (): Promise<Integrity> =>
-      ctx.ipc<Integrity>('check_project_integrity').catch(() => ({ messages: [], save_blocked: false }));
-
-    const assertIntegrity = async (after: string): Promise<void> => {
-      const result = await integrity();
-      if (result.save_blocked) {
-        fail(`project integrity: SAVING IS BLOCKED after ${after}\n    ${result.messages.join('\n    ')}\n  ${reproduce}`);
-      }
-      const fatal = result.messages.filter((m) => /non-finite|NaN|infinite/i.test(m));
-      if (fatal.length > 0) {
-        fail(`project integrity reported non-finite geometry after ${after}\n    ${fatal.join('\n    ')}\n  ${reproduce}`);
-      }
-      if (result.messages.length > 0) ctx.metric('integrityMessages', result.messages.length);
     };
 
     // -----------------------------------------------------------------------
@@ -1042,11 +1021,12 @@ export const exportRoundtripFuzz: Scenario = {
       let skipped: string | null = null;
 
       // The project's own bytes, read IMMEDIATELY before the move rather than
-      // once per episode. The `.stalx` is a live SQLite database and every
-      // mutating command writes to it, so an episode-scoped baseline reports
-      // the hostile-comment oracle's `createLine` as "the export modified
-      // the database". Measured on seed 2. Taken as late as possible so the
-      // only thing between the two reads is the export.
+      // once per episode, so that nothing but the export sits between the two
+      // reads. Under 0.6.0 the `.stalx` was a live SQLite database that every
+      // mutating command wrote, and an episode-scoped baseline reported the
+      // hostile-comment oracle's `createLine` as "the export modified the
+      // project file" (measured on seed 2); a `.stalx` v2 file only changes on
+      // a save, which the same late read keeps out of the comparison.
       const projectBytesBefore =
         draw.shape === 'openProject' && projectFile !== null ? hashOf(projectFile) : null;
 
@@ -1296,8 +1276,8 @@ export const exportRoundtripFuzz: Scenario = {
         ROUNDTRIP_PROJECT_NAME,
         undefined,
         // A real `savePath` rather than a deferred initial save: the deferred
-        // one reserves a path and leaves the database unopened, and an import
-        // into it cannot run. It also means `ensure_shot_uuids` has run by the
+        // one reserves a path and writes no file yet, and an import into it
+        // cannot run. It also means `ensure_shot_uuids` has run by the
         // time anything is exported back out.
         { savePath: projectPath },
       ]);
@@ -1368,7 +1348,6 @@ export const exportRoundtripFuzz: Scenario = {
         rmrf(dir);
         return;
       }
-      await assertIntegrity('the first round-trip import');
 
       const afterFirst = await readProjectDigest(ctx);
       // X6a: the shots survived the trip out and back.
@@ -1430,7 +1409,6 @@ export const exportRoundtripFuzz: Scenario = {
       const second = await callProjectAction(ctx, 'executeTmlImport', [t1, null, false, false, null]);
       if (second.ok) {
         await settleOnce(ctx);
-        await assertIntegrity('a second import of the same file');
         const doubled = await readProjectDigest(ctx);
         guarded(() => checkNoDuplicateUuids(doubled.uuidsByLine, reproduce));
         ctx.metric('x6:doubleImportUnique');
@@ -1456,7 +1434,6 @@ export const exportRoundtripFuzz: Scenario = {
           rmrf(dir);
           return;
         }
-        await assertIntegrity(`round-trip import pass ${pass}`);
         const target = path.join(dir, `trip-${pass}.tmlu`);
         const exported = await callProjectAction(ctx, 'exportTml', [target]);
         if (!exported.ok) {
@@ -1536,7 +1513,6 @@ export const exportRoundtripFuzz: Scenario = {
       // dispatch - and a `createLine` recorded from INSIDE an oracle could
       // only ever be replayed by re-running the oracle from the top anyway.
       note('createLine(hostile comments)');
-      await assertIntegrity('seeding hostile comments');
 
       const csvPath = path.join(dir, 'hostile.csv');
       const csvExport = await callProjectAction(ctx, 'exportCsv', [csvPath]);

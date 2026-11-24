@@ -108,19 +108,22 @@ about 4% of the upload limit (more if undo history is pushed).
 
 Decided: publish to crates.io. Three crates go up: `stalagmight-models`,
 `stalagmight-persistence` and `stalx-reader`. `persistence` uses `parsers` and `compass_data` only
-in tests, so they stay unpublished.
+in tests, so they stay unpublished. Since `.stalx` version 2 (plan
+2026-11-20, G7) a fourth goes up: `stalagmight-legacy`, the frozen 0.6.0 reader that persistence
+and the reader use to open an old file. It is an internal crate like `models`.
 
-- **Supported API:** `stalx-reader` only. `models` and `persistence` are published as internal
+- **Supported API:** `stalx-reader` only. `models`, `legacy` and `persistence` are published as internal
   crates with no semver promise (their crate docs say so). The reader pins them exactly (`=x.y.z`),
   so SpeleoDB only ever depends on the reader's API.
 - **Versions:** all three start at `0.1.0`. A `.stalx` schema bump is a new reader minor version
   while it is `0.x`, with the supported schema version in the release notes.
 - **Owners:** a `crates-owners` team in the `Stalagmight` GitHub org, plus two user owners (a team
   owner can publish and yank but cannot change owners).
-- **Release:** bump the three versions together, run the full check, then publish in dependency
+- **Release:** bump the versions together, run the full check, then publish in dependency
   order with one command:
-  `cargo publish --dry-run -p stalagmight-models -p stalagmight-persistence -p stalx-reader`,
-  then the same without `--dry-run`. CI runs the packaging half on every change
+  `cargo publish --dry-run -p stalagmight-models -p stalagmight-legacy -p stalagmight-persistence -p stalx-reader`,
+  then the same without `--dry-run`. The first reader that reads version 2 is a new minor version
+  (0.2.0 if 0.1.0 is on crates.io). CI runs the packaging half on every change
   (`--no-verify`, in the `check` job) so the crates stay publishable between releases.
 - **Packaged contents:** Rust sources and manifests only (checked with `cargo package --list`); no
   fixtures.

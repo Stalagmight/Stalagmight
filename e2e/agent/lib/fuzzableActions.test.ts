@@ -75,7 +75,7 @@ describe('FUZZABLE_ACTIONS', () => {
     // and never a recorded one, so a trace naming it would be choosing where
     // this process writes a .stalx - which is why the replay path checks the
     // narrower set and the dispatch path checks the wider one.
-    for (const controlOnly of ['saveProject', 'repairProjectIntegrity', 'undo', 'redo', 'noop:observe']) {
+    for (const controlOnly of ['saveProject', 'undo', 'redo', 'noop:observe']) {
       expect(FUZZABLE_ACTIONS.has(controlOnly)).toBe(true);
       expect(REPLAYABLE_MUTATIONS.has(controlOnly)).toBe(false);
     }

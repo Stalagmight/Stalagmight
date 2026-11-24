@@ -234,7 +234,7 @@ pub struct SpeleoFileAccess {
     pub release_context: Option<SpeleoReleaseContext>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "../../bindings/")]
 pub enum SpeleoAccessVerification {
@@ -322,6 +322,15 @@ pub struct SpeleoPublishResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub undo_history_omitted: Option<bool>,
+    /// Plan 12.1: `Some(true)` when the server refused the first upload because it
+    /// does not take this build's project file format
+    /// ([`super::SpeleoDbError::UploadFormatRefused`]): the server project exists
+    /// with no file in it, and the local copy is unchanged (linked, nothing
+    /// uploaded). A retry is never a second create: the copy is linked, so
+    /// Publish refuses it. Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub upload_format_refused: Option<bool>,
 }
 
 /// Result of pulling + extracting a project, returned to the webview. The
@@ -351,7 +360,7 @@ pub struct SpeleoOpenResult {
 }
 
 /// Why an open returned the cached copy read-only, without the server's say.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
 pub enum SpeleoReadOnlyOpen {
@@ -370,7 +379,7 @@ pub enum SpeleoReadOnlyOpen {
 /// lock and reconciling the open project against the server. A discriminated
 /// union (`kind`) the webview branches on. Errors (no permission, anomalies,
 /// network) surface through the `Err(SpeleoErrorDto)` channel instead.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StartEditingResult {
@@ -394,7 +403,7 @@ pub enum StartEditingResult {
 
 /// Outcome of `speleodb_done` (#197): push the open project's edits, then release
 /// the lock and return to read-only.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DoneResult {
@@ -439,7 +448,7 @@ pub enum DoneResult {
 
 /// Outcome of `speleodb_update` (#197): a read-only refresh of the open project
 /// against the server (no lock taken).
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum UpdateResult {
@@ -539,7 +548,7 @@ pub struct SpeleoLinkStatus {
 /// The local copy's relationship to the server tip (the reconcile verdict,
 /// projected for the UI). Drives the action button (T2c): `RemoteAhead` → pull,
 /// `Conflict` → resolve. Derived from [`super::sync::reconcile_verdict`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteState {
@@ -556,7 +565,7 @@ pub enum RemoteState {
 /// Outcome of `speleodb_push` (T2d): push the open project's edits **without**
 /// releasing the lock (unlike [`DoneResult`], which releases). The lock is
 /// retained in every arm so editing continues.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PushResult {
@@ -616,6 +625,13 @@ pub struct SpeleoErrorDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub endpoint_refusal: Option<EndpointRefusal>,
+    /// `Some(true)` ONLY when the server refused this build's project file
+    /// format on upload ([`super::SpeleoDbError::UploadFormatRefused`], plan
+    /// 12.1), so every push surface shows the same line. Absent on every other
+    /// error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub format_refused: Option<bool>,
 }
 
 /// The local work a refused re-pull would have destroyed, carried on
@@ -703,6 +719,7 @@ mod tests {
             unpushed_local: None,
             newer_schema: None,
             endpoint_refusal: None,
+            format_refused: None,
         })
         .expect("serialize error dto");
         // The single-writer hand-off DTOs (#194/#197) must also never carry a token
@@ -926,15 +943,19 @@ mod tests {
             plain(&pushed),
             r#"{"kind":"pushed","undo_history_omitted":true}"#
         );
-        let publish = |undo_history_omitted| SpeleoPublishResult {
+        let publish = |undo_history_omitted, upload_format_refused| SpeleoPublishResult {
             project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
             endpoint: "https://speleodb.example".to_owned(),
             local_path: "/cache/project.stalx".to_owned(),
             undo_history_omitted,
+            upload_format_refused,
         };
-        let quiet = serde_json::to_value(publish(None)).expect("serialize");
+        let quiet = serde_json::to_value(publish(None, None)).expect("serialize");
         assert!(quiet.get("undo_history_omitted").is_none());
-        let noted = serde_json::to_value(publish(Some(true))).expect("serialize");
+        assert!(quiet.get("upload_format_refused").is_none());
+        let noted = serde_json::to_value(publish(Some(true), None)).expect("serialize");
         assert_eq!(noted["undo_history_omitted"], serde_json::json!(true));
+        let refused = serde_json::to_value(publish(None, Some(true))).expect("serialize");
+        assert_eq!(refused["upload_format_refused"], serde_json::json!(true));
     }
 }

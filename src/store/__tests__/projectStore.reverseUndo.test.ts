@@ -89,7 +89,6 @@ function projectWith(stations: Station[]) {
     loop_closures: [],
     file_path: '/tmp/reverse.stalx',
     next_line_id: 5,
-    line_offsets: {},
     imported_file_hashes: [],
     imported_line_hashes: [],
   };
@@ -133,8 +132,6 @@ function serveState(
         return false;
       case 'get_project_warnings':
         return [];
-      case 'check_project_integrity':
-        return { messages: [], save_blocked: false };
       default:
         return undefined;
     }
@@ -307,7 +304,6 @@ describe('frontend mutation ordering (#24)', () => {
       }
       if (command === 'can_undo' || command === 'can_redo') return false;
       if (command === 'get_project_warnings') return [];
-      if (command === 'check_project_integrity') return { messages: [], save_blocked: false };
       // No anchor for the origin, so the reverse mirror places it (the path under test).
       if (command === 'plan_anchors_for_refs') return [null];
       // Both mutations report a reverse, at DIFFERENT counts.
@@ -359,7 +355,6 @@ describe('frontend mutation ordering (#24)', () => {
       }
       if (command === 'can_undo' || command === 'can_redo') return false;
       if (command === 'get_project_warnings') return [];
-      if (command === 'check_project_integrity') return { messages: [], save_blocked: false };
       reverseCalls.push(args);
       if (reverseCalls.length === 1) await firstHeld;
       return { success: true, warnings: [], error: null, line_ids: [] };
@@ -441,8 +436,6 @@ describe('a project that opens during the anchor flush cancels the mutation (#31
           return false;
         case 'get_project_warnings':
           return [];
-        case 'check_project_integrity':
-          return { messages: [], save_blocked: false };
         default:
           mutations.push(command);
           return { success: true, warnings: [], error: null, line_ids: [] };

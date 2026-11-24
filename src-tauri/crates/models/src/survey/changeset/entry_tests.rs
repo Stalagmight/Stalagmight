@@ -1,0 +1,682 @@
+//! History entries: the persisted form is canonical and a fixpoint, and a
+//! hostile entry (truncated, garbage, flipped bytes, another version,
+//! oversized, out-of-range ids, runs that overlap or read past their source,
+//! counts it does not materialise) is refused without a panic and without
+//! quadratic work. A decoded hostile entry that passes the checks still
+//! cannot make a step panic.
+
+use std::time::{Duration, Instant};
+
+use chrono::{TimeZone, Utc};
+
+use super::testkit::{record_walk, Recorded};
+use super::{
+    decode_entry, encode_entry, redo, undo, EntryError, EntryLimits, HistoryEntry, HistoryRefs,
+    PreviewRow, RecordedPreview, HISTORY_FORMAT_VERSION, OLDEST_HISTORY_FORMAT_VERSION,
+};
+use crate::prose::{self, ProsePart, ProseShot, ProseShotEnd, ProseStation};
+use crate::StationRef;
+
+fn entry(changes: super::Changeset) -> HistoryEntry {
+    HistoryEntry {
+        timestamp: Utc.with_ymd_and_hms(2026, 11, 20, 12, 59, 0).unwrap(),
+        kind: "update_shot".to_string(),
+        label: "Update shot Main: 4 \u{2192} 5 \"quoted\" \u{e9}".to_string(),
+        label_parts: Vec::new(),
+        refs: HistoryRefs {
+            lines: vec![3],
+            stations: vec![7, 8],
+            shots: vec!["uuid-1".to_string()],
+            closures: vec![2],
+            sections: vec![],
+        },
+        preview: RecordedPreview {
+            rows: vec![PreviewRow {
+                field: "Length".to_string(),
+                old: "3.50".to_string(),
+                new: "4.00".to_string(),
+            }],
+            more: 2,
+        },
+        changes,
+    }
+}
+
+/// Entries of a few random walks, as text, with the state each undoes from.
+fn samples() -> Vec<(String, super::super::Project, super::super::Project)> {
+    let mut out = Vec::new();
+    for seed in [3, 11, 19] {
+        let Recorded {
+            states, changes, ..
+        } = record_walk(seed, 40);
+        for (k, cs) in changes.into_iter().enumerate() {
+            let text = encode_entry(&entry(cs)).unwrap();
+            out.push((text, states[k].clone(), states[k + 1].clone()));
+        }
+    }
+    out
+}
+
+#[test]
+fn an_entry_is_canonical_compact_json_and_a_fixpoint() {
+    for (text, _, _) in samples() {
+        assert!(
+            // A sample's label names nothing: version 2 (RS-PROSE fix 4).
+            text.starts_with(&format!(
+                "{{\"v\":{OLDEST_HISTORY_FORMAT_VERSION},\"t\":\"2026-11-20T12:59:00.000000000Z\",\"k\":"
+            )),
+            "{text}"
+        );
+        assert!(!text.contains('\n'), "one line");
+        let back = decode_entry(&text, &EntryLimits::default()).unwrap();
+        assert_eq!(
+            encode_entry(&back).unwrap(),
+            text,
+            "decode then encode is the identity"
+        );
+        assert_eq!(back.label, entry(super::Changeset::default()).label);
+        assert_eq!(back.refs.stations, vec![7, 8]);
+        assert_eq!(back.preview.more, 2);
+        // Text the serializer would write from the parsed value: canonical.
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(serde_json::to_string(&value).unwrap().len(), text.len());
+    }
+}
+
+#[test]
+fn an_entry_of_another_version_or_an_unknown_member_is_refused() {
+    let (text, _, _) = samples().into_iter().nth(5).unwrap();
+    assert_eq!(
+        (OLDEST_HISTORY_FORMAT_VERSION, HISTORY_FORMAT_VERSION),
+        (2, 3)
+    );
+    // Without parts the sample is version 2 (RS-PROSE fix 4).
+    let v3 = "{\"v\":2,";
+    assert!(text.starts_with(v3), "{text}");
+    let other = text.replacen(v3, "{\"v\":4,", 1);
+    assert_eq!(
+        decode_entry(&other, &EntryLimits::default()).unwrap_err(),
+        EntryError::Version(4)
+    );
+    // A version 1 entry (U1 alias rows) is an earlier version's.
+    let older = text.replacen(v3, "{\"v\":1,", 1);
+    assert_eq!(
+        decode_entry(&older, &EntryLimits::default()).unwrap_err(),
+        EntryError::Version(1)
+    );
+    let extra = text.replacen(v3, "{\"v\":2,\"cmd\":{},", 1);
+    assert!(matches!(
+        decode_entry(&extra, &EntryLimits::default()),
+        Err(EntryError::Syntax(_))
+    ));
+    let no_version = text.replacen(v3, "{", 1);
+    assert!(decode_entry(&no_version, &EntryLimits::default()).is_err());
+    let bad_time = text.replacen("2026-11-20T12:59:00", "yesterday-ish", 1);
+    assert!(matches!(
+        decode_entry(&bad_time, &EntryLimits::default()),
+        Err(EntryError::Time(_))
+    ));
+}
+
+#[test]
+fn a_truncated_or_byte_flipped_entry_never_panics_and_never_breaks_a_step() {
+    let limits = EntryLimits::default();
+    let mut decoded_variants = 0usize;
+    for (text, before, after) in samples().into_iter().step_by(3) {
+        let bytes = text.as_bytes();
+        for cut in 0..bytes.len() {
+            if let Ok(prefix) = std::str::from_utf8(&bytes[..cut]) {
+                assert!(
+                    decode_entry(prefix, &limits).is_err(),
+                    "a cut at {cut} decoded"
+                );
+            }
+        }
+        for at in 0..bytes.len() {
+            for replacement in [b'0', b'9', b'"', b'[', b'-', b'}'] {
+                let mut flipped = bytes.to_vec();
+                flipped[at] = replacement;
+                let Ok(flipped) = String::from_utf8(flipped) else {
+                    continue;
+                };
+                let Ok(hostile) = decode_entry(&flipped, &limits) else {
+                    continue;
+                };
+                decoded_variants += 1;
+                // Whatever passed the checks must step or refuse, never panic.
+                let mut live = after.clone();
+                if undo(&mut live, &hostile.changes).is_err() {
+                    assert_eq!(live, after, "a refused undo changed the project");
+                }
+                let mut live = before.clone();
+                if redo(&mut live, &hostile.changes).is_err() {
+                    assert_eq!(live, before, "a refused redo changed the project");
+                }
+            }
+        }
+    }
+    assert!(
+        decoded_variants > 100,
+        "only {decoded_variants} flips decoded"
+    );
+}
+
+#[test]
+fn garbage_and_oversized_entries_are_refused() {
+    let limits = EntryLimits::default();
+    for garbage in [
+        "",
+        "null",
+        "[]",
+        "{}",
+        "{\"v\":2}",
+        "\u{feff}{\"v\":2,\"t\":\"x\",\"k\":\"k\",\"label\":\"l\",\"ops\":{}}",
+        "{\"v\":1e400}",
+        "{\"v\":2,\"t\":\"2026-01-01T00:00:00Z\",\"k\":\"k\",\"label\":\"l\",\"ops\":{\"datums\":{\"n\":[0,1],\"h\":[[0,[],[{\"station\":1}]]]}}}",
+    ] {
+        assert!(decode_entry(garbage, &limits).is_err(), "{garbage:?} decoded");
+    }
+    let small = EntryLimits {
+        max_bytes: 100,
+        ..EntryLimits::default()
+    };
+    let (text, _, _) = samples().into_iter().last().unwrap();
+    if text.len() > 100 {
+        assert_eq!(
+            decode_entry(&text, &small).unwrap_err(),
+            EntryError::TooLarge(text.len())
+        );
+    }
+    let deep = format!("{}{}", "[".repeat(100_000), "]".repeat(100_000));
+    let wrapped = format!(
+        "{{\"v\":2,\"t\":\"2026-01-01T00:00:00Z\",\"k\":\"k\",\"label\":\"l\",\"ops\":{deep}}}"
+    );
+    assert!(
+        decode_entry(&wrapped, &limits).is_err(),
+        "a depth bomb decoded"
+    );
+    let long_label = format!(
+        "{{\"v\":2,\"t\":\"2026-01-01T00:00:00Z\",\"k\":\"k\",\"label\":\"{}\",\"ops\":{{}}}}",
+        "x".repeat(5_000)
+    );
+    assert_eq!(
+        decode_entry(&long_label, &limits).unwrap_err(),
+        EntryError::Limit("kind or label characters")
+    );
+}
+
+/// An entry around `ops` (a changeset's JSON).
+fn wrap(ops: &str) -> String {
+    format!("{{\"v\":2,\"t\":\"2026-01-01T00:00:00Z\",\"k\":\"k\",\"label\":\"l\",\"ops\":{ops}}}")
+}
+
+fn shape_error(ops: &str) -> String {
+    match decode_entry(&wrap(ops), &EntryLimits::default()) {
+        Err(EntryError::Shape(why)) => why,
+        other => panic!("{ops}: not a shape error: {other:?}"),
+    }
+}
+
+#[test]
+fn a_structurally_broken_changeset_is_refused_by_the_shape_rules() {
+    let side = |n: u32, segs: &str| format!("{{\"n\":{n},\"h\":1,\"s\":[{segs}]}}");
+    let line = |id: u32, before: &str, after: &str| {
+        format!("{{\"id\":{id},\"before\":{before},\"after\":{after}}}")
+    };
+    // A run reading a line the entry does not record.
+    let why = shape_error(&format!(
+        "{{\"lines\":[{}]}}",
+        line(1, &side(2, "[1,0,2,0,null]"), &side(2, "[9,0,2,0,null]"))
+    ));
+    assert!(why.contains("does not record"), "{why}");
+    // A run past the end of what it reads.
+    let why = shape_error(&format!(
+        "{{\"lines\":[{}]}}",
+        line(1, &side(2, "[1,0,2,0,null]"), &side(3, "[1,0,3,0,null]"))
+    ));
+    assert!(
+        why.contains("past the end") || why.contains("hold"),
+        "{why}"
+    );
+    // Two runs taking the same source shot.
+    let why = shape_error(&format!(
+        "{{\"lines\":[{}]}}",
+        line(
+            1,
+            &side(4, "[1,0,4,0,null]"),
+            &side(4, "[1,0,2,0,null],[1,1,2,0,null]")
+        )
+    ));
+    assert!(why.contains("same shot"), "{why}");
+    // A repeat span claiming four billion cells from a few bytes.
+    let why = shape_error(&format!(
+        "{{\"lines\":[{}]}}",
+        line(
+            1,
+            &side(2, "[1,0,2,0,null]"),
+            &side(2, "[1,0,2,0,null,{\"len\":[[0,4000000000,1.0]]}]")
+        )
+    ));
+    assert!(why.contains("out of range"), "{why}");
+    // A credit the table does not hold, a value a field does not take.
+    for edits in [
+        "{\"cr\":[[0,[0]]]}",
+        "{\"len\":[[0,[\"long\"]]]}",
+        "{\"k\":[[0,[\"Sideways\"]]]}",
+    ] {
+        let why = shape_error(&format!(
+            "{{\"lines\":[{}]}}",
+            line(
+                1,
+                &side(2, "[1,0,2,0,null]"),
+                &side(2, &format!("[1,0,2,0,null,{edits}]"))
+            )
+        ));
+        assert!(why.contains("value"), "{edits}: {why}");
+    }
+    // Out-of-range ids and counters.
+    let why = shape_error(&format!(
+        "{{\"lines\":[{}]}}",
+        line(50_000, &side(0, ""), &side(0, ""))
+    ));
+    assert!(why.contains("id space"), "{why}");
+    let why = shape_error("{\"counters\":[[0,1,0],[4294967295,1,0]]}");
+    assert!(why.contains("counter"), "{why}");
+    let why = shape_error("{\"stations\":{\"add\":[[3000000000,\"x\"]]}}");
+    assert!(why.contains("id space"), "{why}");
+    // A line created without the order knowing it.
+    let why = shape_error(
+        "{\"lines\":[{\"id\":4,\"after\":{\"n\":0,\"h\":1,\"line\":{\"color\":\"#000\",\"dir\":\"in\",\"q\":1.0,\"start\":0},\"s\":[]}}]}",
+    );
+    assert!(why.contains("order"), "{why}");
+    // List hunks out of order or past the list.
+    let why = shape_error("{\"closures\":{\"n\":[1,1],\"h\":[[5,[],[]]]}}");
+    assert!(why.contains("closures"), "{why}");
+    let why = shape_error("{\"order\":{\"n\":[2,2],\"h\":[[1,[5],[6]],[0,[4],[7]]]}}");
+    assert!(why.contains("order"), "{why}");
+    // Station field columns whose ids and values disagree.
+    let why = shape_error("{\"stations\":{\"name\":[[[1,3]],[\"a\"],[\"b\"]]}}");
+    assert!(why.contains("name"), "{why}");
+}
+
+/// Large hostile entries decode (or refuse) in linear time: a column of a
+/// hundred thousand one-cell spans, a hundred thousand station id runs, a
+/// hundred thousand list hunks.
+#[test]
+fn a_large_hostile_entry_costs_linear_work() {
+    let n = super::super::MAX_SHOTS_PER_LINE;
+    let spans: Vec<String> = (0..n).map(|i| format!("[{i},[1.5]]")).collect();
+    let side = format!(
+        "{{\"n\":{n},\"h\":1,\"s\":[[1,0,{n},0,null,{{\"l\":[{}]}}]]}}",
+        spans.join(",")
+    );
+    let lines = format!(
+        "{{\"lines\":[{{\"id\":1,\"before\":{{\"n\":{n},\"h\":1,\"s\":[[1,0,{n},0,null]]}},\"after\":{side}}}]}}"
+    );
+    let runs: Vec<String> = (0..n).map(|i| format!("[{},1]", i * 2)).collect();
+    let names: Vec<String> = (0..n).map(|_| "\"a\"".to_string()).collect();
+    let stations = format!(
+        "{{\"stations\":{{\"name\":[[{}],[{}],[{}]]}}}}",
+        runs.join(","),
+        names.join(","),
+        names.join(",")
+    );
+    let hunks: Vec<String> = (0..n)
+        .map(|i| format!("[{},[\"x\"],[\"y\"]]", i * 2))
+        .collect();
+    let hashes = format!(
+        "{{\"line_hashes\":{{\"n\":[{},{}],\"h\":[{}]}}}}",
+        2 * n,
+        2 * n,
+        hunks.join(",")
+    );
+    for ops in [lines, stations, hashes] {
+        let text = wrap(&ops);
+        let started = Instant::now();
+        let decoded = decode_entry(&text, &EntryLimits::default());
+        let took = started.elapsed();
+        assert!(decoded.is_ok(), "{:?}", decoded.err());
+        assert!(
+            took < Duration::from_secs(20),
+            "{} bytes took {took:?} to decode",
+            text.len()
+        );
+        // Applying it to a project that does not match refuses quickly.
+        let mut p = super::super::test_helpers::project();
+        let started = Instant::now();
+        let changes = decoded.unwrap().changes;
+        assert!(undo(&mut p, &changes).is_err());
+        assert!(redo(&mut p, &changes).is_err());
+        assert!(started.elapsed() < Duration::from_secs(20));
+    }
+}
+
+#[test]
+fn a_non_finite_number_is_refused_on_write() {
+    let Recorded {
+        states, changes, ..
+    } = record_walk(5, 30);
+    let mut cs = changes
+        .into_iter()
+        .find(|c| !c.lines.is_empty())
+        .expect("a walk edits a line");
+    let _ = states;
+    let line = &mut cs.lines[0];
+    let side = line.after.as_mut().or(line.before.as_mut()).unwrap();
+    side.s.push(super::shots::Seg::Rows(super::shots::Rows {
+        uuids: vec!["nan".to_string()],
+        cols: super::values::Cols(vec![(
+            super::ShotField::Length,
+            vec![super::values::Span::Values(
+                0,
+                vec![super::Val::Num(f64::NAN)],
+            )],
+        )]),
+    }));
+    side.n += 1;
+    assert_eq!(encode_entry(&entry(cs)).unwrap_err(), EntryError::NonFinite);
+}
+
+/// A station image carries every field of its archived records (RS 10):
+/// `{id, name, comment?, external?, into?, lines?}`, empty ones left out; an
+/// unknown key, a missing name or the U1 alias arrays are refused (the
+/// history format version guards older entries).
+#[test]
+fn an_archived_record_row_carries_every_field() {
+    use super::super::{ArchivedStation, Station};
+    use super::stations::StationRow;
+    let mut station = Station::new(3, "3");
+    station.archived = vec![
+        ArchivedStation {
+            id: 7,
+            name: "0".to_string(),
+            comment: None,
+            external: None,
+            into: Some(9),
+            lines: Vec::new(),
+        },
+        ArchivedStation {
+            id: 9,
+            name: "1".to_string(),
+            comment: Some("tie-off".to_string()),
+            external: Some("A9".to_string()),
+            into: None,
+            lines: vec![2, 4],
+        },
+    ];
+    let text = serde_json::to_string(&StationRow(station.clone())).unwrap();
+    assert_eq!(
+        text,
+        r#"[3,"3",{"archived":[{"id":7,"name":"0","into":9},{"id":9,"name":"1","comment":"tie-off","external":"A9","lines":[2,4]}]}]"#
+    );
+    let back: StationRow = serde_json::from_str(&text).unwrap();
+    assert_eq!(back.0, station);
+    for bad in [
+        r#"[3,"3",{"archived":[{"id":7}]}]"#,
+        r#"[3,"3",{"archived":[{"id":7,"name":"0","line":2}]}]"#,
+        r#"[3,"3",{"aliases":[[7,"0",2]]}]"#,
+    ] {
+        assert!(serde_json::from_str::<StationRow>(bad).is_err(), "{bad}");
+    }
+}
+
+// ----- label parts (RS-PROSE, format version 3) -----------------------------------
+
+/// A label naming a shot and a line, with its parts (the station part with
+/// a slot, as a builder hands it over).
+fn labelled(changes: super::Changeset) -> HistoryEntry {
+    let shot = ProsePart::Shot(ProseShot {
+        // The to end is a loop end: worded as the backend words it.
+        text: "Main: 4 \u{2192} 5 (loop end on Main)".to_string(),
+        line_id: Some(3),
+        context: Some("Main".to_string()),
+        from: ProseShotEnd {
+            name: "4".to_string(),
+            home_line: None,
+            loop_end: None,
+        },
+        to: ProseShotEnd {
+            name: "5".to_string(),
+            home_line: Some(1),
+            loop_end: Some(true),
+        },
+    });
+    let station = ProsePart::Station(ProseStation {
+        text: "Side / 0".to_string(),
+        line_id: Some(1),
+        context: Some("Side".to_string()),
+        name: "0".to_string(),
+        home_line: None,
+        loop_end: None,
+        station_id: Some(42),
+        slot: Some(StationRef::new(1, 0)),
+    });
+    let marked = format!(
+        "Update shot {} near {} in line {}",
+        prose::mark(&shot),
+        prose::mark(&station),
+        prose::mark(&prose::line_part(Some(3), "Main", true))
+    );
+    let (label, label_parts) = prose::split(&marked);
+    HistoryEntry {
+        label,
+        label_parts,
+        ..entry(changes)
+    }
+}
+
+#[test]
+fn a_labels_parts_say_its_words_and_round_trip_without_slots() {
+    let mut e = labelled(super::Changeset::default());
+    assert_eq!(
+        e.label,
+        "Update shot Main: 4 \u{2192} 5 (loop end on Main) near Side / 0 in line \"Main\""
+    );
+    assert_eq!(prose::plain(&e.label_parts), e.label);
+    e.fit_limits(&EntryLimits::default());
+    let text = encode_entry(&e).unwrap();
+    assert!(
+        text.contains("\"label_parts\":[{\"kind\":\"text\""),
+        "{text}"
+    );
+    assert!(!text.contains("slot"), "a slot is a session handle: {text}");
+    let back = decode_entry(&text, &EntryLimits::default()).unwrap();
+    assert_eq!(back.label, e.label);
+    assert_eq!(back.label_parts, e.label_parts);
+    assert_eq!(prose::plain(&back.label_parts), back.label);
+    assert_eq!(back.label_parts.iter().filter(|p| p.is_name()).count(), 3);
+    assert_eq!(encode_entry(&back).unwrap(), text, "a fixpoint");
+    // A label that names nothing writes no key.
+    let plain = encode_entry(&entry(super::Changeset::default())).unwrap();
+    assert!(!plain.contains("label_parts"), "{plain}");
+}
+
+#[test]
+fn a_version_2_entry_still_decodes_with_a_plain_label() {
+    let mut e = labelled(super::Changeset::default());
+    e.fit_limits(&EntryLimits::default());
+    let v3 = encode_entry(&e).unwrap();
+    // A version 2 entry: the same layout without parts.
+    let start = v3.find(",\"label_parts\":").unwrap();
+    let end = v3.find(",\"refs\":").unwrap();
+    let v2 = format!("{{\"v\":2,{}{}", &v3[7..start], &v3[end..]);
+    assert!(v2.starts_with("{\"v\":2,\"t\":"), "{v2}");
+    let back = decode_entry(&v2, &EntryLimits::default()).unwrap();
+    assert_eq!(back.label, e.label);
+    assert!(back.label_parts.is_empty(), "a version 2 label reads plain");
+    assert_eq!(back.refs.stations, vec![7, 8]);
+    // Parts in a version 2 entry are not version 2's: read plain too.
+    let v2_with_parts = v3.replacen("{\"v\":3,", "{\"v\":2,", 1);
+    let back = decode_entry(&v2_with_parts, &EntryLimits::default()).unwrap();
+    assert!(back.label_parts.is_empty());
+}
+
+#[test]
+fn a_cut_label_drops_its_parts() {
+    let mut e = labelled(super::Changeset::default());
+    let limits = EntryLimits {
+        max_text_chars: 20,
+        ..EntryLimits::default()
+    };
+    e.fit_limits(&limits);
+    assert_eq!(e.label.chars().count(), 20);
+    assert!(e.label.ends_with('\u{2026}'));
+    assert!(e.label_parts.is_empty(), "parts never say other words");
+    // Within the limits, the parts stay (without their slots).
+    let mut e = labelled(super::Changeset::default());
+    e.fit_limits(&EntryLimits::default());
+    assert_eq!(prose::plain(&e.label_parts), e.label);
+    assert!(e.label_parts.iter().all(|p| match p {
+        ProsePart::Station(s) => s.slot.is_none() && s.station_id == Some(42),
+        _ => true,
+    }));
+    // A part whose own strings are past the limits drops them too.
+    let mut e = labelled(super::Changeset::default());
+    for part in &mut e.label_parts {
+        if let ProsePart::Station(s) = part {
+            s.context = Some("x".repeat(100));
+        }
+    }
+    e.fit_limits(&EntryLimits {
+        max_text_chars: 99,
+        ..EntryLimits::default()
+    });
+    assert!(e.label_parts.is_empty());
+}
+
+#[test]
+fn parts_that_do_not_fit_cost_the_pills_never_the_entry() {
+    let mut e = labelled(super::Changeset::default());
+    e.fit_limits(&EntryLimits::default());
+    let text = encode_entry(&e).unwrap();
+    let limits = EntryLimits::default();
+    // Other words than the label's.
+    let other_words = text.replacen("\"text\":\"Side / 0\"", "\"text\":\"Side / 9\"", 1);
+    assert_ne!(other_words, text);
+    let back = decode_entry(&other_words, &limits).unwrap();
+    assert_eq!(back.label, e.label);
+    assert!(back.label_parts.is_empty());
+    // A kind this build does not know, and a value that is no list.
+    for hostile in [
+        text.replacen("\"kind\":\"line\"", "\"kind\":\"section\"", 1),
+        {
+            let start = text.find("\"label_parts\":").unwrap();
+            let end = text.find(",\"refs\":").unwrap();
+            format!("{}\"label_parts\":\"nope\"{}", &text[..start], &text[end..])
+        },
+    ] {
+        assert_ne!(hostile, text);
+        let back = decode_entry(&hostile, &limits).unwrap();
+        assert_eq!(back.label, e.label);
+        assert!(back.label_parts.is_empty(), "{hostile}");
+    }
+    // A slot a hand edit put back is dropped on read.
+    let slotted = text.replacen(
+        "\"station_id\":42",
+        "\"station_id\":42,\"slot\":{\"line_id\":1,\"station_index\":0}",
+        1,
+    );
+    assert_ne!(slotted, text);
+    let back = decode_entry(&slotted, &limits).unwrap();
+    assert_eq!(back.label_parts, e.label_parts);
+}
+
+/// RS-PROSE fix 4: an entry whose label names nothing is written as version
+/// 2, which the previous build reads, so a history of such entries survives
+/// a downgrade; only an entry with parts is version 3. Before, every entry
+/// was version 3 and the previous build dropped the whole history.
+/// Injection: writing `HISTORY_FORMAT_VERSION` for every entry fails it.
+#[test]
+fn an_entry_without_parts_is_written_as_version_2_and_one_with_parts_as_version_3() {
+    let plain = encode_entry(&entry(super::Changeset::default())).unwrap();
+    assert!(plain.starts_with("{\"v\":2,"), "{plain}");
+    assert!(!plain.contains("label_parts"), "{plain}");
+    let back = decode_entry(&plain, &EntryLimits::default()).unwrap();
+    assert!(back.label_parts.is_empty());
+    assert_eq!(encode_entry(&back).unwrap(), plain, "a fixpoint");
+    let mut e = labelled(super::Changeset::default());
+    e.fit_limits(&EntryLimits::default());
+    let with_parts = encode_entry(&e).unwrap();
+    assert!(with_parts.starts_with("{\"v\":3,"), "{with_parts}");
+    let back = decode_entry(&with_parts, &EntryLimits::default()).unwrap();
+    assert_eq!(back.label_parts, e.label_parts);
+    assert_eq!(encode_entry(&back).unwrap(), with_parts, "a fixpoint");
+}
+
+/// RS-PROSE fix 5: a persisted part draws only what it says. Each part's
+/// visible fields (a station's and a line's name and context, a shot's ends
+/// and context) must occur in its own words, else the entry's parts go and
+/// its label reads plain: a hand edit cannot make a pill show one name while
+/// a screen reader reads another. Injection: dropping the visible-field
+/// check in `fitted_parts` fails it.
+#[test]
+fn a_part_whose_drawing_is_not_in_its_words_costs_the_pills() {
+    let mut e = labelled(super::Changeset::default());
+    e.fit_limits(&EntryLimits::default());
+    let text = encode_entry(&e).unwrap();
+    let limits = EntryLimits::default();
+    for hostile in [
+        // A station drawn "Evil" whose words say "Side / 0".
+        text.replacen("\"name\":\"0\"", "\"name\":\"Evil\"", 1),
+        // A context the words do not hold.
+        text.replacen("\"context\":\"Side\"", "\"context\":\"Elsewhere\"", 1),
+        // A shot end the words do not hold.
+        text.replacen("\"name\":\"5\"", "\"name\":\"55\"", 1),
+        // A line drawn under another name.
+        text.replacen("\"name\":\"Main\"", "\"name\":\"Other\"", 1),
+    ] {
+        assert_ne!(hostile, text);
+        let back = decode_entry(&hostile, &limits).unwrap();
+        assert_eq!(back.label, e.label);
+        assert!(back.label_parts.is_empty(), "{hostile}");
+    }
+    // The untouched entry keeps them.
+    assert!(!decode_entry(&text, &limits).unwrap().label_parts.is_empty());
+}
+
+/// RS-PROSE delta fix 3: a persisted part's words must be exactly the words
+/// its fields make in the shapes the backend words them (`slot_text.rs`),
+/// not merely hold them: a station worded "Main / 12" drawn as "1" (a
+/// substring) passed the earlier check. Injection: a `contains` check again
+/// fails it.
+#[test]
+fn a_part_whose_drawing_is_a_substring_of_its_words_costs_the_pills() {
+    let mut e = labelled(super::Changeset::default());
+    e.fit_limits(&EntryLimits::default());
+    let text = encode_entry(&e).unwrap();
+    let limits = EntryLimits::default();
+    for hostile in [
+        // "Side / 0" drawn as a name its words merely contain.
+        text.replacen("\"name\":\"0\"", "\"name\":\"\"", 1),
+        text.replacen("\"context\":\"Side\"", "\"context\":\"Sid\"", 1),
+        // A shot end drawn as part of its name.
+        text.replacen("\"name\":\"4\"", "\"name\":\"\"", 1),
+        // A line drawn as part of its name.
+        text.replacen("\"name\":\"Main\"", "\"name\":\"Mai\"", 1),
+    ] {
+        assert_ne!(hostile, text);
+        let back = decode_entry(&hostile, &limits).unwrap();
+        assert!(back.label_parts.is_empty(), "{hostile}");
+    }
+    // The coordinator's example: words "Main / 12", name "1".
+    let forged = ProsePart::Station(ProseStation {
+        text: "Main / 12".to_string(),
+        line_id: Some(1),
+        context: Some("Main".to_string()),
+        name: "1".to_string(),
+        home_line: None,
+        loop_end: None,
+        station_id: Some(12),
+        slot: None,
+    });
+    let mut e = entry(super::Changeset::default());
+    e.label = "Rename station Main / 12".to_string();
+    e.label_parts = vec![
+        ProsePart::Text {
+            text: "Rename station ".to_string(),
+        },
+        forged,
+    ];
+    let text = encode_entry(&e).unwrap();
+    assert!(decode_entry(&text, &limits).unwrap().label_parts.is_empty());
+}

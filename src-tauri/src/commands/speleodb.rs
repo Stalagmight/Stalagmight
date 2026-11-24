@@ -47,6 +47,7 @@ async fn run_blocking<T: Send + 'static>(
             unpushed_local: None,
             newer_schema: None,
             endpoint_refusal: None,
+            format_refused: None,
         })?
 }
 
@@ -79,6 +80,7 @@ fn unstorable_commit_message(text: Option<&str>) -> Option<SpeleoErrorDto> {
             unpushed_local: None,
             newer_schema: None,
             endpoint_refusal: None,
+            format_refused: None,
         }),
         Ok(()) | Err(CommitMessageError::Empty) => None,
     }
@@ -322,7 +324,8 @@ pub async fn speleodb_get_revisions(
 }
 
 /// [#218] Check the open remote project's working copy out to a past revision:
-/// download the native SQLite file AT `hexsha`, replace the working copy, and reopen it. With
+/// download the project file AT `hexsha` (a version 2 file, or a legacy SQLite revision
+/// migrated in memory), replace the working copy, and reopen it. With
 /// `restore == true` (the user holds the lock) it is stamped as an unpushed edit on
 /// top of the current server HEAD (a git-forward restore; the user pushes to
 /// persist); with `restore == false` it is a read-only View that a later Update
@@ -507,7 +510,7 @@ pub async fn speleodb_release_current_lock(
     run_transfer(app, move |s| s.speleodb_release_current_lock(expected)).await
 }
 
-/// Read access restrictions before opening a linked SQLite project from disk.
+/// Read access restrictions before opening a linked project from disk.
 #[tauri::command]
 pub async fn speleodb_project_access_at(
     app: AppHandle,

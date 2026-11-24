@@ -13,6 +13,7 @@ import { useSpeleoStore, type SpeleoLinkState } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 import { askSpeleoExit, closeKeepingLock, openProjectNeedsSpeleoExitPrompt } from './speleoExit';
 import { RELEASE_CANCELLED, settleOpenLockBeforeLeaving } from './speleoReleaseFailure';
+import { askOpenProjectUnsaved } from './unsavedChanges';
 
 /**
  * Set by {@link performQuit} for exactly one `tauri://close-requested` round
@@ -357,15 +358,22 @@ export function openExitPrompt(dialog: string, data?: Record<string, unknown>): 
  * - The same state on an UPDATE RESTART asks nothing: it keeps the lock and the
  *   local changes (saving unsaved edits first) and restarts, so the user resumes
  *   exactly where they were - the "Keep the lock" end state without the question.
- * - Otherwise unsaved changes get the ordinary unsaved-changes dialog.
+ * - Otherwise unsaved changes get the ordinary unsaved-changes dialog: the
+ *   frontend's edits, or changes only the backend tracks (a 0.6.0 file's
+ *   SpeleoDB bookkeeping), asked of the backend here as every exit asks it
+ *   ({@link askOpenProjectUnsaved}). Hence async: the close listener awaits
+ *   it, and the ask is bounded, so a stalled backend still lets the prompt
+ *   open. A project that moved during the ask (a load or a close landed) is
+ *   decided again for what is open now: nothing is asked about, or done to,
+ *   the project that left.
  * - A clean SpeleoDB project hands its lock back before the quit goes on
  *   ({@link quitAfterHandingBackLock}): a release that fails or is uncertain asks
  *   "Couldn't hand back the lock", and Cancel there abandons the quit. The bounded
  *   silent release at process exit stays only for the exits the app cannot
  *   intercept.
  */
-export function guardQuit(): boolean {
-  const { project, isDirty } = useProjectStore.getState();
+export async function guardQuit(): Promise<boolean> {
+  const { project } = useProjectStore.getState();
   if (!project) return false;
 
   if (openProjectNeedsSpeleoExitPrompt()) {
@@ -380,7 +388,9 @@ export function guardQuit(): boolean {
     return true;
   }
 
-  if (isDirty) {
+  const asked = await askOpenProjectUnsaved();
+  if (!asked.stillOpen) return guardQuit();
+  if (asked.unsaved) {
     openExitPrompt('unsaved-changes', { pendingQuit: true });
     return true;
   }
@@ -414,6 +424,8 @@ async function keepLockThenRestart(): Promise<void> {
     return;
   }
   abandonUpdateRestart();
+  // The save prompt already took over (a file another program changed).
+  if (kept.handedOff) return;
   useUIStore.getState().openDialog('error', {
     title: i18n.t('speleoExitPrompt.restart.failedTitle'),
     message: kept.error,

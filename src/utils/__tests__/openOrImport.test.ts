@@ -48,6 +48,7 @@ beforeEach(() => {
   useProjectStore.setState({
     project: null,
     isDirty: false,
+    fileReadOnlyReason: null,
     loadProject,
     importDmp,
     parseGpx,
@@ -245,6 +246,23 @@ describe('routeOpenedFile - read-only-map import guard (#243)', () => {
     expect(importDmp).not.toHaveBeenCalled();
     expect(useUIStore.getState().activeDialog).toBe('import-blocked');
     expect(useUIStore.getState().dialogData).toMatchObject({ path: '/cave/survey.dmp', cause: 'mode' });
+  });
+
+  // A file made with a newer Stalagmight is read-only whatever the view: the
+  // prompt must not offer the view's switch, whose re-route lands here again.
+  it('blocks a DMP import into a read-only (newer-version) file with its own cause, not the view switch', async () => {
+    useProjectStore.setState({ project: { name: 'X' } as never, fileReadOnlyReason: 'newer version' } as never);
+    useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
+    await routeOpenedFile('/cave/survey.dmp');
+    expect(importDmp).not.toHaveBeenCalled();
+    expect(useUIStore.getState().activeDialog).toBe('import-blocked');
+    expect(useUIStore.getState().dialogData).toMatchObject({ path: '/cave/survey.dmp', cause: 'file' });
+    // The switch's re-route (residualReadOnlyToast) raises the same file cause,
+    // never a loop through the view prompt.
+    useUIStore.setState({ activeDialog: null, dialogData: {} });
+    await routeOpenedFile('/cave/survey.dmp', 'Import Failed', { residualReadOnlyToast: true });
+    expect(useUIStore.getState().dialogData).toMatchObject({ cause: 'file' });
+    expect(importDmp).not.toHaveBeenCalled();
   });
 
   it('blocks a DMP import in Export (measured fallback) with the same import-blocked prompt', async () => {

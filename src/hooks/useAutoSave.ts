@@ -1,5 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useProjectStore } from '../store/projectStore';
+import { useUIStore } from '../store/uiStore';
+import { classifySaveError, type SaveErrorKind } from '../utils/saveErrors';
 
 export type AutoSaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
 
@@ -17,6 +19,11 @@ export interface AutoSaveState {
  * timer.  Manual saves (isDirty going false externally) cancel the timer and
  * briefly show "Saved".
  */
+/** Save failures that pause auto-save until the user resolves them. */
+function isPausingFailure(kind: SaveErrorKind | null): boolean {
+  return kind === 'externally-modified' || kind === 'read-only-file';
+}
+
 export function useAutoSave(): AutoSaveState {
   const [status, setStatus] = useState<AutoSaveStatus>('idle');
   const [countdown, setCountdown] = useState(0);
@@ -77,15 +84,17 @@ export function useAutoSave(): AutoSaveState {
         state.config?.general?.auto_save_interval_seconds ?? 30;
       const hasProject = state.project != null;
 
-      // --- Resume after a save-block clears ---
-      // Auto-save pauses itself after a save-blocking failure (see the fire
-      // handler below). Resume the moment the project stops being save-blocked -
-      // i.e. the integrity issues were resolved (Repair) - so the next pending
-      // edit saves normally.
+      // --- Resume after a pausing failure clears ---
+      // Auto-save pauses itself after a failure no retry can fix (see the fire
+      // handler below). Resume once that failure is gone: a file another program
+      // changed (the `.stalx` v2 guard, resolved in the save prompt) or a
+      // read-only file. A save that lands clears `autosaveFailureKind`, and so
+      // does dismissing the banner (the next edit then tries again and, if the
+      // file is still changed, brings the banner back).
       if (
         pausedRef.current &&
-        prevState.integritySaveBlocked &&
-        !state.integritySaveBlocked
+        isPausingFailure(prevState.autosaveFailureKind) &&
+        !isPausingFailure(state.autosaveFailureKind)
       ) {
         pausedRef.current = false;
       }
@@ -121,6 +130,9 @@ export function useAutoSave(): AutoSaveState {
         // will just fail again. The status stays "didn't run - not saved" until
         // the resume check above fires (issues resolved).
         if (pausedRef.current) return;
+        // The save prompt for a changed, moved or deleted file is open: the user
+        // is deciding where the changes go, so no countdown runs behind it.
+        if (saveConflictPromptOpen()) return;
 
         const seconds = intervalSeconds;
 
@@ -155,6 +167,7 @@ export function useAutoSave(): AutoSaveState {
           const store = useProjectStore.getState();
           // Re-check guards at fire time
           if (
+            saveConflictPromptOpen() ||
             !store.isDirty ||
             !store.project?.file_path ||
             !store.config?.general?.auto_save
@@ -170,17 +183,21 @@ export function useAutoSave(): AutoSaveState {
           // subscriber above to flash "saved".  On failure we handle here.
           if (!result.success) {
             savingRef.current = false;
-            // Auto-save must never persist a broken project, so the backend
-            // refuses the save when the project has unresolvable cross-references.
             // Surface that auto-save did NOT run *persistently* (not a transient
-            // flash) so the user knows their changes are not on disk; the integrity
-            // banner shows how to fix it (Repair).
-            // When the failure is the integrity save-block, PAUSE auto-save rather
-            // than retry on every edit - it would just fail again. It resumes via
-            // the check at the top of the subscriber once the block clears. (The
-            // failure branch of saveProject awaits checkProjectIntegrity, so this
-            // flag is fresh here.)
-            if (useProjectStore.getState().integritySaveBlocked) {
+            // flash) so the user knows their changes are not on disk (the
+            // autosave banner says why).
+            // PAUSE auto-save rather than retry on every edit for a file another
+            // program changed, or a read-only one: retrying would fail the same
+            // way until the user decides. It resumes via the check at the top of
+            // the subscriber once that failure clears - which needs the store to
+            // hold it. The save action records it only while the project is
+            // still dirty (a save that landed meanwhile made it moot), so pause
+            // only on what it recorded: a pause with nothing recorded showed no
+            // banner and never resumed, for the rest of the session.
+            if (
+              isPausingFailure(classifySaveError(result.error)) &&
+              isPausingFailure(useProjectStore.getState().autosaveFailureKind)
+            ) {
               pausedRef.current = true;
             }
             if (flashRef.current) {
@@ -205,4 +222,9 @@ export function useAutoSave(): AutoSaveState {
   }, [clearAllTimers, flash]);
 
   return { status, countdown, cancelPending };
+}
+
+/** Whether the save prompt for a changed, moved or deleted file is open. */
+function saveConflictPromptOpen(): boolean {
+  return useUIStore.getState().activeDialog === 'save-conflict';
 }

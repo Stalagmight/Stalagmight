@@ -90,6 +90,49 @@ test('local conversion publishes, fetches the server copy and opens the remote w
   expect(await page.evaluate(() => (window as unknown as ConversionWindow).__E2E_TEST__.projectStore.getState().project?.file_path)).toBe('/cache/converted/project.stalx');
 });
 
+test('publishing to a server without version 2 support says the server project is empty', async ({ page }) => {
+  // Plan 12.1: the project is created, its first upload refused; the local copy
+  // keeps the work and nothing is downloaded over it.
+  await setupMockedPage(page);
+  await createProject(page, 'Synthetic refused conversion');
+  await page.evaluate(() => {
+    const w = window as unknown as ConversionWindow;
+    w.__conversionCalls = [];
+    const overrides: Record<string, unknown> = {
+      speleodb_session: { logged_in: true, user_email: 'test@example.com', endpoint: 'https://speleodb.example' },
+      speleodb_link_status: {
+        is_remote: true, project_id: 'refused', edit_enabled: false, permission: 'ADMIN',
+        has_unpushed_edits: true, unwound: false, remote_state: 'up_to_date',
+        access_denied: false, server_error: null, undo_mode: 'full', lock_holder: null,
+      },
+    };
+    Object.defineProperty(overrides, 'speleodb_publish', { get: () => {
+      w.__conversionCalls.push('publish');
+      w.__MOCK_SET_PROJECT_IS_REMOTE__(true);
+      return { project_id: 'refused', endpoint: 'https://speleodb.example', local_path: '/cache/refused/project.stalx', upload_format_refused: true };
+    } });
+    Object.defineProperty(overrides, 'speleodb_open_project', { get: () => {
+      w.__conversionCalls.push('download');
+      return { local_path: '/cache/refused/project.stalx', offline: false };
+    } });
+    w.__MOCK_IPC_OVERRIDES__ = overrides;
+    w.__E2E_TEST__.speleoStore.setState({ session: { loggedIn: true, userEmail: 'test@example.com', endpoint: 'https://speleodb.example' } });
+  });
+  await openSpeleoTab(page);
+  await page.getByTestId('speleodb-workspace-convert').click();
+  await page.getByTestId('publish-to-speleodb-dialog-description').fill('A shared survey');
+  await page.getByTestId('publish-to-speleodb-dialog-country').click();
+  await page.getByTestId('publish-to-speleodb-dialog-country-option-US').click();
+  await page.getByTestId('publish-to-speleodb-dialog-submit').click();
+  await expect(page.getByTestId('publish-to-speleodb-dialog')).toHaveCount(0);
+  const toast = page.locator('[data-testid="toast"][data-toast-key="speleodb-publish"]');
+  await expect(toast).toHaveAttribute('data-toast-kind', 'error');
+  await expect(toast).toContainText('does not accept projects saved by this version yet');
+  await expect(toast).toContainText('the project on the server is empty');
+  await expect(toast).toContainText('Your local copy is unchanged');
+  expect(await page.evaluate(() => (window as unknown as ConversionWindow).__conversionCalls)).toEqual(['publish']);
+  expect(await page.evaluate(() => (window as unknown as ConversionWindow).__E2E_TEST__.speleoStore.getState().projectLinkKind)).toBe('remote');
+});
 
 test('publishing shows a centered app-blocking spinner until the conversion completes', async ({ page }, testInfo) => {
   await setupMockedPage(page);

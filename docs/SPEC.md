@@ -4,9 +4,9 @@ The living reference for the application: its data model, its user interface, an
 the workflows they serve. Read this to find out what the app is and how it
 behaves.
 
-Where the code is the source of truth - the command and undo enums, the SQLite
-schema, config keys, dependency versions - this document points at the file
-rather than restating it, because a copy here rots silently.
+Where the code is the source of truth - the command enum, the survey model and
+its file format, config keys, dependency versions - this document points at the
+file rather than restating it, because a copy here rots silently.
 
 ---
 
@@ -126,7 +126,7 @@ Stalagmight is a desktop application for processing underwater cave survey data.
 - Export: PNG, SVG, PDF (map images), CSV, JSON, Ariane `.tml` (data)
 - Dive and gas planning as the Plan workspace mode, persisted to a `.plnx` sidecar
 - SpeleoDB integration - remote project hand-off; see [the native-file and lock contract](SpeleoDB.md) for Save + Push, local autosave, automatic-release exits and access verification
-- SQLite project storage, undo/redo with persistence
+- Project storage in a canonical JSON `.stalx` ([file-format.md](file-format.md)), older SQLite files upgraded on their first save; undo/redo with persistence
 - An Android tablet build, sideload-only and not in CI, with partial touch
   support ([touch-support.md](touch-support.md))
 
@@ -274,7 +274,7 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 ### 2.11 Recovery
 - Auto-save only (no crash recovery dialog)
 - Debounced auto-save on a frontend timer, `general.auto_save_interval_seconds` (default 30) - see [saving.md](saving.md)
-- SQLite integrity checks on project open
+- Every project file is validated on open (and before every save); a damaged one is refused with the recovery options (14.4)
 
 ---
 
@@ -283,9 +283,11 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 | Term | Definition |
 |------|------------|
 | **Shot** | A single survey measurement between two stations. Contains azimuth, length, depth, and optionally LRUD. |
-| **Station** | A point in the cave where a shot measurement is taken. Tied to cave line at physical markers. |
-| **Line** | A group of consecutive shots collected during a single survey session; a continuous run of stations joined by shots. Has metadata (name, colour, direction, quality, azimuth reference); who surveyed it and when is recorded per shot. Called a Section before the rename: the `.stalx` file still stores lines in its `sections` table (see [Persisted names](saving.md#persisted-names-lines-are-sections-on-disk)). |
-| **Section** | A named, coloured grouping of lines - a region of the cave such as "Upper level" (#327). Each line belongs to at most one Section; a line in none is ungrouped. Section names are unique in a project. Not to be confused with the old name of a Line: in code a Section is `Section` / `SectionId` / `Project.sections`, serialized as `cave_sections` / `cave_section_id`, stored in the `cave_sections` / `cave_section_lines` tables. |
+| **Station** | A point in the cave where a shot measurement is taken. Tied to cave line at physical markers. An entity with a project-unique Station ID; a shot runs from one station to the next. |
+| **Line** | A group of consecutive shots collected during a single survey session; a continuous run of stations joined by shots (a chain: its start station, then the station each shot ends at). Has metadata (name, colour, direction, quality, azimuth reference); who surveyed it and when is recorded per shot. Called a Section before the rename: an old SQLite `.stalx` stores lines in its `sections` table (see [Persisted names](saving.md#persisted-names)). |
+| **Junction** | A station on two or more lines - what merging two stations makes. It is one station: one Station ID, one comment, one position, shown once per line it is on, every line showing the station the merge kept. The other stations are archived in it with their own name and comment, and Detach Line from Station brings each back (kept and archived stations, plan 2026-11-23). |
+| **Section** | A named, coloured grouping of lines - a region of the cave such as "Upper level" (#327). Each line belongs to at most one Section; a line in none is ungrouped. Section names are unique in a project. Not to be confused with the old name of a Line: in code a Section is `Section` / `SectionId` / `Project::sections`, serialized as `cave_section_id` on the wire and in the `sections` member of the version 2 file. |
+| **Placement** | Where a piece of the survey that holds no zero datum sits: one of its stations at a local (x, y) position. |
 | **Sections panel** | The left-dock tab that lists the project's lines, grouped under their Sections (ungrouped lines listed separately). It keeps its name. |
 | **Virtual Shot** | A shot that is not a permanent surveyed leg. Since #27 it is one of two kinds, and the distinction drives gas and penetration. |
 | **Jump** | A virtual shot a diver **swims**: a shortcut between two mainlines. Counts toward gas (at `jump_rmv_multiplier`) and penetration. Drawn faded. |
@@ -303,6 +305,16 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 
 ## 4. Data Model
 
+The survey is a **station graph**: stations are entities with stable ids, a
+line is a chain of stations joined by shots, and a station on two or more lines
+is a junction. The file stores observations and user decisions only; every
+position, misclosure, alignment and datum role is derived. The model is
+`models::survey` ([survey-model.md](survey-model.md)); its file is the `.stalx`
+version 2 ([file-format.md](file-format.md)); the design and every deviation
+from it is [the station-graph plan](plans/2026-11-20_station-graph-model.md),
+and which station a junction or a loop closure shows is [the kept-stations
+plan](plans/2026-11-23_kept-stations.md) ("RS").
+
 ### 4.1 Entity Hierarchy
 
 ```
@@ -310,67 +322,88 @@ Project (Cave System)
 ├── Metadata
 │   ├── name: String
 │   ├── location: Option<String>
-│   ├── created_at: DateTime
+│   ├── created_at: DateTime (the nanosecond instant round-trips; a .plnx matches it)
 │   └── modified_at: DateTime
-├── Lines[]   (the `sections` table on disk)
+├── Stations{}   (by StationId, ascending)
+│   ├── id: StationId (u32, project-unique, never reused: the Station ID, shown)
+│   ├── name: String (shown on every line through it, unless a loop closure archives it; unique among each line's own stations, 4.2)
+│   ├── comment: Option<String>
+│   ├── external: Option<String> (an imported identity, attribute only)
+│   └── archived: [{ id, name, comment, external, into, lines }] (the stations merges archived here, shown nowhere; lines = the lines whose own station it was; into = the archived station it is inside, unset: directly in this one)
+├── Lines[]   (display order = list order)
 │   ├── id: u32 (internal, immutable, never shown)
-│   ├── name: String (required, unique in the project; seeded `Line N`)
-│   ├── surveyor: Option<String> (legacy; credit is per shot)
-│   ├── date: Option<Date> (legacy; credit is per shot)
-│   ├── color: Color
-│   ├── direction: SurveyDirection
-│   ├── quality: f64
-│   ├── azimuth_reference: Option<AzimuthReference>
-│   ├── section_id: Option<SectionId> (its Section; serde `cave_section_id`)
-│   └── Shots[]
-│       ├── id: u32 (internal session handle, never shown)
-│       ├── uuid: Option<String> (persistent identity, schema v6+, unique across the project)
-│       ├── azimuth_in: f64 (degrees, 0-360)
-│       ├── azimuth_out: f64 (degrees, 0-360)
+│   ├── name: Option<String> (every line the app makes has one, unique in the project; seeded `Line N`)
+│   ├── color, direction, quality, azimuth_reference: Option<AzimuthReference>
+│   ├── section_id: Option<SectionId> (its Section)
+│   ├── legacy_surveyor / legacy_date (the line-level credit fallback; credit is per shot)
+│   ├── start: StationId (station 0)
+│   ├── hand_moves: {StationId -> [x, y, z]} (legacy, migrated files only)
+│   └── Shots[]   (shot i runs from station i to station i+1)
+│       ├── id: u32 (internal session handle, never shown, never persisted)
+│       ├── uuid: String (persistent identity, required, unique across the project)
+│       ├── to: StationId (the station it ends at; it starts at the previous shot's `to`, or `start`)
+│       ├── azimuth_in / azimuth_out: f64 (degrees, 0-360)
 │       ├── length: f64 (meters)
-│       ├── depth_in: f64 (meters)
-│       ├── depth_out: f64 (meters)
-│       ├── pitch_in: Option<f64> (degrees, -90 to 90)
-│       ├── pitch_out: Option<f64> (degrees, -90 to 90)
-│       ├── left: Option<f64> (meters)
-│       ├── right: Option<f64> (meters)
-│       ├── up: Option<f64> (meters)
-│       ├── down: Option<f64> (meters)
+│       ├── depth_in / depth_out: f64 (meters)
+│       ├── pitch_in / pitch_out: Option<f64> (degrees, -90 to 90, +down)
+│       ├── left / right / up / down: Option<f64> (meters)
 │       ├── comment: Option<String>
 │       ├── kind: ShotKind (Normal | Jump | Reference)
 │       ├── marker_index: Option<u32>
-│       └── temperature: Option<f64> (celsius)
-├── Sections[]   (named groupings of lines, panel order; serde `cave_sections`)
-│   ├── id: SectionId (u32; `next_section_id` allocates, serde `next_cave_section_id`)
+│       ├── temperature: Option<f64> (celsius)
+│       └── credit: surveyors, explorers, date (per shot)
+├── Datums[]   (list order is semantic: frame, roles)
+│   ├── station: StationId
+│   ├── via: Option<LineId> (the line whose slot it was set on)
+│   ├── gps: GpsCoordinates, accuracy_m: Option<f64>, entrance: Option<bool>
+│   └── correction: Option<[x, y]> (maintained, see 4.3)
+├── Placements[]   (one per datum-less piece: { station, x, y })
+├── LoopClosures[]   (list order kept)
+│   ├── id: ClosureId (u64, never reused)
+│   ├── a, b: StationId, with a_via / b_via: Option<LineId>
+│   ├── strategy: Batch | LeastSquaresWeighted | Move | Tie (legacy) | deferred legacy strategies
+│   └── archived: Option<a | b> (the loop end: that end shows the other, kept end; unset: both keep their names)
+├── Sections[]   (named groupings of lines, panel order)
+│   ├── id: SectionId (u32)
 │   ├── name: String (project-unique, never empty)
 │   └── color: String (#rgb / #rrggbb)
-├── Stations[] (computed from shots)
-│   ├── station_ref: StationRef (line_id:station_index, internal handle, never shown)
-│   ├── id: StationId (u32, project-unique Station ID, shown)
-│   ├── name: String (unique within the line, shown)
-│   ├── coordinates: Coordinates (computed or GPS)
-│   ├── is_zero_datum: bool
-│   ├── gps_coordinates: Option<GpsCoordinates>
-│   ├── merged_with: Vec<StationRef>
-│   ├── closures_with: Option<Vec<ClosureRef>> (direct + transitive closure relationships)
-│   └── comment: Option<String>
-│
-│   ClosureRef:
-│     ├── closure_id: u64 (references LoopClosure.id)
-│     ├── station_ref: StationRef (the other station in the closure)
-│     ├── via_station: Option<StationRef> (intermediate station for transitive closures)
-│     └── is_transitive: bool (false = direct closure, true = transitive)
-├── station_names: {StationKey -> String} (every station's name; `station_names` table)
-├── station_ids: {StationKey -> StationId} (every station's Station ID; `station_ids` table)
-├── next_station_id: StationId (the next id to allocate; `project_settings`)
-└── Settings (per-project, stored in the .stalx: project_settings + display_settings tables)
-    ├── validation: ValidationConfig
-    ├── surface_elevation: Option<f64>
-    ├── default_azimuth_reference: Option<AzimuthReference>
-    ├── counter_parity_shots: {shot_uuid} (shots whose record orientation runs against their line's parity after a Combine; dive-plan pins only)
-    └── display toggles (show_stations, show_shots, grid_spacing, geometry_mode,
-        hiddenSections - the Sections hidden on the map, a view setting, ...)
+├── Settings (travel with the file)
+│   ├── validation: ValidationConfig
+│   ├── surface_elevation: Option<f64>
+│   └── default_azimuth_reference: Option<AzimuthReference>
+├── imported_file_hashes / imported_line_hashes (re-import de-duplication)
+└── Counters: next_station_id, next_closure_id, next_section_id (next line id is derived: max + 1)
 ```
+
+A **slot** `StationRef { line_id, station_index }` - "the i-th station along line
+L" - is the address the IPC, the frontend and the data table use; it is derived
+from the chain and resolved to a `StationId` at the command boundary. The
+frontend's per-slot `Station` (coordinates, `id`, `name`, `comment`,
+`is_zero_datum`, `gps_coordinates`, `merged_with` = the other slots of the same
+station, `closures_with` = direct and transitive closure relationships,
+`archived` = the station's archived stations, `shown` = on a foreign slot or a
+loop end only, the Station ID it shows, its home line and whether it is a loop end) is
+derived for every slot; a junction's slots share its id, its shown name and
+comment, and its archived stations.
+
+What the file holds besides the survey: the SpeleoDB link (`speleodb`), the
+per-machine state (`local`: display toggles such as `hiddenSections`, the
+SpeleoDB sync state), the ignored warnings, and the undo history. See
+[file-format.md](file-format.md) and [saving.md](saving.md).
+
+**Invariants** (`Project::validate`, checked after every edit, on every load and
+before every save; plan section 2): ids unique and every reference resolves;
+every line is a simple chain (no station twice on one line); every station is on
+a line; the shots form a **forest** (no cycle without an explicit loop closure:
+what was the merge-forest rule is now structural); every connected piece has
+exactly one anchor (its first datum, else exactly one `Placement`); a closure
+joins two different stations, and two pieces only when both are placed by a
+datum; on every line, the line's own stations have different names (N8, 4.2);
+archived stations and closure archives keep the kept-stations invariants (A1 to
+A6, C1, C2: [survey-model.md](survey-model.md)); counters above every id,
+archived ids included; numbers finite. An edit that would break one is rolled
+back and refused; a save refuses to write an invalid model; a file that breaks
+one is refused with the repair offer.
 
 #### Sections (groupings of lines, #327)
 
@@ -409,58 +442,135 @@ data and changes no geometry or statistics. Rules:
 - **Add .stalx / Merge projects** append the source's Sections with fresh ids and
   deduped names; the copied lines keep their membership.
 
-The code names (`Line`, `LineId`, `Project.lines`, `line_id`,
-`Project.line_offsets`) stop at the file boundary: the `.stalx` keeps the
-pre-rename SQL names (`sections`, `section_id`, `section_offsets`, ...) and the
-JSON it stores (undo history, held gauges, the dive-plan sidecar) keeps
-`section_id`-style keys. See
-[Persisted names](saving.md#persisted-names-lines-are-sections-on-disk).
+In code a Line is `Line` / `LineId` / `Project::lines`, and a Section is
+`Section` / `SectionId` / `Project::sections`; the version 2 file uses the same
+words (`lines`, `sections`). The command and wire names keep `cave_section`
+(`create_cave_section`, `cave_section_id`). A legacy SQLite file called the
+lines `sections` and the Sections `cave_sections`; only the frozen reader reads
+it (see [Persisted names](saving.md#persisted-names)).
 
 ### 4.2 Station Identification
 
 The user identifies a station by its **name** and its **Station ID**, a line
 by its **name**, and a shot by its two stations. The positional handles the
-code addresses them with (`line_id`, the shot id, `StationRef =
-line_id:station_index`) are internal session handles and are never shown.
+code addresses them with (`line_id`, the shot id, the slot `StationRef =
+line_id:station_index`) are internal and are never shown.
 
 | Thing | Identity the user sees | Unique within | Example |
 |-------|------------------------|---------------|---------|
 | Line | name | the project | `Main Line` |
-| Station | name | its line | `17`, `4a`, `A3` |
+| Station | name | the stations each line shows as its own | `17`, `4a`, `A3` |
 | Station | Station ID (integer) | the project | `512` |
 | Station, with its line | `line / name` | the project | `Main Line / 17` |
 | Shot | `from → to` | its line | `4 → 5`, with its line `Main Line: 4 → 5` |
 
-A station's stored identity is the shot UUID before it
-(`StationAnchor::AfterShot`; `LineStart` for station 0). Shot UUIDs are unique
-across the whole project: an import, merge or Add that brings an id the project
-already holds renames the newcomer's copy to a derived id, and a file saved
-before that rule is healed the same way on load, with its undo history
-translated alongside (see [ariane-export.md](ariane-export.md#shot-uuids) and
-[undo-redo.md](undo-redo.md#a-loaded-history-follows-the-loads-shot-uuid-heal)).
-The names (`Project::station_names`) and Station IDs
-(`Project::station_ids`) are keyed to that physical station, so they stay put
-when shots are inserted, deleted or reversed, and follow their station through
-Split Line Here and Combine Lines.
+A station IS its Station ID: the id is the entity's key, so it stays with the
+physical station through every insert, delete, reverse, split and combine with
+no bookkeeping. A station shows ONE identity on every line through it: its
+Station ID, name, comment and external id. A **junction** (a station on two or
+more lines, what a merge made) shows its **kept** station on every line: a
+merge keeps one of its two stations (Merge Stations asks which) and
+**archives** the other in the junction, whole. An archived station keeps its
+own Station ID, name, comment and external id and the lines whose own station
+it was; it is shown nowhere, and its name counts toward no uniqueness. A
+station archived while it was a junction itself keeps the stations archived in
+it inside it, so each archived station is directly in the junction or inside
+another archived station. One that names no line any more is **history**: it
+only reserves its Station ID, and nothing brings it back. A **loop closure**
+may archive one of its ends the same way: that **loop end** shows the closure's
+kept end (name, Station ID, comment) on every line through it, while it stays a
+point of its own (position, datums, selection); Remove Closure shows its own
+station again. Shot UUIDs are unique across the whole project: an import, merge
+or Add that brings an id the project already holds renames the newcomer's copy
+to a derived id (see [ariane-export.md](ariane-export.md#shot-uuids)).
 
-**Normalization.** One entry point, `Project::ensure_station_identities`,
-guarantees after every load, import, Add/Merge, mutating command and undo/redo
-step that:
+**Native and foreign slots.** A line through a station that no archived station
+of it names is a **native line** of the station, and a slot there whose station
+no closure archives is a **native slot**: the line shows its own station. On a
+**foreign slot** (an archived station names the line: the line's own station
+was not kept) the line shows the kept station in the colour of that
+station's **home line**, its first native line in line order: its pill takes
+that line's colour and names it ("Main: 12", RS-OWNERSHIP), with a small
+**home dot** in that colour raised right after its name (RS-LEADDOT); a loop
+end shows the kept end in its kept end's home-line colour, with its home dot
+when that is another line, and no loop mark: its tooltip says it is a loop
+end and a screen reader reads "loop end" (RS-NODOTS). A shot with such an
+end is two-tone, blending across the arrow: the half holding that end in its
+home line's colour, the end's home dot on it (its tooltip "Belongs to
+Main"), the arrow in the blend between the two colours. Plain text names them `Side / 12 (Main)` and
+`Main / 12 (loop end on Side)`. Split Line Here keeps the split station native
+on both halves, or, when an archived station names the line there, that
+station names the second half too.
 
-- every line has a non-empty name, unique in the project: an unnamed line is
-  seeded `Line 1`, `Line 2`, ... (smallest free number, in line order); a
-  repeated name gets ` (2)`, ` (3)`, ... on the later line;
-- every station has a Station ID: one without (or holding an id an earlier
-  station holds) gets the project's `next_station_id`, allocated in line order
-  then station order, so a file an older build rewrote without the ids re-mints
-  the same ids on every open; ids are never reused within a timeline (an undo
-  that restores a snapshot restores the counter with it);
-- every station has a name, unique within its line: a missing name is seeded
-  from the station's index (`i` -> `"i"`), and a name an earlier station of the
-  line holds gets the first free lowercase suffix by the Mid rule below (`5`,
-  `5` -> `5`, `5a`; `Sump`, `Sump` -> `Sump`, `Sump-a`).
+**Uniqueness and normalization.** Every line has a non-empty name, unique in
+the project; every station has a Station ID. On each line, the native slots
+show different stations by different names (invariant N8). Foreign slots and
+loop ends count toward no uniqueness: with Main / 12 kept at Branch's start,
+Branch shows Main's `12` there (a Main-coloured pill) and keeps its own station `12` further along
+(CSV and JSON exports tell them apart by Station ID). **Rule K** picks the
+station kept where no one chooses, and is the dialogs' default (after Merge's
+preference for the one station holding a datum): the one on the longest line
+(its length as line details measure it), ties to the lowest Station ID.
+**Rule L** settles a name an operation makes two native slots of a line show
+for two stations: the station shown on fewer lines (foreign slots and loop ends
+counted) takes the letter suffix below (`5` -> `5a`), free on every line it is
+native on; on a tie, the one new on the line by its own name, then the higher
+Station ID. A station shown on more lines is never lettered for one on fewer,
+and chain order never decides. Merge Stations, Detach Line from Station and
+Remove Closure list each collision their operation makes (a merge rarely: the
+lines that show its kept station anew show it through foreign slots; creating a
+loop closure never) with two answers, lettering one station or the other, and
+refuse one left unanswered; every path without a dialog letters by rule L and
+names each letter in its notice (an import in its receipt). The answers follow
+the station-name rules. An answer may rename only a station of one of the
+operation's own collisions: a rename naming any other station is refused and
+changes nothing, so an operation that makes no collision (creating a loop
+closure among them) takes no rename. A letter the operation offers is taken
+exactly as offered (a station named ` 5` is offered ` 5a`, free on its lines);
+any other name is trimmed, and refused when it is empty or holds a control or
+invisible formatting character, as Edit Station refuses it. A rename addresses
+the identity the slot shows, so every line showing it shows the new name
+(through a foreign slot or a loop end that is the kept station, and the data
+table or Edit Station first says whose station it is); it is refused when a
+native slot of a line the renamed station is native on shows another station by
+the new name. Imports and the edits that create stations keep names unique with
+the letter-suffix rule below; Combine Lines plans its prefixes on the names the
+lines show natively.
 
-A station or line that already has a valid name and id keeps them.
+**Detach and restore.** Detach Line from Station on a line an archived station
+names gives back, whole, the archived station directly in the junction that is,
+or holds, the one naming the line: its Station ID, name, comment and external
+id, on every line it or a station inside it names (they come off together), the
+stations inside it staying inside it. Detaching the junction's only native
+line, when every other line is named by an archived station, keeps the junction
+(Station ID, name, comment) on that line and gives the other lines one station
+back, the archived station the dialog picks (by default rule K over the lines
+it and the stations inside it name), with the other archived stations inside
+it. Detaching a native
+line beside another native line (Split Line Here, a line started there, an
+import join) gives it a new station with the junction's own name and no
+comment. Likewise an edit (a delete of a shot, range or line) that leaves a
+station with no native line gives it the identity of the archived station
+directly in it that names the lines left, itself or through a station inside it
+(rule K among several), its datums, closure ends, placement and hand moves
+following; the old identity becomes history, and its comment and external id
+move to the restored station when that one has none (the delete's confirm names
+a comment this hides; Undo restores it exactly).
+
+**Conversion.** Converting a 0.6.0 file, and opening a version 2 file an earlier
+build wrote (its `requires` lacks `archived-stations`), keep at each junction
+the station on its longest line (rule K) and archive the others; each loop
+closure archives the end rule K does not keep when no other closure archives
+that end and no chain of closure archives would loop, else none; rule L settles
+a name two native slots now show. The conversion notice lists, by line, each
+slot now shown as another station ("Side / 0 is now shown as Main / 12"), each
+letter, each hidden comment and each loop closure that keeps both names (more
+than three are counted and listed behind Details), and says Detach Line from
+Station or Remove Closure brings each back. An unnamed line is seeded `Line 1`,
+`Line 2`, ... (smallest free number, in line order); a repeated line name gets
+` (2)`, ` (3)`, ... on the later line. Station IDs come from `next_station_id`
+and are never reused within a timeline, an archived station's included (an
+undo leaves the counter standing).
 
 **Naming a new station.** An edit that creates a station names it:
 
@@ -483,16 +593,21 @@ A station or line that already has a valid name and id keeps them.
   named station continues it (End), a run between two named stations takes Mid
   suffixes of the station before it, a run before the first named station takes
   Prepend names going backwards; a line with no name at all is seeded.
-- **Split Line Here** at a station: both halves carry the station; the copy that
-  starts the new line keeps the name (names are unique per line, not per
-  project) and gets a **new** Station ID.
+- **Split Line Here** at a station: both halves pass the one station, which
+  becomes a junction; it keeps its name, Station ID and comment. Nothing is
+  minted.
+
+A name is free only when no station of any line the new station is on holds
+it: a station created on a line that also passes a junction is checked
+against the junction's other lines too.
 
 **Combine Lines.** The joined line must keep its names unique, and it renames
 stations only when it has to. The two lines are prefixed when
 
-- a name of the other line (its join station aside - the joined station keeps
-  the kept line's name and Station ID, the other join station's are retired)
-  is also a name of the kept line: a real **collision**; or
+- a name the other line shows natively (its join station aside - the joined
+  station is the kept line's, 7.11) is also a name the kept line shows
+  natively: a real **collision** (a dotted junction or a loop end neither
+  causes nor takes a prefix); or
 - the kept line has two or more **letter families** (it is the product of an
   earlier lettered combine; a letter family is the names starting with one
   ASCII capital directly followed by a digit, `A0`, `A3`, `B12a`) and the other
@@ -521,55 +636,56 @@ joined at kept `8` = other `0` gives `A0 A1 Junction Sump A4 .. A8 B1 Sump-a
 B3`. Lines whose names do not collide keep every name: `0 1 2 3` + `3 4 5`
 joined at `3` gives `0 1 2 3 4 5`; kept `0 .. 200` + other `A1 .. A9` keeps
 both; a line imported as `E0 .. E10`, split at `E5` and combined back is
-`E0 .. E10` again. A final pass letter-suffixes any repeat the prefixing could
-not prevent (all 26 letters in use). The Combine Lines dialog says, for the
-line it shows as kept, which stations will be renamed: each line's lettering
-by its first and last lettered station (the other line's join station, which
-becomes the joined station, left out), with how many are lettered and how
-many keep their names when not all are, then the names made unique by the Mid
-rule one by one (the first three, then a count): "Station names collide, so
-stations will be renamed: Main 0..8 -> A0..A8 (7 renamed, 2 keep their
-names), Side 1..3 -> B1..B3 (2 renamed), Side Sump -> Sump-a". It names the
-joined station by its name after the combine.
+`E0 .. E10` again. A final pass letter-suffixes any repeat the prefixing could not prevent
+(all 26 letters in use). The Combine Lines dialog says, for the line it shows
+as kept, which stations will be renamed: each line's lettering by its first
+and last lettered station (the other line's join station, which becomes the
+joined station, left out), with how many are lettered and how many keep their
+names when not all are, then the names made unique by the Mid rule one by one
+(the first three, then a count): "Station names collide, so stations will be
+renamed: Main 0..8 -> A0..A8 (7 renamed, 2 keep their names), Side 1..3 ->
+B1..B3 (2 renamed), Side Sump -> Sump-a". It names the joined station by its
+name after the combine.
 
 **User edits.** Renaming a station (`SetStationName`, undoable) trims the
-name and refuses an empty one or one another station of the line holds ("Line
-X already has a station named Y"). Renaming a station to the name it already
-has (after trimming) succeeds as a no-op: no undo entry, no unsaved-changes
-flag. Renaming a line (Edit Line) or creating one from the UI refuses an empty
-name or one another line holds ("A line named X already exists"); so do the
-names a user gives the halves of Split Line Here or a delete-and-split and the
-name of a combined line (the line or lines being replaced are no collision).
-Automatic paths (imports, default names) de-duplicate instead, renaming the
-line the operation made, never an unrelated one. The backend and the dialogs,
-the data table and the Sections panel (inline, before sending anything) also
-refuse a station, line or Section name holding a control character or an
-invisible formatting character (the left-to-right / right-to-left marks, the
-bidi embeddings, overrides and isolates, the zero-width space and joiners, the
-BOM; `name_characters_refusal` in the backend, `nameValidation.ts` in the
-UI), which can make a name read as something it is not; visible separators
-such as ` / ` are fine. Names are stored trimmed, and compared trimmed:
-`Main ` is `Main`, and a file holding both is normalized to `Main` and
-`Main (2)`. A name that only differs from the current one by surrounding
-spaces is no rename: nothing is sent.
+name and refuses an empty one or one that a native slot of any line the
+renamed station is native on shows for another station (4.2; "Line X already
+has a station named Y", naming the line where it is taken; the frontend checks
+the same rule before sending, `stationRenameProblem`).
+Renaming a station to the name it already has (after trimming) succeeds as a
+no-op: no undo entry, no unsaved-changes flag. Renaming a line (Edit Line) or
+creating one from the UI refuses an empty name or one another line holds ("A
+line named X already exists"); so do the names a user gives the halves of
+Split Line Here or a delete-and-split and the name of a combined line (the line
+or lines being replaced are no collision). Automatic paths (imports, default
+names) de-duplicate instead, renaming the line the operation made, never an
+unrelated one. The backend and the dialogs, the data table and the Sections
+panel (inline, before sending anything) also refuse a station, line or Section
+name holding a control character or an invisible formatting character (the
+left-to-right / right-to-left marks, the bidi embeddings, overrides and
+isolates, the zero-width space and joiners, the BOM; `name_characters_refusal`
+in the backend, `nameValidation.ts` in the UI), which can make a name read as
+something it is not; visible separators such as ` / ` are fine. Names are
+stored trimmed, and compared trimmed. A name that only differs from the current
+one by surrounding spaces is no rename: nothing is sent.
 
 **Labels.** The "Station IDs" map and image-export label draws the Station ID;
 the "Station names" label draws the name (every station has one). The two are
-exclusive. Merged stations are one point, so a merge group (the stations
-joined by station merges; the image export also counts the two ends of an
-aligned loop closure as one point) draws exactly ONE label, for its
-representative: a station that is not its line's first station if there is
-one, then one that is not its line's last, ties broken by the line's order in
-the project and then by station index. A branch merged onto the middle of the
-main line therefore shows the main line's name there (`Junction`), never the
-branch's `0`. The label keeps the first-in-line rule (it always shows when any
-member starts its line) and hides with the shots only when every member's
-marker would. Stations that are not merged each draw their own label.
+exclusive. A junction is one station, so it draws exactly ONE label (the
+labels group slots by Station ID), on its representative slot: one that is not
+its line's first station if there is one, then one that is not its line's
+last, ties broken by the line's order in the project and then by station
+index; with names on, the label is the junction's shown name, the same on
+every line. A loop end draws no label (name, Station ID or comment), on the map
+or in the image export, though its point is drawn. The image export also counts
+the two ends of an aligned loop closure as one point. The label keeps the
+first-in-line rule (it always shows when any slot starts its line) and hides
+with the shots only when every slot's marker would.
 
 The undo history names lines, stations and shots by name (`Update shot Main
-Line: 4 → 5`, `Merge stations Main Line / 0 and Side / 1`, `Delete line "Main
-Line"`); a name that can no longer be resolved falls back to the wording
-without it.
+Line: 4 → 5`, `Merge Side / 1 into Main Line / 0 (keeps 0)`, `Delete line "Main
+Line"`), worded when the edit was recorded, with the names before it (see
+[undo-redo.md](undo-redo.md#name-resolution)).
 
 A DMP import records each station's MNemo station number as its name (see
 [dmp-import.md](dmp-import.md#station-names)); MNemo restarts at 0 in every
@@ -578,20 +694,38 @@ section, which per-line uniqueness allows.
 ### 4.3 Coordinate System
 
 - **Internal coordinates**: X (East), Y (North), Z (Depth) in meters
-- **Origin**: The frame datum's station, or (0,0,0) if no GPS assigned. The frame
-  datum is the first entry of `zero_datums` that still **resolves**
-  (`Project::frame_datum`; a dangling datum is dropped from the wire and anchors
-  nothing), so it is a **position in that list** rather than a property of any one
-  datum. Anything that promotes a different datum
-  to first (removing the primary one, deleting its station or its line) - or
-  ADDS the first datum, which establishes the frame - would re-define what every
-  stored coordinate means. It does not: the whole survey is translated so that
-  datum's station lands on local (0,0), free-floating components included, which
-  preserves every station's real-world position (and, for the add, every relative
-  position) and changes only the local coordinates
-  (`Project::renormalize_frame`, issue #469). When the promoted datum was a GPS
-  fix (#741), its piece is first moved onto its GPS against the old frame, so
-  every piece stays on its own GPS through the re-frame
+- **Origin**: the frame datum's station, or (0,0,0) if no GPS is assigned. The
+  frame datum is the first datum in list order that resolves, so it is a
+  **position in that list** rather than a property of any one datum.
+- **Anchors**: every connected piece of the survey has exactly one anchor. A
+  piece that holds a datum is placed by its first datum in list order (its
+  **placement datum**) at `gps_to_local(gps, frame gps) + correction`; every
+  later datum in it is a **GPS fix**, which places nothing and is pulled toward
+  in the Closures Computed View. A piece with no datum has a `Placement`: one
+  station at a stored local (x, y), where the user put the piece (an import's
+  placement, Move Segment, Adjust Position).
+- **Positions are derived**: each station is its piece's anchor plus the sum of
+  shot vectors along the chain (`Project::raw_positions`, solver v1, plan 3.3).
+  A junction is one station, so its lines can never drift apart. Depth (Z) is
+  absolute: the mean of the depth readings at the station over every line
+  through it and every station aligned closures tie to it.
+- **What stays still on an edit** (plan 4.1): datum pieces stay on their datum;
+  in a free piece the edited line's first station stays where it was; a merge
+  moves the free piece onto the placed one (or, between two free pieces,
+  `station_a`'s piece onto `station_b`; between two placed pieces the piece
+  whose placement datum is later in the list moves, and that datum becomes a GPS
+  fix); pieces cut off by a delete or a detach stay where they were, unless a
+  GPS fix that becomes their placement datum places them on its GPS.
+- **Frame changes** move nothing relative to anything else. Anything that
+  makes a different datum first (removing the frame datum, deleting its station
+  or its line) - or ADDS the first datum, which establishes the frame - would
+  re-define what every local coordinate means. It does not: the whole survey is
+  translated so the new frame station lands on local (0,0), every `Placement`
+  with it, and every placement datum's `correction` is re-measured so each
+  piece keeps its real-world place despite tangent-plane non-additivity
+  (#469). A GPS edit of a placement datum clears its correction and places its
+  piece on the new GPS; a new GPS on the frame datum's own station moves the
+  other pieces by the change (#769). Corrections below 1e-9 m are not stored.
 - **GPS coordinates**: WGS84 (latitude, longitude, depth reference)
 - **Azimuth**: degrees (0-360), stored **as measured**. The stored number is
   never rotated: each line declares what its readings refer to
@@ -634,13 +768,13 @@ When a zero datum is set with GPS coordinates, a coordinate transformation conve
    - Altitude is always 0 (depth_reference is meters below surface, not ellipsoid height)
 
 2. **ECEF to ENU**: Convert ECEF difference to local tangent plane coordinates
-   - Origin is the zero datum's GPS position
+   - Origin is the frame datum's GPS position
    - East (+X) points east, North (+Y) points north
    - Up component is discarded (cave surveys use depth measurements)
 
 3. **Result**: (east, north) offset in meters
-   - These become the local X, Y coordinates for positioning lines
-   - All other stations are computed relative to this origin
+   - Placement datums sit at these local X, Y coordinates plus their correction
+   - All other stations are computed relative to their piece's anchor
 
 The transformation is implemented in `src-tauri/crates/models/src/geo.rs` with:
 - `geodetic_to_ecef(lat, lon, alt)` - WGS84 to ECEF
@@ -648,16 +782,103 @@ The transformation is implemented in `src-tauri/crates/models/src/geo.rs` with:
 
 ### 4.4 Computed Values
 
-These are derived from shot data, not stored:
+These are derived from the model, never stored, and recomputed after every edit
+(memoised per project revision):
 
-- Station coordinates (from azimuth, length, depth chain)
+- Station coordinates (raw: from the anchors and the shot chain; Closures
+  Computed View: the least-squares solve, [closures.md](closures.md))
+- Merge pairs on the wire (each junction's first slot paired with each other
+  slot), datum roles (placement datum or GPS fix), entrance defaults
+- Loop closure figures: misclosure, path length along shots, error percentage,
+  and whether a snap is aligned
+- Frozen shots, rigid groups, anchored lines, immovable stations
 - Line statistics (total length, depth range, shot count). Total length
   sums permanent and jump shots only: a reference shot repeats passage already
   surveyed, so counting it would double-count (#689). Shot count includes every
   shot.
-- Loop closure errors
-- Penetration distance (maximum line distance from the nearest entrance zero datum; a GPS fix
-  mid-passage is not an entrance unless ticked as one, #741)
+- Penetration distance (maximum line distance from the nearest entrance zero
+  datum; a GPS fix mid-passage is not an entrance unless ticked as one, #741)
+
+### 4.5 What changed with the station graph
+
+Declared behaviour changes of the switch from the 0.6.0 model (plan 12.2 and
+its Deviations sections), visible to users. The complete list, each change
+with its reason, is the plan's "Status (final)" section, and for junctions
+and loop ends section 11 of the kept-stations plan:
+
+- **A junction shows one station, the kept one, on every line.** Merging two
+  stations makes one; the Merge dialog asks which is kept. The other is
+  archived with its own name, Station ID and comment (no comment is joined),
+  and Detach Line from Station brings it back; the lines that showed it show
+  the kept station in the kept station's home-line colour, and may keep a
+  station of their own by the same name (4.2). A migrated file keeps at each
+  junction the station on its longest line, and the conversion notice lists
+  what each line shows differently. Renaming a junction renames it on every
+  line.
+- **A loop closure can show its two ends as one station.** Create Loop Closure
+  asks which end both show, or keeps both names; the other end (a loop end)
+  stays a point of its own with no label, and Remove Closure brings its name
+  back. A migrated loop closure or `Tie` archives the end rule K does not keep,
+  when it may.
+- **Split Line Here makes a junction.** The halves share the split station, so
+  an edit to one half moves the other, Move Segment on the second half is
+  refused when the first holds a datum, and merging the halves' far ends goes to
+  the closure dialog. There is no comment or datum side to choose.
+- **Unmerge detaches one line.** "Detach Line from Station" gives the chosen
+  line its own station back where the junction was: the one a merge archived
+  there (with every line that was one station with it), or a new station with
+  the junction's name and no comment; when every other line shows the junction
+  through archived stations, the chosen line keeps it and they get one back. On
+  a hub of three or more lines it detaches that line only (0.6.0 removed every
+  direct merge pair of the member). Datums and closure ends that came from that
+  line (`via`) go with it.
+- **A delete leaves a junction on its other lines** with its comment and
+  datums; nothing is re-anchored and no replacement merge is invented. When
+  the lines left all show it through an archived station, that station comes
+  back there (rule K among several), keeping a comment that would otherwise
+  vanish.
+- **Set Zero Datum on a junction slot** edits the station's datum when it has
+  one; a station can hold two datums only after merging two placed pieces or
+  from a migration.
+- **A loop closure from a junction to a station a closure already ties it to**
+  is refused as a duplicate (0.6.0 made a second closure from the merged twin).
+- **Migrated merge loops are `Tie` closures** (shown as aligned `Batch`): the
+  Closures Computed View now adjusts a piece 0.6.0 showed as measured, and a
+  demoted merge across one shot is skipped and listed in the Warnings tab
+  instead of failing its piece.
+- **Closure figures are recomputed** from the current geometry, and the path
+  length counts shots only (closures and merges no longer count as
+  zero-length edges).
+- **Warning ignores ride the save** instead of being written at once: "Don't
+  save" discards them, and an Ignore makes the project unsaved.
+- **History labels are worded when the edit is recorded**, with the names
+  before it, batch rows included (0.6.0 resolved them when listed).
+- **Exports**: CSV / JSON `from_id` / `to_id` are shared Station IDs at
+  junctions; Ariane ids are Station IDs, stable across exports; the image
+  export draws one comment and one star per station.
+- **The file is JSON.** An old SQLite file opens as before and is upgraded on
+  its first save, its original kept (Recent Projects: right-click the project, Restore an earlier copy); its undo history is not kept.
+  A file whose conversion moved stations, changed a depth, could not place a
+  station, or changed what a line shows (another station, a letter, a hidden
+  comment, a loop closure keeping both names) shows a one-time conversion
+  notice (a closed file upgraded by a Recents rename or a
+  link strip shows it at its next open), whose last sentence says whether the
+  new format is on disk yet; the converting save turns it to "Saved in the new
+  format", or, with the notice dismissed, says so in a toast. A display toggle
+  before that save is kept for it but is not an unsaved change, so it never
+  starts an autosave that converts the file. Until that save the status bar
+  reads "Old format: converted when you save" instead of "Saved". A file made
+  with a newer Stalagmight opens read-only when it only uses features this
+  version does not know, and is refused (update Stalagmight) when it is a
+  newer major format or cannot be read correctly without those features. A
+  read-only file's status bar reads "Read-only"; Save, Save As, Save and
+  Close, Import and Import from MNemo are off in the menu and say why, and
+  their shortcuts show the read-only notice; Close Project closes it without
+  asking to save. A
+  save refuses a file another
+  program changed since it was opened and asks which version to keep. An older
+  Stalagmight cannot open a file this version saved, and SpeleoDB pushes send
+  the new file, which needs the updated server.
 
 ---
 
@@ -722,7 +943,7 @@ These are derived from shot data, not stored:
 │  │  │         │                                         │   │   │
 │  │  │         ▼                                         │   │   │
 │  │  │  ┌─────────────────────────────────────────────┐ │   │   │
-│  │  │  │              SQLite Database                 │ │   │   │
+│  │  │  │        Project file (.stalx v2, JSON)        │ │   │   │
 │  │  │  └─────────────────────────────────────────────┘ │   │   │
 │  │  └───────────────────────────────────────────────────┘   │   │
 │  │                                                           │   │
@@ -764,7 +985,7 @@ User Action → Command Dispatcher → Tauri IPC → Rust Executor
 | Type | Examples | Logging | Undo | Storage |
 |------|----------|---------|------|---------|
 | **Transient** | Pan, zoom, hover, drag preview | No | No | Zustand only |
-| **Persistent** | Create/edit/delete shots, merge stations | Yes | Yes | SQLite |
+| **Persistent** | Create/edit/delete shots, merge stations | Yes | Yes | the `.stalx` file, on save |
 
 ---
 
@@ -894,6 +1115,11 @@ Primary view for survey work.
 | Detail Panel | Open, 300px | Resizable, collapsible |
 | Data Table | Collapsed | Resizable (height), collapsible |
 
+The data table's line, its row and column selection and its scroll belong to
+the open project: opening another project starts the table on that project's
+first line, at the top, as does reopening one; an edit or a save keeps them
+(demo finding I-12).
+
 #### 6.3.1 Detail Panel Hyperlinks
 
 The Detail Panel provides interactive hyperlinks that enable quick navigation between related survey elements (shots, stations, lines).
@@ -908,9 +1134,56 @@ the test ids) but are never shown:
 - Shot: its two station names, `4 → 5`; with line context `Main Line: 4 → 5`
   (aria-labels and selection announcements always carry the line).
 - Line: its name (`Unnamed line` only for a line that somehow has none).
-- At the default `full` syntactic-highlighting level a link renders as a pill:
-  entity symbol, the label, then (for a station or shot on another line) the
-  line name dimmed after a divider.
+- At the default `full` syntactic-highlighting level a link renders as a line
+  pill (`LinePill.tsx`), coloured by the line it belongs to (a line its own, a
+  station the line its shown station belongs to, which may be another than
+  its slot's, RS-OWNERSHIP; a shot its line, two-tone when an end belongs to
+  another line): a **leading dot** in that line's colour (RS-LEADDOT; a
+  station pill's dot is its station's line's, a shot pill's the shot's own
+  line's, a two-tone shot's in the shot's part at the start), then (for a
+  station or shot on another line) the line name, smaller and muted, with a
+  colon, then the label at the surrounding text size; a station shown on a
+  line it does not belong to (or a shot's end that is) has a small **home
+  dot** in the colour of its own line raised right after its name, taking no
+  room; and for a station its Station ID as a muted superscript with a `#`
+  (`Main Line: 17` with a raised `#42`; the `#` is not read aloud), which
+  steps aside to clear a home dot before it. Both dots are decorative; the
+  loop-end mark stays gone (RS-NODOTS). The aria-label
+  and the selection announcement carry the ID too (`Select station Main Line
+  / 17, Station ID 42`). The fill (a tint of the line's hue), the border (the
+  line colour itself, moved toward the text only until it stands 1.8:1 from
+  the panel and the fill), the hover and the dots (the line colour, ringed
+  only where it alone falls under its floor on what it sits on) come from
+  `src/theme/pillColors.ts` and `pillBlend.ts`, which hold main text at 7:1,
+  the muted parts at 4.5:1, the leading dot at 3:1 and the home dot, small
+  (0.26em) and quiet because the words say the same, at 2:1 for any line
+  colour on every theme. A foreign end or a loop end says so in its tooltip and its
+  screen-reader words. The Station detail's "Also on"
+  rows name the other line only, without the ID. The data table's gutter and
+  line picker, and the dialogs that name stations or lines, use the same pill
+  (`EntityBlob`). Below `full`, links are plain underlined text.
+- Running text (dialog sentences, the Station details' sentences, Warnings
+  tab messages, undo and redo history rows, the conversion notice, toasts)
+  names a station, shot or line with a **prose pill** (RS-PROSE,
+  `ProsePill`): the same leading dot, muted context, bare name, home dot and
+  superscript Station ID inline in the sentence (a station of another line in
+  that line's colour, a two-colour shot blending across its arrow, which
+  never wraps away from either end), on a **glow** of the line's colour
+  (RS-NODOTS): a soft-edged
+  capsule, solid behind the name and rounded at each end of each line's
+  piece, whose halo fades beyond it; a two-colour shot is one capsule whose
+  colour runs from one line's to the other's in OKLab across the arrow.
+  Glows on adjacent lines may touch softly; their cores never meet. Never
+  as `Main / 12`. The paragraph's line pitch is the same as with plain
+  text, and the home dot moves no word (at a pill's end it hangs into the
+  space before the next word). A screen reader reads the
+  sentence as plain text writes it (`Main / 12 (loop end on Side)`, sr-only
+  words beside the drawing); aria-labels, tooltips, copies, exports and logs
+  keep the plain text. Backend texts carry their names as parts beside the
+  plain string (`ProjectWarning.messageParts`,
+  `ValidationWarning.parts`, `UndoHistoryItem.descriptionParts`,
+  `ConversionNoticeView.change_parts` / `detail_parts`; `models::prose`).
+  Below `full` prose is plain text.
 
 **Shot Detail - Connected Line:**
 ```
@@ -951,8 +1224,43 @@ the test ids) but are never shown:
 └────────────────────────────────────────────────────┘
 ```
 
+**A junction** (a station on several lines) is one station: its Station ID,
+name and comment are the same from every slot, the station the merge kept
+(kept and archived stations, plan 2026-11-23). The details show the identity
+the slot shows (RS 6) and say each fact once (demo finding N-3), the slot's
+own line too (V-8): the Line row names the slot's line (a link to it), and
+"Connected" does not repeat it. On a line whose own station a merge archived
+(a foreign slot) a line under the Name says whose station it is: "12 belongs
+to Main Line"; its pills are in that line's colour (RS-OWNERSHIP). "Also on"
+lists the other lines through it, one row each, the same for every junction
+however it was made (a merge, Split Line Here, a line started there, an
+import; I-9): the line by name (a link to its slot), never a name of its own.
+Each row has a button that detaches that line (tooltip "Detach <line> from
+this station"); when the detach would bring a station back, take other lines
+with it or repeat a name, the button opens Detach Line from Station on that
+line instead. "Archived here" lists the stations merges archived in it, each
+with its name, Station ID and the line whose own station it was (`0 (Station
+ID 9), Side's own station`) or, for one no line names any more, "kept for its
+Station ID", and its comment; a station archived inside another (a junction a
+later merge archived whole) is listed under it, as Detach brings the two back
+together; hidden when none. A loop closure end that
+shows its closure's kept end opens with "Loop closure end, shown as Main /
+3" and its own station, hidden until the closure is removed; its position,
+depth and datum are its own. A rename or comment edit through a foreign slot
+or a loop end (Edit Station, the data table) first says whose station it
+changes and offers Detach Line from Station or Remove Closure instead. The
+Data table's Conn picker and Edit Station head their list of the other lines
+"Also on" too, Adjust Position says "Joined to N other lines", and the
+combine menu says "Joined here" for two lines sharing a station. "Connected"
+also lists every shot that meets the station on the other lines
+(`StationOtherLineShots.tsx`), so a junction of three lines shows three or
+more shots, not just a previous and a next. A junction's zero datum is found
+from any of its slots, here and in Edit Station.
+
 **Loop Closures Section:**
-- Placed after "Merged with", before "Connected" section
+- Placed after "Also on" and "Archived here", before "Connected" section
+- A closure that hides one end says so: "Side / 17, the loop end, is shown as Main / 3. Removing the closure brings it back."
+- The remove button opens Remove Closure when the closure hides a station or a name would repeat
 - Collapsible with default expanded state
 - Hidden when station has no `closures_with` entries
 - Closures grouped by `closure_id`; direct closures listed first, then transitive
@@ -1477,12 +1785,13 @@ Confirms reversing a line end-to-end, so the far end becomes station 0.
 invariant - every station keeps its world coordinate, and `reverse(reverse(s))`
 is the identity in exact arithmetic. In f64 it is only *bit*-exact when the
 `+180` shift is representable (`17.5` round-trips exactly; `0.1` comes back a
-couple of ulps out), which is why undo snapshots the project rather than
-re-running the transform. Per shot:
+couple of ulps out), which is why the undo entry records the flip's
+exceptions (the cells a re-flip would not give back bit for bit) rather than
+trusting the transform to invert itself. Per shot:
 
 | field | operation |
 |-------|-----------|
-| shot order | reversed; ids stay attached to positions, `uuid` travels with the record |
+| shot order | reversed with the chain (the line's stations in the opposite order); session ids stay attached to positions, `uuid` travels with the record |
 | `azimuth_in` / `azimuth_out` | reciprocated (`+180`) **and** swapped |
 | `depth_in` / `depth_out` | swapped |
 | `pitch_in` / `pitch_out` | swapped **and negated** |
@@ -1513,43 +1822,30 @@ both readings inside `[0, 360)` put their difference in `(-360, 360)`, so a shot
 that could be misread always has an out-of-range reading, which
 `Validator::validate_shot` reports as `INVALID_AZIMUTH`.
 
-Beyond the shots, `line_offsets` (the `section_offsets` table) gains the line's
-old total displacement (station 0 is now the far end), and every external
-station ref in the line -
-merges, loop closures, zero datums, station offsets and comments - is remapped
-to its mirrored station so each relationship stays on its original physical
-station. That list is the complete set of `StationKey`-bearing collections on
-`Project` (`for_each_station_ref`), but it is *not* everything in the app that
-names a station: the gas plan's pins (origin, endpoint, way points, marked
-points, stage-drop overrides) and the UI's selection are positional
-`StationRef`s the backend cannot reach. The plan's pins are mirrored frontend-
-side so the plan stays on the physical stations the diver picked; selection and
-merge staging are cleared.
+Beyond the shots, the line's chain is reversed: its start becomes the old last
+station and every shot ends at the station it used to start from. Stations are
+entities, so every merge (junction), loop closure, zero datum, hand move and
+comment stays on its physical station with nothing to remap. What the backend
+cannot reach are positional `StationRef`s held outside the model: the gas plan's
+pins (origin, endpoint, way points, marked points, stage-drop overrides) and the
+UI's selection. The plan's pins are mirrored frontend-side so the plan stays on
+the physical stations the diver picked; selection and merge staging are cleared.
 
-Pins inside a *saved* `.plnx` need **no** rewriting, because a plan does not name a
-station by its position. It records the two shots a station sits BETWEEN, and a
-reverse does not change what a station sits between - the same pair still names
-the same junction whichever way the line is walked.
+Pins inside a *saved* `.plnx` need **no** rewriting: a plan names a station by
+the two shots it sits BETWEEN and by its Station ID, and a reverse changes
+neither. (The older `AfterShot(uuid)` form, still read from older plans, would
+resolve to the station next door after a reverse, since the anchoring shot
+travels with its record; a plan pin's own shots vouch for its Station ID, so
+the id wins where it can.)
 
-That matters because the old `AfterShot(uuid)` form failed silently: after a
-reverse such an anchor still *resolved*, to the station next door, since the
-anchoring shot travelled with its record. Nothing counted as stale, so
-`stale_ref_count` stayed 0 and the panel showed no warning while the route - and
-with it the gas plan - had quietly been re-priced against a different pair of
-stations. Every other survey edit leaves an unresolvable ref that fails loudly.
+A station at the END of a line has only one neighbouring shot; its Station ID
+says which end it is. The one case that cannot be tracked by shots alone is
+splitting that shot: the split keeps the original UUID on the shortened tail,
+so afterwards no shot in the file has that station as an endpoint, and the
+Station ID still names it.
 
-A station at the END of a line has only one neighbouring shot, so its side
-comes from the line's recorded orientation (`reverse_parity`) instead. The one
-case that cannot be tracked is splitting that shot: the split keeps the original
-UUID on the shortened tail, so afterwards no shot in the file has that station as
-an endpoint. That is detected via the neighbour's recorded length and reported as
-a stale ref for the diver to re-pin, rather than guessed at.
-
-One other store outside `Project` is settled the same way: position-keyed
-(`NULL`-uuid) `resolved_warnings` rows are pinned to their shot's UUID, because
-the reverse keeps shot *ids* on positions - so the save-time carry-over would
-otherwise re-read the row's `(section_id, shot_id)` columns as an identity and migrate
-the ignore onto the mirrored shot.
+Ignored warnings are keyed by shot uuid, which travels with its shot, so an
+ignore stays on its shot through a reverse.
 
 `CommandResult.reversed_lines` names the lines a command renumbered -
 on the forward reverse, on a batch of them, and on an undo or redo of either
@@ -1565,7 +1861,8 @@ flipped - it records how the survey was swum, which a renumbering does not
 change. Nothing in the geometry pipeline reads it.
 
 Frozen shots do not block a reverse: the physical line is preserved exactly, so
-the frozen invariant still holds. Undo is a before/after project snapshot pair.
+the frozen invariant still holds. Undo is one changeset entry: the reversed run
+plus the flip's exceptions.
 
 **Entry points.** Sections-panel, map-station and map-shot context menus
 ("Reverse Line", plus "Reverse N Lines" when several lines are
@@ -1585,11 +1882,12 @@ backend-side. Left/right is never swapped on the import path (no dialog to ask).
 The toggle is offered by the DMP wizard only; the TML, Compass, Walls and GPX
 importers build their configs with `reverse: false`.
 
-Ticking the toggle changes numbering only, never where the passage lands: the
-line anchor gains the same displacement the in-app reverse applies, because
-station 0 is now the far end. Merge- and datum-based placements re-anchor the
-line anyway; `Origin` and `Manual` position station 0 directly and would
-otherwise land a full end-to-end displacement away.
+Ticking the toggle changes numbering only, never where the passage lands.
+Connections to an existing or same-batch station make that station part of the
+line (a junction) and datum-based placements place it by the datum; `Origin`
+and `Manual` place the FILE's first station (the reversed line's last) at the
+chosen point, so the reversal cannot move the line a full end-to-end
+displacement away.
 
 Both sides of a connection renumber independently. A wizard connection whose
 target is created **by the same batch** has its target index mirrored too - and
@@ -1604,15 +1902,51 @@ Shown when merging two **unconnected** stations (different line groups).
 ```
 ┌─ Merge Stations ─────────────────────────────────────────────────┐
 │                                                                  │
-│  Station A: Line "Main Line" #14 (depth: 12.3m)                 │
-│  Station B: Line "Side Passage" #0 (depth: 12.8m)               │
+│  Keep (the station kept is shown on every line):                 │
+│  (o) Far Room / 2 (Station ID 31)                                │
+│  ( ) Upstream / 0 (Station ID 40)                                │
 │                                                                  │
-│  Distance between: 2.4m                                          │
-│  Depth difference: 0.5m                                          │
+│  Upstream will show Far Room / 2.                                │
+│  Upstream / 0 is archived.                                       │
+│  Detach Line from Station brings Upstream / 0 back.              │
+│                                                                  │
+│  Far Room / 2 is already where Far Room and Main Line meet.      │
+│  Upstream moves 24 m onto Far Room / 2's position.               │
+│  Depths 4.0 m (Upstream), 12.5 m (Far Room), 12.5 m (Main Line)  │
+│  become 9.7 m: the joined station takes the mean of its depth    │
+│  readings.                                                       │
 │                                                                  │
 │  [ Cancel ]                                      [ Merge ]       │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+The dialog says what the merge does before it does it, from the merge check
+(`ConnectivityResult.merge_preview`, the merge run on a copy): the lines of the
+piece that moves (named, up to three, then counted: "Upstream and Upstream
+Side move 24 m", "A, B, C and 2 more move"; demo finding N-13), how far (not said below 1 cm, nor after a snap-to-merge drag,
+which already moved it; when both pieces are placed by their own GPS the datum
+notice says it instead), and onto whose position; that a picked station is
+already a junction, and of which lines (`MergePreview.junctions`, the picked
+slot's line first; demo finding V-2); and, when the two stations' depths
+differ by more than 0.5 m (`JUNCTION_DEPTH_SPREAD_M`), every depth reading the
+joined station's mean takes, each with its line (`MergeDepths.readings`: A's
+line, the other lines at A, B's line, the other lines at B), and that mean (as
+0.6.0 computed a merged station's depth). At a junction the two stations'
+depths alone do not add up to it: "Depths 4.0 m and 12.5 m become 9.7 m" read
+12.5 m twice, once on each line through the junction. Every merge-tool pick
+that can merge opens this dialog, so no merge happens without it.
+
+The **Keep** radios choose the kept station (4.2), one per station, each its
+pill (line, own name, Station ID; a station a loop closure shows as another
+adds "shown as K through a loop closure"). Preselected is the station holding
+a zero datum or GPS fix when only one does, else rule K's; when a loop closure
+between the two already shows them as one, its kept end is kept and the dialog
+says why. Under them, from the preview of each keep (`MergeKeepPreview`): the
+lines that will show the kept station, that the other "is archived" ("with its
+comment" when it has one), that Detach Line from Station brings it back, the
+stations archived inside it that stay inside it, each name a line will show
+twice (its own station and the dotted junction), every other comment the merge
+hides, and a row per collision with its two answers.
 
 If the two stations are already connected (same line group), MergeStations is rejected and the frontend should show the Closure Dialog instead.
 
@@ -1670,6 +2004,12 @@ pairs regardless of the dialog. See [closures.md](closures.md#create-loop-closur
 │  [ Cancel ]                                      [ Export ]      │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+When the file is written the dialog closes and a success toast names it
+("Exported to demo-cave.tml"); a failed export shows an error toast and keeps
+the dialog open; a cancelled save picker shows nothing (demo finding I-13).
+In a read-only file the TML notice about lines without a zero datum does not
+suggest setting one, since that edit is turned off there (I-10).
 
 ---
 
@@ -1756,19 +2096,86 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 **Merging unconnected stations** (different line groups):
 1. User activates Merge Tool (M)
 2. Selects two stations from different, unconnected line groups
-3. MergeDialog appears showing station details and distance
-4. Confirm → Stations merged, lines repositioned to align
+3. MergeDialog appears with the Keep choice, what moves and how far
+4. Confirm → the two stations become ONE station, a junction of their lines:
+   the piece that moves (the free one onto the placed one; between two free
+   pieces the first pick's) lands on the other. The station chosen under
+   **Keep** is shown on every line through it; the other is archived in it
+   with its own Station ID, name and comment (nothing is joined), and the
+   lines whose own station it was show the kept station in the kept
+   station's home-line colour. Which station is kept moves nothing
+5. Picking another slot of the same station clears the pick, as clicking the
+   same slot does: they are already one station
+
+**Detaching a line** (the inverse; "Detach Line from Station..." in the station
+menu, or a line's button in Station details) follows the three cases of 4.2,
+and nothing moves: a line whose own station a merge archived gets that station
+back, or, when a later merge archived it inside another junction, that junction
+(its Station ID, name and comment), together with every line it or a station
+archived inside it names (they were one station before the merge; the dialog
+names them), the stations inside it staying inside it (detach one of their
+lines again to take it off on its own); a native line whose other lines all
+show the junction through archived stations keeps the junction (its Station ID,
+name and comment), and the other lines come off together on ONE station, the
+archived station a picker chooses ("The lines that come off show:", default
+rule K), with the other archived stations inside it; any other line gets a new
+station with the junction's own name and no comment. The datums and closure
+ends that came from the lines that come off (their `via`) move with them; the
+orphan-closure sweep then promotes a closure left as the only connection of the
+detached piece. On a hub of three or more lines the dialog asks "Choose what
+comes off" and says, under the choice, what every line ends up with there, name
+and Station ID, from the backend's per-line preview (`DetachLinePreview.lines`,
+the detach run on a copy; demo finding V-1): "Far Room: 0, Station ID 19 (comes
+off with Upstream)", "Upstream: 0, Station ID 19 (comes off with Far Room)",
+"Main Line: 8, Station ID 8 (stays)", and that Upstream's own station (Station
+ID 22) stays archived inside the one they get back, for a second Detach of
+Upstream to bring back. The row of a line that keeps the junction reads as what
+comes off ("Far Room and Upstream, together (Main Line keeps this station)"),
+so the history row, which names the lines that come off, names what the user
+picked. The dialog preselects the line clicked when it comes off alone with its
+own station back (an archived station names it); otherwise the first such other
+line, which is the likely intent (demo findings I-7, V-1); with none, the line
+clicked. It shows the comment that comes back ("With its comment: ..."), a row
+per collision of the returning station's name with a native station of its
+lines, with two answers ("Rename the station that comes back (Side / 0, Station
+ID 15) to 0a", "Rename the 0 that is on Side now (Station ID 29) to 0a"), and,
+when a line already shows the name with a letter, that a letter given earlier
+because of the junction stays.
+
+When the choice does not change the result there is no choice (demo finding
+N-2): on a junction of two lines where one keeps the station when detached
+and the other gets back exactly the station it had, both choices leave the
+same two stations, so the dialog asks for both lines' previews first, then
+says in one sentence what happens ("North Passage comes off: it gets back 0
+(Station ID 9); Main Line keeps station 3."), with the comment it gets back
+when it has one, and Detach / Cancel. Detach then detaches the line that
+comes off, whichever slot the dialog was opened on. Everywhere else the list
+of lines stays. The history row always names the line that comes off, never
+the one that keeps the station, and the station as `Line / name` on a line
+that stays on it (demo finding V-6: another line may show its own station 0):
+a detach of the keeping line (the other lines come off with the station they
+had) reads `Detach line "North Passage" from Main Line / 3`, and on a hub
+`Detach lines "B" and "C" from Main / 4`.
 
 **Creating a loop closure** (already connected stations):
 1. User activates Merge Tool (M)
 2. Selects two stations that are already in the same connected group
-3. ClosureDialog appears with closure preview data (path length, misclosure, error %)
-   - If the two stations are the two ends of one shot (directly or through merges
-     and other closures), the dialog says why and Create is disabled: the closure
-     would squeeze that shot to zero length (#737)
-4. User selects error distribution method
-5. Confirm → Loop closure created, shown as dashed line on map
-6. Closure stations updated with `closures_with` references (direct + transitive)
+3. ClosureDialog appears with closure preview data (path length, misclosure, error %),
+   and says why the merge became a closure: "These stations are already
+   connected, so merging them would make a loop. A loop closure is created
+   instead." The "Checking merge compatibility..." toast leaves as the
+   dialog opens (demo finding I-9)
+   - If the two stations are the two ends of one shot (directly or through
+     junctions and other closures), the dialog says why and Create is disabled:
+     the closure would squeeze that shot to zero length (#737)
+4. User selects error distribution method, and under "Both ends show:" which
+   end both ends show, or "Keep both names": by default rule K's end, or, when
+   that is not allowed (the other end is already another closure's loop end,
+   or the kept end already shows it), "Keep both names", with a note saying why
+5. Confirm → Loop closure created, shown as dashed line on map; the end not
+   kept becomes a loop end (4.2), which Remove Closure brings back, with a
+   row per name it would then repeat on its lines
+6. Closure stations show `closures_with` references (direct + transitive, derived)
 7. Detail Panel shows "Loop Closures" section for involved stations
 
 **Connecting Lines with Reference Shots:**
@@ -1797,6 +2204,12 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 4. Map updates in real-time
 5. Auto-saved
 
+A comment of several lines (typed so, imported, or the two comments Combine
+Lines' "Both" joins) shows its lines separated by " / " in its one-line cell
+("T-junction, line arrow points out / Silt bank, low visibility"); hovering
+the cell shows it whole, and the comment editor, the Station details and a
+copy keep its line breaks (demo finding N-9).
+
 **Via Map:**
 1. User clicks station/shot with Select tool
 2. Detail Panel shows properties
@@ -1817,21 +2230,47 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
    position-aware: an edge shot gets "Are you sure you want to delete this
    shot?" and is deleted without splitting; a mid-line shot opens the Delete
    Shot dialog offering [Split Line] or [Shift Geometry]; the last remaining
-   shot removes the whole line
+   shot removes the whole line. Shift Geometry is not offered, and the dialog
+   says why, when the shot is in a loop ("This shot is part of a loop") or the
+   two sides reach different zero datums ("Both sides are anchored to a zero
+   datum."); a shot in a loop gives only the loop reason, even when both
+   sides reach the one datum through it. A range whose two sides reach one
+   datum through a loop closure says "Both sides are tied to the same zero
+   datum through a loop closure." (demo finding I-8; 0.6.0 said "Both sides
+   are anchored" in each case)
 3. On Split Line, the line splits into two, named "<line> A" and
    "<line> B" by default, each made unique against the other lines (both
    editable; an empty name, another line's name or the two names equal is
-   refused inline and disables the button)
+   refused inline and disables the button). Half A keeps the line's colour;
+   half B, a new line, gets the colour a new line gets (the next palette
+   colour no line uses), as Split Line Here gives it; a range split does the
+   same (demo finding I-9: both halves were the line's colour). When the split leaves a loop
+   closure as the only connection between the two halves' pieces, that closure
+   becomes a junction and the piece past it moves onto it by the misclosure (as
+   in 0.6.0); the Delete Shot dialog ("If you choose Split Line, ...") and the
+   Delete & Split dialog say so first: "The loop closure A / 3 - B / 5 becomes
+   a junction; the stations past it move by up to 2.2 m."
 4. A delete with shift (a single shot's Shift Geometry, or a range of shots with
    shift) that leaves a loop closure spanning a single shot - e.g. closure A:1-A:4
    after shots 1..2 are gap-closed - removes that closure with the delete. The
    Delete Shots dialog lists it before you confirm ("Close Gap & Delete removes
    these loop closures (they would span a single shot)"; Split removes none), and
    a warning toast says so afterwards ("Removed
-   loop closure A:1 to A:4: closing the gap left its two stations at the two ends
-   of one shot."). Both name the closure by the
-   stations it was created with. One Undo restores the shots and the closure
-   (#737)
+   loop closure A / 1 to A / 4: closing the gap left its two stations at the two
+   ends of one shot."). Both name the closure by its stations before the
+   delete. One Undo restores the shots and the closure (#737)
+5. A delete removes one station from the line (station 0 for the first shot,
+   else the shot's end station). If that station is a junction it stays for the
+   other lines, with its comment and datums, and the line simply leaves it; if
+   the lines left all show it through archived stations (each was merged
+   there), the archived station they name comes back as it (rule K among
+   several, 4.2), its datums, closures and placement following, as Detach gives
+   a line its own station back (the demo's I-1); the junction's comment moves
+   to the restored station when that has none, and the confirm names a comment
+   this hides; a station on no other line is deleted with its comment, datums
+   and hand moves, and its closures are dropped. Then the orphan-closure sweep
+   runs: a closure left as the only connection of two pieces becomes a junction
+   ([closures.md](closures.md#when-a-closure-becomes-a-merge-promotion))
 
 **Deleting a Station:** Not supported. Selecting a station and pressing Delete
 opens the Delete Station dialog, whose Delete button is disabled; it tells the
@@ -1839,9 +2278,11 @@ user to delete the connected shots instead.
 
 **Deleting a Line:**
 1. Right-click line in Sections Panel → Delete
-2. Confirmation: "Are you sure you want to delete this line and all its
-   shots?", plus a list of relationships (merges, closures, offsets, zero
-   datums) that will also be removed
+2. Confirmation naming the line: "Delete the line "Upstream Side" and its 2
+   shots (13.0 m)?" (demo finding I-9; deleting a line's last shot names it
+   too), plus a list of what goes with it: its connections to other lines
+   (the shared station stays for them), the closures and zero datums on stations
+   only this line passes, its map placement, and hand-moved station positions
 3. Confirm → Line removed
 
 ### 7.8 Merging Cave Systems
@@ -1854,10 +2295,12 @@ user to delete the connected shots instead.
    - Enter new merged system name
    - Optional checkbox: "Archive original project files (rename to
      .stalx.archived)" - off by default
-5. Confirm → Systems merged into single file. Each source is read like an
-   open would read it (through a private copy, so the source files are only
-   read - renamed only if you choose to archive them - and an older file's
-   pending shot classification is finished).
+5. Confirm → Systems merged into a new version 2 file. Each source (version 2
+   or an older SQLite file) is read like an open would read it, so the source
+   files are only read - renamed only if you choose to archive them. A source
+   made with a newer Stalagmight, or one that breaks the survey's rules, is
+   refused with the open's message. Station IDs are offset, closure and Section
+   ids re-minted, and no junction is made across sources.
    A system with a GPS zero datum is placed at its real position: the first
    one's datum station becomes the origin, and every later one lands at its
    GPS position relative to it. A system without a datum keeps its own layout.
@@ -1881,7 +2324,8 @@ The zero datum establishes the coordinate system origin and enables GPS-accurate
 3. Click Save
 4. Station marked with the enlarged golden zero-datum station dot
 5. Map auto-zooms to fit survey in new position
-6. All line offsets are recalculated
+6. The station's piece is placed on the GPS (when this is the first datum, it
+   becomes the frame and the survey is translated so it is at the origin)
 
 A depth-reference input (meters below surface, alongside lat/lon) is not yet
 built anywhere in this flow; it is tracked as an enhancement in #524.
@@ -1899,24 +2343,31 @@ built anywhere in this flow; it is tracked as an enhancement in #524.
    rest of the import continues through the normal connection wizard
 
 **What Happens Internally:**
-1. GPS coordinates (WGS84) are stored with the station
-2. Coordinates are converted to local ENU meters via geodetic transformation
-3. Line offsets are recalculated to maintain relative positions
-4. The zero datum station becomes the (0,0) origin of the local coordinate system
-5. Connected lines' positions are preserved through offset tracking
+1. A datum is stored on the station, with the slot's line as its `via` hint
+2. GPS coordinates (WGS84) are converted to local ENU meters via the geodetic
+   transformation
+3. The first datum of a piece places it (its `Placement` is dropped); a later
+   one in an already placed piece is a GPS fix and moves nothing in the Raw
+   Data View
+4. The frame datum's station is the (0,0) origin of the local coordinate system
+5. Every station's position is re-derived from its piece's anchor (4.3)
 
 **Updating an Existing Zero Datum:**
 1. Right-click on the zero datum station → "Set Zero Datum" (reopens the Edit
    Station dialog)
 2. Modify coordinates and confirm
-3. All line offsets are recalculated
+3. A placement datum's piece moves onto the new GPS (its correction cleared); a
+   new GPS on the frame datum's own station moves the other placed pieces by
+   the change; a GPS fix's new GPS changes only its gap
 4. Undo restores previous GPS coordinates
 
 Changing only the accuracy of a datum (its GPS unchanged) moves nothing, for a
 placement datum and a GPS fix alike; only a new GPS reading re-places a piece.
-A station holds at most one zero datum: setting one on a station that already
-holds a datum under another identity is refused, and re-setting a datum
-updates it in place.
+Set Zero Datum on a slot edits the datum that slot has: the first datum on the
+station attached via the slot's line, else the station's first datum, else it
+adds one. So on a junction it edits the station's existing datum instead of
+adding a second. A station holds two datums only after a merge of two placed
+pieces at stations that each had one, or from a migrated file.
 
 **Removing a Zero Datum:**
 1. Right-click the zero datum station → "Set Zero Datum", untick "Set as Zero
@@ -1934,44 +2385,40 @@ updates it in place.
 line in two at a mid-line station, or at a point along a shot (a station
 is inserted there first; within 1 cm of a shot end the cut snaps to that end).
 Nothing is deleted. The first half keeps the line id and ends on the split
-station; the second half starts on a co-located copy and copies the line's
-direction, quality and north reference (every shot keeps its own surveyors,
-explorers and date). The two copies are NOT
-merged. Merges on the split station, its name and its manual offset go to both
-copies; its loop closures stay on the first half; the dialog picks the half for
-its comment (A, B or both) and its zero datum (A or B). Names default to
-`<name> A` / `<name> B` made unique (` (2)`, ...; line names are required and
-project-unique, 4.1), each half has a colour picker: A keeps the line's
-colour, B defaults to the colour a new line gets (the next palette colour no
-line uses, never A's). The dialog notes that the halves are not connected
-(merge the two cut stations for routes and gas planning to continue across
-them). A loop closure from
-before the cut to past it, with nothing else tying the halves, is left as their
-only tie, which the split turns into a merge (a closure must close a loop),
-moving one half by the loop's misclosure; the dialog says which half moves and
-how far before the user confirms (`split_line_preview`). A second closure
-that tied that half to the same point would then tie the point to itself (its
-two stations are merged), so the split removes it (#738), and the dialog lists
-each one by the station ids it was created with: "Loop closure 1:0 to 0:3 is
-removed: its two stations become one point." A closure that already tied a
-point to itself goes too, listed as "...: its two stations are already one
-point." One undo step brings back every closure. The delete-and-split commands,
-Delete Shot, Delete Line, Unmerge and Remove Zero Datum remove such closures
-the same way and say so in a toast, by the station ids they were created with.
-A project file that already holds a closure between merged stations, or from a
-station to itself, opens without it ([closures.md](closures.md)).
+station; the second half starts on **the same station**, which becomes a
+junction of the two halves, and copies the line's direction, quality and north
+reference (every shot keeps its own surveyors, explorers and date). The split
+station keeps its Station ID, comment and zero datum, and both halves show it
+by the name the line did, so there is no side to choose for them; a legacy hand move there is copied to the second
+half, so it does not shift. Names default to `<name> A` / `<name> B` made
+unique (` (2)`, ...; line names are required and project-unique, 4.1), each
+half has a colour picker: A keeps the line's colour, B defaults to the colour
+a new line gets (the next palette colour no line uses, never A's). The dialog
+says the halves share the split station. The halves stay connected, so nothing
+moves, no closure changes, and routes and gas planning continue across the
+cut. Declared consequences (4.5): an edit to one half moves the other, Move
+Segment on the second half is refused when the first half holds a datum, and
+merging the halves' far ends goes to the closure dialog. One undo step.
+
+The commands that can leave a loop closure on one point - Delete Shot, the
+delete-and-split commands, Delete Line, Merge, Detach and Remove Zero Datum -
+remove such closures in their sweep and say so in a toast, by the stations the
+closure had before the edit ("Removed loop closure A / 0 to B / 3: the merge
+made its two stations one point."). A version 2 file cannot hold a closure from
+a station to itself (it breaks an invariant), so none is ever cleaned up on
+open ([closures.md](closures.md)).
 
 **Combine Lines** (an end station's context menu, or **Combine 2 Lines...**
 in the line menu when exactly two lines are selected): the two chosen
 lines meet end to end and
 become one; other lines there stay attached as branches. They meet when an
-end station of each is the same point: in one merge group; unmerged and
-co-located within 1 mm horizontally (the state a split leaves); or tied by a
-loop closure, the survey's own statement that the two are one point, apart by
-the loop's misclosure. Another line's end merged there stays merged to the
-joined station, now a station in the middle of the combined line; a line
-merged there at a station in its middle stays merged too (a crossing); one
-ending there unmerged is left as it is, and the dialog says so. The station
+end station of each is the same point: one station (a junction of the two
+lines, the state a split leaves); two stations side by side, within 1 mm
+horizontally; or tied by a loop closure, the survey's own statement that the
+two are one point, apart by the loop's misclosure. Every other line through
+the joined station stays on it, now a station in the middle of the combined
+line (a branch, or a crossing); a line ending there on a station of its own is
+left as it is, and the dialog says so. The station
 menu offers, by how many lines end at the point: with one other, **Combine
 Line With <name>...**, opening the dialog directly; with three in all,
 **Combine Lines...** and a submenu of every pair ("A with B"); with four or
@@ -1983,42 +2430,52 @@ line and any choices; everything informational (what moves, what becomes a
 loop closure, branches, depth, direction, credit) is folded under **Details**.
 Two lines that meet at more than one end (a
 loop of two) join at the end the station menu was opened on; the Sections panel
-picks a merge first, then co-located ends, then a closure. The kept line (the
+picks a junction first, then co-located ends, then a closure. The kept line (the
 lower id by default; the dialog can swap) keeps its id, shot numbers, direction
 and position; the other line is reversed first when the two meet end to end
 or start to start. Every per-shot field travels, and every station reference
-follows its station; the join station keeps one comment and one name (the
-dialog asks when they differ).
+follows its station; the joined station is the kept line's join station
+(its Station ID, name and comment, shown on every line through it). The other
+join station is archived in it for the lines it was the own station of besides
+the absorbed line, which show the joined station from then on (Detach Line
+from Station brings it back with its comment, and the dialog says so); when it
+was the own station of no other line it only keeps its Station ID reserved,
+and the dialog asks which comment the joined station keeps when the two
+differ. When a loop closure between the two join stations already shows them
+as the other line's, that one is kept, and the dialog says why. Every other
+station keeps the name its line showed it by.
 
 Whatever stands in the way changes instead of blocking, and the dialog lists
 it, for the line it shows as kept, before the user confirms:
 
 - **A side moves.** Across a loop closure (or any other gap over 1 mm) the
-  other line, and everything still merged to it, moves by the gap so the two
+  other line, and everything still connected to it, moves by the gap so the two
   ends meet. The kept side moves instead when a zero datum holds the other side
   and not the kept one, or, with no datum deciding, when the other side holds
   the station the Closures Computed View holds the survey at: moving it would
   shift the whole cave in Plan and Export. The dialog says which and why. Ends
-  side by side move a side by their residual under 1 mm the same way, with
-  everything merged to it, so merged stations stay one point and reopening
-  the project moves nothing (#740). The dialog lists a move that small only
-  when it turns a tie into a loop closure (a snap from the moving side, or,
-  with zero datums on both sides, the moving line's merge), so the tie's
-  listed reason has its cause beside it.
-- **Ties become loop closures.** A merge or snapped (aligned) closure that
+  side by side move a side by their residual under 1 mm the same way: the two
+  stations become one, so nothing is left a residual apart (#740). The dialog
+  lists a move that small only when it turns a tie into a loop closure (a snap
+  from the moving side, or, with zero datums on both sides, the moving line's
+  junction), so the tie's listed reason has its cause beside it.
+- **Ties become loop closures.** A junction or snapped (aligned) closure that
   would tie the combined line to itself, or keep the moving side tied to what
-  stays, becomes an ordinary loop closure between the same two stations: the
-  one nearest the moving line, so the least moves. The loop's misclosure
-  moves there, and the closures the combine made or stretched are measured
-  again. A snapped closure whose stations had come apart (more than 1 cm)
+  stays, becomes an ordinary (`Batch`) loop closure: at a torn junction the
+  moving line is detached from it (it gets a new station there, the old one
+  stays with the lines that do not move) and the closure ties the two stations;
+  the junction torn is the one nearest the moving line, so the least moves. A
+  station both lines pass besides the join is torn the same way, since the
+  combined line may not pass a station twice. The loop's misclosure moves to
+  the new closure, and every closure's figures are recomputed. A snapped closure whose stations had come apart (more than 1 cm)
   counts as snapped when the combine brings them back together there, so it
   becomes an ordinary loop closure too rather than snapping again inside the
   combined line; Details name it as the loop closure left from a snap. So
   does a snapped closure the combine pulls apart, where the joined station
   keeps the other join station's position as shown, and Details say so
-  (#736). When both sides are anchored by zero datums, the moving side's merge
-  towards its own datum becomes a closure too (a closure may tie two anchored
-  groups; a merge may not). Where two loop closures end up tying the same two
+  (#736). When both sides are anchored by zero datums, the moving side's
+  junction towards its own datum is torn into a closure too (a closure may tie
+  two anchored groups; a junction may not). Where two loop closures end up tying the same two
   stations, one stays: the first that the Closures Computed View adjusts (the
   first of them when it adjusts none), so a legacy (proportional or equal) or
   snapped closure there gives way to an ordinary one, such as the closure a
@@ -2027,8 +2484,8 @@ it, for the line it shows as kept, before the user confirms:
   way and what takes its place ("This closure is replaced:"); two closures
   the Closures Computed View treats alike keep the first without a word.
 - **Ties across one shot are removed.** A tie that, combined, would be a loop
-  closure joining the two ends of one shot (for example the merge at the far
-  end of a one-shot passage merged to both join stations) would only be skipped
+  closure joining the two ends of one shot (for example the junction at the
+  far end of a one-shot passage that meets both join stations) would only be skipped
   by the Closures Computed View, so the combine removes it instead (#746).
   Before the confirm the dialog says how many connections it removes, outside
   the folded Details, and Details list each under "This connection is
@@ -2040,20 +2497,20 @@ it, for the line it shows as kept, before the user confirms:
 - **Bearings convert.** The combined line has one north reference, the kept
   one's: the other line's stored azimuths turn by the difference, so every
   station stays where it is.
-- The kept line's quality factor wins; the fixed side's manual offset on the
-  join station wins (the dialog says how far the other moves), and a line
-  merged at the other join station, on a join that is not merged, moves with
-  the joined station (its side's shift plus the difference of the two
-  offsets), so it stays merged to it (#755; the dialog lists it); shots of the
-  other line that share an identity (uuid) with the kept one's get new ones;
-  a depth gap between unmerged join stations is reported, whatever its size
-  (the joined station takes the average); a line with no shots is absorbed
-  at its one station.
+- The kept line's quality factor wins; the fixed side's legacy hand move on
+  the join station wins (the dialog says how far the other moves), and a line
+  that meets the other join station moves with the joined station (#755; the
+  dialog lists it); the other line's hand moves move to the kept line. A depth
+  gap between side-by-side join stations is reported, whatever its size (the
+  joined station's depth is the mean of its readings); a line with no shots is
+  absorbed at its one station. Shot uuids are project-unique, so no shot gets a
+  new identity.
 
 Refused, with the reason in the menu row: both lines placed by their own zero
 datum on one of their own stations (merge them first, so the later datum becomes
-a GPS fix), the two join stations each holding a zero datum (the combined
-station would hold two; remove one first), lines that
+a GPS fix), two side-by-side join stations each holding a zero datum (the
+combined station would hold two; remove one first; a junction that already
+holds two keeps them), lines that
 meet nowhere (merge two of their ends, or create a loop closure between them,
 first), more than 99,999 shots, and a kept line that has used up its shot
 numbers for the session. A line is never combined with itself. Every shot
@@ -2067,55 +2524,59 @@ Rules and edge cases: [plans/2026-11-12_merge-split-sections.md](plans/2026-11-1
 ### 8.1 Command Pattern
 
 Persistent operations are variants of the `Command` enum, almost all executed
-through `AppState::execute`: acquire the command lock, run the read-only edit
-gate, capture undo data, apply the command, finalize the undo entry, push it,
-log. Persistence to SQLite happens on save, not per command. Two variants are
-labels rather than executable commands: `RepairIntegrity` and
-`UpdateProjectSettings` name snapshot undo entries recorded by their dedicated
-methods (`repair_project_integrity`, `update_project_settings`), and
-`AppState::execute` rejects them with an error.
+through `AppState::execute`: acquire the command lock, run the read-only gates,
+record the entry's label and refs, snapshot the survey, apply the command
+through its family's `apply`, validate (a violation rolls back), capture the
+difference as one changeset, push it, stamp `modified_at`, mark the project
+unsaved. Nothing is written to disk per command; the file is written on save.
+Commands address stations by slot (`StationRef`), resolved to a Station ID at
+execute time. Recipes that are several model steps (Split Line Here, Combine
+Lines, the delete-and-split family, imports, Add .stalx, project settings,
+surface elevation) are `AppState` methods that run the same pipeline with their
+own label. `RepairIntegrity`, `UpdateProjectSettings` and `SetSurfaceElevation`
+are not executable through `execute`, which rejects them with an error.
 
 The variants cover project lifecycle (create/open/save/close/merge), lines,
-shots, station merges, loop closures, zero datums, station comments, the move
-operations, and a `Batch` wrapper that applies a list atomically. The
-authoritative list - every variant with its fields - is
+shots, station merges and detaches, loop closures, zero datums, station names
+and comments, the move operations, Sections, and a `Batch` wrapper that applies
+a list atomically. The authoritative list - every variant with its fields - is
 `src-tauri/crates/core/src/core/command.rs`; it grows with the feature set, so it is
-deliberately not mirrored here.
+deliberately not mirrored here. The pipeline is
+[architecture.md](architecture.md#appstate-and-the-open-file) and
+[undo-redo.md](undo-redo.md#the-execute-pipeline).
 
 ### 8.2 UndoEntry Structure
 
-Each entry in the undo/redo stack contains:
+Each entry in the undo/redo stack (`core/undo.rs`) is a history entry plus its
+canonical text:
 
 ```rust
-pub struct UndoEntry {
-    /// The command that was executed
-    pub command: Command,
-    /// Data needed to undo this command
-    pub undo_data: UndoData,
-    /// Timestamp when the command was executed (None for legacy entries)
-    pub timestamp: Option<DateTime<Utc>>,
-    /// Serialized byte length of `command`, measured at push (None for restored/legacy entries)
-    pub command_bytes: Option<usize>,
+pub struct HistoryEntry {
+    pub timestamp: DateTime<Utc>,   // strictly increasing along the undo stack
+    pub kind: String,               // the command kind, for the icon ("create_line", ...)
+    pub label: String,              // worded at record time, names before the edit
+    pub refs: HistoryRefs,          // stable ids it names: stations, lines, shot uuids, closures, Sections
+    pub preview: RecordedPreview,   // rows the changeset cannot say (batch rows, a move's offset)
+    pub changes: Changeset,         // the id-keyed before and after images
 }
 ```
 
 **Timestamp Handling:**
-- New entries automatically receive `Utc::now()` timestamp on creation
-- Timestamps persist across app restarts via the `executed_at` column in SQLite
-- Legacy entries (from before timestamps were added) have `None` and display as "Unknown" in UI
-- Format: ISO 8601 / RFC 3339 (e.g., `2024-01-12T14:32:15.123Z`)
+- Every entry is stamped when it is pushed, strictly after the newest undo
+  entry and after the SpeleoDB inherited-history watermark
+- Timestamps persist with the entry in the file's `history` member
+- Format: ISO 8601 / RFC 3339 UTC with nanoseconds
 
-### 8.3 UndoData Variants
+### 8.3 Changesets
 
-Undo data is captured in two phases - before execution for "previous" state, after
-execution for anything that exists only once IDs are assigned - and stored as an
-`UndoData` variant: an inverse command, previous field values, an entity snapshot,
-a merge / closure / datum / move record, or a whole-project snapshot pair for
-batches.
-
-`src-tauri/crates/core/src/core/undo.rs` defines the variants.
-[undo-redo.md](undo-redo.md) is the reference for which command uses which
-variant and what undo and redo each does with it.
+One payload type for every command: a `Changeset` of id-keyed before and after
+images (stations by Station ID, lines and their shot runs by line id and shot
+uuid, the lists as hunks, the project fields, the counters), captured
+generically by diffing the survey before and after the edit, and applied either
+way with preconditions: a step refuses, and changes nothing, unless the live
+survey is exactly the recorded state on everything the changeset touches.
+`src-tauri/crates/models/src/survey/changeset.rs` defines it;
+[undo-redo.md](undo-redo.md) is the reference.
 
 ### 8.4 Stack Exposure Commands
 
@@ -2148,20 +2609,22 @@ interface UndoHistoryItem {
 - Partial completion on failure is acceptable
 
 **Failure behavior:**
-- On single `undo()`/`redo()` failure, the popped entry is pushed back to the original stack so no entry is lost
+- On single `undo()`/`redo()` failure (the survey is not the state the entry
+  expects), nothing changes and the popped entry is pushed back to the original
+  stack so no entry is lost
 - On `undo_to(N)`/`redo_to(N)` failure, execution stops at the failing step; already-completed steps remain applied, and the failing entry is pushed back to its original stack
 - `undo_to`/`redo_to` return an enhanced error message on partial failure: `"Undo failed at step {current} of {total}: {reason}"` (or `"Redo failed at step..."`)
-- A `tracing::error!` is logged whenever a popped entry fails to apply, including command description, undo data variant name, and failure reason (no full snapshot JSON)
+- A `tracing::warn!` is logged whenever a popped entry is refused, with the step and the refusal (never a survey dump)
 - Frontend shows an error toast with the failure reason (`result.error ?? 'Unknown error'`) using de-duplication keys `'undo-failed'` / `'redo-failed'`
 - Frontend always calls `refreshProjectState()` on both success and failure (via `try/finally`) to sync UI with backend state
 
 ### 8.5 Command Execution
 
 `AppState::execute` (`src-tauri/crates/core/src/core/state/commands.rs`) is the generic entry
-point; a handful of commands with heavier bookkeeping have their own `execute_*`
-methods alongside it, and `undo()`/`redo()`/`undo_to()`/`redo_to()` live in
+point; the recipes have their own `execute_*` methods alongside it, and
+`undo()`/`redo()`/`undo_to()`/`redo_to()` live in
 `src-tauri/crates/core/src/core/state/undo.rs`. Lock ordering
-(`command_lock` -> `undo_stack` -> `project`), the two-phase undo capture and the
+(`command_lock`, then `project` -> `file` -> `undo_stack` -> `derived`) and the
 batch rollback rules are documented in [undo-redo.md](undo-redo.md).
 
 ### 8.6 Transient Operations
@@ -2659,8 +3122,16 @@ function useNetworkStatus() {
 ### 14.4 File Corruption Recovery
 
 #### Integrity Checks
-- Quick check on open: `PRAGMA quick_check`
-- Full check on-demand: `PRAGMA integrity_check`
+- Version 2: every open decodes the file under the reader's limits and runs
+  `Project::validate` (the invariants of 4.1); a file that is truncated, not a
+  project, or breaks an invariant is refused with the recovery options below
+- Legacy SQLite: the frozen 0.6.0 reader runs its own checks on open
+  (`PRAGMA quick_check`, the schema guard), then the migration verifies the
+  converted positions
+- The open project always validates (every edit and undo step is checked), so
+  there is nothing to repair in it: 0.6.0's integrity banner, its Review &
+  Repair dialog and their `check_project_integrity` / `repair_project_integrity`
+  commands are gone
 
 #### Recovery Options (Always Ask User)
 1. Attempt Repair
@@ -2669,40 +3140,92 @@ function useNetworkStatus() {
 4. Cancel
 
 #### Restore from Backup
-The dialog offers the files beside the project named after it plus a suffix
-that contains `.backup` or ends in `.tmp` (`cave.stalx.backup`,
-`cave.stalx.backup.1`, `cave.stalx.tmp`), and only those that start with
-SQLite's header. It never offers the project itself (nor, on Unix, a hard
-link to it), its
-`.pre-restore` copy, SQLite's `-journal`/`-wal`/`-shm` files, or an empty file
-(#720).
+The same list serves the damaged-file dialog's Restore from Backup and Recent
+Projects' "Restore an earlier copy" (right-click a project). It
+(`list_project_backups`, `core/state/project_restore.rs`) offers, each with its
+kind (`BackupInfo.kind`):
+
+- the files beside the project named after it plus a suffix that contains
+  `.backup` ("Backup": `cave.stalx.backup`, `cave.stalx.backup.1`, the copy
+  Attempt Repair keeps) or ends in `.tmp` ("Copy from a save that was
+  interrupted": `cave.stalx.tmp`, the temp a version 2 save writes through);
+- the copy the last restore kept, `<project>.stalx.pre-restore` ("The file as
+  it was before the last restore"), so a restore can be undone;
+- the SQLite original a project's first version 2 save kept in the app-data
+  `backups/` folder (`<stem>.<path key>.<UTC stamp>.pre-v2.stalx`, "Original
+  before the upgrade to the new format").
+
+It offers only files that are a SQLite project or a complete version 2 file:
+never a version 2 file a save tore before it finished, the project itself
+(nor, on Unix, a hard link to it), SQLite's `-journal`/`-wal`/`-shm` files, or
+an empty file (#720).
+
+The dialog lists them newest first, each in words with its local date and
+size; the file name is only in the row's tooltip. A click on a row selects
+it and writes nothing. The sentence under the list says what Restore does:
+"Replace `<file>` with this copy? The current file is kept as
+`<file>.pre-restore` and is listed here, so you can switch back." (for the
+damaged file: "Replace the damaged ...? The damaged file is kept as ... and is
+listed here."), and for the copy the last restore kept "Put `<file>` back as
+it was before the last restore? The two files swap places: ...". Restoring
+any other copy while there is such a copy overwrites it, which a second
+sentence says in the warning colour ("The copy kept by the last restore
+(`<date>`) is overwritten and cannot be restored afterwards."). Restore is
+disabled until a copy
+is chosen; the footer is Cancel (Recent Projects) or Back (damaged file),
+then Restore. The result names a pre-upgrade original in words, never by its
+app-data path, and can be closed without opening the project.
 
 A restore never writes into a file in place, and a restore that is refused or
 fails changes nothing:
 - Refused while the project, its `<project>.stalx.pre-restore` or the backup is
   open in the app, or while a project is being opened; when the backup is the
-  project itself; when the backup does not open as a project (empty, not a
-  project, damaged too); when an armed journal or a WAL with frames sits beside
-  the backup, the project or the `.pre-restore` copy; when one of those files,
-  or such a sidecar, is not a regular file; and when the project or the backup
-  was saved by a newer version.
+  project itself; when the backup does not open as a project the way a load
+  opens it (empty, not a project, damaged too, or a torn version 2 file: "is
+  incomplete: the save that wrote it never finished"); when an armed journal or
+  a WAL with frames sits beside a SQLite project or `.pre-restore` copy (beside
+  a version 2 file such sidecars are debris and are set aside); when one of
+  those files, or such a sidecar, is not a regular file; and when the project
+  or the backup was saved by a newer version.
 - Otherwise the backup is copied beside the project and opened as a project
-  first. The previous `.pre-restore` copy is set aside, a copy of the project
+  first. A SQLite backup with an armed journal or a WAL with frames beside it
+  is copied with them folded in (rolled back, read through, as an open does),
+  so the restored file is the survey the pair opens as; the backup and its
+  sidecars are only read. The previous `.pre-restore` copy is set aside, a copy of the project
   replaces it, and the backup copy replaces the project, each by rename. If the
   last step fails, the previous `.pre-restore` copy goes back. On Unix the
   restored file keeps the project's permission bits.
-- The dialog never offers the `.pre-restore` copy. Restoring it directly (over
-  IPC) swaps the two files back.
+- Restoring the `.pre-restore` copy swaps the two files back.
+- A restored pre-upgrade original that is saved again is not kept a second
+  time: the upgrade keeps no copy when one with the same bytes is already kept
+  for the project ([saving.md](saving.md#upgrading-a-legacy-file)).
 
-#### Backup Before Repair
-Always create backup before attempting repair:
-```rust
-fn backup_before_repair(path: &Path) -> Result<PathBuf> {
-    let backup = path.with_extension("stalx.backup");
-    fs::copy(path, &backup)?;
-    Ok(backup)
-}
-```
+#### Attempt Repair and Export Salvageable Data
+Attempt Repair (`AppState::repair_project_file`, `core/state/project_salvage.rs`)
+always keeps the damaged original first, as the next free
+`<file>.backup[.N]`:
+
+- **Version 2**: the file is read with salvage (`stalx_v2::decode_salvage`:
+  dangling references dropped, an anchorless piece given a `Placement`, a cycle
+  broken into a `Batch` closure, out-of-range counters lowered), the history is
+  dropped, and the repaired project is written in place behind the save guard,
+  so the dialog's Open reopens it and Recents and a SpeleoDB link keep pointing
+  at it (a managed copy is marked unpushed). Every repair is listed. A file
+  nothing can rebuild is left as it is; a sound file has nothing to do. Refused
+  while the file is open, or for a file made with a newer version.
+- **Legacy SQLite**: 0.6.0's repair of the database in place (REINDEX,
+  VACUUM), run only on a file the open refuses for damage. A file that opens
+  is not touched ("Nothing to repair"), nor is one this version cannot
+  convert although 0.6.0 opens it: that file is not damaged, its open reports
+  `CANNOT_CONVERT` ("This file needs converting ..., and this version cannot
+  convert it: <reason>") instead of offering this dialog, and the repair says
+  so if asked. After the repair the open is tried again: the result is
+  "succeeded" only when the project then opens; otherwise it says why it
+  still cannot be opened.
+
+Export Salvageable Data writes the repaired project as version 2 JSON (with
+the counts and the repairs as warnings) for a version 2 file, and the legacy
+salvage export for a SQLite one.
 
 ### 14.5 Validation Error Recovery
 
@@ -2723,14 +3246,24 @@ fn backup_before_repair(path: &Path) -> Result<PathBuf> {
   with the next edit, so it must not gate like an error; it resolves with "Go to
   station" or Ignore
 - A piece of the survey nothing places (`SECTION_NOT_CONNECTED`, the code's
-  pre-rename spelling, #814): a line, or lines joined by merges or aligned loop
-  closures, with no zero datum and no such link to a piece that has one, in a
+  pre-rename spelling, #814): a line, or lines joined at junctions (an aligned
+  loop closure never ties an unplaced piece, invariant 7), with no zero datum and no such link to a piece that has one, in a
   project where some piece does. One warning per piece, on the first shot of its
   first line. An import whose connection could not be made leaves such a piece.
   Advisory (a separate piece may be kept on purpose); it resolves with "Go to
   station" or Ignore. The Ignore is kept on that shot, so if the piece later gains
   an earlier line the warning moves to that line's first shot and shows again. A
   project with no zero datum at all gets none
+- A junction whose depth readings disagree (`JUNCTION_DEPTH_SPREAD`): a station on
+  two or more lines whose readings (each incoming shot's depth out, each outgoing
+  shot's depth in) span more than 0.5 m (`JUNCTION_DEPTH_SPREAD_M`, the threshold
+  the Merge dialog uses to name the depths). The station's depth is their mean, so
+  a reading off by metres moves it silently otherwise. One warning per junction,
+  on the shot arriving at it on its first line that has one, else on a shot
+  leaving it under `JUNCTION_DEPTH_SPREAD_START` (so two junctions never share an
+  Ignore), naming the junction, the spread and the mean. Advisory; it resolves
+  with "Go to station" (the junction) or Ignore. The threshold is fixed, not a
+  `settings.validation` key
 
 ---
 
@@ -2857,82 +3390,49 @@ pub fn create_line(state: &mut State, cmd: CreateLineCommand) -> Result<Line> {
 
 ### 17.1 Project File (`.stalx`)
 
-A project is a single SQLite database carrying the `.stalx` extension. Saving
-writes a fresh `<name>.stalx.tmp` and atomically renames it over the target, so an
-interrupted save never leaves a half-written project - see [saving.md](saving.md).
+A project is a single `.stalx` file in format version 2: one UTF-8 JSON object,
+canonical (the same model gives the same bytes) and line-oriented (one record
+per line), holding observations and user decisions only. The format is
+specified for outside readers in [file-format.md](file-format.md): recognising a
+file, the encoding and canonical rules, versioning (`version`, `requires`,
+`conventions`), every member, the validity rules, unknown content, how to
+derive positions, a Python reader, the limits. Saving builds the whole file in
+memory, writes `<name>.stalx.tmp`, syncs it, checks that the file on disk is
+still the one last read or written, and renames the temp over it, so an
+interrupted save never leaves a half-written project - see
+[saving.md](saving.md).
 
-The schema is versioned (`SCHEMA_VERSION` in
-`src-tauri/crates/persistence/src/persistence/sqlite.rs`) and migrated forward when an older file is
-opened. Alongside the survey tables (project, `sections` with one row per line,
-shots, station merges, zero datums, loop closures, `section_offsets` and
-`station_offsets`; the SQL keeps the pre-rename names, see
-[Persisted names](saving.md#persisted-names-lines-are-sections-on-disk)) it holds per-project and
-display settings, the persisted undo and redo stacks, resolved warnings, import
-hashes, station comments and names, the SpeleoDB link row, and the Unwind chain
-position in `speleo_undo_chain`. Five markers are worth knowing before touching migration
-code:
+- `requires` lists features a reader must understand: a file naming one this
+  build does not know opens read-only ("made with a newer Stalagmight"), as
+  does unknown content in a survey record; a higher `version` is refused with
+  the newer-version prompt, and so is a file naming an unknown feature whose
+  survey breaks a rule without it (the feature may relax the rule: it is not
+  offered a repair).
+- `summary` is a non-authoritative header (name, counts, length, bounds,
+  SpeleoDB id) that Recents and Global View read without parsing the body.
+- `speleodb` (the link, rides uploads) and `local` (per-machine state: display
+  toggles, the SpeleoDB sync state) are rewritten at once by the local-only
+  durable save; `history` holds the undo and redo entries.
+- The SpeleoDB server and its Python reader must accept version 2 before a
+  managed project's upload can land (the rollout prerequisite of
+  [plan 12.1](plans/2026-11-20_station-graph-model.md#121-rollout-prerequisites-outside-this-repository-called-out-in-the-pr));
+  until then every upload fails with "This SpeleoDB server does not accept
+  projects saved by this version yet", keeping the project dirty and locked,
+  and Publish says the new server project stayed empty.
 
-- `UNDO_FORMAT_SAFE_VERSION` - files written before it get their persisted
-  undo/redo stacks dropped on open, because pre-v7 `ShotUpdates` JSON cannot
-  distinguish "field untouched" from "clear this field".
-- v12 normalises stored pitch to the +down convention
-  (`migrate_pitch_to_down_convention`); see [inclination.md](inclination.md).
-- v15 drops the `collab_state` table, the storage for the since-removed Ariane
-  collaboration baseline, and also clears the persisted undo/redo stacks -
-  unconditionally, for every pre-v15 file, via `drop_legacy_undo_history`, which
-  loops both `undo_stack` and `redo_stack`. `UNDO_FORMAT_SAFE_VERSION` is 7, so
-  a v14 file reaches the migration with its history intact, and those payloads
-  can name the removed `apply_collab_changes` command, which no longer
-  deserializes; the loader skips a bad entry without truncating, so the stack
-  would otherwise load with a hole in the middle. v13 drops the stacks the same
-  way, for the legacy `is_reference` boolean.
-- v16 adds `speleo_link.undo_mode` (whether this project's undo history rides to
-  SpeleoDB) and two local-only tables: `speleo_undo_chain` (how far back through
-  the server's revisions this machine has unwound) and `speleo_undo_watermark`
-  (which loaded entries a chain step inherited, so the next push does not ship
-  them again); see [undo-redo.md](undo-redo.md). Both `speleo_undo_chain` and
-  `speleo_undo_watermark` are created by `migrate_schema` in `schema.rs`
-  (CREATE TABLE IF NOT EXISTS), so a legacy file gains them on open;
-  `save_speleo_undo_watermark` in `persistence/sqlite/settings.rs` also creates
-  the watermark table defensively, and the read side probes `sqlite_master`
-  first.
-- v17 gives `LineUpdates`' (then `SectionUpdates`) `name` / `surveyor` / `date` the `double_option` +
-  `skip_serializing_if` pair `ShotUpdates` has had since v7, so an undo can once
-  again restore a line field that was null before the edit (issue #413
-  finding 5). It is the v7 hazard one struct over - a pre-v17 writer serialized
-  every untouched nullable field as an explicit `null`, which now reads as "clear
-  this field" - so the migration drops the persisted stacks through
-  `drop_legacy_undo_history` exactly as v13, v15 and v16 do.
-  `UNDO_FORMAT_SAFE_VERSION` stays at 7: it is the floor for the pre-v7 purge
-  alone, and bumping it would make the v13 and v15 arms' own tests pass with
-  those arms removed.
-
-`station_names` holds per-station names in the same positional shape as
-`station_comments`. It was added at v18 WITHOUT a schema version bump, on
-purpose: SpeleoDB turns an uploaded `.stalx` into a map with OpenSpeleo's
-Python package `stalagmight_lib` (pytool_stalagmight_lib, through
-`openspeleo_lib`; not the app's Rust lib crate of the same name). Before its
-0.0.2 it refuses any file not at exactly v18 (0.0.2 also takes 19, and a server
-may still run 0.0.1), and it reads only the tables it knows, so a new table is
-invisible to it while a bump would lock it out (verified version and details in
-`persistence/sqlite/station_texts.rs`). The cost is that a build without the table drops
-the names on its next save. A v18 file from before the table takes the version
-fast path, so the read side treats a missing table as empty and `save_project`
-creates it inside its transaction; `station_names_tests.rs` in
-`persistence/sqlite/` pins both, and that no table the outside reader reads
-changes when a project gains names. Every station's name is written (names are
-required, 4.2).
-
-`station_ids` holds every station's Station ID in the same positional shape
-(`section_id, station_index, station_id`), and the `project_settings` row
-`next_station_id` the allocation counter - both without a schema bump, for the
-same reason (see [saving.md](saving.md#station-names-and-station-ids)).
+**Legacy files.** Files written before version 2 are SQLite databases with the
+same extension. They are read by the frozen 0.6.0 reader (`crates/legacy`: the
+schema migration chain up to v18, the side tables added without a version bump,
+the load pipeline) and converted in memory by `persistence::migrate`, which
+verifies every slot's position against 0.6.0's open; the first save writes
+version 2 over the file after making the original whole (an old build's hot
+journal rolled back, a WAL checkpointed) and keeping it in the app-data
+`backups/` folder ([saving.md](saving.md#upgrading-a-legacy-file)). The
+history of a legacy file is not kept. Only the frozen reader knows the SQLite
+schema; the app never writes one.
 
 The dive plan lives beside the project in its own `.plnx` SQLite sidecar
 (`src-tauri/crates/persistence/src/persistence/plnx.rs`), not in the `.stalx`.
-
-Table definitions are authoritative in `src-tauri/crates/persistence/src/persistence/sqlite/` and are
-not reproduced here.
 
 ### 17.2 DMP File Import
 
@@ -3103,7 +3603,7 @@ and quoted (`export/csv.rs` `escape_csv`).
 | **Map Rendering** | MapLibre GL JS 5.x, with a custom WebGL layer for survey geometry |
 | **Virtualization** | TanStack Virtual (data tables) |
 | **i18n** | react-i18next |
-| **Database** | SQLite (via rusqlite) |
+| **Storage** | The project: canonical JSON `.stalx` (version 2). SQLite via rusqlite: the tile cache, the `.plnx` dive plans, and reading legacy projects |
 | **Logging** | tracing + tracing-subscriber |
 | **Build** | pnpm + Vite + Tauri CLI |
 | **Testing** | cargo test, vitest, Playwright; the agent harness for full-app runs |
@@ -3223,7 +3723,8 @@ The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortc
 `{shot}` names the shot by its line and stations, `Main Line: 4 → 5`
 (section 4.2), never by a positional id. The structured `lineId` /
 `shotIndex` of a warning say which shot it is; the Warnings tab's Full level
-turns the leading `Shot {shot}` into a shot pill.
+turns the leading `Shot {shot}` into a shot pill, and every other station,
+shot or line the message names into a prose pill (`messageParts`, RS-PROSE).
 
 | Rule | Severity | Message |
 |------|----------|---------|

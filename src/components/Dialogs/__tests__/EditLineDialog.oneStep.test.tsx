@@ -67,7 +67,6 @@ beforeEach(() => {
     if (MUTATIONS.has(command)) return { success: true, warnings: [], error: null, line_ids: [1] };
     if (command === 'can_undo' || command === 'can_redo') return false;
     if (command === 'get_project_state') return null;
-    if (command.includes('integrity')) return { messages: [] };
     if (command.startsWith('get_') || command.startsWith('validate')) return [];
     return null;
   });

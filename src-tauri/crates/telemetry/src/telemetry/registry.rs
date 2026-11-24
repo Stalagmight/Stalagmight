@@ -134,6 +134,13 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.plan_anchors_for_refs",
     "command.plan_refs_for_anchors",
     "command.preview_delete_shot",
+    "command.preview_detach_line",
+    // Kept and archived stations (plan 2026-11-23, RS 7): the Create Loop
+    // Closure and Remove Closure dialogs' naming previews, and "whose
+    // station is this" before a rename or comment edit.
+    "command.preview_loop_closure",
+    "command.preview_remove_loop_closure",
+    "command.preview_station_identity",
     "command.preview_zero_datum",
     "command.pull_mnemo",
     "command.push_frontend_log",
@@ -294,6 +301,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.reverse-line",
     "action.dialog.line-adjust",
     "action.dialog.settings",
+    "action.dialog.shown-identity-edit",
     "action.dialog.open-from-speleodb",
     "action.dialog.speleodb-done",
     "action.dialog.speleodb-divergence",
@@ -371,6 +379,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.reverse-line",
     "dialog-cancel.line-adjust",
     "dialog-cancel.settings",
+    "dialog-cancel.shown-identity-edit",
     "dialog-cancel.open-from-speleodb",
     "dialog-cancel.speleodb-done",
     "dialog-cancel.speleodb-divergence",
@@ -484,6 +493,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.reverse-line",
     "dwell.dialog.line-adjust",
     "dwell.dialog.settings",
+    "dwell.dialog.shown-identity-edit",
     "dwell.dialog.open-from-speleodb",
     "dwell.dialog.speleodb-done",
     "dwell.dialog.speleodb-divergence",
@@ -530,9 +540,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.save-permission",
     "dialog-cancel.save-permission",
     "dwell.dialog.save-permission",
-    // Structural-integrity IPC commands (check + repair).
-    "command.check_project_integrity",
-    "command.repair_project_integrity",
     // Closure-adjusted display mode (measured ↔ closure-adjusted) toggle + state.
     // Only the non-default state ("closureAdjusted") is emitted.
     "action.toggle.geometryMode",
@@ -652,6 +659,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.reverse-line",
     "active-dwell.dialog.line-adjust",
     "active-dwell.dialog.settings",
+    "active-dwell.dialog.shown-identity-edit",
     "active-dwell.dialog.open-from-speleodb",
     "active-dwell.dialog.speleodb-done",
     "active-dwell.dialog.speleodb-divergence",
@@ -867,6 +875,25 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.add-or-open-project",
     "dwell.dialog.add-or-open-project",
     "active-dwell.dialog.add-or-open-project",
+    // `.stalx` v2 (station-graph model): the save prompt's Overwrite answer
+    // to the external-modification guard, the conversion notice of a legacy
+    // open, the backend dirty flag read after a warning ignore, the
+    // read-only reason of a file made with a newer Stalagmight, and the
+    // save-conflict prompt itself.
+    "command.save_project_overwriting",
+    "command.take_conversion_notice",
+    "command.has_unsaved_changes",
+    "command.project_read_only_reason",
+    // Whether the open file is still a 0.6.0 file, which the status bar says
+    // instead of "Saved" until the first save converts it (demo issue N-6).
+    "command.project_file_is_legacy",
+    // The save prompt's "Use the file's version": the open file read again
+    // and, only when it opens, put in place of the session (one operation).
+    "command.reload_project_full_binary",
+    "action.dialog.save-conflict",
+    "dialog-cancel.save-conflict",
+    "dwell.dialog.save-conflict",
+    "active-dwell.dialog.save-conflict",
 ];
 
 #[cfg(test)]
@@ -1209,7 +1236,26 @@ mod tests {
         //   + 1 the discarded-history banner asks whether the history it reports
         //       was an earlier version's (compact undo entries):
         //       command.history_discarded_from_earlier_version = 744.
-        assert_eq!(EVENT_NAMES.len(), 744);
+        //   + 8 `.stalx` v2: command.save_project_overwriting,
+        //       command.take_conversion_notice, command.has_unsaved_changes,
+        //       command.project_read_only_reason, and the full per-dialog set
+        //       for save-conflict = 752.
+        //   - 2 the integrity banner's IPC, unreachable on the station graph
+        //       (every edit and load validates): command.check_project_integrity,
+        //       command.repair_project_integrity = 750.
+        //   + 1 the Detach dialog's naming preview (review finding UX-4):
+        //       command.preview_detach_line = 751.
+        //   + 1 the status bar's "old format" state (demo issue N-6):
+        //       command.project_file_is_legacy = 752.
+        //   + 1 the save prompt's reopen check (pre-PR review finding 1),
+        //       made the reload itself, one operation (pre-PR delta review
+        //       finding 2): command.reload_project_full_binary = 753.
+        //   + 3 kept and archived stations (RS 7): command.preview_loop_closure,
+        //       command.preview_remove_loop_closure,
+        //       command.preview_station_identity = 756.
+        //   + 4 the data table's "whose station is this?" prompt (RS 5.4): the
+        //       full per-dialog set for shown-identity-edit = 760.
+        assert_eq!(EVENT_NAMES.len(), 760);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

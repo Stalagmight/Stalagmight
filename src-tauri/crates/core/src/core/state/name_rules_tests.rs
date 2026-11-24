@@ -1,14 +1,30 @@
 //! The name rules at the command layer: a rename to the name a station
 //! already has is a no-op, control and invisible formatting characters are
-//! refused, names are stored and compared trimmed, Split and Combine refuse
-//! a line name a rename would refuse (and never rename an unrelated line),
-//! and the Combine candidate tells the dialog which stations it renames.
+//! refused, names are stored and compared trimmed, a junction's name is
+//! unique on every one of its lines (plan 5.3), Split and Combine refuse a
+//! line name a rename would refuse (and never rename an unrelated line), and
+//! the Combine candidate tells the dialog which stations it renames.
+//!
+//! Lines are built with the model's own `create_line` (what Create Line
+//! does). Every case runs: the commands they drive (Split Line Here and
+//! Combine, delete-and-split, line renames and Sections) are all on the
+//! station graph, and so is their setup.
+//!
+//! Retired from 0.6.0: the half of `names_are_stored_and_compared_trimmed`
+//! that ran `Project::ensure_station_identities` over padded and repeated
+//! names a file could hold. There is no identity epilogue on the station
+//! graph (identities are structural, a v2 load is pure, and `validate`
+//! refuses repeated names); a legacy file's names are settled by the
+//! migration. `a_split_given_a_taken_name_by_a_direct_caller_renames_its_own_half`
+//! is adapted: the model's Split refuses the taken name itself, so there is
+//! no unvalidated path that could rename either line.
 
 use super::AppState;
 use crate::core::{Command, CommandResult};
+use crate::models::survey::{LineMeta, Project, SplitOptions, StartAt};
 use crate::models::{
-    CombineJoinEnds, CombineLinesOptions, CombinePick, CombineRenameReason, LineEnd, LineId,
-    LineUpdates, Project, ShotData, SplitAt, SplitLineOptions, SplitSide, StationRef,
+    CombineJoinEnds, CombineLinesOptions, CombinePick, CombineRenameReason, Coordinates, LineEnd,
+    LineId, LineUpdates, ShotData, SplitAt, SplitLineOptions, StationRef, LINE_GONE,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -25,6 +41,11 @@ fn ok(result: CommandResult) -> CommandResult {
     result
 }
 
+fn refused(result: CommandResult) -> String {
+    assert!(!result.success, "the command was expected to be refused");
+    result.error.unwrap_or_default()
+}
+
 fn new_state() -> AppState {
     let state = AppState::new().unwrap();
     ok(state.execute(Command::CreateProject {
@@ -34,26 +55,72 @@ fn new_state() -> AppState {
     state
 }
 
-fn create_line(state: &AppState, name: &str, shots: usize) -> LineId {
-    ok(state.execute(Command::CreateLine {
-        name: Some(name.to_string()),
-        surveyor: None,
-        date: None,
-        color: "#4ecdc4".to_string(),
-        direction: None,
-        shots: (0..shots).map(|_| shot(90.0, 10.0)).collect(),
-        cave_section_id: None,
-    }))
-    .line_id
-    .unwrap()
-}
-
 fn project(state: &AppState) -> Project {
     state.get_project_state().unwrap()
 }
 
+/// Change the open project directly: a fixture outside the history.
+fn edit<R>(state: &AppState, f: impl FnOnce(&mut Project) -> R) -> R {
+    let mut p = project(state);
+    let out = f(&mut p);
+    assert!(p.validate().is_empty(), "{:?}", p.validate());
+    state.set_project_for_tests(p);
+    out
+}
+
+fn meta(name: &str) -> LineMeta {
+    LineMeta {
+        name: Some(name.to_string()),
+        color: "#4ecdc4".to_string(),
+        ..LineMeta::default()
+    }
+}
+
+/// A new free line of `shots` shots heading east (what Create Line makes).
+fn create_line(state: &AppState, name: &str, shots: usize) -> LineId {
+    edit(state, |p| {
+        let shots = (0..shots).map(|_| shot(90.0, 10.0)).collect();
+        p.create_line(meta(name), StartAt::New, shots, None)
+            .unwrap()
+            .value
+    })
+}
+
+/// A new line starting at `at`'s station: a junction there.
+fn create_branch(state: &AppState, name: &str, at: StationRef, shots: usize) -> LineId {
+    edit(state, |p| {
+        let start = p.station_at(at).unwrap();
+        let shots = (0..shots).map(|_| shot(0.0, 5.0)).collect();
+        p.create_line(meta(name), StartAt::Station(start), shots, None)
+            .unwrap()
+            .value
+    })
+}
+
 fn line_name(state: &AppState, line: LineId) -> Option<String> {
-    project(state).get_line(line).and_then(|l| l.name.clone())
+    project(state).line(line).and_then(|l| l.name.clone())
+}
+
+/// The station names along `line`.
+fn names_on(state: &AppState, line: LineId) -> Vec<String> {
+    let p = project(state);
+    p.line(line)
+        .unwrap()
+        .stations()
+        .map(|s| p.stations[&s].name.clone())
+        .collect()
+}
+
+fn name_at(state: &AppState, slot: StationRef) -> String {
+    let p = project(state);
+    p.stations[&p.station_at(slot).unwrap()].name.clone()
+}
+
+fn rename(state: &AppState, slot: StationRef, name: &str) -> CommandResult {
+    state.execute(Command::SetStationName {
+        station_ref: slot,
+        name: name.to_string(),
+    })
 }
 
 fn split_options(name_a: &str, name_b: &str) -> SplitLineOptions {
@@ -62,8 +129,6 @@ fn split_options(name_a: &str, name_b: &str) -> SplitLineOptions {
         name_b: name_b.to_string(),
         color_a: "#111111".to_string(),
         color_b: "#222222".to_string(),
-        comment_side: SplitSide::A,
-        datum_side: SplitSide::A,
     }
 }
 
@@ -91,29 +156,25 @@ fn split(state: &AppState, line: LineId, at: u32, name_a: &str, name_b: &str) ->
     (line, result.line_id.unwrap())
 }
 
+// === Station names ===
+
 #[test]
 fn renaming_a_station_to_its_own_name_leaves_no_history() {
     let state = new_state();
     let main = create_line(&state, "Main", 2);
     let station = StationRef::new(main, 1);
-    ok(state.execute(Command::SetStationName {
-        station_ref: station,
-        name: "sump".to_string(),
-    }));
-    assert!(state.undo().success);
+    ok(rename(&state, station, "sump"));
+    ok(state.undo());
     assert!(state.can_redo());
     let history = state.get_undo_stack().len();
     let modified_at = project(&state).modified_at;
 
     // " 1 " is "1" once trimmed: the station's name already.
-    ok(state.execute(Command::SetStationName {
-        station_ref: station,
-        name: " 1 ".to_string(),
-    }));
+    ok(rename(&state, station, " 1 "));
     assert_eq!(state.get_undo_stack().len(), history, "no undo entry");
     assert!(state.can_redo(), "the redo branch survives");
     assert_eq!(project(&state).modified_at, modified_at, "not touched");
-    assert_eq!(project(&state).station_name_at(station), Some("1"));
+    assert_eq!(name_at(&state, station), "1");
 }
 
 /// The `command` field of every event `run` emits on this thread, as a
@@ -170,18 +231,13 @@ fn a_name_with_a_newline_is_logged_escaped() {
     let main = create_line(&state, "Main", 2);
     let station = StationRef::new(main, 1);
     let forged = "1\nERROR forged line";
-    {
-        let mut guard = state.project.lock().unwrap();
-        let project = guard.as_mut().unwrap();
-        let key = project.key_for_ref(station).unwrap();
-        project.station_names.insert(key, forged.to_string());
-    }
+    edit(&state, |p| {
+        let id = p.station_at(station).unwrap();
+        p.stations.get_mut(&id).unwrap().name = forged.to_string();
+    });
     // The rename to the name the station has is the no-op path's log.
     let logged = commands_logged_during(|| {
-        ok(state.execute(Command::SetStationName {
-            station_ref: station,
-            name: forged.to_string(),
-        }));
+        ok(rename(&state, station, forged));
     });
     assert!(!logged.is_empty(), "the command is logged");
     assert!(
@@ -191,19 +247,25 @@ fn a_name_with_a_newline_is_logged_escaped() {
 }
 
 #[test]
-fn control_and_invisible_characters_are_refused_in_names() {
+fn control_and_invisible_characters_are_refused_in_station_names() {
     let state = new_state();
     let main = create_line(&state, "Main", 2);
-    let refused = |result: CommandResult| result.error.unwrap_or_default();
-
-    let station = refused(state.execute(Command::SetStationName {
-        station_ref: StationRef::new(main, 1),
-        name: "A\u{202E}B".to_string(),
-    }));
     assert_eq!(
-        station,
+        refused(rename(&state, StationRef::new(main, 1), "A\u{202E}B")),
         "A station name cannot contain control or invisible formatting characters (U+202E)"
     );
+    assert!(state
+        .refuse_new_line_name(Some("New\u{200D}Line"))
+        .is_some());
+    // Visible separators stay allowed.
+    ok(rename(&state, StationRef::new(main, 1), "1 / sump"));
+    assert_eq!(name_at(&state, StationRef::new(main, 1)), "1 / sump");
+}
+
+#[test]
+fn control_and_invisible_characters_are_refused_in_line_and_section_names() {
+    let state = new_state();
+    let main = create_line(&state, "Main", 2);
     let line = refused(state.execute(Command::UpdateLineMetadata {
         line_id: main,
         updates: LineUpdates {
@@ -226,15 +288,6 @@ fn control_and_invisible_characters_are_refused_in_names() {
             "{hidden:?}: {section}"
         );
     }
-    assert!(state
-        .refuse_new_line_name(Some("New\u{200D}Line"))
-        .is_some());
-
-    // Visible separators stay allowed.
-    ok(state.execute(Command::SetStationName {
-        station_ref: StationRef::new(main, 1),
-        name: "1 / sump".to_string(),
-    }));
     ok(state.execute(Command::UpdateLineMetadata {
         line_id: main,
         updates: LineUpdates {
@@ -245,14 +298,40 @@ fn control_and_invisible_characters_are_refused_in_names() {
 }
 
 #[test]
-fn names_are_stored_and_compared_trimmed() {
+fn station_names_are_stored_trimmed_and_line_names_compared_trimmed() {
     let state = new_state();
-    let main = create_line(&state, " Main ", 1);
-    assert_eq!(line_name(&state, main).as_deref(), Some("Main"));
+    let main = create_line(&state, "Main", 1);
+    ok(rename(&state, StationRef::new(main, 1), "  sump\u{20}"));
+    assert_eq!(name_at(&state, StationRef::new(main, 1)), "sump");
     assert!(
         state.refuse_new_line_name(Some("Main ")).is_some(),
         "a padded copy of a taken name is the taken name"
     );
+    assert!(state.refuse_new_line_name(Some(" Side ")).is_none());
+    assert_eq!(
+        state
+            .refuse_new_line_name(None)
+            .and_then(|r| r.error)
+            .as_deref(),
+        Some("A line name cannot be empty")
+    );
+}
+
+#[test]
+fn line_names_are_stored_trimmed() {
+    let state = new_state();
+    let main = ok(state.execute(Command::CreateLine {
+        name: Some(" Main ".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        shots: vec![shot(90.0, 10.0)],
+        cave_section_id: None,
+    }))
+    .line_id
+    .unwrap();
+    assert_eq!(line_name(&state, main).as_deref(), Some("Main"));
     ok(state.execute(Command::UpdateLineMetadata {
         line_id: main,
         updates: LineUpdates {
@@ -261,38 +340,109 @@ fn names_are_stored_and_compared_trimmed() {
         },
     }));
     assert_eq!(line_name(&state, main).as_deref(), Some("Upstream"));
-
-    // A file (or an older build) can hold padded names: the normalization
-    // trims them, and a repeat found on the trimmed key gets ` (2)`.
-    let mut p = Project::new("Padded".to_string(), None);
-    for name in ["Main", "Main ", " Side"] {
-        p.add_line(crate::models::LineData {
-            name: Some(name.to_string()),
-            color: "#123456".to_string(),
-            quality: 1.0,
-            shots: vec![shot(0.0, 1.0)],
-            ..Default::default()
-        });
-    }
-    // `add_line` trims; put the padding back as a file would hold it.
-    p.lines[1].name = Some("Main ".to_string());
-    p.lines[2].name = Some(" Side".to_string());
-    let (first, second) = (p.lines[0].id, p.lines[1].id);
-    let key = |p: &Project, line: LineId, i: u32| p.key_for_ref(StationRef::new(line, i)).unwrap();
-    let (k0, k1) = (key(&p, first, 0), key(&p, first, 1));
-    p.station_names.insert(k0, "5 ".to_string());
-    p.station_names.insert(k1, "5".to_string());
-    p.ensure_station_identities();
-    let names: Vec<_> = p.lines.iter().map(|l| l.name.clone().unwrap()).collect();
-    assert_eq!(names, ["Main", "Main (2)", "Side"]);
-    assert_eq!(
-        p.line_station_names(first),
-        [Some("5".to_string()), Some("5a".to_string())]
-    );
-    assert!(p.get_line(second).is_some());
-    // Settled: a second pass changes nothing.
-    assert!(p.ensure_station_identities().is_empty());
 }
+
+#[test]
+fn a_rename_is_refused_in_0_6_0_words() {
+    let state = new_state();
+    let main = create_line(&state, "Main", 2);
+    ok(rename(&state, StationRef::new(main, 2), "sump"));
+    assert_eq!(
+        refused(rename(&state, StationRef::new(main, 1), "sump")),
+        "Line \"Main\" already has a station named \"sump\""
+    );
+    assert_eq!(
+        refused(rename(&state, StationRef::new(main, 1), "   ")),
+        "A station name cannot be empty"
+    );
+    assert_eq!(
+        refused(rename(&state, StationRef::new(main, 9), "x")),
+        "Station not found"
+    );
+    assert_eq!(
+        refused(rename(&state, StationRef::new(77, 0), "x")),
+        LINE_GONE
+    );
+    assert_eq!(state.get_undo_stack().len(), 1, "only the first rename");
+}
+
+#[test]
+fn a_junction_name_is_unique_on_every_one_of_its_lines() {
+    // Main 0-1-2-3, Side starts at Main's 1 (a junction): its stations are
+    // the junction, then Side's own.
+    let state = new_state();
+    let main = create_line(&state, "Main", 3);
+    let side = create_branch(&state, "Side", StationRef::new(main, 1), 2);
+    ok(rename(&state, StationRef::new(side, 2), "far"));
+    let junction = StationRef::new(side, 0);
+
+    // A name Main holds, asked on Side's slot: Main is named.
+    assert_eq!(
+        refused(rename(&state, junction, "3")),
+        "Line \"Main\" already has a station named \"3\""
+    );
+    // A name only Side holds, asked on Main's slot: Side is named.
+    assert_eq!(
+        refused(rename(&state, StationRef::new(main, 1), "far")),
+        "Line \"Side\" already has a station named \"far\""
+    );
+    // Free on both lines: one name on every slot.
+    ok(rename(&state, junction, "J"));
+    assert_eq!(name_at(&state, StationRef::new(main, 1)), "J");
+    assert_eq!(names_on(&state, side)[0], "J");
+    // And it now blocks the name on both lines.
+    assert!(refused(rename(&state, StationRef::new(main, 3), "J")).contains("\"Main\""));
+    assert!(refused(rename(&state, StationRef::new(side, 1), "J")).contains("\"Side\""));
+}
+
+#[test]
+fn a_pasted_column_of_names_is_one_step_and_all_or_nothing() {
+    let state = new_state();
+    let main = create_line(&state, "Main", 3);
+    let paste = |names: &[&str]| Command::Batch {
+        commands: names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| Command::SetStationName {
+                station_ref: StationRef::new(main, u32::try_from(i).unwrap()),
+                name: (*name).to_string(),
+            })
+            .collect(),
+        label: None,
+    };
+    ok(state.execute(paste(&["E0", "E1", "E2", "E3"])));
+    assert_eq!(names_on(&state, main), ["E0", "E1", "E2", "E3"]);
+    assert_eq!(state.get_undo_stack().len(), 1, "one entry for the paste");
+
+    // The third name repeats the first: the whole paste is refused.
+    let error = refused(state.execute(paste(&["x", "y", "x", "z"])));
+    assert_eq!(error, "Line \"Main\" already has a station named \"x\"");
+    assert_eq!(names_on(&state, main), ["E0", "E1", "E2", "E3"]);
+    assert_eq!(state.get_undo_stack().len(), 1);
+
+    ok(state.undo());
+    assert_eq!(names_on(&state, main), ["0", "1", "2", "3"]);
+    ok(state.redo());
+    assert_eq!(names_on(&state, main), ["E0", "E1", "E2", "E3"]);
+}
+
+#[test]
+fn a_rename_survives_save_and_reopen_and_undoes_there() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("names.stalx");
+    let state = new_state();
+    let main = create_line(&state, "Main", 2);
+    ok(rename(&state, StationRef::new(main, 1), "sump"));
+    ok(state.save_project(Some(path.clone())));
+
+    let reopened = AppState::new().unwrap();
+    ok(reopened.open_project(path));
+    assert_eq!(name_at(&reopened, StationRef::new(main, 1)), "sump");
+    ok(reopened.undo());
+    assert_eq!(name_at(&reopened, StationRef::new(main, 1)), "1");
+}
+
+// === Split and Combine names ===
 
 #[test]
 fn split_refuses_a_taken_or_empty_half_name_like_a_rename() {
@@ -337,7 +487,7 @@ fn split_refuses_a_taken_or_empty_half_name_like_a_rename() {
             .as_deref(),
         Some("A line named \"Side\" already exists")
     );
-    assert_eq!(project(&state).lines.len(), 2, "nothing changed");
+    assert_eq!(project(&state).lines().len(), 2, "nothing changed");
     // The line's own name is no collision: it is the line being replaced.
     let (_, second) = split(&state, main, 2, " Main ", "Main B");
     assert_eq!(line_name(&state, main).as_deref(), Some("Main"));
@@ -349,7 +499,7 @@ fn delete_and_split_refuse_a_taken_or_empty_half_name() {
     let state = new_state();
     let main = create_line(&state, "Main", 5);
     create_line(&state, "Side", 1);
-    let shot_at = |i: usize| project(&state).get_line(main).unwrap().shots[i].id;
+    let shot_at = |i: usize| project(&state).line(main).unwrap().shots[i].id;
     let single = state.execute_delete_shot_and_split(
         main,
         shot_at(2),
@@ -368,7 +518,7 @@ fn delete_and_split_refuse_a_taken_or_empty_half_name() {
         "Main B".to_string(),
     );
     assert_eq!(range.error.as_deref(), Some("A line name cannot be empty"));
-    assert_eq!(project(&state).lines.len(), 2, "nothing changed");
+    assert_eq!(project(&state).lines().len(), 2, "nothing changed");
     let done = ok(state.execute_delete_shot_and_split(
         main,
         shot_at(2),
@@ -397,7 +547,7 @@ fn combine_refuses_a_name_a_third_line_holds_and_takes_either_own_name() {
     ok(state.execute_combine_lines(main, second, combine_options(" Main B ")));
     assert_eq!(line_name(&state, main).as_deref(), Some("Main B"));
     let names: Vec<_> = project(&state)
-        .lines
+        .lines()
         .iter()
         .map(|l| l.name.clone().unwrap())
         .collect();
@@ -405,50 +555,62 @@ fn combine_refuses_a_name_a_third_line_holds_and_takes_either_own_name() {
 }
 
 #[test]
-fn a_split_given_a_taken_name_by_a_direct_caller_renames_its_own_half() {
-    // The model is reachable without the command's validation (tests, the
-    // preview's copy): the half yields, never the unrelated line.
-    let mut p = Project::new("Direct".to_string(), None);
-    let data = |name: &str, shots: usize| crate::models::LineData {
-        name: Some(name.to_string()),
-        color: "#123456".to_string(),
-        quality: 1.0,
-        shots: (0..shots).map(|_| shot(0.0, 1.0)).collect(),
-        ..Default::default()
-    };
-    let main = p.add_line(data("Main", 4)).id;
-    let side = p.add_line(data("Side", 1)).id;
-    let second = p
-        .split_line_at_station(main, 2, &split_options("Main", "Side"))
-        .unwrap();
-    p.ensure_station_identities();
-    assert_eq!(p.get_line(side).unwrap().name.as_deref(), Some("Side"));
+fn a_split_given_a_taken_name_by_a_direct_caller_is_refused_and_renames_nothing() {
+    // 0.6.0's model could be called without the command's validation and
+    // then renamed its own half. The station graph's Split validates the
+    // names itself, so no caller can make it rename either line.
+    let state = new_state();
+    let main = create_line(&state, "Main", 4);
+    let side = create_line(&state, "Side", 1);
+    let mut p = project(&state);
+    let before = p.clone();
+    let refusal = p
+        .split_line(
+            main,
+            SplitAt::Station { station_index: 2 },
+            &SplitOptions {
+                name_a: "Main".to_string(),
+                name_b: "Side".to_string(),
+                color_a: "#111111".to_string(),
+                color_b: "#222222".to_string(),
+            },
+        )
+        .err()
+        .map(|e| e.to_string());
     assert_eq!(
-        p.get_line(second).unwrap().name.as_deref(),
-        Some("Side (2)")
+        refusal.as_deref(),
+        Some("A line named \"Side\" already exists")
     );
+    assert_eq!(p, before, "nothing changed");
+    assert_eq!(p.line(side).unwrap().name.as_deref(), Some("Side"));
 }
 
 /// Put `side`'s start on `main`'s last station (`main_end`) and merge them,
-/// so the two lines touch there and can be combined.
+/// so the two lines touch there and can be combined. The merge moves
+/// `side` onto `main` (`station_a`'s piece moves), so the junction keeps
+/// Main's name and Side's own names are made unique around it; merged the
+/// other way, the junction would take Side's `0` and letter Main's.
 fn merge_start_onto_end(state: &AppState, main: LineId, main_end: u32, side: LineId) {
-    let end = project(state)
-        .compute_station_raw_coords(StationRef::new(main, main_end))
-        .unwrap();
-    let start = project(state)
-        .compute_station_raw_coords(StationRef::new(side, 0))
-        .unwrap();
+    let position = |line: LineId, index: u32| {
+        let p = project(state);
+        p.raw_positions()
+            .slot(&p, StationRef::new(line, index))
+            .unwrap()
+    };
+    let (end, start) = (position(main, main_end), position(side, 0));
     ok(state.execute(Command::MoveLine {
         line_id: side,
-        offset: crate::models::Coordinates {
-            x: end.x - start.x,
-            y: end.y - start.y,
+        offset: Coordinates {
+            x: end[0] - start[0],
+            y: end[1] - start[1],
             z: 0.0,
         },
     }));
     ok(state.execute(Command::MergeStations {
-        station_a: StationRef::new(main, main_end),
-        station_b: StationRef::new(side, 0),
+        station_a: StationRef::new(side, 0),
+        station_b: StationRef::new(main, main_end),
+        keep: None,
+        renames: None,
     }));
 }
 
@@ -491,12 +653,7 @@ fn the_combine_candidate_names_the_renames_and_the_joined_station() {
 
     // The combine does what the candidate said.
     ok(state.execute_combine_lines(main, side, combine_options("Main")));
-    let names: Vec<_> = project(&state)
-        .line_station_names(main)
-        .into_iter()
-        .map(Option::unwrap)
-        .collect();
-    assert_eq!(names, ["A0", "A1", "A2", "A3", "B1", "B2"]);
+    assert_eq!(names_on(&state, main), ["A0", "A1", "A2", "A3", "B1", "B2"]);
 }
 
 #[test]
@@ -508,10 +665,7 @@ fn a_combine_keeps_custom_names_and_says_how_many_it_keeps() {
     let main = create_line(&state, "Main", 8);
     let side = create_line(&state, "Side", 3);
     for (line, index, name) in [(main, 2, "Junction"), (main, 3, "Sump"), (side, 2, "Sump")] {
-        ok(state.execute(Command::SetStationName {
-            station_ref: StationRef::new(line, index),
-            name: name.to_string(),
-        }));
+        ok(rename(&state, StationRef::new(line, index), name));
     }
     merge_start_onto_end(&state, main, 8, side);
     let candidate = state
@@ -553,13 +707,8 @@ fn a_combine_keeps_custom_names_and_says_how_many_it_keeps() {
     assert_eq!(renames.join_name, "A8");
 
     ok(state.execute_combine_lines(main, side, combine_options("Main")));
-    let names: Vec<_> = project(&state)
-        .line_station_names(main)
-        .into_iter()
-        .map(Option::unwrap)
-        .collect();
     assert_eq!(
-        names,
+        names_on(&state, main),
         ["A0", "A1", "Junction", "Sump", "A4", "A5", "A6", "A7", "A8", "B1", "Sump-a", "B3"]
     );
 }
@@ -570,10 +719,7 @@ fn a_combine_that_renames_nothing_says_nothing() {
     let state = new_state();
     let main = create_line(&state, "Main", 4);
     for i in 0..=4 {
-        ok(state.execute(Command::SetStationName {
-            station_ref: StationRef::new(main, i),
-            name: format!("E{i}"),
-        }));
+        ok(rename(&state, StationRef::new(main, i), &format!("E{i}")));
     }
     let (_, second) = split(&state, main, 2, "Main", "Main B");
     let candidate = state
@@ -583,10 +729,5 @@ fn a_combine_that_renames_nothing_says_nothing() {
     assert_eq!(candidate.plan_keeping_a.station_renames, None);
     assert_eq!(candidate.plan_keeping_b.station_renames, None);
     ok(state.execute_combine_lines(main, second, combine_options("Main")));
-    let names: Vec<_> = project(&state)
-        .line_station_names(main)
-        .into_iter()
-        .map(Option::unwrap)
-        .collect();
-    assert_eq!(names, ["E0", "E1", "E2", "E3", "E4"]);
+    assert_eq!(names_on(&state, main), ["E0", "E1", "E2", "E3", "E4"]);
 }

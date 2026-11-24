@@ -1626,10 +1626,10 @@ button.sh-tool.sh-tool--active {
   border-color: color-mix(in oklab, var(--o) 72%, transparent);
 }
 
-/* Entity-link pill: a tinted background + dim, entity-tinted border (--o set to
-   var(--sh-<entity>)), matching the icon-set legend chips. The full `border`
-   shorthand is required because <button> doesn't get border-style: solid here,
-   so a width-only utility renders nothing. The entity symbol sits inside. */
+/* Neutral pill (the data table's raw-table name): a tinted background + dim
+   border in --o. The full `border` shorthand is required because <button>
+   doesn't get border-style: solid here, so a width-only utility renders
+   nothing. Line link pills are `.sh-lpill`, below. */
 .sh-pill {
   background: color-mix(in oklab, var(--o) 14%, var(--cc-panel));
   border: 1px solid color-mix(in oklab, var(--o) 30%, var(--cc-border));
@@ -1683,35 +1683,397 @@ button.sh-apill {
      only sets width). The element pills work for the same reason. */
   border: 1px solid var(--cc-accent);
 }
-/* The line context (a line name) after a divider, at the SAME font/size as the
-   pill text (just dimmer). The divider is a SHORT centered vertical bar
-   (pseudo-element), not a full-height border, so it doesn't span the whole
-   line. Never an id: positional handles are not shown. */
-.sh-pill-id {
-  position: relative;
-  margin-left: 0;
-  /* Balanced gap around the divider: flex gap (~4px) + divider left (1px) ≈ 5px
-     before, padding-left - divider ≈ 5px after. */
-  padding-left: 7px;
-  padding-right: 5px;
-  text-align: center;
+/* Line link pill (DetailLink, EntityBlob; src/components/common/LinePill.tsx).
+   Every colour is a custom property set inline from src/theme/pillColors.ts,
+   derived from the line's own colour and the theme so the text keeps 7:1 and
+   the muted parts 4.5:1 whatever colour the line has. The pill shows its line
+   by its leading dot, its fill and its border (RS-LEADDOT; no loop mark
+   since RS-NODOTS). A foreign station has its home dot, superscript, after
+   its name. The main part takes the surrounding text size; the context and
+   the Station ID are smaller. Children share one baseline (the smaller
+   context sits on the name's baseline); the dot is centred, and the Station
+   ID and the home dot are lifted off the baseline by a relative offset so
+   they never change the pill's height. */
+.sh-lpill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3em;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0.18em 0.6em 0.18em 0.5em;
+  border: 1px solid var(--pill-border);
+  border-radius: 9999px;
+  background: var(--pill-bg);
+  color: var(--pill-text);
+  line-height: 1.15;
+  white-space: nowrap;
+  vertical-align: middle;
+  text-align: left;
+}
+.sh-lpill:hover:not([aria-disabled='true']) {
+  background: var(--pill-bg-hover);
+  border-color: var(--pill-border-hover);
+}
+.sh-lpill--missing {
+  border-style: dashed;
+}
+/* The line colour, as the Sections panel's row dot draws it, sized for the
+   pill; the ring is drawn only when the colour alone is too close to the
+   fill (RS-LEADDOT, the RS-NODOTS colours otherwise unchanged). */
+.sh-lpill-dot {
+  flex: none;
+  align-self: center;
+  width: 0.6em;
+  height: 0.6em;
+  border-radius: 9999px;
+  background: var(--pill-dot);
+  box-shadow: 0 0 0 1px var(--pill-ring, transparent);
+}
+.sh-lpill-warn {
+  flex: none;
+  align-self: center;
+  color: var(--pill-warning);
+  font-size: 0.85em;
   line-height: 1;
-  font-weight: 600;
-  color: color-mix(in oklab, var(--o) 55%, var(--cc-text-secondary));
 }
-.sh-pill-id::before {
-  content: "";
-  position: absolute;
-  left: 1px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 1px;
-  height: 0.8em;
-  background: color-mix(in oklab, var(--o) 30%, var(--cc-border));
+/* In a narrow place the context gives way first (RS-OWNERSHIP fix): it
+   shrinks to an ellipsis long before the name does, so the station's name
+   and its Station ID stay in the pill. */
+.sh-lpill-ctx {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.857em;
+  color: var(--pill-muted);
 }
-/* Cap-height glyphs sit high in their line box; nudge the context text down a
-   hair to optically center it. The divider (on .sh-pill-id) stays centered. */
-.sh-pill-nudge {
+.sh-lpill-main {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A two-tone shot pill (RS-OWNERSHIP): the pill itself paints nothing and
+   each segment is painted in its own line's colours (custom properties set
+   per segment): the half holding an end of another line in that line's,
+   the rest in the shot's. The halves meet before the arrow and blend
+   (RS-BLEND, theme/pillBlend.ts): each segment's fill (padding box) and
+   border (border box, under a transparent border) are gradients that fade
+   from its own colour to the midpoint with its neighbour over the last
+   0.4em at a seam, so the two meet in one colour across a 0.8em cross-fade
+   and the rounded ends stay intact. The later segment overlaps the earlier
+   by 1px (both are the midpoint there), so no hairline of the panel shows
+   through the seam at a fractional position. */
+.sh-lpill.sh-lpill--split,
+.sh-lpill.sh-lpill--split:hover:not([aria-disabled='true']) {
+  gap: 0;
+  padding: 0;
+  border-color: transparent;
+  border-width: 0;
+  background: transparent;
+}
+.sh-lpill-seg {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3em;
+  min-width: 0;
+  padding: 0.18em 0.3em;
+  border: 1px solid transparent;
+  border-left-width: 0;
+  border-right-width: 0;
+  background:
+    var(--seg-fill, linear-gradient(var(--pill-bg), var(--pill-bg))) padding-box,
+    var(--seg-edge, linear-gradient(var(--pill-border), var(--pill-border))) border-box;
+  color: var(--pill-text);
+}
+/* A zero-width strut in the pill's own font: every segment, even one holding
+   only the dot (the head), has the text's baseline and height, so the
+   halves line up and are one height. The gap after it is taken back. */
+.sh-lpill-seg::before {
+  content: '\200b';
+  margin-right: -0.3em;
+}
+.sh-lpill-seg:first-child {
+  flex: 0 1000 auto;
+  padding-left: 0.5em;
+  border-left-width: 1px;
+  border-radius: 9999px 0 0 9999px;
+}
+.sh-lpill-seg:last-child {
+  padding-right: 0.6em;
+  border-right-width: 1px;
+  border-radius: 0 9999px 9999px 0;
+}
+.sh-lpill-seg + .sh-lpill-seg {
   position: relative;
-  top: 1px;
+  margin-left: -1px;
+}
+/* The arrow is a segment of its own (RS-ARROW): its fill and border run
+   from the from half's colour to the to half's, so the cross-fade is
+   centred on the arrow, whose padding is the same on both sides. The
+   halves beside it give up most of their padding on that side, so the
+   arrow keeps the one-colour pill's spacing and the blend spans the arrow
+   and the space around it. The from half sits above the arrow's 1px
+   overlap (both are its colour there), so the overlap never covers the
+   last glyph of the from end's name. */
+.sh-lpill-seg.sh-lpill-seg--to-arrow {
+  position: relative;
+  z-index: 1;
+  padding-right: 0.05em;
+}
+.sh-lpill-seg.sh-lpill-seg--from-arrow {
+  padding-left: 0.05em;
+}
+.sh-lpill-seg.sh-lpill-seg--arrow {
+  flex: none;
+  padding-left: 0.32em;
+  padding-right: 0.32em;
+}
+.sh-lpill--split:hover:not([aria-disabled='true']) .sh-lpill-seg {
+  background:
+    var(--seg-fill-hover, linear-gradient(var(--pill-bg-hover), var(--pill-bg-hover))) padding-box,
+    var(--seg-edge-hover, linear-gradient(var(--pill-border-hover), var(--pill-border-hover))) border-box;
+}
+/* A shot end's name: inline inside the main part, its tooltip says whose
+   station it is and whether it is a loop end (RS-NODOTS). */
+.sh-lpill-end {
+  display: inline;
+}
+.sh-lpill-sid {
+  flex: none;
+  position: relative;
+  top: -0.6em;
+  margin-left: -0.12em;
+  font-size: 0.7em;
+  line-height: 1;
+  color: var(--pill-muted);
+  font-variant-numeric: tabular-nums;
+  vertical-align: baseline;
+}
+/* A foreign station's home dot (RS-LEADDOT; the user: "a small color dot in
+   superscript right after the station name, it doesnt need to take any
+   space horizontally", then "make the suprescript dot more subtle"). Its
+   geometry, shared by link and prose pills (custom properties on the pill,
+   so the Station ID after it reads them too):
+   - `--home-size`, the dot's diameter;
+   - `--home-gap`, how far after the name's last glyph it starts;
+   - `--home-mid`, how high its middle sits above the baseline (link pills;
+     level with the Station ID's digits);
+   - `--home-clear`, how far a Station ID after it stays clear of it;
+   - `--home-ring-w`, its ring's width, drawn (`--home-ring`) only where its
+     colour alone does not reach the home dot's floor on what it sits on
+     (`HOME_DOT_MIN` in theme/pillColors.ts). */
+:where(.sh-lpill, .sh-ppill) {
+  --home-size: 0.26em;
+  --home-gap: 0.02em;
+  --home-mid: 0.65em;
+  --home-clear: 0.22em;
+  --home-ring-w: 1px;
+}
+/* In a link pill the home dot is an empty flex item, so its baseline is its
+   bottom edge: on the name's baseline, then lifted by a relative offset so
+   its middle is `--home-mid` up. Its margins take back the gap before it
+   and give back its width, so nothing moves: the pill keeps its width and a
+   shot's arrow its place (a from end's dot hangs over the arrow's padding,
+   above its tail). Only a Station ID right after it steps aside,
+   `--home-clear` from it (measured in WebKitGTK: without it they met). */
+.sh-lpill-home {
+  flex: none;
+  position: relative;
+  top: calc(var(--home-size) / 2 - var(--home-mid));
+  width: var(--home-size);
+  height: var(--home-size);
+  margin-left: calc(var(--home-gap) - 0.3em);
+  margin-right: calc(-1 * (var(--home-gap) + var(--home-size)));
+  border-radius: 9999px;
+  background: var(--home-dot, var(--pill-dot));
+  box-shadow: 0 0 0 var(--home-ring-w) var(--home-ring, transparent);
+}
+/* The Station ID's margin, in its own (0.7em) font: it starts
+   gap + size + clear after the name, where the pill's gap would put it at
+   0.3em. */
+.sh-lpill-home ~ .sh-lpill-sid {
+  margin-left: calc((var(--home-gap) + var(--home-size) + var(--home-clear) - 0.3em) / 0.7);
+}
+
+/* Prose pill (ProsePill, src/components/common/Prose.tsx; RS-PROSE): a line
+   pill inline in running text, with the link pill's leading dot, context
+   and Station ID (no marks after a name since RS-NODOTS) and no border: a
+   glow, a soft-edged capsule in the line's colour (theme/proseGlow.ts). Its
+   core is solid behind the whole name and the dot, rounded at each end of
+   each line's piece; a halo in the same colour carries it further and
+   fades. The colour is a wash
+   (`--pill-tint`, prosePillColors and proseTintOf in pillColors.ts) that the
+   panel, an accent box or the glow of the line above shows through.
+   It must leave the paragraph's line pitch exactly as plain text has it, and
+   it does, because nothing it paints takes part in a line box's height:
+   - the glow is the background, padding and box-shadow of an inline box
+     (`.sh-ppill-vis`), whose line-height is 0 (CSS 2.1 10.8.1);
+   - its font is scaled (`--glow-s`) so its content area, the core, hugs the
+     glyphs instead of the font's whole content area (19 px of a 20 px line
+     in Segoe UI), and `.sh-ppill-txt` puts the text back at its size, with a
+     zero line-height on every part inside;
+   - the dots (`.sh-ppill-dot`, `.sh-ppill-home`) are empty inline boxes
+     with that zero line-height, their circles painted in their padding;
+   - the Station ID and the home dot are lifted by a relative offset, never
+     `vertical-align`.
+   The geometry is in em of the text, unitless here and in theme/proseGlow.ts
+   (GLOW; a test pins the two equal); in the scaled box it is divided by the
+   scale. `box-decoration-break: clone` makes each line's piece of a wrapped
+   pill its own capsule. `.sh-ppill` itself paints nothing: it holds the
+   colours and the sr-only words, which a copy and a screen reader take. */
+.sh-ppill {
+  --glow-s: 0.75;
+  --glow-pt: 0.04;
+  --glow-pb: 0.06;
+  --glow-px: 0.22;
+  --glow-mx: -0.1;
+  --glow-spread: 0.14;
+  --glow-blur: 0.28;
+  --glow-reach: calc(var(--glow-spread) + 1.5 * var(--glow-blur));
+  color: var(--pill-text);
+}
+.sh-ppill-vis {
+  font-size: calc(var(--glow-s) * 1em);
+  line-height: 0;
+  padding: calc(var(--glow-pt) * 1em / var(--glow-s)) calc(var(--glow-px) * 1em / var(--glow-s))
+    calc(var(--glow-pb) * 1em / var(--glow-s));
+  margin: 0 calc(var(--glow-mx) * 1em / var(--glow-s));
+  border-radius: 9999px;
+  background: var(--pill-tint);
+  box-shadow: 0 0 calc(var(--glow-blur) * 1em / var(--glow-s)) calc(var(--glow-spread) * 1em / var(--glow-s))
+    var(--pill-tint);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.sh-ppill-vis * {
+  line-height: 0;
+}
+.sh-ppill-txt {
+  font-size: calc(1em / var(--glow-s));
+}
+/* A two-colour shot (RS-OWNERSHIP, RS-NODOTS): the drawing paints nothing
+   and is not scaled; its word boxes are, each painting its share of its
+   line's capsule once laid out (`--w-glow`, an SVG of the same core and
+   halo, useProseGlow.ts), its colour running across the arrow. A box keeps
+   the halo's room above and below; the pill's first and last box keep the
+   room for its rounded ends and give back as much of it as the one-colour
+   pill's padding does not take. No word box wraps; a space box may. */
+.sh-ppill-vis--split {
+  font-size: 1em;
+  padding: 0;
+  margin: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+.sh-ppill-w {
+  font-size: calc(var(--glow-s) * 1em);
+  padding: calc((var(--glow-pt) + var(--glow-reach)) * 1em / var(--glow-s)) 0
+    calc((var(--glow-pb) + var(--glow-reach)) * 1em / var(--glow-s));
+  background: var(--w-glow, none) 0 0 / 100% 100% no-repeat;
+  white-space: nowrap;
+}
+.sh-ppill-w.sh-ppill-w--sp {
+  white-space: normal;
+}
+.sh-ppill-w.sh-ppill-w--start {
+  padding-left: calc((var(--glow-px) + var(--glow-reach)) * 1em / var(--glow-s));
+  margin-left: calc((var(--glow-mx) - var(--glow-reach)) * 1em / var(--glow-s));
+}
+.sh-ppill-w.sh-ppill-w--end {
+  padding-right: calc((var(--glow-px) + var(--glow-reach)) * 1em / var(--glow-s));
+  margin-right: calc((var(--glow-mx) - var(--glow-reach)) * 1em / var(--glow-s));
+}
+.sh-ppill-seg {
+  color: var(--pill-text);
+}
+/* A box that clips its prose (a `truncate` label) keeps room above and below
+   for the glow's halo, given back so the row keeps its height: clipped at
+   the line box, the halo ended in flat top and bottom edges. */
+.sh-ppill-clip {
+  padding-block: calc(var(--glow-spread, 0.14) * 1em + var(--glow-blur, 0.28) * 1em);
+  margin-block: calc(-1 * (var(--glow-spread, 0.14) * 1em + var(--glow-blur, 0.28) * 1em));
+}
+.sh-ppill-nw {
+  white-space: nowrap;
+}
+.sh-ppill-ctx {
+  font-size: 0.857em;
+  color: var(--pill-muted);
+}
+/* The leading dot (RS-LEADDOT): the line colour (`--pill-dot`, 0.58em) with
+   its 1px ring (`--pill-ring`, transparent unless the colour alone does not
+   stand 3:1 on the glow), at the start of the glow's core, which covers it.
+   An empty inline box, not an inline-block: WebKit breaks after an atomic
+   inline even where white-space forbids it (RS-ARROW), and the dot must stay
+   with the first word (`.sh-ppill-nw`). Its font is the glow's scaled one,
+   so its content area is the core's and the dot, a radial gradient in its
+   padding, sits on the core's middle, about concentric with the capsule's
+   rounded start. With a zero line-height it adds nothing to the line box. */
+.sh-ppill-dot {
+  --dot-r: calc(0.29em / var(--glow-s));
+  font-size: calc(var(--glow-s) * 1em);
+  margin-right: calc(0.3em / var(--glow-s));
+  padding: 0 calc(var(--dot-r) + 1.25px);
+  background: radial-gradient(
+    circle calc(var(--dot-r) + 1.25px) at center,
+    var(--pill-dot) calc(var(--dot-r) - 0.25px),
+    var(--pill-ring, transparent) calc(var(--dot-r) + 0.25px),
+    var(--pill-ring, transparent) calc(var(--dot-r) + 0.75px),
+    transparent calc(var(--dot-r) + 1.25px)
+  );
+}
+/* A zero-width joiner as the dot's own text: an empty box has no character,
+   so a break before the pill fell between the dot and its word (Chromium
+   kept the closed box on the line before). The joiner allows a break before
+   it after a space and none after it (UAX 14, LB 10 and 8a). */
+.sh-ppill-dot::before {
+  content: '\200d';
+}
+.sh-ppill-sid {
+  position: relative;
+  top: -0.45em;
+  margin-left: 0.14em;
+  font-size: 0.7em;
+  color: var(--pill-muted);
+  font-variant-numeric: tabular-nums;
+  vertical-align: baseline;
+}
+/* A foreign station's home dot in prose (RS-LEADDOT; geometry from the
+   `--home-*` properties, see `.sh-lpill-home`), right after the name's last
+   word, in its no-wrap run. An empty inline box like the leading dot (never
+   an inline-block: WebKit breaks after an atomic inline, RS-ARROW), its
+   circle a radial gradient in its padding (the circle and 1.25px of room for
+   its ring), centred on its content area and lifted by a relative offset to
+   superscript height (its middle about 0.66em up in Segoe UI, as in a link
+   pill, so a from end's dot clears the arrow's tail below it); its negative
+   right margin gives back its whole advance, so it takes no room and, with a
+   zero line-height, adds nothing to the line box. At the end of a pill it
+   hangs into the space before the next word. A word joiner is its text: no
+   break on either side of it. A Station ID right after it steps aside,
+   `--home-clear` from it. */
+.sh-ppill-home {
+  --home-r: calc(var(--home-size) / 2);
+  position: relative;
+  top: -0.25em;
+  margin-left: calc(var(--home-gap) - 1.25px);
+  margin-right: calc(-1 * var(--home-gap) - var(--home-size) - 1.25px);
+  padding: 0 calc(var(--home-r) + 1.25px);
+  background: radial-gradient(
+    circle calc(var(--home-r) + 1.25px) at center,
+    var(--home-dot, var(--pill-dot)) calc(var(--home-r) - 0.25px),
+    var(--home-ring, transparent) calc(var(--home-r) + 0.25px),
+    var(--home-ring, transparent) calc(var(--home-r) + var(--home-ring-w) - 0.25px),
+    transparent calc(var(--home-r) + var(--home-ring-w) + 0.25px)
+  );
+}
+.sh-ppill-home::before {
+  content: '\2060';
+}
+.sh-ppill-home + .sh-ppill-sid {
+  margin-left: calc((var(--home-gap) + var(--home-size) + var(--home-clear)) / 0.7);
 }

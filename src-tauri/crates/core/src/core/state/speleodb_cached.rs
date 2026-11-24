@@ -102,7 +102,7 @@ const NOT_A_CACHE_DIR_REFUSAL: &str = "This copy's folder links to another place
 Stalagmight does not remove anything through it. Nothing was removed.";
 
 /// Which account a cached copy belongs to, relative to the signed-in session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
 pub enum SpeleoCacheOwnership {
@@ -478,6 +478,7 @@ impl AppState {
                                  SpeleoDB website."
                             ),
                             severity: WarningSeverity::Warning,
+                            parts: None,
                         });
                         result.with_warnings(warnings)
                     }
@@ -850,6 +851,7 @@ impl AppState {
                         "The copy was removed, but some of its files could not be ({e})."
                     ),
                     severity: WarningSeverity::Warning,
+                    parts: None,
                 });
                 result.with_warnings(warnings)
             }

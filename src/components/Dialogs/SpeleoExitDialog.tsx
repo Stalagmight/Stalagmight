@@ -76,6 +76,11 @@ function SpeleoExitPrompt({ request }: { request: SpeleoExitRequest }) {
       const outcome = await work();
       if (useSpeleoExitPrompt.getState().request?.id !== request.id || outcome === 'stay') return;
       if (!outcome.ok) {
+        // Another prompt owns the failure (the save prompt): get out of its way.
+        if (outcome.handedOff) {
+          request.settle(false);
+          return;
+        }
         setError(outcome.error);
         return;
       }

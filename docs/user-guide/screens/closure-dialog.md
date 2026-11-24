@@ -26,6 +26,14 @@ one line or through other merges and loop closures. See
 8. **Cancel**: same as 1.
 9. **Create Closure**
 
+**Both ends show** chooses how the closure names its two stations: keep
+one of them (the other end is then hidden: it keeps its own point, but shows
+the kept station's name and Station ID, with no label on the map), or **Keep
+both names**. The dialog preselects the end on the longest line; when that
+end cannot be kept (another closure already hides the other end, or it is
+shown as that end already), **Keep both names** is preselected and a note
+says why. **Remove Closure** brings a hidden end's name back.
+
 ## Details
 
 - The error color: green under 1%, yellow under 3%, orange under 5%, red from

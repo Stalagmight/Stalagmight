@@ -289,7 +289,7 @@ describe('SpeleoBanner retry needs an open edit gate (#270)', () => {
     useSpeleoStore.setState({ session: { loggedIn: true, endpoint: 'https://synthetic.example', userEmail: 'user@example.com' },
       link: { ...LINK, editState: 'read-only', hasUnpushedEdits: false }, refreshLinkStatus: vi.fn(async () => {}) });
     useProjectStore.setState({ loadProject: vi.fn(async () => ({ success: true })),
-      refreshProjectState: vi.fn(async () => {}), checkProjectIntegrity: vi.fn(async () => []), checkHistoryDiscarded: vi.fn(async () => {}) });
+      refreshProjectState: vi.fn(async () => {}), checkHistoryDiscarded: vi.fn(async () => {}) });
     invokeIpcMock.mockResolvedValue({ kind: 'fast_forwarded', local_path: '/tmp/p.stalx' });
     render(<><SpeleoBanner /><SpeleoWorkspace /></>);
     await userEvent.click(screen.getByTestId('speleodb-workspace-editing'));

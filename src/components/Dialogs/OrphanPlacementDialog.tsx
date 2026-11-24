@@ -15,9 +15,10 @@ import type { Line } from '../../types/project';
 import type { DmpSection } from '../../types/ipc/DmpSection';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { presentImportReceipt } from '../../utils/saveFeedback';
-import { formatShotLabel, formatStationLabel } from '../../utils/formatters';
-import { lineDisplayName } from '../../utils/stationIdentity';
+import { formatShotLabel } from '../../utils/formatters';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useProse } from '../../hooks/useProse';
+import { Prose } from '../common/Prose';
 import { computeOverlapPairs, needsDirectionReversal, type MergeOption } from '../../utils/overlapHelpers';
 import { repeatedShots, type OverlapChoice } from '../../utils/overlapChoices';
 import { isRepeatDoublyAnchored, mergeOptionsOf, overlapParamsOf, placeSuggestion } from '../../utils/orphanPlacement';
@@ -99,11 +100,13 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
   );
   const { mergeStations, updateShot, setShotKind, refreshProjectState, project } = useProjectStore();
   const labels = useIdentityLabels();
-  // `Main Line / 17`. The line name comes with the suggestion (the backend
-  // names every line), the station name from the project.
+  // The connection description names both slots as prose pills (RS-PROSE);
+  // the merge-station options and the alternatives' buttons keep `stationOn`.
+  const prose = useProse();
+  // `Main Line / 17`, the slot's plain label (`Side / 12 (Main)` for a
+  // foreign slot). The suggestion names the same lines the project does.
   const stationOn = useCallback(
-    (lineId: number, lineName: string, stationIndex: number) =>
-      formatStationLabel(labels.stationName({ line_id: lineId, station_index: stationIndex }), lineDisplayName(lineName)),
+    (lineId: number, stationIndex: number) => labels.station({ line_id: lineId, station_index: stationIndex }, true),
     [labels],
   );
   const { closeDialog, setView, triggerFitToBounds, openDialog, showToast } = useUIStore();
@@ -221,7 +224,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     // The new reading is shown turned to run the way the existing one does, so
     // its label names its stations in that order too.
     const reversed = needsDirectionReversal(params.importStationIndex, params.direction);
-    const orphanStation = (k: number) => labels.stationName({ line_id: orphanLine.id, station_index: k });
+    const orphanStation = (k: number) => labels.station({ line_id: orphanLine.id, station_index: k });
     return repeatedShots(params, mergeImportStation, orphanLine.shots, targetLine.shots).map((r) => ({
       orphanShotIndex: r.orphanShotIndex,
       existingLabel: labels.shotAt(targetLine.id, r.targetShotIndex),
@@ -516,14 +519,14 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
             {/* Connection description */}
             <div className="p-3 rounded border border-border bg-surface-alt space-y-2">
               <div className="text-sm">
-                <span className="font-medium">
-                  {stationOn(currentSuggestion!.orphanLineId, currentSuggestion!.orphanLineName, displayOrphanStation)}
+                <span className="font-medium" data-testid="orphan-connection-from">
+                  <Prose text={prose.station({ line_id: currentSuggestion!.orphanLineId, station_index: displayOrphanStation }, true)} />
                 </span>
               </div>
               <div className="text-xs text-text-secondary">
                 &rarr;{' '}
-                <span className="font-medium text-text-primary">
-                  {stationOn(currentSuggestion!.targetLineId, currentSuggestion!.targetLineName, displayTargetStation)}
+                <span className="font-medium text-text-primary" data-testid="orphan-connection-to">
+                  <Prose text={prose.station({ line_id: currentSuggestion!.targetLineId, station_index: displayTargetStation }, true)} />
                 </span>
               </div>
             </div>
@@ -570,7 +573,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                     value: String(opt.offset),
                     label: t('dialogs.orphanPlacement.mergeOption', {
                       importStation: labels.station({ line_id: currentSuggestion!.orphanLineId, station_index: opt.importStation }),
-                      targetStation: stationOn(currentSuggestion!.targetLineId, currentSuggestion!.targetLineName, opt.existingStation),
+                      targetStation: stationOn(currentSuggestion!.targetLineId, opt.existingStation),
                     }),
                   }))}
                   size="sm"
@@ -654,7 +657,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                           {confidenceLabel(alt.confidence)}
                         </span>
                         <span className="truncate">
-                          {stationOn(alt.targetLineId, alt.targetLineName, alt.targetStationIndex)}
+                          {stationOn(alt.targetLineId, alt.targetStationIndex)}
                         </span>
                         <span className="text-text-tertiary ml-auto shrink-0">
                           {t('dialogs.orphanPlacement.alternativeSummary', {

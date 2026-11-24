@@ -29,7 +29,8 @@ usvg = { workspace = true }
 svg2pdf = { workspace = true }
 
 [dev-dependencies]
-# Test-only and acyclic: the hand-run `.stalx` export diagnostic in tml.rs
-# opens a real project database to root-check every exported shot.
+# Test-only and acyclic: the hand-run `.stalx` export diagnostic in
+# tml_tests.rs reads a real project (v2 decoded, legacy migrated) to
+# root-check every exported shot.
 stalagmight-persistence = { path = "../persistence" }
 tempfile = { workspace = true }

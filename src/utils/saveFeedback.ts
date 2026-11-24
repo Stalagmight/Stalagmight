@@ -1,7 +1,8 @@
-import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import {
   classifySaveError,
+  isFileExistsError,
+  isFileMissingError,
   stripSaveErrorMarker,
   IGNORES_UNREADABLE,
   type SaveErrorKind,
@@ -11,6 +12,7 @@ import { getErrorMessage, invokeIpc } from './ipc';
 import i18n from '../i18n';
 import { importReceiptSummaryParts, isEmptyImportReceipt } from './importReceipt';
 import { TOAST_KEYS } from './toastKeys';
+import { showReadOnlyFileNotice } from './blockedNotice';
 import type { ValidationWarning } from '../types/ipc/ValidationWarning';
 import type { ImportReceipt } from '../types/ipc/ImportReceipt';
 import type { ToastKind } from '../store/uiStore';
@@ -18,46 +20,49 @@ import type { ToastKind } from '../store/uiStore';
 /**
  * Surface a failed (non-throwing) save to the user.
  *
- * Four classes of failure, in priority order:
- *  1. Unresolvable cross-references - NOT an error, an integrity problem the
- *     user can fix. Route them straight to the Review & Repair dialog instead
- *     of a scary "Save Failed" error window.
- *  2. Filesystem permission denial (e.g. macOS forgot folder access) - already
+ * Three classes of failure, in priority order:
+ *  1. Filesystem permission denial (e.g. macOS forgot folder access) - already
  *     surfaced by `saveProject` itself via the folder-access guidance dialog,
  *     so don't double up with a generic error window.
- *  3. A destination that is gone or unopenable (#429) - the error dialog, but
- *     saying what is actually wrong with the folder instead of relaying
- *     SQLite's "Failed to open database".
- *  4. Anything else (a real I/O error) - show the error dialog as before.
+ *  2. A destination that is gone or unopenable (#429) - the error dialog, but
+ *     saying what is actually wrong with the folder instead of relaying the
+ *     backend's raw text.
+ *  3. Anything else (a real I/O error) - show the error dialog as before.
  *
- * Reads `integritySaveBlocked`, which `saveProject` refreshes (awaited) on
- * failure, so it is current by the time this runs. On an IPC-transport reject
- * that re-check never ran, so `integritySaveBlocked` may be stale - pass
- * `skipIntegrityRouting` there to go straight to the error dialog instead of
- * wrongly opening Review & Repair. `title` overrides the dialog title (e.g.
- * "Detach Failed") without leaving the router.
+ * Ahead of all three: a file another program changed since it was opened
+ * (`EXTERNALLY_MODIFIED`, the `.stalx` v2 guard) opens the save prompt, where the
+ * user keeps their version, saves it as a new file, or takes the file's. A
+ * read-only file (made with a newer Stalagmight) is not an error either: the
+ * save was turned away, as every edit of that file is, so it gets the same
+ * worded warning toast as a typed key or Ctrl+Z, never the error dialog and
+ * its "report it as a bug" footer (demo issue N-1).
  *
- * The integrity route is SKIPPED for a failure that names its own cause and has
- * no repair in that dialog (#517's unreadable ignore list). `saveProject` runs
- * `checkProjectIntegrity()` on EVERY failure, so a project carrying both
- * problems would otherwise always show Review & Repair - which cannot fix the
- * named one - and the refusal would never render anywhere.
+ * `title` overrides the dialog title (e.g. "Detach Failed") without leaving the
+ * router.
+ *
+ * (0.6.0 also routed a save its integrity check had blocked to a Review &
+ * Repair dialog. On the station graph every edit and load validates the survey,
+ * so no save is blocked that way, and that dialog is gone.)
  */
 export function surfaceSaveFailure(
   error: string | null | undefined,
   openDialog: (dialog: string, data?: Record<string, unknown>) => void,
-  opts?: { skipIntegrityRouting?: boolean; title?: string },
+  opts?: { title?: string },
 ): void {
-  const routesToIntegrity =
-    !opts?.skipIntegrityRouting && classifySaveError(error) !== 'ignores-unreadable';
-  if (routesToIntegrity && useProjectStore.getState().integritySaveBlocked) {
-    useProjectStore.getState().openIntegrityDialog();
+  const kind = classifySaveError(error);
+  // The file changed on disk (plan 6.5's guard): the user decides which version
+  // to keep, in the save prompt. Not an error.
+  if (kind === 'externally-modified') {
+    openDialog('save-conflict', { error });
     return;
   }
   if (!error) return;
-  const kind = classifySaveError(error);
   // Already surfaced by `saveProject` through the folder-access guidance dialog.
   if (kind === 'permission') return;
+  if (kind === 'read-only-file') {
+    showReadOnlyFileNotice();
+    return;
+  }
   openDialog('error', {
     message: saveFailureMessage(kind, error),
     title: opts?.title ?? i18n.t('dialogs.saveFailure.title'),
@@ -68,14 +73,25 @@ export function surfaceSaveFailure(
  * The line a failed save gets on a user-facing surface. A marked destination
  * failure is reworded - the backend's own text for one is SQLite's "Failed to
  * open database", which tells the user nothing about the folder being gone
- * (#429) - and everything else is relayed as the backend wrote it.
+ * (#429) - and everything else is relayed as the backend wrote it. A marker
+ * never reaches the user.
  */
+export function saveFailureLine(error: string): string {
+  return saveFailureMessage(classifySaveError(error), error);
+}
+
 function saveFailureMessage(kind: SaveErrorKind, error: string): string {
   switch (kind) {
+    case 'permission':
+      return i18n.t('banners.autosave.permissionDenied');
+    case 'externally-modified':
+      return externallyModifiedLine(error);
     case 'path-not-found':
       return i18n.t('dialogs.saveFailure.pathNotFound');
     case 'path-too-long':
       return i18n.t('dialogs.saveFailure.pathTooLong');
+    case 'read-only-file':
+      return i18n.t('dialogs.saveFailure.readOnlyFile');
     // Already a full sentence from the backend; only its routing marker comes off.
     case 'ignores-unreadable':
       return stripSaveErrorMarker(error, IGNORES_UNREADABLE);
@@ -84,29 +100,10 @@ function saveFailureMessage(kind: SaveErrorKind, error: string): string {
   }
 }
 
-/**
- * Whether the autosave-failure banner should render, given the integrity
- * banner's state (`App.tsx`).
- *
- * The default is to YIELD: when saving is integrity-blocked, the integrity
- * banner already tells the "saving is paused, here is the Repair button" story,
- * and docs/notifications.md asks for one surface per event.
- *
- * The exception is a failure Review & Repair cannot fix (#517's unreadable
- * ignore list). That is a DIFFERENT ongoing condition with a different remedy,
- * so the integrity banner is not telling its story - it is hiding it, and the
- * user would be left repairing cross-references while every save is refused for
- * an unrelated reason they were never shown.
- */
-export function shouldShowAutosaveBanner(state: {
-  autosaveFailure: string | null;
-  autosaveFailureKind: SaveErrorKind | null;
-  integritySaveBlocked: boolean;
-  integrityIssueCount: number;
-}): boolean {
-  if (state.autosaveFailure === null) return false;
-  if (state.autosaveFailureKind === 'ignores-unreadable') return true;
-  return !(state.integritySaveBlocked && state.integrityIssueCount > 0);
+/** The guard's refusal in words: a changed file, one that is gone, or one that appeared where a first save goes. */
+function externallyModifiedLine(error: string): string {
+  if (isFileExistsError(error)) return i18n.t('banners.autosave.externallyExists');
+  return i18n.t(isFileMissingError(error) ? 'banners.autosave.externallyMissing' : 'banners.autosave.externallyModified');
 }
 
 /**
@@ -122,6 +119,10 @@ export function autosaveFailureMessage(error?: string | null): string {
       return i18n.t('banners.autosave.pathNotFound');
     case 'path-too-long':
       return i18n.t('banners.autosave.pathTooLong');
+    case 'externally-modified':
+      return externallyModifiedLine(error ?? '');
+    case 'read-only-file':
+      return i18n.t('banners.autosave.readOnlyFile');
     case 'ignores-unreadable':
       return stripSaveErrorMarker(error ?? '', IGNORES_UNREADABLE);
     default:

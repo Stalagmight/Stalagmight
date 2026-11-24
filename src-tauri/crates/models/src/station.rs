@@ -5,18 +5,17 @@ use super::LineId;
 
 /// A station's project-unique, never-reused integer identity: the Station ID
 /// the user sees (the Station detail field, the Data table column, the
-/// "Station IDs" map and image-export label). Allocated from
-/// [`crate::Project::next_station_id`] in line order, station order, by
-/// [`crate::Project::ensure_station_identities`]; carried with its physical
-/// station through every structural edit by the same `StationKey` walkers that
-/// carry `station_names`. Never shown as the positional `line:index` handle,
-/// which stays an internal session address.
+/// "Station IDs" map and image-export label). Minted from the project's
+/// station counter ([`crate::survey::Counters`]) and kept by the station
+/// through every structural edit (a merge keeps a retired id as an alias).
+/// Never shown as the positional `line:index` handle, which stays an internal
+/// session address.
 pub type StationId = u32;
 
 /// Every valid Station ID is below this (2^31). A stored id at or above it
 /// (a crafted or corrupt file, a snapshot, an Add that would overflow) is
-/// invalid: the normalization re-mints it, and a counter past it is brought
-/// back ([`crate::Project::ensure_station_identities`]). The headroom above
+/// invalid (`survey::Project::validate`); the migration and salvage re-mint
+/// it, and a counter past it is brought back. The headroom above
 /// keeps `next_station_id` arithmetic far from `u32::MAX`, where saturating
 /// adds handed out one id twice.
 pub const MAX_STATION_ID: StationId = 1 << 31;
@@ -141,8 +140,7 @@ impl StationKey {
     }
 
     /// A positional key (index 0 → `LineStart`, else `Index`). Transitional /
-    /// test convenience; the library canonicalizes to `AfterShot` via
-    /// [`crate::Project::key_for_ref`].
+    /// test convenience; 0.6.0 canonicalized keys to `AfterShot`.
     pub fn positional(line_id: LineId, station_index: u32) -> Self {
         let anchor = if station_index == 0 {
             StationAnchor::LineStart
@@ -413,16 +411,35 @@ pub struct Station {
     /// User comment for this station
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
-    /// The station's project-unique Station ID ([`StationId`]).
+    /// The node's Station ID ([`StationId`]): every grouping, command,
+    /// move, datum and selection keys on it. A display of the Station ID
+    /// reads the shown one ([`Self::shown_id`]).
     #[serde(default)]
     pub id: StationId,
-    /// The station's name, unique within its line (e.g. `"17"`, `"A3"`, or
-    /// the MNemo station number a DMP import recorded). Every station has one
-    /// once the project is normalized ([`crate::Project::ensure_station_identities`]);
-    /// empty only for a station the normalization could not key (a shot
-    /// without a uuid), which a loaded project never has.
+    /// The name the slot shows: its node's shown identity's (RS 5.1: the
+    /// node's own, or the kept end's when a loop closure archives the node),
+    /// unique among the names its line shows other identities by (N8). A
+    /// junction shows one name on every line. Every station has one once
+    /// the project is normalized; empty only for a station the
+    /// normalization could not key (a shot without a uuid), which a loaded
+    /// project never has.
     #[serde(default)]
     pub name: String,
+    /// The records merges archived in the node (RS 3), oldest first; `None`
+    /// when it has none (most stations), so the key stays off the wire and
+    /// costs nothing per station (the `closures_with` reasoning). Every slot
+    /// of a junction carries them, as it carries the shared id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub archived: Option<Vec<crate::ArchivedStationWire>>,
+    /// How the slot shows its node when that is not the node's own identity
+    /// on one of its native lines (RS 6): the Station ID shown, the home-line
+    /// dot of a foreign slot and the loop mark of a loop end. `None` on every
+    /// other slot (the slot shows `id`, natively), so the key costs nothing
+    /// there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub shown: Option<crate::ShownSlot>,
 }
 
 impl Station {
@@ -437,6 +454,8 @@ impl Station {
             comment: None,
             id: 0,
             name: String::new(),
+            archived: None,
+            shown: None,
         }
     }
 
@@ -451,7 +470,25 @@ impl Station {
             comment: None,
             id: 0,
             name: String::new(),
+            archived: None,
+            shown: None,
         }
+    }
+
+    /// The Station ID the slot shows (RS 6): the shown identity's, which is
+    /// the node's own unless a loop closure archives the node.
+    pub fn shown_id(&self) -> StationId {
+        self.shown.as_ref().map_or(self.id, |shown| shown.id)
+    }
+
+    /// Whether the slot is foreign (RS 2): it carries a home-line dot.
+    pub fn is_foreign(&self) -> bool {
+        self.shown.as_ref().is_some_and(|shown| shown.foreign)
+    }
+
+    /// Whether a loop closure archives the slot's node (RS 6: the loop mark).
+    pub fn is_loop_end(&self) -> bool {
+        self.shown.as_ref().is_some_and(|shown| shown.loop_end)
     }
 
     /// The loop closures involving this station; empty when the field is absent.
@@ -465,56 +502,6 @@ impl Station {
     /// keeps the "`None` when empty" invariant that keeps the key off the wire.
     pub fn closures_mut(&mut self) -> &mut Vec<ClosureRef> {
         self.closures_with.get_or_insert_with(Vec::new)
-    }
-}
-
-/// Record of a station merge. Endpoints stored as position-independent
-/// [`StationKey`]s. Backend-only (no `TS`); the frontend/wire form is
-/// [`StationMergeWire`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StationMerge {
-    pub station_a: StationKey,
-    pub station_b: StationKey,
-    pub merged_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// Zero datum assignment (backend; wire form is [`ZeroDatumWire`]).
-///
-/// One list holds every datum. Its role is derived, never stored
-/// ([`DatumRole`], `Project::datum_roles`): the first resolvable datum of each
-/// merge-connected component PLACES that rigid group, and every later one in
-/// the same component is a GPS FIX that only the Closures Computed View solve
-/// reads (#741).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ZeroDatum {
-    pub station_ref: StationKey,
-    pub gps: GpsCoordinates,
-    /// Horizontal accuracy of the GPS position in metres. `None` means
-    /// [`DEFAULT_GPS_ACCURACY_M`]; `Some(0.0)` is a hard pin.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub accuracy_m: Option<f64>,
-    /// The user's answer to "is this station a cave entrance?", or `None` for
-    /// the default rule (`Project::datum_entrances`): a placement datum is
-    /// always an entrance, a GPS fix is one when its station is the first or
-    /// last station of its line (#741).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub entrance: Option<bool>,
-}
-
-impl ZeroDatum {
-    /// A datum with the default accuracy and the default entrance rule.
-    pub fn new(station_ref: StationKey, gps: GpsCoordinates) -> Self {
-        Self {
-            station_ref,
-            gps,
-            accuracy_m: None,
-            entrance: None,
-        }
-    }
-
-    /// The accuracy the solve uses: the stored one, or the default.
-    pub fn effective_accuracy_m(&self) -> f64 {
-        self.accuracy_m.unwrap_or(DEFAULT_GPS_ACCURACY_M)
     }
 }
 
@@ -556,9 +543,9 @@ pub enum DatumRole {
     GpsFix,
 }
 
-/// Positional wire form of [`StationMerge`] for the frontend (which reasons by
-/// `station_index`). ts-rs exports it as `StationMerge` so the generated TS and
-/// the frontend stay positional; the backend resolves the stored keys when encoding.
+/// A merge pair on the wire, positional for the frontend (which reasons by
+/// `station_index`): two slots of one junction. ts-rs exports it as
+/// `StationMerge`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(rename = "StationMerge", export_to = "bindings/StationMerge.ts")]
 pub struct StationMergeWire {
@@ -568,7 +555,7 @@ pub struct StationMergeWire {
     pub merged_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Positional wire form of [`ZeroDatum`]; ts-rs exports it as `ZeroDatum`.
+/// A zero datum on the wire, on its slot; ts-rs exports it as `ZeroDatum`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(rename = "ZeroDatum", export_to = "bindings/ZeroDatum.ts")]
 pub struct ZeroDatumWire {
@@ -730,6 +717,63 @@ mod tests {
         );
     }
 
+    /// A station's records and its shown slot leave the wire when it has
+    /// none (most stations, paid per station on every refresh) and are
+    /// declared optional (RS 6).
+    #[test]
+    fn records_and_shown_are_omitted_when_absent_and_declared_optional() {
+        use ts_rs::TS;
+
+        let plain = serde_json::to_value(Station::new(StationRef::new(1, 0))).unwrap();
+        let keys = plain.as_object().unwrap();
+        assert!(
+            !keys.contains_key("archived") && !keys.contains_key("shown"),
+            "a native station with no records must omit both keys: {plain}"
+        );
+        let mut junction = Station::new(StationRef::new(1, 0));
+        junction.archived = Some(vec![
+            crate::ArchivedStationWire {
+                id: 7,
+                name: "0".into(),
+                comment: Some("rope".into()),
+                into: None,
+                lines: vec![2],
+            },
+            crate::ArchivedStationWire {
+                id: 8,
+                name: "5".into(),
+                comment: None,
+                into: Some(7),
+                lines: Vec::new(),
+            },
+        ]);
+        junction.shown = Some(crate::ShownSlot {
+            id: 3,
+            home_line: Some(4),
+            foreign: true,
+            loop_end: false,
+            loop_closure: None,
+        });
+        let junction = serde_json::to_value(junction).unwrap();
+        assert_eq!(
+            junction["archived"],
+            serde_json::json!([
+                { "id": 7, "name": "0", "comment": "rope", "lines": [2] },
+                { "id": 8, "name": "5", "into": 7, "lines": [] }
+            ])
+        );
+        assert_eq!(
+            junction["shown"],
+            serde_json::json!({ "id": 3, "home_line": 4, "foreign": true, "loop_end": false })
+        );
+        let decl = Station::decl();
+        assert!(
+            decl.contains("archived?: Array<ArchivedStation>")
+                && decl.contains("shown?: ShownSlot"),
+            "both leave the wire when absent, so the declaration carries the `?`: {decl}"
+        );
+    }
+
     /// #441 follow-up: EMPTY must leave the wire too, not just `None`.
     ///
     /// `closures_mut()` hands out a `&mut Vec`, so `Some(vec![])` is reachable
@@ -877,36 +921,7 @@ pub struct FrozenShotRef {
     pub shot_index: u32,
 }
 
-/// A detected loop closure in the survey. Endpoints stored as position-independent
-/// [`StationKey`]s. Backend-only (no `TS`); the wire form is [`LoopClosureWire`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LoopClosure {
-    /// Unique identifier for this closure
-    #[serde(default)]
-    pub id: u64,
-    /// First station in the closure (merge point A)
-    pub station_a: StationKey,
-    /// Second station in the closure (merge point B)
-    pub station_b: StationKey,
-    /// Total path length along the loop (meters)
-    pub path_length: f64,
-    /// Misclosure distance (meters) - how far apart the two stations are
-    pub misclosure_distance: f64,
-    /// Closure error percentage (misclosure / path_length * 100)
-    pub error_percentage: f64,
-    /// Horizontal misclosure component (meters)
-    pub horizontal_misclosure: f64,
-    /// Vertical misclosure component (meters)
-    pub vertical_misclosure: f64,
-    /// Strategy for distributing the closure error
-    #[serde(default)]
-    pub strategy: ClosureStrategy,
-    /// Whether the closure endpoints have been aligned (post-adjustment or snap-to-merge)
-    #[serde(default)]
-    pub is_aligned: bool,
-}
-
-/// Positional wire form of [`LoopClosure`]; ts-rs exports it as `LoopClosure`.
+/// The wire form of a loop closure; ts-rs exports it as `LoopClosure`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(rename = "LoopClosure", export_to = "bindings/LoopClosure.ts")]
 pub struct LoopClosureWire {
@@ -923,6 +938,11 @@ pub struct LoopClosureWire {
     pub strategy: ClosureStrategy,
     #[serde(default)]
     pub is_aligned: bool,
+    /// The end the closure archives (RS 5), with its own identity and the
+    /// one it is shown as; absent when the closure keeps both names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub archived: Option<crate::ClosureArchive>,
 }
 
 /// Reference to a loop closure from a station's perspective
@@ -973,4 +993,10 @@ pub struct ConnectivityResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub datum_shift: Option<crate::MergeDatumShift>,
+    /// For a pair that may be merged: the piece the merge moves, how far,
+    /// and the depths when the two stations disagree (demo issue I-4). The
+    /// Merge dialog says so before the user confirms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub merge_preview: Option<crate::MergePreview>,
 }

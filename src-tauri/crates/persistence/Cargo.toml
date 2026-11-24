@@ -28,17 +28,31 @@ serde = { workspace = true, features = ["derive"] }
 # roundtrip-exactly - declaring it here keeps a standalone
 # `cargo test -p stalagmight-persistence` on the same parser, and this crate is
 # precisely where the roundtrip matters (it deserializes saved projects).
-serde_json = { workspace = true, features = ["float_roundtrip"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "raw_value"] }
 rusqlite = { workspace = true, features = ["bundled", "hooks", "limits"] }
 chrono = { workspace = true, features = ["serde"] }
 tracing = { workspace = true }
 anyhow = { workspace = true }
-flate2 = { workspace = true }
+thiserror = { workspace = true }
 ts-rs = { workspace = true, features = ["no-serde-warnings"] }
-uuid = { workspace = true, features = ["v4"] }
+uuid = { workspace = true, features = ["v4", "v5"] }
+# `.stalx` v2: the canonical float spelling (shortest round trip) and the
+# external-modification guard's content hash.
+ryu = { workspace = true }
+sha2 = { workspace = true }
+# The frozen 0.6.0 model and SQLite reader: old `.stalx` files are opened
+# exactly as 0.6.0 opened them and migrated into `models::survey`
+# (`persistence::migrate`). Published with this crate (pinned exactly, like
+# models) so the CI packaging gate and crates.io see a versioned dependency.
+stalagmight-legacy = { path = "../legacy", version = "=0.1.0" }
 
 [dev-dependencies]
-# Test-only and acyclic: the sqlite round-trip tests import a real `.dmp`
-# through the parser to exercise a realistic project shape.
-stalagmight-parsers = { path = "../parsers" }
+# The undo engine's shared test kit (`survey::changeset::testkit`: the gate
+# surveys, the random walk), for the v2 size gates and property tests.
+stalagmight-models = { path = "../models", features = ["test-support"] }
+# The v2 size benches compare the file with its gzip.
+flate2 = { workspace = true }
 tempfile = { workspace = true }
+# The legacy test writer (`write_v18`), so the migration property tests can
+# produce "what an old build wrote" in memory.
+stalagmight-legacy = { path = "../legacy", features = ["writer"] }

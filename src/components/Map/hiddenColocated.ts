@@ -15,13 +15,15 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { selectActiveSurveyData } from '../../store/geometrySelectors';
 import { mapHiddenLines } from '../../store/sectionVisibility';
+import { alignedClosureTargets } from '../../utils/closureTies';
 
 const keyOf = (r: StationRef) => `${r.line_id}:${r.station_index}`;
 
 /**
  * `seeds` plus every station reachable from them through `stationMergedWith`
- * and through closures in `alignedClosureIds`, over all of `data`. The seeds
- * keep their order and come first.
+ * and through the closures in `alignedClosureIds` that tie them (a
+ * closure-chain entry is not a tie: plan D15, `closureTies.ts`), over all of
+ * `data`. The seeds keep their order and come first.
  */
 export function expandColocated(
   seeds: readonly StationRef[],
@@ -36,13 +38,13 @@ export function expandColocated(
   const seen = new Set(seeds.map(keyOf));
   const queue = [...seeds];
   while (queue.length > 0) {
-    const g = globalByKey.get(keyOf(queue.pop()!));
+    const holder = queue.pop()!;
+    const g = globalByKey.get(keyOf(holder));
     if (g === undefined) continue;
+    const merged = data.stationMergedWith.get(g);
     const linked = [
-      ...(data.stationMergedWith.get(g) ?? []),
-      ...(data.stationClosuresWith.get(g) ?? [])
-        .filter((c) => alignedClosureIds.has(c.closure_id))
-        .map((c) => c.station_ref),
+      ...(merged ?? []),
+      ...alignedClosureTargets(holder, merged, data.stationClosuresWith.get(g), alignedClosureIds),
     ];
     for (const ref of linked) {
       const key = keyOf(ref);

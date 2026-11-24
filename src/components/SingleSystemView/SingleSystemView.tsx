@@ -1,12 +1,12 @@
 import { useCollaboratorsSync } from '../../store/speleoCollaboratorsStore';
 import { lineDisplayName } from '../../utils/stationIdentity';
 import { LeftWorkspace } from './LeftWorkspace';
-import { useSpeleoStore } from '../../store/speleoStore';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import { useOnboardingStep } from '../../hooks/useOnboardingStep';
 import { useProject } from '../../hooks/useProject';
-import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
+import { useAutoSave } from '../../hooks/useAutoSave';
+import { SaveStatus } from './SaveStatus';
 import { useProjectStore } from '../../store/projectStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { PANEL_FIELDS, useUIStore, type PanelId, type PanelMode } from '../../store/uiStore';
@@ -17,6 +17,7 @@ import { OfflineIndicator } from '../common/OfflineIndicator';
 import { MapAttribution } from '../Map/MapAttribution';
 import Toolbar from './Toolbar';
 import { SpeleoBanner } from './SpeleoBanner';
+import { publishChromeMetrics } from './chromeMetrics';
 import SectionsPanel from './SectionsPanel';
 import DetailPanel from './DetailPanel';
 import { GasPlanPanel } from './GasPlanPanel';
@@ -546,10 +547,12 @@ export default function SingleSystemView() {
     }
   }, [focusedLineId, focusedLineExists, project, exitLineFocus]);
 
-  // Fullscreen data table: the overlay's top edge tracks the live toolbar
-  // height (it can change with wrapping/zoom), published as a CSS var on the
-  // root so the fixed-position wrapper can reference it. useLayoutEffect so the
-  // var is set before the overlay's first paint.
+  // Fullscreen data table: the overlay's top edge tracks the live toolbar's
+  // bottom edge (its height changes with wrapping/zoom, and a banner above it
+  // moves it down), published as CSS vars on the root so the fixed-position
+  // wrapper can reference them (`publishChromeMetrics`). useLayoutEffect so
+  // the vars are set before the overlay's first paint. A banner appearing or
+  // growing above shrinks the root, so observing the root catches the move.
   const rootRef = useRef<HTMLDivElement | null>(null);
   const projectLoaded = project != null;
   useLayoutEffect(() => {
@@ -560,13 +563,11 @@ export default function SingleSystemView() {
     if (!root || !toolbar) return undefined;
     // Expose the chrome heights so floating menus (e.g. data-table dropdowns) can
     // stay clear of the top toolbar and the bottom status bar when they flip.
-    const apply = () => {
-      root.style.setProperty('--toolbar-h', `${toolbar.offsetHeight}px`);
-      if (statusBar) root.style.setProperty('--statusbar-h', `${statusBar.offsetHeight}px`);
-    };
+    const apply = () => publishChromeMetrics(root, toolbar, statusBar ?? null);
     apply();
     const ro = new ResizeObserver(apply);
     ro.observe(toolbar);
+    ro.observe(root);
     if (statusBar) ro.observe(statusBar);
     return () => ro.disconnect();
   }, [projectLoaded]);
@@ -952,69 +953,6 @@ export default function SingleSystemView() {
         />
       </footer>
     </div>
-  );
-}
-
-function SaveStatus({
-  status,
-  countdown,
-  isDirty,
-  onSave,
-}: {
-  status: AutoSaveStatus;
-  countdown: number;
-  isDirty: boolean;
-  onSave: () => void;
-}) {
-  const { t } = useTranslation();
-  const linked = useSpeleoStore((s) => s.remoteProjectId !== null);
-
-  let text: string;
-  let className = '';
-
-  switch (status) {
-    case 'saving':
-      text = t('singleView.status.saving');
-      break;
-    case 'saved':
-      text = linked ? 'Saved locally' : t('singleView.status.saved');
-      break;
-    case 'pending':
-      text = t('singleView.status.autoSaveCountdown', { seconds: countdown });
-      break;
-    case 'error':
-      text = t('singleView.status.saveError');
-      className = 'text-red-400';
-      break;
-    case 'idle':
-    default:
-      text = isDirty
-        ? t('singleView.status.unsavedChanges')
-        : linked ? 'Saved locally' : t('singleView.status.saved');
-      if (isDirty) className = 'text-yellow-400';
-      break;
-  }
-
-  // On a failed save, the status doubles as a retry - clicking it runs the same
-  // save as the burger-menu Save button.
-  if (status === 'error') {
-    return (
-      <button
-        type="button"
-        data-testid="save-status"
-        onClick={() => onSave()}
-        title={t('common.actions.save')}
-        className={`${className} cursor-pointer hover:underline`}
-      >
-        {text}
-      </button>
-    );
-  }
-
-  return (
-    <span data-testid="save-status" className={className}>
-      {text}
-    </span>
   );
 }
 

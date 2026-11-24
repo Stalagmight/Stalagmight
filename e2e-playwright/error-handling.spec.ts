@@ -44,7 +44,6 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
       station_merges: unknown[];
       zero_datums: unknown[];
       loop_closures: unknown[];
-      line_offsets: Record<string, unknown>;
     } | null = null;
     let projectPath: string | null = null;
     let lineCounter = 0;
@@ -113,7 +112,6 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
             station_merges: [],
             zero_datums: [],
             loop_closures: [],
-            line_offsets: {},
           };
           return {
             loadingId: Date.now(),
@@ -150,7 +148,6 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
             station_merges: [],
             zero_datums: [],
             loop_closures: [],
-            line_offsets: {},
           };
           return {
             loadingId: Date.now(),
@@ -163,6 +160,7 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
               min_depth: 0,
               max_depth: 0,
               station_count: 0,
+              junction_count: 0,
               loop_count: 0,
               penetration_distance: 0,
             },
@@ -237,6 +235,7 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
               min_depth: 0,
               max_depth: 0,
               station_count: mockStations.length,
+              junction_count: 0,
               loop_count: 0,
               penetration_distance: 0,
             },

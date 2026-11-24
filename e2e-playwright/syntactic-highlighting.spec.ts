@@ -172,12 +172,26 @@ test.describe('Syntactic Highlighting', () => {
     await page.keyboard.press('Control+3');
     await expect(page.getByTestId('data-table')).toBeVisible();
 
-    // Full (default): entity blobs render in the table, and detail-panel links
-    // render the entity symbol (a duotone svg, not a plain dot).
+    // Full (default): line pills render in the table, and detail-panel links
+    // are pills in their line's colour that lead with a dot in it (it
+    // replaced the entity symbol; RS-LEADDOT brought it back after RS-NODOTS).
     await expect(page.locator('[data-entity]').first()).toBeVisible({ timeout: 5000 });
-    await expect(page.locator('[data-testid$="-link-symbol"]').first()).toBeVisible({ timeout: 5000 });
-    // The link renders as an entity pill: inline-flex (symbol next to text),
-    // rounded, with a tinted background.
+    await expect(page.locator('button.sh-lpill[data-testid$="-link"]').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid$="-link-dot"]').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid$="-link-symbol"]')).toHaveCount(0);
+    // The dot is a filled circle in the line's colour, before the name.
+    const dot = await page.locator('[data-testid$="-link-dot"]').first().evaluate((el) => {
+      const s = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      return { bg: s.backgroundColor, w: r.width, h: r.height, first: el.parentElement?.firstElementChild === el, hidden: el.getAttribute('aria-hidden') };
+    });
+    expect(dot.bg).not.toBe('rgba(0, 0, 0, 0)');
+    expect(dot.w).toBeGreaterThan(4);
+    expect(Math.abs(dot.w - dot.h)).toBeLessThan(0.5);
+    expect(dot.first).toBe(true);
+    expect(dot.hidden).toBe('true');
+    // The link renders as a line pill: inline-flex, rounded, with a tinted
+    // background and a border in the line's colour.
     const linkPill = page.locator('[data-testid$="-link"]').first();
     const pill = await linkPill.evaluate((el) => {
       const s = getComputedStyle(el);
@@ -194,7 +208,7 @@ test.describe('Syntactic Highlighting', () => {
     expect(pill.display).toMatch(/flex/);
     expect(pill.radius).toBeGreaterThan(8); // rounded-full
     expect(pill.bg).not.toBe('rgba(0, 0, 0, 0)'); // tinted background
-    // The dim entity-tinted border actually renders (solid, non-zero, visible).
+    // The line-tinted border actually renders (solid, non-zero, visible).
     expect(pill.borderStyle).toBe('solid');
     expect(pill.borderWidth).toBeGreaterThan(0);
     expect(pill.borderColor).not.toBe('rgba(0, 0, 0, 0)');
@@ -203,7 +217,7 @@ test.describe('Syntactic Highlighting', () => {
     expect((await linkPill.textContent())?.trim()).not.toMatch(/\d+:\d+/);
     await expect(page.locator('[data-testid$="-link-id"]')).toHaveCount(0);
 
-    // Switch to Off via the store preview: blobs and symbols disappear.
+    // Switch to Off via the store preview: the pills disappear.
     await page.evaluate(() => {
       const e2e = (window as unknown as {
         __E2E_TEST__: { uiStore: { getState: () => { setSyntacticHighlightPreview: (c: unknown) => void } } };
@@ -211,7 +225,9 @@ test.describe('Syntactic Highlighting', () => {
       e2e.uiStore.getState().setSyntacticHighlightPreview({ level: 'off', preset: 'default', overrides: {} });
     });
     await expect(page.locator('[data-entity]')).toHaveCount(0);
-    await expect(page.locator('[data-testid$="-link-symbol"]')).toHaveCount(0);
+    await expect(page.locator('.sh-lpill')).toHaveCount(0);
+    await expect(page.locator('[data-testid$="-link-dot"]')).toHaveCount(0);
     await expect(page.locator('[data-testid$="-link-id"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid$="-link-station-id"]')).toHaveCount(0);
   });
 });

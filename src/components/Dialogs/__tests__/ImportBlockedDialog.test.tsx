@@ -140,6 +140,20 @@ describe('ImportBlockedDialog', () => {
     });
   });
 
+  it('cause "file" (made with a newer Stalagmight): explains it and offers no switch to loop on', () => {
+    h.env.appMode = 'survey';
+    h.env.dialogData.cause = 'file';
+    render(<ImportBlockedDialog />);
+    expect(screen.getByTestId('import-blocked-dialog').textContent).toContain(
+      'dialogs.importBlocked.bodyFile',
+    );
+    expect(screen.queryByTestId('import-blocked-switch')).toBeNull();
+    expect(screen.getByTestId('import-blocked-stay').textContent).toBe('common.actions.close');
+    fireEvent.click(screen.getByTestId('import-blocked-stay'));
+    expect(closeDialog).toHaveBeenCalled();
+    expect(routeOpenedFile).not.toHaveBeenCalled();
+  });
+
   it('a missing path still switches the mode but routes nothing (no crash)', () => {
     delete h.env.dialogData.path;
     render(<ImportBlockedDialog />);

@@ -1752,6 +1752,9 @@ pub fn run() {
             // PathResolver delegates to the platform-native APIs correctly.
             commands::event_sink::init_app_dirs(app.handle());
 
+            // The `generator` every .stalx save writes ("Stalagmight <version>").
+            core::state::set_generator(env!("CARGO_PKG_VERSION"));
+
             // Initialize app state
             let app_state = core::state::AppState::new()?;
             app.manage(app_state);
@@ -1826,6 +1829,11 @@ pub fn run() {
             commands::project::update_project_settings,
             commands::project::set_surface_elevation,
             commands::project::save_project,
+            commands::project::save_project_overwriting,
+            commands::project::take_conversion_notice,
+            commands::project::has_unsaved_changes,
+            commands::project::project_read_only_reason,
+            commands::project::project_file_is_legacy,
             commands::project::close_project,
             commands::project::speleodb_discard_cached_copy,
             commands::project::take_unrecognised_shot_kinds,
@@ -1843,6 +1851,7 @@ pub fn run() {
             commands::project::merge_projects,
             commands::project::load_project_full,
             commands::project::load_project_full_binary,
+            commands::project::reload_project_full_binary,
             commands::project::create_project_full,
             commands::project::cancel_loading,
             // SpeleoDB commands (read-only spike, #183)
@@ -1927,6 +1936,10 @@ pub fn run() {
             commands::station::merge_stations,
             commands::station::unmerge_stations,
             commands::station::unmerge_station_pair,
+            commands::station::preview_detach_line,
+            commands::station::preview_loop_closure,
+            commands::station::preview_remove_loop_closure,
+            commands::station::preview_station_identity,
             commands::station::set_zero_datum,
             commands::station::preview_zero_datum,
             commands::station::remove_zero_datum,
@@ -1998,8 +2011,6 @@ pub fn run() {
             commands::raw_data::get_raw_table,
             // Validation
             commands::validation::get_project_warnings,
-            commands::validation::check_project_integrity,
-            commands::validation::repair_project_integrity,
             commands::validation::resolve_warning,
             commands::validation::unresolve_warning,
             // Survey geometry

@@ -35,7 +35,7 @@ import { dmpFileBytes, endOfLineBytes, escapeXmlText, writeTmluXml } from './sur
  * A local copy of `scenarios/framework.ts`'s `mulberry32`.
  *
  * Copied rather than imported: `framework.ts` pulls in the WebdriverIO session
- * surface and, through `fixtures.ts`, `node:sqlite` - none of which a pure
+ * surface and the fixture helpers - none of which a pure
  * generator test has any use for. The property under test is "the same stream
  * produces the same spec", which any deterministic PRNG demonstrates.
  */

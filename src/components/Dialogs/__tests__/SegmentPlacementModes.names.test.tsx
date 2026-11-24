@@ -1,7 +1,9 @@
 /**
  * The segment placement cards name every station by its name - the one an
  * incoming DMP station will get, the one an existing project station has -
- * never by its position (SPEC 4.2).
+ * never by its position (SPEC 4.2). The skipped suggestion's target is a
+ * prose pill (RS-PROSE): coloured for a project slot, neutral for an incoming
+ * line's station; it reads as the plain label.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
@@ -14,6 +16,18 @@ import type { DmpSection } from '../../../types/ipc/DmpSection';
 import type { Line } from '../../../types/project';
 import type { LineEditState } from '../../../utils/batchImportHelpers';
 import { blankEditableShot } from '../../common/editableShot';
+import { accessibleText } from '../../../test/accessibleText';
+
+/** The suggestion card's target line: its accessible text and its one pill. */
+function suggestionTarget() {
+  const el = screen.getByTestId('segment-mode-suggestion-target');
+  const pills = el.querySelectorAll('.sh-ppill');
+  expect(pills).toHaveLength(1);
+  return {
+    text: accessibleText(el),
+    drawing: pills[0]!.querySelector('[aria-hidden="true"]')!.textContent,
+  };
+}
 
 const dmpShot = (): DmpShot => ({
   shot_type: 'Standard',
@@ -158,7 +172,9 @@ describe('SegmentPlacementModes station names', () => {
         })}
       />
     );
-    expect(screen.getByText(/Main Line \/ A7/)).toBeInTheDocument();
+    const target = suggestionTarget();
+    expect(target.text).toBe('→ Main Line / A7 · 2 shots matched');
+    expect(target.drawing).toBe('Main Line: A7');
     expect(screen.queryByText(/stn/)).toBeNull();
   });
 
@@ -182,7 +198,9 @@ describe('SegmentPlacementModes station names', () => {
         })}
       />
     );
-    expect(screen.getByText(/Upper Sump \/ 2/)).toBeInTheDocument();
-    expect(screen.queryByText(/Upstream \//)).toBeNull();
+    const target = suggestionTarget();
+    expect(target.text).toBe('→ Upper Sump / 2 · 2 shots matched');
+    expect(target.drawing).toBe('Upper Sump: 2');
+    expect(screen.getByTestId('segment-mode-suggestion-target').textContent).not.toMatch(/Upstream/);
   });
 });

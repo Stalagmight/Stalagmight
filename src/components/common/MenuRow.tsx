@@ -11,6 +11,7 @@
  * button attributes in.
  */
 import { forwardRef, useId, type ReactNode, type ButtonHTMLAttributes, type CSSProperties } from 'react';
+import { DisabledReason, DISABLED_REASON_DELAY_MS } from './DisabledReason';
 
 /** The button base classes shared by every menu row. */
 export const MENU_ROW_BASE_CLASS =
@@ -29,6 +30,10 @@ export const MENU_ROW_HINT_WRAP_CLASS = 'text-xs leading-4 line-clamp-3 whitespa
  *  extra a hint adds (`h-4`). */
 export const MENU_ROW_HEIGHT_PX = 36;
 export const MENU_ROW_HINT_HEIGHT_PX = 16;
+
+/** How long the pointer rests on a disabled row before its reason shows
+ *  ({@link DISABLED_REASON_DELAY_MS}). */
+export const MENU_ROW_REASON_DELAY_MS = DISABLED_REASON_DELAY_MS;
 
 interface MenuRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   'data-testid'?: string;
@@ -53,6 +58,16 @@ interface MenuRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /** Let the hint wrap to its own height (up to three lines) instead of the
    *  fixed single line: only for rows that never re-render with a new hint. */
   hintWraps?: boolean;
+  /**
+   * Why a read-only state turned this `disabled` row off (demo finding N-12),
+   * shown in the app's tooltip on hover (`DisabledReason`: opaque, at the
+   * row's side, V-3). Such a row is `aria-disabled`, not `disabled`: a
+   * `disabled` button gets no click (so the menu could not say why on one),
+   * and WebKitGTK drew no native `title` tooltip for one. The menu must
+   * therefore turn a click on it into the notice, never the action. Ignored
+   * on an enabled row.
+   */
+  reason?: string | undefined;
 }
 
 /**
@@ -61,24 +76,32 @@ interface MenuRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {
  * onClick, disabled, data-testid, aria-*, onMouseEnter, …) pass straight through.
  */
 export const MenuRow = forwardRef<HTMLButtonElement, MenuRowProps>(function MenuRow(
-  { label, icon, showIcons, iconStyle, className, children, hint, hintWraps, 'data-testid': testId, ...buttonProps },
+  { label, icon, showIcons, iconStyle, className, children, hint, hintWraps, reason, 'data-testid': testId, ...buttonProps },
   ref,
 ) {
   const hintId = useId();
+  // A disabled row fades its icon and label (as a disabled `Button` does,
+  // `opacity-50`), so it reads as off at a glance: the muted text colour alone
+  // was hard to tell from an enabled row (demo finding I-10). The hint, which
+  // says why, keeps its full muted colour.
+  const faded = buttonProps.disabled ? ' opacity-50' : '';
   // With a hint, the accessible name stays the label and the hint describes it.
   const hintProps =
     hint === undefined ? {} : { 'aria-label': buttonProps['aria-label'] ?? label, 'aria-describedby': hintId };
-  return (
+  const explained = buttonProps.disabled === true && reason !== undefined;
+  const button = (
     <button
       {...buttonProps}
       {...hintProps}
       ref={ref}
+      disabled={explained ? undefined : buttonProps.disabled}
+      aria-disabled={explained ? true : buttonProps['aria-disabled']}
       data-testid={testId}
       className={`${MENU_ROW_BASE_CLASS}${className ? ` ${className}` : ''}`}
     >
       {showIcons && (
         <span
-          className="w-[18px] h-[18px] flex-shrink-0 inline-flex items-center justify-center"
+          className={`w-[18px] h-[18px] flex-shrink-0 inline-flex items-center justify-center${faded}`}
           style={iconStyle}
           aria-hidden="true"
         >
@@ -86,10 +109,10 @@ export const MenuRow = forwardRef<HTMLButtonElement, MenuRowProps>(function Menu
         </span>
       )}
       {hint === undefined ? (
-        <span className="flex-1 truncate">{label}</span>
+        <span className={`flex-1 truncate${faded}`}>{label}</span>
       ) : (
         <span className="flex-1 min-w-0 flex flex-col">
-          <span className="truncate">{label}</span>
+          <span className={`truncate${faded}`}>{label}</span>
           <span
             id={hintId}
             className={`${hintWraps ? MENU_ROW_HINT_WRAP_CLASS : MENU_ROW_HINT_CLASS} text-text-secondary`}
@@ -101,6 +124,12 @@ export const MenuRow = forwardRef<HTMLButtonElement, MenuRowProps>(function Menu
       )}
       {children}
     </button>
+  );
+  if (!explained) return button;
+  return (
+    <DisabledReason reason={reason} className="!flex w-full" testId={testId ? `${testId}-reason` : undefined}>
+      {button}
+    </DisabledReason>
   );
 });
 

@@ -1,7 +1,8 @@
 /**
  * The distance and gas legends name their origin station the way the user
  * knows it - by name with its line (`from Main Line / 17`, SPEC 4.1) - never by
- * the positional `line:index` handle the stores address it with.
+ * the positional `line:index` handle the stores address it with. The station
+ * is a prose pill (RS-PROSE) that a screen reader reads as that plain label.
  */
 import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -11,6 +12,17 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import type { GasReachField } from '../../types/ipc.generated';
+import { accessibleText } from '../../test/accessibleText';
+
+/** The origin line's prose pills (their kinds) and its accessible text. */
+function origin(testId: string) {
+  const el = screen.getByTestId(testId);
+  return {
+    text: accessibleText(el),
+    pills: [...el.querySelectorAll('.sh-ppill')].map((pill) => pill.getAttribute('data-prose-kind')),
+    drawing: el.querySelector('.sh-ppill [aria-hidden="true"]')?.textContent ?? null,
+  };
+}
 
 /** Line 3's station at position 2 is named `17`, so a positional label would read `3:2`. */
 const ORIGIN = { line_id: 3, station_index: 2 };
@@ -64,16 +76,22 @@ describe('legend origin labels', () => {
 
     useUIStore.setState({ distanceGradientOrigin: ORIGIN } as never);
     rerender(<DistanceLegend max={120} visible />);
-    const origin = screen.getByTestId('distance-legend-origin');
-    expect(origin).toHaveTextContent('from Main Line / 17');
-    expect(origin).not.toHaveTextContent('3:2');
+    expect(origin('distance-legend-origin')).toEqual({
+      text: 'from Main Line / 17',
+      pills: ['station'],
+      drawing: 'Main Line: 17#204',
+    });
+    expect(screen.getByTestId('distance-legend-origin')).not.toHaveTextContent('3:2');
   });
 
   it('the gas legend reads "from Main Line / 17" for a picked origin', () => {
     useGasPlanStore.setState({ origin: ORIGIN } as never);
     render(<GasLegend field={gasField()} units="metric" visible />);
-    const origin = screen.getByTestId('gas-legend-origin');
-    expect(origin).toHaveTextContent('from Main Line / 17');
-    expect(origin).not.toHaveTextContent('3:2');
+    expect(origin('gas-legend-origin')).toEqual({
+      text: 'from Main Line / 17',
+      pills: ['station'],
+      drawing: 'Main Line: 17#204',
+    });
+    expect(screen.getByTestId('gas-legend-origin')).not.toHaveTextContent('3:2');
   });
 });

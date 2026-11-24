@@ -9,12 +9,15 @@ import { computeImmovableStationKeys } from '../immovableStations';
  * round 5, P2). The move tools previously walked a materialized `Station[]`
  * (rebuilding + RETAINING the whole ~89k-object graph via the lazy proxy);
  * `computeImmovableStationKeys` reads the SoA directly instead. These tests pin
- * the behavior by running the ORIGINAL `Station[]` algorithm as an independent
- * oracle over the same fixtures and asserting the SoA helper matches it exactly.
+ * the behavior by running a `Station[]` walk as an independent oracle over the
+ * same fixtures and asserting the SoA helper matches it exactly.
  */
 
-// The original algorithm, verbatim from MapCanvas before the SoA migration, over
-// a materialized Station[] - the behavioral oracle the SoA path must reproduce.
+// The original algorithm from MapCanvas before the SoA migration, over a
+// materialized Station[], with plan D15's rule written independently of
+// `closureTies.ts`: an aligned `closures_with` entry whose `via_station` is a
+// slot of neither the holder's station nor the target's (by Station ID) is a
+// closure-chain entry and does not tie the holder.
 function immovableViaStationArray(
   stations: readonly Station[],
   alignedClosureIds: ReadonlySet<bigint>,
@@ -22,6 +25,8 @@ function immovableViaStationArray(
   const stationByKey = new Map(
     stations.map((s) => [`${s.station_ref.line_id}:${s.station_ref.station_index}`, s]),
   );
+  const stationIdOf = (ref: { line_id: number; station_index: number }): number | undefined =>
+    stationByKey.get(`${ref.line_id}:${ref.station_index}`)?.id;
   const immovable = new Set<string>();
   const queue: string[] = [];
   for (const s of stations) {
@@ -40,6 +45,10 @@ function immovableViaStationArray(
     }
     for (const cr of st.closures_with ?? []) {
       if (!alignedClosureIds.has(cr.closure_id)) continue;
+      if (cr.via_station) {
+        const via = stationIdOf(cr.via_station);
+        if (via !== st.id && via !== stationIdOf(cr.station_ref)) continue;
+      }
       queue.push(`${cr.station_ref.line_id}:${cr.station_ref.station_index}`);
     }
   }
@@ -57,7 +66,9 @@ const st = (
   gps_coordinates: null,
   merged_with: [],
   closures_with: [],
-  id: 0,
+  // A slot of its own station unless the case says otherwise (a junction's
+  // slots share one id).
+  id: line_id * 1000 + station_index,
   name: String(station_index),
   ...opts,
 });
@@ -129,5 +140,80 @@ describe('computeImmovableStationKeys', () => {
     const got = computeImmovableStationKeys(data, new Set<bigint>());
     expect([...got].sort()).toEqual(['0:0', '0:1']);
     expect(got).toEqual(immovableViaStationArray(lazyStationArray(data), new Set<bigint>()));
+  });
+
+  // Plan D15. X = 1:1, Y = 2:1, Z = 3:1; closure 7 joins X and Y (unaligned),
+  // closure 8 joins X and Z (aligned). The wire gives Y a closure-chain entry
+  // "Z via X" under 8, and Z one "Y via X" under 7.
+  const x = { line_id: 1, station_index: 1 };
+  const y = { line_id: 2, station_index: 1 };
+  const z = { line_id: 3, station_index: 1 };
+  const chainCase = (datumOn: 'x' | 'y'): Station[] => [
+    st(1, 1, {
+      is_zero_datum: datumOn === 'x',
+      closures_with: [
+        { closure_id: 7n, station_ref: y, via_station: null, is_transitive: false },
+        { closure_id: 8n, station_ref: z, via_station: null, is_transitive: false },
+      ],
+    }),
+    st(2, 1, {
+      is_zero_datum: datumOn === 'y',
+      closures_with: [
+        { closure_id: 7n, station_ref: x, via_station: null, is_transitive: false },
+        { closure_id: 8n, station_ref: z, via_station: x, is_transitive: true },
+      ],
+    }),
+    st(3, 1, {
+      closures_with: [
+        { closure_id: 8n, station_ref: x, via_station: null, is_transitive: false },
+        { closure_id: 7n, station_ref: y, via_station: x, is_transitive: true },
+      ],
+    }),
+  ];
+
+  it("a datum on Y does not freeze the aligned X-Z pair its unaligned closure reaches (D15)", () => {
+    const { data } = fixture(chainCase('y'));
+    const aligned = new Set([8n]);
+    const got = computeImmovableStationKeys(data, aligned);
+    // Y's tie group over aligned closures is Y alone: 8 ties X and Z, not Y.
+    expect([...got].sort()).toEqual(['2:1']);
+    expect(got).toEqual(immovableViaStationArray(lazyStationArray(data), aligned));
+  });
+
+  it('a datum on X freezes Z through the aligned closure, and not Y', () => {
+    const { data } = fixture(chainCase('x'));
+    const aligned = new Set([8n]);
+    const got = computeImmovableStationKeys(data, aligned);
+    expect([...got].sort()).toEqual(['1:1', '3:1']);
+    expect(got).toEqual(immovableViaStationArray(lazyStationArray(data), aligned));
+  });
+
+  it("follows an aligned closure attached on a junction's other slot", () => {
+    // J is one station on lines 4 and 5 (id 4000); closure 9 joins it, on its
+    // 4:0 slot, to W = 6:2. The datum is on the 5:0 slot, which reaches W via 4:0.
+    const j = { line_id: 4, station_index: 0 };
+    const j2 = { line_id: 5, station_index: 0 };
+    const w = { line_id: 6, station_index: 2 };
+    const stations = [
+      st(4, 0, {
+        id: 4000,
+        merged_with: [j2],
+        closures_with: [{ closure_id: 9n, station_ref: w, via_station: null, is_transitive: false }],
+      }),
+      st(5, 0, {
+        id: 4000,
+        is_zero_datum: true,
+        merged_with: [j],
+        closures_with: [{ closure_id: 9n, station_ref: w, via_station: j, is_transitive: true }],
+      }),
+      st(6, 2, {
+        closures_with: [{ closure_id: 9n, station_ref: j, via_station: null, is_transitive: false }],
+      }),
+    ];
+    const { data } = fixture(stations);
+    const aligned = new Set([9n]);
+    const got = computeImmovableStationKeys(data, aligned);
+    expect([...got].sort()).toEqual(['4:0', '5:0', '6:2']);
+    expect(got).toEqual(immovableViaStationArray(lazyStationArray(data), aligned));
   });
 });

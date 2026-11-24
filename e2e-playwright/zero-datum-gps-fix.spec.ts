@@ -13,6 +13,8 @@ import {
   waitForMapIdle,
   type LineSeed,
 } from './helpers/app';
+import { expectSpoken, prosePillKinds } from './helpers/proseText';
+import { expectProse } from './helpers/proseSentence';
 
 const lineSeeds: LineSeed[] = [
   {
@@ -221,8 +223,11 @@ test.describe('Second zero datum in a connected survey (#741)', () => {
     }, b);
 
     const notice = page.getByTestId('adjustment-notice');
-    await expect(notice.getByTestId('adjustment-notice-far-gps-fix')).toHaveText(
+    // The station is a prose pill (RS-PROSE) that reads as its plain label.
+    await expectProse(
+      notice.getByTestId('adjustment-notice-far-gps-fix'),
       'Bent to a GPS fix at Entrance B / 1, 43 m from its surveyed position. Check it.',
+      ['station'],
       { timeout: 10000 }
     );
     await page.evaluate(() => (window as unknown as { __E2E_TEST__: E2EStores }).__E2E_TEST__.uiStore.getState().setGeometryMode('measured', 'e2e'));
@@ -268,8 +273,12 @@ test.describe('Second zero datum in a connected survey (#741)', () => {
 
     const dialog = page.getByTestId('merge-dialog');
     await expect(dialog).toBeVisible({ timeout: 10000 });
-    await expect(dialog.getByTestId('merge-datum-shift')).toHaveText(
-      'Entrance B is placed by its own GPS. It moves 12 m to meet the other piece, and its zero datum at Entrance B / 0 becomes a GPS fix.'
+    // RS-PROSE: the line and the datum's station are pills; it reads as written.
+    await expectSpoken(
+      dialog.getByTestId('merge-datum-shift'),
+      'Entrance B is placed by its own GPS. It moves 12 m to meet the other piece, and its zero datum at Entrance B / 0 becomes a GPS fix.',
+      { exact: true },
     );
+    expect(await prosePillKinds(dialog.getByTestId('merge-datum-shift'))).toEqual(['line', 'station']);
   });
 });

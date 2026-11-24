@@ -89,7 +89,6 @@ test.describe('Large Dataset Operations', () => {
           },
         ],
         loop_closures: [],
-        line_offsets: {},
       };
 
       mocks.setCurrentProject(nextProject);

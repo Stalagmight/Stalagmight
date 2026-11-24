@@ -1,15 +1,23 @@
-//! The reader's public survey model and its conversion from the app's `Project`.
+//! The reader's public survey model and its conversion from the app's
+//! station-graph model (`stalagmight_models::survey::Project`).
 //!
 //! These types are deliberately separate from `stalagmight_models`: the app's
 //! model changes often, and every change there must not become a breaking
 //! change for a consumer. Each struct is `#[non_exhaustive]` so fields can be
 //! added in a minor release.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use stalagmight_models::station::{StationKey, StationRef};
-use stalagmight_models::{NorthReference, Project, ShotKind as ModelShotKind, SurveyDirection};
+use stalagmight_models::station::{GpsCoordinates, StationRef};
+use stalagmight_models::survey::{ClosureStrategy, Project};
+use stalagmight_models::{
+    join_names, LineCreditSummary, LineId, NorthReference, ShotKind as ModelShotKind, SurveyCredit,
+    SurveyDirection, EMPTY_CREDIT,
+};
+
+/// The app's station identity (the user-visible Station ID).
+type ModelStationId = stalagmight_models::StationId;
 
 /// One project, read from a `.stalx` file.
 ///
@@ -19,34 +27,70 @@ use stalagmight_models::{NorthReference, Project, ShotKind as ModelShotKind, Sur
 /// - Azimuths are as stored; add the section's [`Section::azimuth_correction_deg`]
 ///   to get a true-north bearing.
 ///
+/// # Stations and junctions
+///
+/// A section (survey line) is a chain of stations: [`StationId`] `{ section_id,
+/// index }` names the `index`-th station of a section. That address is
+/// positional. The station itself has a project-wide id, the Station ID the
+/// app shows ([`Section::station_ids`], [`StationPosition::station_id`]): a
+/// station on two or more sections (a **junction**, what the app used to call
+/// a merge) has ONE Station ID, one name and one comment, and is listed at
+/// every one of its positions. [`Survey::station_merges`] pairs the positions
+/// of each junction.
+///
+/// # Shown identity
+///
+/// The app shows some stations as another one (its "kept and archived
+/// stations"):
+/// - The stations a merge did not keep are not stations of the survey at all:
+///   a junction shows its kept station on every section through it, and that
+///   is the one station this crate lists there.
+/// - A loop closure can **archive** one of its two ends: that end is still a
+///   station of its own, with its own position, Station ID and slot ids
+///   ([`Section::station_ids`]), but the app shows it under the station at
+///   the closure's other end (its name, Station ID and comment). Its own
+///   name and comment are hidden. [`Survey::shown_as`] maps each such
+///   station to the one shown in its place; [`Survey::station_names`] lists
+///   the shown name at its positions and [`Survey::station_comments`] leaves
+///   its own comment out.
+///
 /// # Identity
 ///
 /// - [`Section::id`] is stable across edits for the life of the project.
+/// - The Station ID ([`Section::station_ids`]) is stable across edits and never
+///   reused; the junction of two sections keeps the id of one of them.
 /// - [`StationId::index`] is NOT stable: inserting or deleting a shot shifts the
 ///   indexes after it, and reversing a section renumbers station `i` to `N - i`.
-///   Key anything persistent on `(section id, shot uuid)`, never on an index.
+///   Key anything persistent on the Station ID or on `(section id, shot uuid)`,
+///   never on an index.
 /// - [`Shot::uuid`] is stable across edits and unique across the whole survey.
-///   A shot the file gives no usable UUID (files from before shot UUIDs, a second
-///   shot repeating one in its section, or a section repeating an id an earlier
-///   section holds - the same Ariane file imported twice, a merge of two copies)
-///   gets one derived deterministically and is flagged [`Shot::uuid_derived`].
-///   For the last case the derived id is the one the app's own open gives it;
-///   for the first two the app mints its own, so those match the app only once
-///   it has saved the file.
+///   An SQLite file can hold a shot with no usable UUID (files from before shot
+///   UUIDs, a second shot repeating one in its section, or a section repeating
+///   an id an earlier section holds - the same Ariane file imported twice, a
+///   merge of two copies): it gets one derived deterministically, the one the
+///   app's own conversion of the file gives it, flagged [`Shot::uuid_derived`].
+///   It persists once the app saves the file (as JSON). A JSON file holds a
+///   UUID for every shot.
 ///
 /// # Ordering
 ///
 /// Every list is sorted, so the same file content always reads to the same
-/// value: sections by id, shots in
-/// survey order, merges by `(a, b)`, zero datums, comments, names and station
-/// positions by station, loop closures by id. [`Survey::modified_at`] changes
-/// on every save; leave it out of any content hash.
+/// value: sections by id, shots in survey order, merges by `(a, b)`, zero
+/// datums, comments, names and station positions by station, loop closures by
+/// id. [`Survey::modified_at`] changes on every save; leave it out of any
+/// content hash.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Survey {
-    /// The file's schema version as uploaded, read before the private copy is
-    /// migrated forward (`PRAGMA user_version`, or the project row's own version
-    /// for files that predate the pragma; 0 if neither is recorded).
+    /// Which of the two `.stalx` formats the file is.
+    pub format: FileFormat,
+    /// The major format version: 1 for an SQLite file, the `version` member of
+    /// a JSON file (2 for every file this crate reads).
+    pub format_version: u64,
+    /// An SQLite file's schema version as uploaded, read before the private
+    /// copy is migrated forward (`PRAGMA user_version`, or the project row's
+    /// own version for files that predate the pragma; 0 if neither is
+    /// recorded). Always 0 for a JSON file (see [`Survey::format_version`]).
     pub schema_version: i32,
     pub name: String,
     pub location: Option<String>,
@@ -55,15 +99,40 @@ pub struct Survey {
     /// RFC 3339.
     pub modified_at: String,
     pub sections: Vec<Section>,
+    /// Two positions of one junction station: for each station on two or more
+    /// sections, its first position (lowest `(section_id, index)`) paired
+    /// with each of the others. Both ends always have the same Station ID.
     pub station_merges: Vec<StationMerge>,
     /// Every zero datum: each component's placement datum and its GPS fixes
     /// alike. [`StationPosition::anchor`] names the placement datum.
     pub zero_datums: Vec<ZeroDatum>,
     pub loop_closures: Vec<LoopClosure>,
+    /// One per station that has a comment, at the station's first position
+    /// (lowest `(section_id, index)`): a junction's comment is listed once. A
+    /// loop end a closure archives is left out (its comment is hidden; see
+    /// [`Survey::shown_as`]).
     pub station_comments: Vec<StationComment>,
-    /// Station names, e.g. the MNemo station number a DMP import recorded. Not
-    /// unique: MNemo numbers restart at 0 in every section.
+    /// The station names (e.g. the MNemo station number a DMP import
+    /// recorded), at every position, as the app shows them: a junction's one
+    /// name is listed once per section it is on, and a loop end a closure
+    /// archives shows the name of the station in [`Survey::shown_as`]. On
+    /// each section, the positions showing a section's own station have
+    /// different names; a junction position showing a station another
+    /// section keeps (a merge archived this section's own station there; the
+    /// app draws it with that section's colour dot) and a loop end show
+    /// another station's name and count for no uniqueness, so a section may
+    /// show one name at such a position and again at a station of its own
+    /// (Branch shows Main's 12 at its start and its own 12 further on). A
+    /// closure whose two ends are on one section shows that one name twice
+    /// there. Not unique across the survey: MNemo numbers restart at 0 in
+    /// every section. Tie stations by [`Section::station_ids`], never by
+    /// name.
     pub station_names: Vec<StationName>,
+    /// The loop ends a closure archives: each one's Station ID mapped to the
+    /// Station ID of the station the app shows in its place (the closure's
+    /// other end, followed when that end is archived in turn). Empty when
+    /// no closure archives an end. See the type's "Shown identity".
+    pub shown_as: BTreeMap<u32, u32>,
     /// The zero datum whose station is the georeference origin of the local frame
     /// (the project's first resolvable datum, as the app defines it). `None` when
     /// the project has no usable datum. See [`StationPosition`].
@@ -72,12 +141,31 @@ pub struct Survey {
     /// the supported input for drawing a map; `None` unless requested in
     /// [`crate::ReadOptions`].
     pub stations: Option<Vec<StationPosition>>,
-    /// Cross-references (merges, datums, closures, comments, names) whose station
-    /// no longer exists in the file. They are dropped, and counted here.
+    /// Cross-references (merges, datums, closures, comments, names) of an SQLite
+    /// file whose station no longer exists in the file. They are dropped, and
+    /// counted here. Always 0 for a JSON file, which is refused instead.
     pub unresolved_references: usize,
+    /// A JSON file only: set when the file names `requires` features or holds
+    /// survey fields this crate does not know (the app would open it
+    /// read-only). Everything this crate knows is read, but the file may mean
+    /// more than this value shows; upgrade the crate. The text names the
+    /// unknown parts and can quote the file: treat it as untrusted.
+    pub newer_content: Option<String>,
 }
 
-/// A station: `index` 0 is the section's start, index `i` is the end of shot `i - 1`.
+/// The two `.stalx` file formats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FileFormat {
+    /// The SQLite database the app wrote before format version 2. Read through
+    /// the app's conversion of old files.
+    Sqlite,
+    /// Canonical JSON, format version 2 and later.
+    Json,
+}
+
+/// A station position: `index` 0 is the section's start, index `i` is the end
+/// of shot `i - 1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub struct StationId {
@@ -108,6 +196,11 @@ pub struct Section {
     /// verified zero, and the survey is in uncorrected (usually magnetic) north.
     pub azimuth_correction_source: CorrectionSource,
     pub shots: Vec<Shot>,
+    /// The Station ID of each station of the section, by index
+    /// (`station_ids[i]` is the id of `StationId { section_id: id, index: i }`,
+    /// so there is one more than there are shots). A junction station has the
+    /// same id on every section through it.
+    pub station_ids: Vec<u32>,
 }
 
 /// Provenance of a section's azimuth correction.
@@ -131,11 +224,11 @@ pub enum CorrectionSource {
 pub struct Shot {
     /// Stable identity across revisions. See [`Shot::uuid_derived`].
     pub uuid: String,
-    /// `true` when the file had no usable UUID for this shot (none, the same one
-    /// as an earlier shot in the section, or one a lower section already holds)
-    /// and `uuid` was derived: deterministic for the same file, but not a
-    /// persisted identity until the app re-saves the file. A repeat across
-    /// sections derives the id the app gives it, so it survives that save.
+    /// `true` when an SQLite file had no usable UUID for this shot (none, the
+    /// same one as an earlier shot in the section, or one a lower section
+    /// already holds) and `uuid` was derived: deterministic for the same file,
+    /// the id the app's conversion of the file gives it, but not a persisted
+    /// identity until the app re-saves the file. Never set for a JSON file.
     pub uuid_derived: bool,
     pub kind: ShotKind,
     pub length: f64,
@@ -207,7 +300,8 @@ pub enum North {
     Grid,
 }
 
-/// Two stations that are the same physical point.
+/// Two positions of one junction station (the same physical point, with one
+/// Station ID).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct StationMerge {
@@ -219,6 +313,8 @@ pub struct StationMerge {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct ZeroDatum {
+    /// The datum's station, at the position of the section it was set on (a
+    /// junction's first position when that is not recorded).
     pub station: StationId,
     pub latitude: f64,
     pub longitude: f64,
@@ -227,14 +323,13 @@ pub struct ZeroDatum {
     /// Horizontal disagreement, metres, between where this datum's station sits
     /// in the local frame and where its GPS says it should be relative to the
     /// frame datum. For a datum that places its piece, `Some(~0)` when
-    /// consistent; a large value means the stored offsets no longer honour
+    /// consistent; a large value means the stored placement no longer honours
     /// this datum (e.g. a datum removed and re-added). For a GPS fix (a later
-    /// datum in a merge-connected piece that another datum places, #741) it is
-    /// the fix's gap to its GPS, which is expected: a fix does not move the
-    /// stored survey. This reader does not say which role a datum has: the
-    /// first datum of a merge-connected piece in the file's `zero_datums`
-    /// order places it, and `zero_datum_extras` holds the fixes. `None` unless
-    /// station positions were requested and a frame datum exists.
+    /// datum in a connected piece that another datum places, #741) it is the
+    /// fix's gap to its GPS, which is expected: a fix does not move the
+    /// measured survey. The first datum of a connected piece in the file's
+    /// datum order places it. `None` unless station positions were requested
+    /// and a frame datum exists.
     pub residual_m: Option<f64>,
 }
 
@@ -242,8 +337,15 @@ pub struct ZeroDatum {
 #[non_exhaustive]
 pub struct LoopClosure {
     pub id: u64,
+    /// Each end at the position of the section it was made on (a junction's
+    /// first position when that is not recorded).
     pub a: StationId,
     pub b: StationId,
+    /// A rigid tie the app's conversion made from an old file: the two ends
+    /// are one physical point (a merge that closed a loop, joined a section to
+    /// itself, or an aligned legacy closure), kept as a closure because one
+    /// station cannot represent it.
+    pub tie: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -269,7 +371,9 @@ pub struct StationName {
 /// - Metres. `x` east, `y` north (true north where the section records an
 ///   azimuth correction, otherwise as surveyed), `z` depth below the surface,
 ///   positive down.
-/// - Section and station offsets (manual moves) are applied.
+/// - Every position of a junction has the same `x` and `y`. Legacy per-section
+///   manual moves of an old file are applied (`z` can then differ per
+///   section).
 /// - Horizontal georeference: the [`Survey::frame_datum`] station is the origin.
 ///   Another station's latitude/longitude is the frame datum's, moved by
 ///   `(x - frame.x)` metres east and `(y - frame.y)` metres north on the WGS84
@@ -277,16 +381,18 @@ pub struct StationName {
 ///   placed every other datum relative to it.
 /// - Only a station whose [`StationPosition::anchor`] is `Some` sits in a
 ///   component tied to a datum. A floating component (`anchor: None`) is placed
-///   wherever the user's offsets put it, so its georeference is not meaningful.
+///   wherever the user put it, so its georeference is not meaningful.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct StationPosition {
     pub station: StationId,
+    /// The station's Station ID (shared by every position of a junction).
+    pub station_id: u32,
     pub x: f64,
     pub y: f64,
     pub z: f64,
     /// The zero-datum station anchoring this station's connected component
-    /// (connected through shots and station merges): the component's placement
+    /// (connected through shots and junctions): the component's placement
     /// datum, its first datum in the project's list order, as the app defines
     /// it. A later datum in the same component is a GPS fix, which never
     /// anchors. The frame datum is the placement datum of its own component.
@@ -308,111 +414,165 @@ impl From<StationRef> for StationId {
     }
 }
 
-impl Survey {
-    pub(crate) fn from_project(
-        project: &Project,
-        schema_version: i32,
-        with_stations: bool,
-        derived_uuids: &std::collections::HashSet<(u32, String)>,
-    ) -> Self {
-        let mut unresolved = 0;
-        let mut resolve = |key: &StationKey| {
-            let id = project.resolve_key(key).map(StationId::from);
-            if id.is_none() {
-                unresolved += 1;
-            }
-            id
-        };
+/// What the format path knows about the file besides its survey.
+pub(crate) struct ReadMeta<'a> {
+    pub(crate) format: FileFormat,
+    pub(crate) format_version: u64,
+    pub(crate) schema_version: i32,
+    /// `(section id, uuid)` of every shot whose uuid the file did not give.
+    pub(crate) derived_uuids: &'a HashSet<(u32, String)>,
+    pub(crate) unresolved_references: usize,
+    pub(crate) newer_content: Option<String>,
+}
 
-        let mut station_merges: Vec<StationMerge> = project
-            .station_merges
-            .iter()
-            .filter_map(|m| {
-                Some(StationMerge {
-                    a: resolve(&m.station_a)?,
-                    b: resolve(&m.station_b)?,
-                })
-            })
-            .collect();
-        station_merges.sort_by_key(|m| (m.a, m.b));
+/// A station's positions, sorted by `(section_id, index)`.
+fn positions_of(project: &Project, station: ModelStationId) -> Vec<StationId> {
+    let mut out: Vec<StationId> = project
+        .topology()
+        .slots_of(station)
+        .iter()
+        .copied()
+        .map(StationId::from)
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+/// The position the reader reports for something attached to `station` (a
+/// datum, a closure end): its position on the `via` section when that section
+/// passes the station, else its first position.
+fn attached_position(
+    project: &Project,
+    station: ModelStationId,
+    via: Option<LineId>,
+) -> Option<StationId> {
+    via.and_then(|line| project.topology().slot_on(station, line))
+        .map(StationId::from)
+        .or_else(|| positions_of(project, station).first().copied())
+}
+
+/// How many [`StationMerge`]s a project reads to (what the count cap checks).
+pub(crate) fn junction_pair_count(project: &Project) -> usize {
+    let topology = project.topology();
+    topology
+        .stations()
+        .iter()
+        .map(|&s| topology.slots_of(s).len().saturating_sub(1))
+        .sum()
+}
+
+fn junction_pairs(project: &Project) -> Vec<StationMerge> {
+    let mut out = Vec::new();
+    for &station in project.topology().stations() {
+        let positions = positions_of(project, station);
+        if let Some((&first, rest)) = positions.split_first() {
+            out.extend(rest.iter().map(|&b| StationMerge { a: first, b }));
+        }
+    }
+    out.sort_by_key(|m| (m.a, m.b));
+    out
+}
+
+impl Survey {
+    pub(crate) fn from_model(project: &Project, meta: &ReadMeta<'_>, with_stations: bool) -> Self {
+        let datum_at = |index: usize| -> Option<StationId> {
+            let d = project.datums.get(index)?;
+            attached_position(project, d.station, d.via)
+        };
         let mut zero_datums: Vec<ZeroDatum> = project
-            .zero_datums
+            .datums
             .iter()
-            .filter_map(|z| {
+            .filter_map(|d| {
                 Some(ZeroDatum {
-                    station: resolve(&z.station_ref)?,
-                    latitude: z.gps.latitude,
-                    longitude: z.gps.longitude,
-                    depth: z.gps.depth_reference,
+                    station: attached_position(project, d.station, d.via)?,
+                    latitude: d.gps.latitude,
+                    longitude: d.gps.longitude,
+                    depth: d.gps.depth_reference,
                     residual_m: None,
                 })
             })
             .collect();
         zero_datums.sort_by_key(|z| z.station);
         let mut loop_closures: Vec<LoopClosure> = project
-            .loop_closures
+            .closures
             .iter()
             .filter_map(|c| {
                 Some(LoopClosure {
                     id: c.id,
-                    a: resolve(&c.station_a)?,
-                    b: resolve(&c.station_b)?,
+                    a: attached_position(project, c.a, c.a_via)?,
+                    b: attached_position(project, c.b, c.b_via)?,
+                    tie: c.strategy == ClosureStrategy::Tie,
                 })
             })
             .collect();
         loop_closures.sort_by_key(|c| c.id);
+        let shown = project.shown_index();
         let mut station_comments: Vec<StationComment> = project
-            .station_comments
-            .iter()
-            .filter_map(|(key, text)| {
+            .stations
+            .values()
+            .filter(|station| !shown.is_archived(station.id))
+            .filter_map(|station| {
+                let text = station.comment.as_ref().filter(|t| !t.is_empty())?;
                 Some(StationComment {
-                    station: resolve(key)?,
+                    station: attached_position(project, station.id, None)?,
                     text: text.clone(),
                 })
             })
             .collect();
         station_comments.sort_by_key(|c| c.station);
-        let mut station_names: Vec<StationName> = project
-            .station_names
-            .iter()
-            .filter_map(|(key, name)| {
-                Some(StationName {
-                    station: resolve(key)?,
-                    name: name.clone(),
-                })
-            })
-            .collect();
+        let mut station_names: Vec<StationName> = Vec::new();
+        for line in project.lines() {
+            for (index, id) in line.stations().enumerate() {
+                let Some(station) = project
+                    .station(shown.shown(id))
+                    .filter(|s| !s.name.is_empty())
+                else {
+                    continue;
+                };
+                station_names.push(StationName {
+                    station: StationId {
+                        section_id: line.id,
+                        index: index as u32,
+                    },
+                    name: station.name.clone(),
+                });
+            }
+        }
         station_names.sort_by_key(|n| n.station);
-        let frame_datum = project
-            .frame_datum_key()
-            .and_then(|key| project.resolve_key(&key))
-            .map(StationId::from);
+        let shown_as: BTreeMap<u32, u32> = shown
+            .archived_nodes()
+            .map(|node| (node, shown.shown(node)))
+            .filter(|(node, kept)| node != kept)
+            .collect();
+        let frame = project.frame_datum();
+        let frame_datum = frame.and_then(datum_at);
 
-        let frame_gps = project.frame_datum().map(|d| d.gps);
         let stations = with_stations.then(|| {
-            let placements: Vec<StationId> = project
-                .placement_datum_refs()
+            let raw = project.raw_positions();
+            let topology = project.topology();
+            let placements: Vec<Option<StationId>> = project
+                .placement_datums()
                 .into_iter()
-                .map(StationId::from)
+                .map(|d| d.and_then(datum_at))
                 .collect();
-            let anchors = Anchors::new(project, &station_merges, &placements);
-            let mut positions: Vec<StationPosition> = project
-                .compute_station_positions()
+            let mut positions: Vec<StationPosition> = raw
+                .slots(project)
                 .into_iter()
-                .map(|(station_ref, coordinates)| {
-                    let station = StationId::from(station_ref);
-                    StationPosition {
-                        station,
-                        x: coordinates.x,
-                        y: coordinates.y,
-                        z: coordinates.z,
-                        anchor: anchors.of(station),
-                        latitude: None,
-                        longitude: None,
-                    }
+                .map(|slot| StationPosition {
+                    station: StationId::from(slot.slot),
+                    station_id: slot.station,
+                    x: slot.x,
+                    y: slot.y,
+                    z: slot.z,
+                    anchor: topology
+                        .component_of(slot.station)
+                        .and_then(|c| placements.get(c).copied().flatten()),
+                    latitude: None,
+                    longitude: None,
                 })
                 .collect();
             positions.sort_by_key(|p| p.station);
+            let frame_gps = frame.and_then(|i| project.datums.get(i)).map(|d| d.gps);
             georeference(
                 &mut positions,
                 &mut zero_datums,
@@ -423,59 +583,80 @@ impl Survey {
         });
 
         let mut people = PeopleCache::new();
-        let mut sections: Vec<&stalagmight_models::Line> = project.lines.iter().collect();
-        sections.sort_by_key(|s| s.id);
+        let mut lines: Vec<&stalagmight_models::survey::Line> = project.lines().iter().collect();
+        lines.sort_by_key(|l| l.id);
         Self {
-            schema_version,
+            format: meta.format,
+            format_version: meta.format_version,
+            schema_version: meta.schema_version,
             name: project.name.clone(),
             location: project.location.clone(),
             created_at: project.created_at.to_rfc3339(),
             modified_at: project.modified_at.to_rfc3339(),
-            sections: sections
+            sections: lines
                 .into_iter()
-                .map(|section| {
-                    let reference = project.azimuth_reference_for(section);
-                    Section {
-                        id: section.id,
-                        name: section.name.clone(),
-                        surveyor: section.surveyor_names(),
-                        date: section
-                            .first_survey_date()
-                            .map(|d| d.format("%Y-%m-%d").to_string()),
-                        direction: match section.direction {
-                            SurveyDirection::In => Direction::In,
-                            SurveyDirection::Out => Direction::Out,
-                        },
-                        quality: section.quality,
-                        color: section.color.clone(),
-                        north: match reference.north {
-                            NorthReference::Magnetic => North::Magnetic,
-                            NorthReference::True => North::True,
-                            NorthReference::Grid => North::Grid,
-                        },
-                        azimuth_correction_deg: reference.correction,
-                        azimuth_correction_source: correction_source(project, section),
-                        shots: section
-                            .shots
-                            .iter()
-                            .map(|shot| {
-                                let derived = shot.uuid.as_ref().is_some_and(|uuid| {
-                                    derived_uuids.contains(&(section.id, uuid.clone()))
-                                });
-                                Shot::from_model(shot, derived, &mut people)
-                            })
-                            .collect(),
-                    }
-                })
+                .map(|line| Section::from_model(project, line, meta, &mut people))
                 .collect(),
-            station_merges,
+            station_merges: junction_pairs(project),
             zero_datums,
             loop_closures,
             station_comments,
             station_names,
+            shown_as,
             frame_datum,
             stations,
-            unresolved_references: unresolved,
+            unresolved_references: meta.unresolved_references,
+            newer_content: meta.newer_content.clone(),
+        }
+    }
+}
+
+/// A shot's credit, empty when it has none.
+fn credit_of(shot: &stalagmight_models::survey::Shot) -> &SurveyCredit {
+    shot.credit.as_deref().unwrap_or(&EMPTY_CREDIT)
+}
+
+impl Section {
+    fn from_model(
+        project: &Project,
+        line: &stalagmight_models::survey::Line,
+        meta: &ReadMeta<'_>,
+        people: &mut PeopleCache,
+    ) -> Self {
+        let reference = project.azimuth_reference_for(line);
+        let summary = LineCreditSummary::from_credits(line.shots.iter().map(credit_of));
+        Self {
+            id: line.id,
+            name: line.name.clone(),
+            surveyor: join_names(&summary.surveyor_people()),
+            date: line
+                .shots
+                .iter()
+                .filter_map(|s| credit_of(s).date)
+                .min()
+                .map(|d| d.format("%Y-%m-%d").to_string()),
+            direction: match line.direction {
+                SurveyDirection::In => Direction::In,
+                SurveyDirection::Out => Direction::Out,
+            },
+            quality: line.quality,
+            color: line.color.clone(),
+            north: match reference.north {
+                NorthReference::Magnetic => North::Magnetic,
+                NorthReference::True => North::True,
+                NorthReference::Grid => North::Grid,
+            },
+            azimuth_correction_deg: reference.correction,
+            azimuth_correction_source: correction_source(project, line),
+            shots: line
+                .shots
+                .iter()
+                .map(|shot| {
+                    let derived = meta.derived_uuids.contains(&(line.id, shot.uuid.clone()));
+                    Shot::from_model(shot, derived, people)
+                })
+                .collect(),
+            station_ids: line.stations().collect(),
         }
     }
 }
@@ -486,7 +667,7 @@ fn georeference(
     positions: &mut [StationPosition],
     datums: &mut [ZeroDatum],
     frame_datum: Option<StationId>,
-    frame_gps: Option<&stalagmight_models::station::GpsCoordinates>,
+    frame_gps: Option<&GpsCoordinates>,
 ) {
     let (Some(frame), Some(frame_gps)) = (frame_datum, frame_gps) else {
         return;
@@ -514,7 +695,7 @@ fn georeference(
     for d in datums.iter_mut() {
         let (Some((x, y)), Ok(gps)) = (
             at(positions, d.station),
-            stalagmight_models::station::GpsCoordinates::new(d.latitude, d.longitude, d.depth),
+            GpsCoordinates::new(d.latitude, d.longitude, d.depth),
         ) else {
             continue;
         };
@@ -523,116 +704,19 @@ fn georeference(
     }
 }
 
-fn correction_source(project: &Project, section: &stalagmight_models::Line) -> CorrectionSource {
+fn correction_source(
+    project: &Project,
+    line: &stalagmight_models::survey::Line,
+) -> CorrectionSource {
     use stalagmight_models::CorrectionSource as Model;
-    if section.azimuth_reference.is_none() && project.default_azimuth_reference.is_none() {
+    if line.azimuth_reference.is_none() && project.settings.default_azimuth_reference.is_none() {
         return CorrectionSource::NotRecorded;
     }
-    match project.azimuth_reference_for(section).source {
+    match project.azimuth_reference_for(line).source {
         Model::Unknown => CorrectionSource::Unknown,
         Model::FileDeclared => CorrectionSource::FileDeclared,
         Model::IgrfAuto { epoch_year } => CorrectionSource::Model { epoch_year },
         Model::Manual => CorrectionSource::Manual,
-    }
-}
-
-/// Which zero datum anchors each station's component (connected through shots
-/// and station merges): its placement datum. Union-find with path halving and
-/// union by size.
-struct Anchors {
-    index: HashMap<StationId, usize>,
-    root: Vec<usize>,
-    anchor_of_root: HashMap<usize, StationId>,
-}
-
-impl Anchors {
-    fn new(project: &Project, merges: &[StationMerge], placements: &[StationId]) -> Self {
-        let mut index = HashMap::new();
-        for section in &project.lines {
-            for i in 0..=section.shots.len() as u32 {
-                let next = index.len();
-                index.insert(
-                    StationId {
-                        section_id: section.id,
-                        index: i,
-                    },
-                    next,
-                );
-            }
-        }
-        let mut uf = UnionFind::new(index.len());
-        for section in &project.lines {
-            for i in 0..section.shots.len() as u32 {
-                let at = |index_: u32| {
-                    index.get(&StationId {
-                        section_id: section.id,
-                        index: index_,
-                    })
-                };
-                if let (Some(&a), Some(&b)) = (at(i), at(i + 1)) {
-                    uf.union(a, b);
-                }
-            }
-        }
-        for m in merges {
-            if let (Some(&a), Some(&b)) = (index.get(&m.a), index.get(&m.b)) {
-                uf.union(a, b);
-            }
-        }
-        // `placements` are the project's placement datums (`Project::datum_roles`),
-        // in list order: at most one per merge component, the first datum of
-        // each. The first one seen still wins, should two ever share a root.
-        let mut anchor_of_root = HashMap::new();
-        for &station in placements {
-            if let Some(&i) = index.get(&station) {
-                anchor_of_root.entry(uf.find(i)).or_insert(station);
-            }
-        }
-        let root = (0..index.len()).map(|i| uf.find(i)).collect();
-        Self {
-            index,
-            root,
-            anchor_of_root,
-        }
-    }
-
-    fn of(&self, station: StationId) -> Option<StationId> {
-        let i = *self.index.get(&station)?;
-        self.anchor_of_root.get(&self.root[i]).copied()
-    }
-}
-
-struct UnionFind {
-    parent: Vec<usize>,
-    size: Vec<usize>,
-}
-
-impl UnionFind {
-    fn new(n: usize) -> Self {
-        Self {
-            parent: (0..n).collect(),
-            size: vec![1; n],
-        }
-    }
-
-    fn find(&mut self, mut i: usize) -> usize {
-        while self.parent[i] != i {
-            self.parent[i] = self.parent[self.parent[i]];
-            i = self.parent[i];
-        }
-        i
-    }
-
-    fn union(&mut self, a: usize, b: usize) {
-        let (mut a, mut b) = (self.find(a), self.find(b));
-        if a == b {
-            return;
-        }
-        if self.size[a] < self.size[b] {
-            std::mem::swap(&mut a, &mut b);
-        }
-        self.parent[b] = a;
-        self.size[a] += self.size[b];
     }
 }
 
@@ -642,7 +726,7 @@ impl UnionFind {
 type PeopleCache = HashMap<usize, (Arc<[Person]>, Arc<[Person]>)>;
 
 fn people_of(
-    shot: &stalagmight_models::Shot,
+    shot: &stalagmight_models::survey::Shot,
     cache: &mut PeopleCache,
 ) -> (Arc<[Person]>, Arc<[Person]>) {
     let convert = |list: &[stalagmight_models::Person]| -> Arc<[Person]> {
@@ -662,14 +746,13 @@ fn people_of(
 
 impl Shot {
     fn from_model(
-        shot: &stalagmight_models::Shot,
+        shot: &stalagmight_models::survey::Shot,
         uuid_derived: bool,
         people: &mut PeopleCache,
     ) -> Self {
         let (surveyors, explorers) = people_of(shot, people);
         Self {
-            // The reader fills every missing UUID before converting.
-            uuid: shot.uuid.clone().unwrap_or_default(),
+            uuid: shot.uuid.clone(),
             uuid_derived,
             kind: match shot.kind {
                 ModelShotKind::Normal => ShotKind::Normal,
@@ -692,7 +775,9 @@ impl Shot {
             comment: shot.comment.clone(),
             surveyors,
             explorers,
-            date: shot.credit().date.map(|d| d.format("%Y-%m-%d").to_string()),
+            date: credit_of(shot)
+                .date
+                .map(|d| d.format("%Y-%m-%d").to_string()),
         }
     }
 }

@@ -1,12 +1,11 @@
 use std::path::PathBuf;
 use tauri::{Manager, State};
-use ts_rs::TS;
 
 use crate::core::loading::{CreateProjectFullResult, LoadError, LoadProjectFullResult};
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
-    AdjustmentReport, AlongLineResult, DistanceField, FrozenShotRef, Project, ProjectMetadata,
-    ProjectStats, RulerEndpoint, Station, StationRef,
+    AdjustmentReport, AlongLineResult, DistanceField, ProjectMetadata, RulerEndpoint, Station,
+    StationRef,
 };
 
 /// Update per-project settings (#57): project name + validation thresholds.
@@ -57,6 +56,71 @@ pub fn save_project(
 
 pub(crate) fn save_project_impl(state: &AppState, path: Option<PathBuf>) -> CommandResult {
     state.execute(Command::SaveProject { path })
+}
+
+/// The "Overwrite" answer to a save the external-modification guard refused
+/// (`EXTERNALLY_MODIFIED: ...`, plan 6.5): write the open project over a file
+/// another program changed since it was last read or written. `path` is as
+/// in [`save_project`]; the frontend's conflict prompt passes `null`. Every
+/// other refusal (read-only file, invalid survey) still applies.
+#[tauri::command]
+pub fn save_project_overwriting(state: State<AppState>, path: Option<PathBuf>) -> CommandResult {
+    tracing::info!(
+        path = ?path,
+        purpose = "replace a project file another program changed, at the user's request",
+        "Overwrite save requested"
+    );
+    state.save_project_overwriting(path)
+}
+
+/// The notice a legacy (SQLite) open leaves when the conversion to
+/// the station-graph model moved stations (plan 7.2.10), taken once: the
+/// frontend asks after a load and shows it as a banner (its view: the changes,
+/// a renamed-stations list for Details, the file state). `None` for a version
+/// 2 file and for a conversion that moved nothing.
+#[tauri::command]
+pub fn take_conversion_notice(
+    state: State<'_, AppState>,
+) -> Option<crate::core::ConversionNoticeView> {
+    let notice = state.take_conversion_notice();
+    if notice.is_some() {
+        tracing::info!(
+            purpose = "tell the user the old file format conversion moved stations",
+            "Handing the conversion notice to the frontend"
+        );
+    }
+    notice
+}
+
+/// Whether the open project has changes no save has written yet (the
+/// backend's dirty flag). Warning ignores mark it without an undo entry
+/// (plan 6.5), so the frontend reads it after one to keep its own dirty flag,
+/// which autosave watches, in step. Every exit (quit, close, switch, New
+/// Project, an account change) asks it too before it leaves the project: on a
+/// 0.6.0 file it also counts the SpeleoDB bookkeeping that waits for the
+/// converting save, which the frontend's flag leaves out so autosave does not
+/// convert a file the user only looked at.
+#[tauri::command]
+pub fn has_unsaved_changes(state: State<'_, AppState>) -> bool {
+    state.has_unsaved_changes()
+}
+
+/// Why the open project is read-only, when the file was made with a newer
+/// Stalagmight (an unknown `requires` feature or unknown survey content, plan
+/// 6.4); `None` when it is editable as far as the file is concerned. A peek,
+/// like [`history_discarded`]: the condition lasts as long as the project is
+/// open, and edits, undo and saves are refused with `READ_ONLY_FILE: ...`.
+#[tauri::command]
+pub fn project_read_only_reason(state: State<'_, AppState>) -> Option<String> {
+    state.read_only_reason()
+}
+
+/// Whether the open project's file on disk is still a 0.6.0 file: opened
+/// from one and not saved yet (the first save converts it, plan 7.2.10). A
+/// peek: the status bar says so instead of "Saved" until a save lands.
+#[tauri::command]
+pub fn project_file_is_legacy(state: State<'_, AppState>) -> bool {
+    state.file_is_legacy()
 }
 
 /// What a close does with a held SpeleoDB write lock - the exit prompt's three
@@ -167,29 +231,7 @@ pub fn get_project_state(state: State<AppState>) -> Option<ProjectState> {
 }
 
 pub(crate) fn get_project_state_impl(state: &AppState) -> Option<ProjectState> {
-    let project = state.get_project_state()?;
-    let stations = project.compute_station_coordinates();
-    let mut stats = project.stats();
-
-    // Calculate penetration distance with computed stations. Reference ties are
-    // not swimmable, so they leave the route unless opted back in (#27 q13).
-    let include_reference_legs = state.get_config().gas.include_reference_legs;
-    stats.penetration_distance =
-        project.calculate_penetration_with(&stations, include_reference_legs);
-
-    // Depth is the absolute station range, not a per-line delta walk (#481).
-    let (min_depth, max_depth) = Project::depth_range(&stations);
-    stats.min_depth = min_depth;
-    stats.max_depth = max_depth;
-
-    let frozen_shots = project.compute_frozen_shots();
-
-    Some(ProjectState {
-        project,
-        stations,
-        stats,
-        frozen_shots,
-    })
+    state.project_state_wire()
 }
 
 /// Per-station along-cave distance from a chosen origin station, or from the
@@ -366,20 +408,9 @@ pub(crate) fn merge_projects_impl(
     })
 }
 
-/// Combined project state for frontend
-#[derive(serde::Serialize, TS)]
-pub struct ProjectState {
-    /// Serialized through [`ProjectIpc`] so cross-references reach the frontend
-    /// in positional wire form (the ts-rs `Project` shape), not the internal
-    /// `StationKey` shape that derived serde would emit. ts-rs still reads the
-    /// field type (`Project`) for the generated binding, so the TS contract is
-    /// unchanged; only the runtime serde payload is corrected.
-    #[serde(serialize_with = "crate::models::project::serialize_project_ipc")]
-    pub project: Project,
-    pub stations: Vec<Station>,
-    pub stats: ProjectStats,
-    pub frozen_shots: Vec<FrozenShotRef>,
-}
+/// Combined project state for frontend: the station-graph wire projection
+/// (`survey::wire::ProjectStateWire`, the TS `ProjectState`).
+pub type ProjectState = crate::models::survey::wire::ProjectStateWire;
 
 /// Load project with full progress reporting.
 /// Uses spawn_blocking for UI responsiveness during computation phases.
@@ -434,13 +465,29 @@ pub async fn load_project_full_binary(
     app_handle: tauri::AppHandle,
     path: PathBuf,
 ) -> Result<tauri::ipc::Response, LoadError> {
+    binary_load(move || app_handle.state::<AppState>().do_load_project_full(path)).await
+}
+
+/// The save prompt's "Use the file's version" (plan 6.5): open the open
+/// project's own file again as it is on disk now, in place of the session and
+/// its unsaved changes, in ONE backend operation
+/// (`AppState::do_reload_project_full`): only a read that opened replaces the
+/// session, so the frontend never closes the project first. The payload is
+/// `load_project_full_binary`'s, so the frontend applies it as any load.
+#[tauri::command]
+pub async fn reload_project_full_binary<R: tauri::Runtime>(
+    app_handle: tauri::AppHandle<R>,
+) -> Result<tauri::ipc::Response, LoadError> {
+    binary_load(move || app_handle.state::<AppState>().do_reload_project_full()).await
+}
+
+/// Run a full load off the main thread and encode its result as the binary
+/// load payload ([`crate::core::load_binary`]).
+async fn binary_load(
+    load: impl FnOnce() -> Result<LoadProjectFullResult, LoadError> + Send + 'static,
+) -> Result<tauri::ipc::Response, LoadError> {
     let t_start = std::time::Instant::now();
-    let result: Result<Result<LoadProjectFullResult, LoadError>, _> =
-        tauri::async_runtime::spawn_blocking(move || {
-            let state = app_handle.state::<AppState>();
-            state.do_load_project_full(path)
-        })
-        .await;
+    let result = tauri::async_runtime::spawn_blocking(load).await;
     let handler_elapsed = t_start.elapsed();
 
     let load_result = match result {
@@ -458,7 +505,7 @@ pub async fn load_project_full_binary(
         handler_ms = handler_elapsed.as_millis() as u64,
         encode_ms = encode_elapsed.as_millis() as u64,
         bytes = bytes.len(),
-        "load_project_full_binary returning"
+        "binary load payload returning"
     );
 
     Ok(tauri::ipc::Response::new(bytes))
@@ -473,8 +520,8 @@ pub fn cancel_loading(state: State<AppState>) {
 
 /// Create a persisted project with full progress reporting.
 ///
-/// This creates a new project database file immediately, emitting progress events
-/// during creation phases (CreatingDatabase, InitializingProject, SavingSettings).
+/// This creates a new project file immediately, emitting progress events
+/// during creation phases (CreatingFile, InitializingProject, SavingSettings).
 ///
 /// Unlike `create_project`, this command supports assigning a canonical save path
 /// during project creation and can optionally defer the initial disk write.
@@ -540,7 +587,7 @@ pub fn take_unrecognised_shot_kinds(
 /// Peeking, not taking, unlike [`take_unrecognised_shot_kinds`]: that one drives a
 /// one-shot prompt the user answers, this describes an ongoing condition that lasts as
 /// long as the project is open (docs/notifications.md: banner-class). Dismissal is
-/// frontend state, as it is for the integrity banner.
+/// frontend state.
 ///
 /// No `loading_id` for the same reason: the flag is written under the same `project`
 /// mutex acquisition that commits the project, so it cannot describe a different one.
@@ -609,5 +656,153 @@ mod close_lock_tests {
             CloseLock::from_args(Some(false), Some(true)),
             CloseLock::Discard
         );
+    }
+}
+
+/// The `.stalx` v2 file-status commands, end to end on an [`AppState`]: what
+/// the frontend's banners, save prompt and dirty tracking read.
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test module: a failed setup step is the point"
+)]
+mod file_status_tests {
+    use std::path::{Path, PathBuf};
+
+    use tempfile::TempDir;
+
+    use crate::core::state::{EXTERNALLY_MODIFIED_CODE, READ_ONLY_FILE_CODE};
+    use crate::core::{AppState, Command, CommandResult};
+    use crate::models::survey::{LineMeta, Project, StartAt};
+    use crate::models::{ShotData, ShotUpdates};
+    use crate::persistence::stalx_v2::{self, Extras, Mode};
+
+    /// One free line of two shots, laid out from its start at the origin.
+    fn survey() -> Project {
+        let mut p = Project::new("File status", None);
+        let shot = |length: f64| ShotData {
+            length,
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            depth_in: 1.0,
+            depth_out: 1.0,
+            ..ShotData::default()
+        };
+        let line = p
+            .add_line(
+                LineMeta::default(),
+                StartAt::New,
+                vec![shot(10.0), shot(7.5)],
+            )
+            .unwrap();
+        let start = p.line(line).unwrap().start;
+        p.set_placement(start, 0.0, 0.0).unwrap();
+        assert!(p.validate().is_empty(), "{:?}", p.validate());
+        p
+    }
+
+    fn write_v2(dir: &Path) -> PathBuf {
+        let path = dir.join("status.stalx");
+        let bytes = stalx_v2::encode(&survey(), &Extras::default(), Mode::Normal).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    fn open(path: &Path) -> AppState {
+        let state = AppState::new().unwrap();
+        let r = state.execute(Command::OpenProject {
+            path: path.to_path_buf(),
+        });
+        assert!(r.success, "{:?}", r.error);
+        state
+    }
+
+    fn edit(state: &AppState) -> CommandResult {
+        let project = state.get_project_state().unwrap();
+        let line = &project.lines()[0];
+        state.execute(Command::UpdateShot {
+            line_id: line.id,
+            shot_id: line.shots[0].id,
+            updates: ShotUpdates {
+                length: Some(11.25),
+                ..ShotUpdates::default()
+            },
+        })
+    }
+
+    #[test]
+    fn an_ordinary_v2_file_reports_nothing_and_tracks_unsaved_changes() {
+        let dir = TempDir::new().unwrap();
+        let state = open(&write_v2(dir.path()));
+        assert_eq!(state.read_only_reason(), None);
+        assert_eq!(state.take_conversion_notice(), None);
+        assert!(!state.has_unsaved_changes());
+
+        assert!(edit(&state).success);
+        assert!(state.has_unsaved_changes());
+        let r = state.execute(Command::SaveProject { path: None });
+        assert!(r.success, "{:?}", r.error);
+        assert!(!state.has_unsaved_changes());
+    }
+
+    #[test]
+    fn a_file_changed_on_disk_is_refused_and_the_overwrite_answer_writes_it() {
+        let dir = TempDir::new().unwrap();
+        let path = write_v2(dir.path());
+        let state = open(&path);
+        assert!(edit(&state).success);
+
+        // Another program rewrites the file (same survey, other bytes).
+        let mut theirs = std::fs::read_to_string(&path).unwrap();
+        theirs.push('\n');
+        std::fs::write(&path, &theirs).unwrap();
+
+        let r = state.execute(Command::SaveProject { path: None });
+        assert!(!r.success);
+        assert!(r
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with(EXTERNALLY_MODIFIED_CODE));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), theirs);
+        assert!(state.has_unsaved_changes());
+
+        let r = state.save_project_overwriting(None);
+        assert!(r.success, "{:?}", r.error);
+        assert_ne!(std::fs::read_to_string(&path).unwrap(), theirs);
+        assert!(!state.has_unsaved_changes());
+        // And the guard follows the bytes it wrote: a plain save passes again.
+        assert!(edit(&state).success);
+        let r = state.execute(Command::SaveProject { path: None });
+        assert!(r.success, "{:?}", r.error);
+    }
+
+    #[test]
+    fn a_file_made_with_a_newer_stalagmight_says_why_it_is_read_only() {
+        let dir = TempDir::new().unwrap();
+        let path = write_v2(dir.path());
+        let text = std::fs::read_to_string(&path).unwrap();
+        let patched = text.replacen(
+            "\"requires\":[\"archived-stations\"]",
+            "\"requires\":[\"archived-stations\",\"x-lofts\"]",
+            1,
+        );
+        assert_ne!(patched, text);
+        std::fs::write(&path, patched.as_bytes()).unwrap();
+        let state = open(&path);
+
+        let reason = state.read_only_reason().expect("read-only");
+        assert!(reason.contains("newer Stalagmight"), "{reason}");
+        assert!(reason.contains("x-lofts"), "{reason}");
+        // The Overwrite answer is no way around it.
+        let r = state.save_project_overwriting(None);
+        assert!(!r.success);
+        assert!(r
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with(READ_ONLY_FILE_CODE));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), patched);
     }
 }

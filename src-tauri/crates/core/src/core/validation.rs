@@ -1,7 +1,8 @@
 use crate::config::ValidationConfig;
 use crate::models::shot::implied_pitch_deg;
+use crate::models::survey::{Line, Project, Shot};
 use crate::models::warning::severity_for_code;
-use crate::models::ShotData;
+use crate::models::{LineId, ShotData};
 
 use super::{ValidationWarning, WarningSeverity};
 
@@ -26,8 +27,12 @@ impl Validator {
     /// Validate a shot and return any warnings, each opening with the shot as
     /// the user reads it: `Shot Main Line: 4 → 5 has zero length`, never the
     /// positional `line:position` handle. `shot_label` names the shot
-    /// (`Main Line: 4 → 5`, `Project::shot_label_at`) and is asked only when a
+    /// (`Main Line: 4 → 5`, `Project::shot_text`) and is asked only when a
     /// check fires, so a whole-project pass pays for no names on clean shots.
+    /// It may give the shot marked (`Project::shot_marked`, RS-PROSE): each
+    /// message is split here into its plain words and its parts
+    /// ([`ValidationWarning::marked`]), the plain words those of the plain
+    /// label.
     pub fn validate_shot(
         shot: &ShotData,
         config: &ValidationConfig,
@@ -43,10 +48,12 @@ impl Validator {
         // gate, and the map coloring can never disagree on a code's class.
         findings
             .into_iter()
-            .map(|(code, body)| ValidationWarning {
-                code: code.to_string(),
-                message: format!("Shot {label} {body}"),
-                severity: severity_for_code(code),
+            .map(|(code, body)| {
+                ValidationWarning::marked(
+                    code,
+                    &format!("Shot {label} {body}"),
+                    severity_for_code(code),
+                )
             })
             .collect()
     }
@@ -303,15 +310,77 @@ impl Validator {
             .iter()
             .any(|w| w.severity == WarningSeverity::Error)
     }
+
+    /// Shot `index` of `line` checked against the project's own thresholds
+    /// (`settings.validation`, #57: stored in the file, authoritative over
+    /// the global config), each warning naming the shot by
+    /// [`Self::shot_label`], with the shot as its part
+    /// (`Project::shot_marked`, RS-PROSE).
+    pub fn validate_project_shot(
+        project: &Project,
+        line: &Line,
+        index: usize,
+    ) -> Vec<ValidationWarning> {
+        Self::validate_project_shot_named(project, line, index, || {
+            project.shot_marked(line.id, index)
+        })
+    }
+
+    /// [`Self::validate_project_shot`] with the shot named by `shot_label`
+    /// (asked only when a check fires, plain or marked): a whole-project
+    /// pass names its shots through one `SlotTexts` (RS-FX9).
+    pub fn validate_project_shot_named(
+        project: &Project,
+        line: &Line,
+        index: usize,
+        shot_label: impl FnOnce() -> String,
+    ) -> Vec<ValidationWarning> {
+        let Some(shot) = line.shots.get(index) else {
+            return Vec::new();
+        };
+        Self::validate_shot(&geometry(shot), &project.settings.validation, shot_label)
+    }
+
+    /// A shot as the user reads it: `Main Line: 4 \u{2192} 5`, the line's
+    /// label, then the names the line shows the stations the shot runs
+    /// between by, a dotted slot or a loop end qualified (`Branch: 12 (Main)
+    /// \u{2192} 13`, [`Project::shot_text`], RS-FX5; a chain index stands in
+    /// for a station the line does not reach). The Warnings tab strips this
+    /// prefix by the frontend's `shotLabelAt`, which words it the same.
+    pub fn shot_label(project: &Project, line: LineId, index: usize) -> String {
+        project.shot_text(line, index)
+    }
+}
+
+/// The measurements the checks read, without the shot's identity, comment or
+/// credit, so a whole-project pass allocates nothing for a clean shot.
+fn geometry(shot: &Shot) -> ShotData {
+    ShotData {
+        azimuth_in: shot.azimuth_in,
+        azimuth_out: shot.azimuth_out,
+        length: shot.length,
+        depth_in: shot.depth_in,
+        depth_out: shot.depth_out,
+        pitch_in: shot.pitch_in,
+        pitch_out: shot.pitch_out,
+        left: shot.left,
+        right: shot.right,
+        up: shot.up,
+        down: shot.down,
+        kind: shot.kind,
+        marker_index: shot.marker_index,
+        temperature: shot.temperature,
+        ..ShotData::default()
+    }
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "tests assert on known-present warnings; a failed expect fails the test"
+)]
 mod tests {
-    #![expect(
-        clippy::expect_used,
-        reason = "tests assert on known-present warnings; a failed expect fails the test"
-    )]
     use super::*;
     use crate::models::GpsCoordinates;
 
@@ -352,6 +421,8 @@ mod tests {
         assert!(warnings
             .iter()
             .all(|w| w.message.starts_with("Shot Main: 4 \u{2192} 5 ")));
+        // A plain label names nothing: no parts.
+        assert!(warnings.iter().all(|w| w.parts.is_none()));
     }
 
     fn default_config() -> ValidationConfig {
@@ -1361,5 +1432,74 @@ mod tests {
                 w.code
             );
         }
+    }
+
+    /// A project shot is checked against the project's own thresholds, not
+    /// the global defaults, and named as the user reads it; the geometry the
+    /// checks read is the shot's.
+    #[test]
+    fn test_project_shot_uses_the_project_thresholds_and_its_label() {
+        use crate::models::survey::{LineMeta, StartAt};
+        let mut project = Project::new("P", None);
+        let line = project
+            .add_line(
+                LineMeta {
+                    name: Some("Main".to_string()),
+                    ..LineMeta::default()
+                },
+                StartAt::New,
+                vec![
+                    ShotData {
+                        length: 9.5,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 5.0,
+                        left: Some(-2.0),
+                        ..Default::default()
+                    },
+                ],
+            )
+            .unwrap();
+        let line = project.line(line).unwrap().clone();
+        assert!(Validator::validate_project_shot(&project, &line, 0).is_empty());
+        project.settings.validation.warn_shot_length_max = 8.0;
+        let long = Validator::validate_project_shot(&project, &line, 0);
+        assert_eq!(long.len(), 1);
+        assert_eq!(long[0].code, "LONG_SHOT");
+        assert_eq!(
+            long[0].message,
+            "Shot Main: 0 \u{2192} 1 length 9.5m above maximum threshold 8.0m"
+        );
+        // RS-PROSE: the shot is a part, and the parts say the message's words.
+        let parts = long[0]
+            .parts
+            .as_deref()
+            .expect("the message names its shot");
+        assert_eq!(crate::models::prose::plain(parts), long[0].message);
+        assert!(matches!(
+            parts,
+            [
+                crate::models::ProsePart::Text { .. },
+                crate::models::ProsePart::Shot(_),
+                crate::models::ProsePart::Text { .. }
+            ]
+        ));
+        let lrud = Validator::validate_project_shot(&project, &line, 1);
+        assert_eq!(lrud.len(), 1);
+        assert_eq!(lrud[0].code, "NEGATIVE_LRUD");
+        assert!(lrud[0].message.starts_with("Shot Main: 1 \u{2192} 2 "));
+        // No such shot: nothing to check.
+        assert!(Validator::validate_project_shot(&project, &line, 2).is_empty());
+        // A station the line does not reach is named by its chain index, and a
+        // line that is gone by the unnamed-line label.
+        assert_eq!(
+            Validator::shot_label(&project, line.id, 2),
+            "Main: 2 \u{2192} 3"
+        );
+        assert_eq!(
+            Validator::shot_label(&project, line.id + 1, 0),
+            format!("{}: 0 \u{2192} 1", crate::models::UNNAMED_LINE)
+        );
     }
 }

@@ -6,6 +6,8 @@ import { useProjectStore } from '../../store/projectStore';
 import { defaultConfig } from '../../types/config';
 import { flushGasConfigWrite, queueGasConfigWrite } from '../../utils/gasConfigDisk';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useProse } from '../../hooks/useProse';
+import { Prose } from '../common/Prose';
 import { formatFixed } from '../../i18n/format';
 import { gasAssumptionsSummary } from '../../utils/gasAssumptionsSummary';
 import { formatGasLength, formatPressure, formatVolume } from '../../utils/formatGas';
@@ -36,6 +38,10 @@ export function GasPlanPanel() {
   const { t } = useTranslation();
   // Stations are shown by name with their line (`Main Line / 17`): names are only line-unique.
   const identity = useIdentityLabels();
+  // The out-of-reach sentence names its turn station as a prose pill
+  // (RS-PROSE); the origin, endpoint, way-point and marked-point readouts are
+  // values in rows, plain labels.
+  const prose = useProse();
   const {
     originChosen,
     originPickArmed,
@@ -185,7 +191,7 @@ export function GasPlanPanel() {
 
   const units = gasConfig.units;
   const originLabel = origin
-    ? identity.station(origin, true)
+    ? identity.planStation(origin)
     : t('gasPanel.origin.entrance');
 
   // Way-point readouts, all from the engine (#298) - the panel never re-derives a
@@ -494,7 +500,7 @@ export function GasPlanPanel() {
             <div className="flex items-center gap-2">
               <span data-testid="gas-endpoint-readout" className="font-mono text-xs">
                 {endpoint
-                  ? identity.station(endpoint, true)
+                  ? identity.planStation(endpoint)
                   : t('gasPanel.route.endpointAuto')}
               </span>
               <button
@@ -513,12 +519,14 @@ export function GasPlanPanel() {
               rather than leaving the diver to wonder where their endpoint went. */}
           {endpointOutOfReach && (
             <p className="text-xs opacity-70" data-testid="gas-endpoint-out-of-reach">
-              {t(
-                turnTowardEndpoint
-                  ? 'gasPanel.route.endpointOutOfReach'
-                  : 'gasPanel.route.endpointUnusable',
-                { station: identity.station(endpointOutOfReach, true) }
-              )}
+              <Prose
+                text={t(
+                  turnTowardEndpoint
+                    ? 'gasPanel.route.endpointOutOfReach'
+                    : 'gasPanel.route.endpointUnusable',
+                  { station: prose.planStation(endpointOutOfReach) }
+                )}
+              />
             </p>
           )}
 
@@ -538,7 +546,7 @@ export function GasPlanPanel() {
                   >
                     <span className="opacity-60 w-4 text-right">{i + 1}.</span>
                     <span className="font-mono flex-1">
-                      {identity.station(w, true)}
+                      {identity.planStation(w)}
                     </span>
                     {unresolved.waypoints[i] && (
                       <span className="text-error" data-testid={`gas-waypoint-unresolved-${i}`}>
@@ -631,7 +639,7 @@ export function GasPlanPanel() {
                   data-testid={`gas-marked-row-${i}`}
                 >
                   <span className="font-mono">
-                    {identity.station(m.station, true)}
+                    {identity.planStation(m.station)}
                   </span>
                   <input
                     type="text"

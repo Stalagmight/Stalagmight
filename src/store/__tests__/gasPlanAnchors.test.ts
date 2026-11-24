@@ -417,8 +417,6 @@ describe('projectStore re-resolves the plan pins around every mutation (#310)', 
           return false;
         case 'get_project_warnings':
           return [];
-        case 'check_project_integrity':
-          return { messages: [], save_blocked: false };
         default:
           order = order.filter((id) => id !== 'b');
           return { success: true, warnings: [], error: null, line_ids: [] };
@@ -478,8 +476,6 @@ describe('projectStore re-resolves the plan pins around every mutation (#310)', 
           return false;
         case 'get_project_warnings':
           return [];
-        case 'check_project_integrity':
-          return { messages: [], save_blocked: false };
         case 'undo':
           order = ['a', 'b', 'c', 'd', 'e'];
           return { success: true, warnings: [], error: null, line_ids: [] };
@@ -507,8 +503,6 @@ describe('projectStore re-resolves the plan pins around every mutation (#310)', 
       name_b: 'B',
       color_a: '#111111',
       color_b: '#222222',
-      comment_side: 'a' as const,
-      datum_side: 'a' as const,
     };
     const combine = {
       name: 'K',

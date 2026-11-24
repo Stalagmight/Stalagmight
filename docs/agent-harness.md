@@ -250,17 +250,13 @@ children). That default is a deliberate trade, not inertia.
 
 **What release costs you.** `debug_assertions` is off, so these stop running:
 
-- Every `debug_assert!` in a live path - `core/state/command_comment.rs:71`,
-  four in `core/loading.rs`, `models/project/reverse.rs:379`,
-  `models/project/classify.rs:244`, `core/state/undo_restore.rs:264`,
-  `core/state/speleodb_pull.rs:1685`, `persistence/sqlite.rs:519`. Each is an
-  invariant check the app performs on itself during exactly the mutations a
-  fuzzer drives.
-- `Project::debug_assert_merge_alignment` (`models/project/offsets.rs:546`), whose
-  whole body is `#[cfg(debug_assertions)]`. In debug it emits a `tracing::error!`
-  when a merge ends up more than 5 cm out of alignment inside a single command;
-  that line rides the ring buffer into the harness's error-log oracle. In release
-  the check does not exist, so that class of drift becomes invisible.
+- Every `debug_assert!` in a live path - four in `core/loading.rs` (the load
+  progress phases), one in `core/state/config.rs` and three in
+  `models/disk_names.rs` (the `.plnx` on-disk vocabulary). Each is an
+  invariant check the app performs on itself. (The station-graph model checks
+  its invariants with `Project::validate` after every command, in release
+  too, so the old merge-alignment `debug_assert` has no successor: a junction
+  is one station and cannot drift.)
 - Rust's debug-only integer-overflow panics: an overflow that aborts loudly in
   debug wraps silently in release.
 - `[profile.release]` sets `strip = true`, so a crash marker's
@@ -469,7 +465,7 @@ Interaction (each runs a cheap oracle sweep after; findings ride the result unde
 | `file_dialog_answer(triggerTestid, kind, path\|paths\|cancel)` | Click the named UI control, answer the picker it opens, and verify that exact answer was consumed. |
 | `store_action(store, action, args?)` | Call a Zustand action (async-aware). |
 | `eval(script, args?)` | Async function body in the webview; returns its value. |
-| `ipc(command, args?)` | `window.__TAURI__.core.invoke`; e.g. `get_recent_logs_since`, `check_project_integrity`. |
+| `ipc(command, args?)` | `window.__TAURI__.core.invoke`; e.g. `get_recent_logs_since`, `has_unsaved_changes`. |
 | `map_view(set?)` | Read or set the MapLibre view (center/zoom/bearing). |
 | `map_click(lngLat, button?)` | Click a visible geographic point through the ordinary or placement path, reject half-open viewport edges, and require the map interaction sequence to advance. |
 | `map_feature_click(featureType, lineId, shotId?/stationIndex?, button?, verifySelection?)` | Resolve current WebGL geometry by semantic identity, arm a one-use overlap preference, drive the MapLibre pipeline, and prove this click was processed. Selection is also verified by default. |
@@ -543,15 +539,16 @@ bridge only after a comparison has already failed.
 A full run today (release, HEAD) costs about 135 ms/iteration on the fractal
 fixture and 217 ms/iteration on naharon, against 104 / 189 before the extra
 oracles - so the undoTo/redoTo equivalence check, the per-step invariant suite,
-the integrity delta and the save/reload boundary together add roughly 30% and 15%
-respectively. On naharon, `integrityMs` is ~4% of step time and `canonicalMs` ~7%;
-the rest is still the app. Save/close/reopen is charged outside the fused step,
+the integrity delta (since retired) and the save/reload boundary together add
+roughly 30% and 15% respectively. On naharon, the delta's `integrityMs` was ~4%
+of step time and `canonicalMs` ~7%; the rest is still the app. Save/close/reopen is charged outside the fused step,
 at roughly a second per round trip.
 
 That leaves the bridge at roughly 6% of a step. Measured on fractal seed 4 x60
 (90 steps, `actionMs`/`observeMs`/`canonicalMs` are reported as metrics): 4775 ms
 in the store action's own `flushPlanAnchors` + command + `refreshProjectState` +
-`checkProjectIntegrity` chain, 810 ms in the three read-only IPC reads, 132 ms
+`checkProjectIntegrity` chain (that last re-check is gone with the integrity
+banner), 810 ms in the three read-only IPC reads, 132 ms
 canonicalizing, ~390 ms of WebDriver. The action chain is the boundary coverage
 that found the `updateLine` and undo-fails-outright bugs, so it stays; further
 speedup has to come from parallelism, which is what `agent:fuzz-matrix` is for.
@@ -563,9 +560,10 @@ history stacks are empty. Tracked fixtures ship with a stack
 (`undo_persist_limit`, 20 rows in the fractal fixture and 2 in naharon), and a
 scenario that models undo depth must not fuzz on top of somebody else's entries
 or burn the headroom below the 100-entry limit. `stripUndoHistory`
-(`e2e/agent/lib/fixtures.ts`) is the harness-side replica of the app's own
-`Database::clear_undo_history_at`, and refuses any path inside `e2e/fixtures/`
-so it can only ever touch a temp copy.
+(`e2e/agent/lib/fixtures.ts`) empties a v2 file's `history` member and leaves a
+legacy SQLite file as it is (the tracked fixtures are old SQLite files, and the
+app drops a migrated file's history on open), and refuses any path inside
+`e2e/fixtures/` so it can only ever touch a temp copy.
 
 | Env var | Effect |
 |---|---|
@@ -579,14 +577,17 @@ closures, no zero datums and a non-null surveyor on all 32 lines; naharon has
 all three plus 13 null-surveyor lines, and half the bugs below are only
 reachable there.
 
-Three oracles run, not one. The **roundtrip** comparison above; an **absolute
+Two oracles run, not one. The **roundtrip** comparison above, and an **absolute
 invariant** suite (`checkProjectInvariants`) run in-page on every observed state,
 because the roundtrip only sees drift BETWEEN states and a command that corrupts
 the project with an undo that faithfully restores the corruption matches at every
-depth; and an **integrity delta**, which records
-`check_project_integrity`'s own verdict per depth and asserts every history move
-restores it. The invariant suite deliberately does not re-check what the integrity
-checker owns - the split, and why, is in `fuzzOracleCore.ts`.
+depth. The invariant suite deliberately does not re-check what the app's own
+`Project::validate` owns - the split, and why, is in `fuzzOracleCore.ts`. A third,
+the **integrity delta** (`check_project_integrity`'s verdict per depth), is
+retired with that command: the app validates every edit, import and
+file-decoded history step itself and rolls back, with an error log the sweeps
+report, whatever would break the survey, so the verdict was empty at every
+depth (`undoRedoFuzz.ts` has the reasoning).
 
 About 10% of history moves are taken as a MULTI-step `undoTo`/`redoTo` jump - the
 history dropdown's path - verified against the same snapshots single steps
@@ -856,8 +857,9 @@ store actions.
 An EPISODE opens a fresh fixture and runs a few FLOWS with no reload between
 them; a FLOW is one input file from an entry point to whatever ends it.
 Per-step oracles cover the screen table, the error boundary, the project
-invariants, unexpected error dialogs and wedges, plus an integrity check after
-any step that pushed an undo entry. Per-flow oracles are in
+invariants, unexpected error dialogs and wedges (an import the app's own
+validation rolls back logs an error, which the IPC-contract log read reports).
+Per-flow oracles are in
 `e2e/agent/lib/importFlowOracles.ts`: the undo roundtrip, dialog/placement/context
 residue, the receipt's numbers against the project's delta, the receipt's own
 rendering, and leftover staging files.
@@ -1255,8 +1257,7 @@ consumed, which is what resolves it there.)
   even if the process survived), React error-boundary probe, new error/warn ring
   lines since an internal cursor. A `dropped`/`ring-overflow` warning means the
   500-entry ring rotated past the cursor.
-- **Full sweep** (`check_problems`): cheap sweep plus `check_project_integrity`
-  (`save_blocked` = fatal, non-empty messages = error), leftover write-staging
+- **Full sweep** (`check_problems`): cheap sweep plus leftover write-staging
   files (`*.stalx.tmp`, `*.download.tmp`, `*.vacuum.tmp`) beside
   `projectStore.projectPath`, `get_memory_stats` vs a session baseline
   (total RSS > baseline*1.5 + 300MB = warning, with per-process breakdown), and

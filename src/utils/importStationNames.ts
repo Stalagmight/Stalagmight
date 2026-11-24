@@ -8,7 +8,7 @@
  * rules (`fill_line_station_names`: End, Mid and Prepend), seeds a line with
  * no names at all from the station indexes, and makes every name unique in its
  * line (`settle_line_station_names`). This is a port of those rules from
- * `src-tauri/crates/models/src/project/station_naming.rs`, so the wizard shows
+ * `src-tauri/crates/models/src/station_naming.rs`, so the wizard shows
  * exactly the name the import gives; keep the two in step.
  */
 import type { EditableShot } from '../components/common/editableShot';
@@ -232,25 +232,25 @@ export function dmpFileStationLabel(index: number, lineName: string | null | und
 
 /**
  * `Main Line / 17`: station `index` at the far end of a DMP suggestion - a
- * station of an existing project line, named by the project, or of another
+ * station of an existing project line, by the project's plain label (which
+ * says whose station a dotted slot shows: `Side / 12 (Main)`), or of another
  * incoming line, in that line's file numbering. An incoming line goes by the
  * name the user gave it in the wizard (`wizardLineName`, by import index),
  * the file's until renamed.
  */
 export function suggestionTargetStationLabel(
-  labels: Pick<IdentityLabels, 'stationName'>,
+  labels: Pick<IdentityLabels, 'station'>,
   suggestion: Pick<CrossLineSuggestion, 'targetType' | 'existingLineId' | 'existingLineName'> &
     Partial<Pick<CrossLineSuggestion, 'targetImportIndex'>>,
   index: number,
   wizardLineName?: (importIndex: number) => string | undefined,
 ): string {
-  const name =
-    suggestion.targetType === 'existing' && suggestion.existingLineId != null
-      ? labels.stationName({ line_id: suggestion.existingLineId, station_index: index })
-      : dmpFileStationName(index);
+  if (suggestion.targetType === 'existing' && suggestion.existingLineId != null) {
+    return labels.station({ line_id: suggestion.existingLineId, station_index: index }, true);
+  }
   const lineName =
     suggestion.targetType === 'importing' && suggestion.targetImportIndex != null
       ? (wizardLineName?.(suggestion.targetImportIndex) ?? suggestion.existingLineName)
       : suggestion.existingLineName;
-  return formatStationLabel(name, lineDisplayName(lineName));
+  return formatStationLabel(dmpFileStationName(index), lineDisplayName(lineName));
 }

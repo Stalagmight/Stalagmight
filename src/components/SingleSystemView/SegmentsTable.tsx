@@ -115,7 +115,7 @@ export function SegmentsTable() {
         boundaryLabelAt: (k) => boundaryLabels[k] ?? '',
         boundaryTitleAt: (k) => {
           const ref = boundaryRefs[k] ?? null;
-          return ref ? identity.station(ref, true) : undefined;
+          return ref ? identity.planStation(ref) : undefined;
         },
         parksAfter: (i) => sameStation(dropRef, boundaryRefs[i + 1] ?? null),
         onToggleScooter: (i, next) => applyEdits([{ row: i, colKey: SEG_COL.scooter, value: next }]),

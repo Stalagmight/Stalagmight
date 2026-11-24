@@ -6,6 +6,10 @@
  * The station names differ from their indices on purpose (station i of Main
  * Line is `M<i>`, of Side is `S<i>`), so a label built from the handles can
  * never pass for one built from the names.
+ *
+ * A sentence draws each name as a prose pill (RS-PROSE): `said` checks the
+ * pills' kinds and reads the sentence as a screen reader does, which is the
+ * plain sentence word for word. Dialog titles stay plain text.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -17,6 +21,7 @@ vi.mock('../../../utils/ipc', async (importOriginal) => ({
 }));
 
 import '../../../i18n';
+import { invokeIpc } from '../../../utils/ipc';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import DrawShotDialog from '../DrawShotDialog';
@@ -27,6 +32,8 @@ import DeleteShotChoiceDialog from '../DeleteShotChoiceDialog';
 import SwapCommentsDialog from '../SwapCommentsDialog';
 import ReverseLineDialog from '../ReverseLineDialog';
 import BulkDeleteDialog from '../BulkDeleteDialog';
+import { said as spoken } from './proseSentence';
+import { accessibleText } from '../../../test/accessibleText';
 
 const MAIN = 3;
 const SIDE = 8;
@@ -78,6 +85,15 @@ beforeEach(() => {
 const open = (dialogData: Record<string, unknown>) =>
   useUIStore.setState({ dialogData } as never);
 
+/** The pill kinds in the element `testId`, and its text as a screen reader reads it. */
+const said = (testId: string) => {
+  const el = screen.getByTestId(testId);
+  return {
+    pills: [...el.querySelectorAll('.sh-ppill')].map((pill) => pill.getAttribute('data-prose-kind')),
+    text: accessibleText(el).replace(/\s+/g, ' ').trim(),
+  };
+};
+
 /** No positional `3:1` handle, `Line 3` id fallback or `#2` shot number. */
 const expectNoHandles = () => expect(document.body.textContent).not.toMatch(/\b\d+:\d+\b|Line \d|Shot ID/);
 
@@ -85,7 +101,7 @@ describe('dialog identity labels', () => {
   it('Draw Shot names the station it starts from', () => {
     open({ fromStation: { line_id: MAIN, station_index: 2 }, appendMode: true });
     render(<DrawShotDialog />);
-    expect(screen.getAllByText(/Main Line \/ M2/).length).toBeGreaterThan(0);
+    expect(document.body.textContent).toContain('Main Line: M2');
     expect(document.body.textContent).toContain('Add Shot After Station M2');
     expectNoHandles();
   });
@@ -93,7 +109,7 @@ describe('dialog identity labels', () => {
   it('Edit Shot names the shot by its line and stations', () => {
     open({ lineId: MAIN, shotId: 31 });
     render(<EditShotDialog />);
-    expect(screen.getByTestId('edit-shot-identity')).toHaveTextContent('Main Line: M1 → M2');
+    expect(said('edit-shot-identity')).toEqual({ pills: ['shot'], text: 'Main Line: M1 → M2' });
     expectNoHandles();
   });
 
@@ -103,24 +119,49 @@ describe('dialog identity labels', () => {
       closures: [{ closureId: 4n, stationRef: { line_id: SIDE, station_index: 2 } }],
     });
     render(<RemoveClosureDialog />);
-    expect(screen.getByText('Side / S2')).toBeInTheDocument();
+    expect(document.body.textContent).toContain('Side: S2');
     expectNoHandles();
   });
 
-  it('Unmerge names each merged station by line and name', () => {
+  it('Detach names the station and each line through it', async () => {
+    // A two-line junction lists its lines once the previews have answered
+    // (here they fail, so the choice cannot be ruled out, N-2).
+    vi.mocked(invokeIpc).mockRejectedValueOnce(new Error('No project open')).mockRejectedValueOnce(new Error('No project open'));
     open({
       stationRef: { line_id: MAIN, station_index: 0 },
       mergedStations: [{ line_id: SIDE, station_index: 1 }],
     });
     render(<UnmergeStationsDialog />);
-    expect(screen.getByText('Side / S1')).toBeInTheDocument();
+    expect(await screen.findByText('Main Line (the line you clicked)')).toBeInTheDocument();
+    expect(screen.getByTestId('unmerge-stations-lead')).toHaveTextContent('M0 is where 2 lines meet');
+    expect(screen.getByText('Side')).toBeInTheDocument();
+    expectNoHandles();
+  });
+
+  it('Detach with no choice to offer names the line that comes off and the one that keeps the station', async () => {
+    const preview = (kept: boolean) => ({ name: 'S1', station_id: 9, restored: true, kept, lines: [] });
+    vi.mocked(invokeIpc)
+      .mockImplementationOnce(async () => preview(true))
+      .mockImplementationOnce(async () => preview(false));
+    open({
+      stationRef: { line_id: MAIN, station_index: 0 },
+      mergedStations: [{ line_id: SIDE, station_index: 1 }],
+    });
+    render(<UnmergeStationsDialog />);
+    // The sentence draws its names as prose pills; it reads as it was written.
+    expect(spoken(await screen.findByTestId('unmerge-stations-naming'))).toBe(
+      'Side comes off: it gets back S1 (Station ID 9); Main Line keeps station M0.',
+    );
     expectNoHandles();
   });
 
   it('Delete Shot names the shot it deletes', () => {
     open({ lineId: MAIN, shotId: 31, lineName: 'Main Line' });
     render(<DeleteShotChoiceDialog />);
-    expect(document.body.textContent).toContain('Shot Main Line: M1 → M2 is in the middle of the line.');
+    expect(said('delete-shot-choice-lead')).toEqual({
+      pills: ['shot'],
+      text: 'Shot Main Line: M1 → M2 is in the middle of the line. Choose whether to split the line or shift geometry.',
+    });
     expectNoHandles();
   });
 
@@ -136,7 +177,10 @@ describe('dialog identity labels', () => {
       endStationIndex: 2,
     });
     render(<BulkDeleteDialog />);
-    expect(document.body.textContent).toContain('Delete 2 shots (stations M0 to M2 in Main Line).');
+    expect(said('bulk-delete-summary')).toEqual({
+      pills: ['station', 'station', 'line'],
+      text: 'Delete 2 shots (stations M0 to M2 in Main Line).',
+    });
     expectNoHandles();
   });
 
@@ -146,15 +190,21 @@ describe('dialog identity labels', () => {
       target: { type: 'shot', lineId: MAIN, shotId: 32, comment: 'Silt' },
     });
     render(<SwapCommentsDialog />);
-    expect(document.body.textContent).toContain('Comment being moved, from station Side / S1:');
-    expect(document.body.textContent).toContain('The shot Main Line: M2 → M3 already has a comment:');
+    expect(said('swap-comments-source')).toEqual({ pills: ['station'], text: 'Comment being moved, from station Side / S1:' });
+    expect(said('swap-comments-target')).toEqual({
+      pills: ['shot'],
+      text: 'The shot Main Line: M2 → M3 already has a comment:',
+    });
     expectNoHandles();
   });
 
   it('Reverse names the line and where it will run, by station names', () => {
     open({ lineIds: [SIDE] });
     render(<ReverseLineDialog />);
-    expect(screen.getByTestId('reverse-line-list')).toHaveTextContent('Side (will run from S2 to S0)');
+    expect(said('reverse-line-list')).toEqual({
+      pills: ['line', 'station', 'station'],
+      text: 'Side (will run from S2 to S0)',
+    });
     expectNoHandles();
   });
 });

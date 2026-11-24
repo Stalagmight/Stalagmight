@@ -15,7 +15,6 @@ use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryIt
 use stalagmight_lib::commands::line::{SegmentGeometry, SegmentLineGeometry};
 use stalagmight_lib::commands::memory::{MemoryStats, ProcessMemory};
 use stalagmight_lib::commands::mnemo::{MnemoError, MnemoPort, MnemoPullProgress, MnemoPullResult};
-use stalagmight_lib::commands::project::ProjectState;
 use stalagmight_lib::commands::survey_geometry::{
     GeometryShot, SurveyGeometry, SurveyGeometryError,
 };
@@ -31,15 +30,16 @@ use stalagmight_lib::config::{
     UnitsConfig, UpdateTrack, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
-    CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
-    LockReleaseOutcome, ReversedLine, ValidationWarning, WarningSeverity,
+    CommandResult, CommentHolder, ImportReceipt, LockReleaseOutcome, ReversedLine,
+    ValidationWarning, WarningSeverity,
 };
 use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
     SpeleoManagedFile,
 };
 use stalagmight_lib::core::state::{
-    SpeleoCacheOwnership, SpeleoCachedProject, SpeleoPurgeReport, VirtualShotMode,
+    ConversionFile, ConversionNoticeView, ConversionSource, SpeleoCacheOwnership,
+    SpeleoCachedProject, SpeleoPurgeReport, VirtualShotMode,
 };
 use stalagmight_lib::export::color_scale::{
     ExportColorScale, ExportLevels, ExportValueKind, ValueHistogram,
@@ -50,23 +50,33 @@ use stalagmight_lib::models::placement_suggest::{
     CrossLineSuggestion, ImportLineForSuggestion, MatchDirection, OrphanPlacementSuggestion,
     PlacementSuggestion, SuggestionConfidence, TargetType,
 };
+use stalagmight_lib::models::survey::wire::{LineWire, ProjectStateWire, ProjectWire};
 use stalagmight_lib::models::{
     AdjustmentFailureReport, AdjustmentReport, AlongLineResult, AzimuthReference, ClosurePair,
-    ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, CombineCandidate, CombineJoinEnds,
+    ClosurePreview, ClosureRef, ClosureStrategy, CombineCandidate, CombineJoinEnds,
     CombineJoinKind, CombineJoinedMove, CombineLineRenames, CombineLinesOptions, CombinePick,
     CombinePlan, CombineRemovedClosure, CombineRemovedKind, CombineRenameReason,
     CombineReplacedClosure, CombineReplacedKind, CombineStationRename, CombineStationRenames,
     ConnectivityResult, Coordinates, CorrectionSource, CreditEdit, CreditTargets, CreditedPerson,
-    CylRole, Cylinder, DatumGap, DatumRole, DeleteShotImpact, DeleteShotRangeImpact, DistanceField,
-    DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, ExistingShotUpdate, FarGpsFix, FrozenShotRef,
-    GasReachField, GpsBounds, GpsCoordinates, ImportLineConfig, ImportPlacement, KeptMovesReason,
-    Line, LineCreditSummary, LineData, LineEnd, LineRelationships, LineStats, LineUpdates,
-    LoopClosureWire, MarkedPoint, MergeDatumShift, NorthReference, PathShot, Person, PlanAnchorSet,
-    PlanMode, PlanSegment, Project, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind,
-    RouteLeg, RouteProfilePoint, RulerEndpoint, Section, Shot, ShotData, ShotKind, ShotUpdates,
-    SkippedClosure, SpeleoLink, SplitAt, SplitLineOptions, SplitPreview, SplitSide, Station,
-    StationMergeWire, StationPair, StationRef, SurveyCredit, SurveyDirection, TankMaterial, Team,
-    TornTie, TornTieKind, TornTieReason, UnrecognisedShotKind, ZeroDatumPreview, ZeroDatumWire,
+    CylRole, Cylinder, DatumGap, DatumRole, DeleteShotImpact, DeleteShotRangeImpact,
+    DetachLinePreview, DetachLineResult, DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot,
+    Diver, ExistingShotUpdate, FarGpsFix, FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates,
+    ImportLineConfig, ImportPlacement, KeptMovesReason, LineCreditSummary, LineData, LineEnd,
+    LineRelationships, LineStats, LineUpdates, LoopClosureWire, MarkedPoint, MergeDatumShift,
+    MergeDepthReading, MergeDepths, MergeJunction, MergePreview, NorthReference, PathShot, Person,
+    PlanAnchorSet, PlanMode, PlanSegment, ProjectMetadata, ProjectStats, ProjectWarning,
+    RangeDeleteKind, RouteLeg, RouteProfilePoint, RulerEndpoint, Section, Shot, ShotData, ShotKind,
+    ShotUpdates, SkippedClosure, SpeleoLink, SplitAt, SplitLineOptions, SplitPreview, SplitSide,
+    Station, StationMergeWire, StationPair, StationRef, SurveyCredit, SurveyDirection,
+    TankMaterial, Team, TornTie, TornTieKind, TornTieReason, UnrecognisedShotKind,
+    ZeroDatumPreview, ZeroDatumWire,
+};
+use stalagmight_lib::models::{
+    ArchivedStationWire, ClosureArchive, ClosureEndWire, ClosureKeepPreview, IdentityNotice,
+    KeepCandidate, KeepRefusalReason, LetteredStationWire, LoopClosureNaming, MergeKeepPreview,
+    NameCollisionWire, NameRepeatWire, ProseLine, ProsePart, ProseShot, ProseShotEnd, ProseStation,
+    RemoveClosureNaming, RenameSuggestion, RestoredIdentityWire, ShownElsewhereWire, ShownSlot,
+    StationIdentity, StationOwner, StationRename,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -79,7 +89,9 @@ use stalagmight_lib::parsers::tml::{
     TmlShotType, TmlUnit,
 };
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
-use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
+use stalagmight_lib::persistence::{
+    BackupInfo, BackupKind, RawTableData, RepairResult, SalvagedData,
+};
 use stalagmight_lib::speleodb::{
     DoneResult, EndpointRefusal, Permission, PushResult, RemoteState, SpeleoAccessVerification,
     SpeleoCollaborator, SpeleoDbAction, SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus,
@@ -97,6 +109,17 @@ fn export<T: TS + 'static>(out_dir: &Path) {
         .expect("TS type must have an export path");
     let out_path = out_dir.join(export_to);
     T::export_to(&out_path).expect("Failed to export TS type");
+    flatten_import_paths(&out_path);
+}
+
+/// Export a station-graph wire type (`models::survey::wire`), which carries
+/// the legacy TS name (`#[ts(rename)]`) but no `#[ts(export)]` path (so no
+/// test writes it into `src-tauri/bindings/`): rendered with
+/// `export_to_string` into `<name>.ts`, then flattened like every other file.
+fn export_wire<T: TS + 'static>(out_dir: &Path, name: &str) {
+    let out_path = out_dir.join(format!("{name}.ts"));
+    let text = T::export_to_string().expect("Failed to render TS type");
+    fs::write(&out_path, text).expect("Failed to write TS type");
     flatten_import_paths(&out_path);
 }
 
@@ -150,6 +173,8 @@ fn main() {
     fs::create_dir_all(&out_dir).expect("Failed to create ipc types directory");
     // Remove generated files whose source types were retired with native transfer.
     for name in [
+        // U1's per-line junction aliases, replaced by records (RS 3).
+        "StationAlias",
         "SpeleoProjectMetadataPatch",
         "SpeleoProjectMetadata",
         "SpeleoUnwindTarget",
@@ -169,6 +194,13 @@ fn main() {
         "SpeleoUserSuggestion",
         // Retired with the dead Settings > Display "Depth Gradient" section (#380).
         "DepthGradientConfig",
+        // Retired with the integrity banner and its IPC, which the station
+        // graph cannot reach (every edit and load validates).
+        "IntegrityCheckResult",
+        "IntegrityRepairResult",
+        // The delete previews' re-anchored closures, which the station graph
+        // never makes.
+        "ClosureUpdate",
     ] {
         for directory in [
             &out_dir,
@@ -184,11 +216,12 @@ fn main() {
     // Core command/result types
     export::<CommandResult>(&out_dir);
     export::<LockReleaseOutcome>(&out_dir);
+    export::<ConversionFile>(&out_dir);
+    export::<ConversionNoticeView>(&out_dir);
+    export::<ConversionSource>(&out_dir);
     export::<ReversedLine>(&out_dir);
     export::<ImportReceipt>(&out_dir);
     export::<CommentHolder>(&out_dir);
-    export::<IntegrityRepairResult>(&out_dir);
-    export::<IntegrityCheckResult>(&out_dir);
     export::<ValidationWarning>(&out_dir);
     export::<WarningSeverity>(&out_dir);
 
@@ -203,7 +236,7 @@ fn main() {
     export::<stalagmight_lib::models::NewerSchema>(&out_dir);
 
     // Project/model types
-    export::<Project>(&out_dir);
+    export_wire::<ProjectWire>(&out_dir, "Project");
     export::<ProjectMetadata>(&out_dir);
     // [Track B] SpeleoDB hand-off link (#189)
     export::<SpeleoLink>(&out_dir);
@@ -233,7 +266,7 @@ fn main() {
     export::<AzimuthReference>(&out_dir);
     export::<CorrectionSource>(&out_dir);
     export::<NorthReference>(&out_dir);
-    export::<Line>(&out_dir);
+    export_wire::<LineWire>(&out_dir, "Line");
     export::<Section>(&out_dir);
     // Per-shot survey credit (surveyors, explorers, date as people)
     export::<Person>(&out_dir);
@@ -280,6 +313,33 @@ fn main() {
     export::<VirtualShotMode>(&out_dir);
     export::<ShotUpdates>(&out_dir);
     export::<Station>(&out_dir);
+    // Kept and archived stations (plan 2026-11-23, RS 6 and 7).
+    export::<ArchivedStationWire>(&out_dir);
+    export::<ShownSlot>(&out_dir);
+    export::<StationIdentity>(&out_dir);
+    export::<ClosureEndWire>(&out_dir);
+    export::<ClosureArchive>(&out_dir);
+    export::<StationRename>(&out_dir);
+    export::<RenameSuggestion>(&out_dir);
+    export::<NameCollisionWire>(&out_dir);
+    export::<KeepCandidate>(&out_dir);
+    export::<MergeKeepPreview>(&out_dir);
+    export::<NameRepeatWire>(&out_dir);
+    export::<ClosureKeepPreview>(&out_dir);
+    export::<KeepRefusalReason>(&out_dir);
+    export::<LoopClosureNaming>(&out_dir);
+    export::<RemoveClosureNaming>(&out_dir);
+    export::<StationOwner>(&out_dir);
+    export::<LetteredStationWire>(&out_dir);
+    export::<RestoredIdentityWire>(&out_dir);
+    export::<IdentityNotice>(&out_dir);
+    // Prose that names stations, shots and lines (RS-PROSE).
+    export::<ProsePart>(&out_dir);
+    export::<ProseStation>(&out_dir);
+    export::<ProseShot>(&out_dir);
+    export::<ProseShotEnd>(&out_dir);
+    export::<ProseLine>(&out_dir);
+    export::<ShownElsewhereWire>(&out_dir);
     export::<StationRef>(&out_dir);
     export::<StationMergeWire>(&out_dir);
     export::<ZeroDatumWire>(&out_dir);
@@ -287,6 +347,10 @@ fn main() {
     export::<DatumGap>(&out_dir);
     export::<ZeroDatumPreview>(&out_dir);
     export::<MergeDatumShift>(&out_dir);
+    export::<MergePreview>(&out_dir);
+    export::<MergeDepths>(&out_dir);
+    export::<MergeDepthReading>(&out_dir);
+    export::<MergeJunction>(&out_dir);
     export::<LoopClosureWire>(&out_dir);
     export::<ClosureRef>(&out_dir);
     export::<ClosureStrategy>(&out_dir);
@@ -296,10 +360,11 @@ fn main() {
     export::<LineRelationships>(&out_dir);
     export::<StationPair>(&out_dir);
     export::<ClosurePair>(&out_dir);
-    export::<ClosureUpdate>(&out_dir);
     export::<DeleteShotImpact>(&out_dir);
     export::<RangeDeleteKind>(&out_dir);
     export::<DeleteShotRangeImpact>(&out_dir);
+    export::<DetachLinePreview>(&out_dir);
+    export::<DetachLineResult>(&out_dir);
     export::<ConnectivityResult>(&out_dir);
     export::<ClosurePreview>(&out_dir);
     export::<ProjectWarning>(&out_dir);
@@ -308,7 +373,7 @@ fn main() {
     export::<AdjustmentFailureReport>(&out_dir);
     export::<AdjustmentReport>(&out_dir);
     export::<FrozenShotRef>(&out_dir);
-    export::<ProjectState>(&out_dir);
+    export_wire::<ProjectStateWire>(&out_dir, "ProjectState");
 
     // Placement suggestions
     export::<MatchDirection>(&out_dir);
@@ -396,6 +461,7 @@ fn main() {
 
     // Recovery (SPEC 14.4)
     export::<BackupInfo>(&out_dir);
+    export::<BackupKind>(&out_dir);
     export::<RepairResult>(&out_dir);
     export::<SalvagedData>(&out_dir);
 
@@ -518,11 +584,12 @@ fn main() {
     let export_list = [
         "CommandResult",
         "LockReleaseOutcome",
+        "ConversionFile",
+        "ConversionNoticeView",
+        "ConversionSource",
         "ReversedLine",
         "ImportReceipt",
         "CommentHolder",
-        "IntegrityRepairResult",
-        "IntegrityCheckResult",
         "ValidationWarning",
         "WarningSeverity",
         "DisplaySettings",
@@ -603,6 +670,31 @@ fn main() {
         "KeptMovesReason",
         "LineEnd",
         "Station",
+        "ArchivedStation",
+        "ShownSlot",
+        "StationIdentity",
+        "ClosureEnd",
+        "ClosureArchive",
+        "StationRename",
+        "RenameSuggestion",
+        "NameCollision",
+        "KeepCandidate",
+        "MergeKeepPreview",
+        "NameRepeat",
+        "ClosureKeepPreview",
+        "KeepRefusalReason",
+        "LoopClosureNaming",
+        "RemoveClosureNaming",
+        "StationOwner",
+        "LetteredStation",
+        "RestoredIdentity",
+        "IdentityNotice",
+        "ProsePart",
+        "ProseStation",
+        "ProseShot",
+        "ProseShotEnd",
+        "ProseLine",
+        "ShownElsewhere",
         "StationRef",
         "StationMerge",
         "ZeroDatum",
@@ -610,6 +702,10 @@ fn main() {
         "DatumGap",
         "ZeroDatumPreview",
         "MergeDatumShift",
+        "MergePreview",
+        "MergeDepths",
+        "MergeDepthReading",
+        "MergeJunction",
         "LoopClosure",
         "ClosureRef",
         "ClosureStrategy",
@@ -619,10 +715,11 @@ fn main() {
         "LineRelationships",
         "StationPair",
         "ClosurePair",
-        "ClosureUpdate",
         "DeleteShotImpact",
         "RangeDeleteKind",
         "DeleteShotRangeImpact",
+        "DetachLinePreview",
+        "DetachLineResult",
         "ConnectivityResult",
         "ClosurePreview",
         "ProjectWarning",
@@ -691,6 +788,7 @@ fn main() {
         "RingLogEntry",
         "LogsSince",
         "BackupInfo",
+        "BackupKind",
         "RepairResult",
         "SalvagedData",
         "RawTableData",

@@ -1,51 +1,212 @@
 /**
- * EntityBlob - the entity "pill" used for ids in the data table. Same style as
- * the detail-panel link pills (entity symbol + tinted background + dim
- * entity-colored border), but with just the id text (`LineID:ID`) - no
- * divider and no separate suffix.
+ * EntityBlob - a line pill that is not a link: the data table's row gutters
+ * and line picker, and the station, shot and line names in dialogs. Same look
+ * as the `DetailLink` pill (`LinePill.tsx`): the colour of its line in its
+ * leading dot, fill and border, an optional muted context, the main part
+ * and, for a station, its Station ID as a muted superscript; a station shown
+ * on a line it does not belong to has its home dot after its name.
  *
  * Renders the pill only when the highlighting level is "full"; otherwise it
- * renders its children as plain text, so callers can wrap an id unconditionally.
+ * renders `plain` (or its children) as plain text, so callers can wrap a name
+ * unconditionally.
  */
-import type { CSSProperties } from 'react';
+import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useUIStore } from '../../store/uiStore';
 import type { BlobEntity } from '../../theme/syntacticPalette';
-import { syntacticVarName, syntacticLevelAtLeast } from '../../theme/syntacticPalette';
-import { EntitySymbol } from './toolIcons';
+import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
+import type { StationRef } from '../../types/project';
+import { homeDotOn } from '../../theme/pillColors';
+import { endTitleOf, markOf, PillParts, pillStyle, shotToneOf, useResolvePill } from './LinePill';
+import type { ShotEndMarks } from './shotEndMarks';
 
 export interface EntityBlobProps {
-  /** Which geometry entity this represents (drives the color + symbol). */
+  /** Which entity this names (`station`, `shot`, `line`). */
   entity: BlobEntity;
-  /** The id text rendered in the pill. */
-  children: React.ReactNode;
+  /** The line the pill belongs to, whose colour it takes; null for a neutral pill. */
+  lineId: number | null;
+  /** The main part: a station name, a shot, a line name. */
+  children: ReactNode;
+  /** The muted, smaller context before the main part (a line name), shown with a colon. */
+  context?: string | null | undefined;
+  /** A station's Station ID, as a muted superscript at the end. */
+  stationId?: number | null | undefined;
+  /** The line a station pill's station belongs to, when not `lineId`: the
+   *  pill takes its colour and names it as the context (RS-OWNERSHIP, see
+   *  `LinePill.tsx`). */
+  homeLineId?: number | null | undefined;
+  /** A loop end's station pill (a loop closure shows this station as its other end, RS 6): said in its tooltip and words. */
+  loopEnd?: boolean | undefined;
+  /** A shot pill's two ends, each with an optional home line and loop end
+   *  (its tooltip and words) and owner line (its half's colour); replaces
+   *  `children` in the pill. */
+  shotEnds?: ShotEndMarks | null | undefined;
+  /** What the lower highlighting levels show; defaults to `children`. */
+  plain?: ReactNode | undefined;
+  /** After everything, inside the pill (the data table's picker chevron). */
+  trailing?: ReactNode | undefined;
   /** Optional tooltip. */
-  title?: string;
+  title?: string | undefined;
+  /** Screen-reader words after a station's name, in place of the owner
+   *  words the pill works out itself (`StationBlob`'s `bySlot`). */
+  words?: string | null | undefined;
+  /** The line a station pill's shown station belongs to when the pill keeps
+   *  its slot's colour (`StationBlob`'s `bySlot`): the home dot after its
+   *  name takes that line's colour, ringed against this pill's fill. */
+  homeDotLineId?: number | null | undefined;
   /** Extra classes for the pill. */
-  className?: string;
-  testId?: string;
+  className?: string | undefined;
+  testId?: string | undefined;
 }
 
-export function EntityBlob({ entity, children, title, className = '', testId }: EntityBlobProps) {
+export function EntityBlob({
+  entity,
+  lineId,
+  children,
+  context,
+  stationId,
+  homeLineId,
+  loopEnd = false,
+  shotEnds,
+  plain,
+  trailing,
+  title,
+  words,
+  homeDotLineId,
+  className = '',
+  testId,
+}: EntityBlobProps) {
+  const { t } = useTranslation();
   const level = useUIStore((s) => s.syntacticLevel);
+  const resolve = useResolvePill();
+  // A station of another line takes that line's colour and name (RS-OWNERSHIP).
+  const owner = entity === 'station' && homeLineId !== null && homeLineId !== undefined && homeLineId !== lineId ? homeLineId : null;
+  const pill = resolve(owner ?? lineId);
+  const ownerName = owner !== null ? (pill.lineNameOf?.(owner) ?? null) : null;
 
   // Only the Full level paints pills; otherwise keep the plain text rendering.
   if (!syntacticLevelAtLeast(level, 'full')) {
-    return <>{children}</>;
+    return (
+      <>
+        {plain ?? children}
+        {trailing}
+      </>
+    );
   }
 
+  const tone =
+    entity === 'shot' && shotEnds ? shotToneOf(resolve, lineId, shotEnds.fromOwnerLineId, shotEnds.toOwnerLineId, 'link') : null;
+  // A station shown on a line it does not belong to has its home dot
+  // (RS-LEADDOT): the pill's own dot on its owner's pill, or the station's
+  // line's colour on a slot's pill (`homeDotLineId`).
+  const slotHome =
+    entity === 'station' && owner === null && homeDotLineId !== null && homeDotLineId !== undefined && homeDotLineId !== lineId
+      ? homeDotLineId
+      : null;
+  const homeDot = slotHome === null ? null : homeDotOn(pill.colorOf(slotHome), pill.colors, pill.theme);
   return (
     <span
-      className={`sh-pill inline-flex items-center gap-1 align-middle rounded-full px-2 py-0.5 text-xs leading-none text-text-primary tabular-nums ${className}`}
-      style={{ '--o': `var(${syntacticVarName(entity)})` } as CSSProperties}
+      className={`sh-lpill${tone ? ' sh-lpill--split' : ''} ${className}`}
+      style={tone ? undefined : pillStyle(pill.colors, homeDot)}
       data-entity={entity}
+      data-owner-line={owner ?? undefined}
       data-testid={testId}
-      title={title}
+      title={title ?? endTitleOf(ownerName !== null ? { line: ownerName } : null, entity === 'station' && loopEnd)}
     >
-      <span className="flex shrink-0 items-center">
-        <EntitySymbol entity={entity} size={14} />
-      </span>
-      {children}
+      <PillParts
+        testId={testId}
+        context={owner !== null && context ? (ownerName ?? context) : context}
+        main={children}
+        shotEnds={
+          shotEnds
+            ? {
+                from: shotEnds.from,
+                to: shotEnds.to,
+                fromMark: markOf(pill, shotEnds.fromHomeLineId),
+                toMark: markOf(pill, shotEnds.toHomeLineId),
+                fromLoopEnd: shotEnds.fromLoopEnd,
+                toLoopEnd: shotEnds.toLoopEnd,
+              }
+            : null
+        }
+        tone={tone}
+        loopEnd={entity === 'station' && loopEnd}
+        loopEndLabel={t('identity.loopEnd')}
+        stationId={entity === 'station' ? stationId : null}
+        stationIdLabel={t('identity.stationId')}
+        homeDot={owner !== null || slotHome !== null}
+        ownerWords={
+          words !== undefined
+            ? words
+            : ownerName === null
+              ? null
+              : context
+                ? t('identity.onLineLabel', { line: pill.lineNameOf?.(lineId) ?? '' })
+                : t('identity.homeMarkLabel', { line: ownerName })
+        }
+        trailing={trailing}
+      />
     </span>
+  );
+}
+
+/**
+ * A station as a pill: its bare name, the Station ID it shows, its line's
+ * colour and, with `withLine`, its line as the context (`Main Line: 17`). A
+ * foreign slot, or a loop end whose kept end lives on another line, takes
+ * the colour and name of the line its shown station belongs to
+ * (RS-OWNERSHIP), its dot that line's colour, unless `homeLineId` says
+ * otherwise; a loop end says so in its tooltip and words (RS 6, no mark since
+ * RS-NODOTS). Either has the home dot after its name (RS-LEADDOT). With
+ * `bySlot` it is the slot's pill instead: its own line's colour (its leading
+ * dot too) and name, for a list of slots whose point is which lines they are
+ * on (a delete's "no longer shared" pairs, as the "Also on" rows name a
+ * line); its tooltip, its screen-reader words and its home dot, in the
+ * colour of the line it belongs to, still say whose station it shows. Below
+ * Full it is
+ * the plain label (`17`, `Main Line / 17`; `12 (Main)`, `Side / 12 (Main)`
+ * for a foreign slot; `3 (loop end on Side)` for a loop end).
+ */
+export function StationBlob({
+  station,
+  withLine = false,
+  homeLineId,
+  bySlot = false,
+  className,
+  testId,
+  title,
+}: {
+  station: StationRef;
+  withLine?: boolean | undefined;
+  homeLineId?: number | null | undefined;
+  /** The slot's own line's colour and name (see above). */
+  bySlot?: boolean | undefined;
+  className?: string | undefined;
+  testId?: string | undefined;
+  title?: string | undefined;
+}) {
+  const labels = useIdentityLabels();
+  const { t } = useTranslation();
+  const owner = labels.ownerLine(station);
+  const ownerName = owner === null ? null : labels.lineName(owner);
+  return (
+    <EntityBlob
+      entity="station"
+      lineId={station.line_id}
+      context={withLine ? labels.lineName(station.line_id) : null}
+      stationId={labels.shownStationId(station)}
+      homeLineId={bySlot ? null : homeLineId === undefined ? owner : homeLineId}
+      loopEnd={labels.shown(station)?.loop_end === true}
+      plain={labels.station(station, withLine)}
+      className={className}
+      testId={testId}
+      title={title ?? (bySlot && ownerName !== null ? t('identity.homeMarkTitle', { line: ownerName }) : undefined)}
+      words={bySlot ? (ownerName === null ? null : t('identity.homeMarkLabel', { line: ownerName })) : undefined}
+      homeDotLineId={bySlot ? owner : undefined}
+    >
+      {labels.stationPill(station)}
+    </EntityBlob>
   );
 }
 

@@ -12,8 +12,9 @@ use std::time::{Duration, Instant};
 use ts_rs::TS;
 
 use crate::core::events::EventSink;
+use crate::models::NewerSchema;
 use crate::models::SectionId;
-use crate::persistence::{NewerSchema, RefusedSchemaObject};
+use crate::persistence::RefusedSchemaObject;
 
 // ============================================================================
 // LoadError
@@ -115,6 +116,25 @@ impl LoadError {
         Self::with_details("CORRUPT", message, path)
     }
 
+    /// The open was refused because this build cannot convert a 0.6.0 file
+    /// that is not damaged (`MigrateError::is_conversion_refusal`): `reason`
+    /// says what the file needs. Never `CORRUPT`, so the recovery dialog and
+    /// its Attempt Repair are not offered for a healthy file (review findings
+    /// D-migration-upgrade-9, J-docs-tests-truth-6). `path` rides in
+    /// `details`.
+    pub fn cannot_convert(reason: &str, path: &str) -> Self {
+        Self::with_details(
+            "CANNOT_CONVERT",
+            format!(
+                "This file needs converting from the Stalagmight 0.6.0 file format, and this \
+                 version cannot convert it: {}. The file was not changed, and Stalagmight 0.6.0 \
+                 still opens it.",
+                clamp_quoted_error(reason)
+            ),
+            path,
+        )
+    }
+
     /// The open was refused because the file's database schema holds something
     /// Stalagmight never creates (a view, trigger or virtual table, or an object
     /// named like a SQLite pragma), so it was changed by another program and
@@ -142,6 +162,25 @@ impl LoadError {
         let mut err = Self::with_details("NEWER_SCHEMA", newer.to_string(), path);
         err.newer_schema = Some(newer.clone());
         err
+    }
+
+    /// The open was refused because the file requires features this build
+    /// does not know, and read without them its survey does not hold
+    /// together (`stalx_v2::DecodeError::NewerFeatures`). The same
+    /// `NEWER_SCHEMA` code as [`Self::newer_schema`], so the frontend shows
+    /// its "saved by a newer Stalagmight" dialog and never the repair offer;
+    /// there are no format versions to name, so `newer_schema` is unset and
+    /// the dialog shows `message`. `path` rides in `details`.
+    pub fn newer_features(file: &str, features: &[String], path: &str) -> Self {
+        Self::with_details(
+            "NEWER_SCHEMA",
+            format!(
+                "\"{file}\" was saved by a newer version of Stalagmight: it uses features \
+                 this version does not know ({}). Update Stalagmight to open it.",
+                features.join(", ")
+            ),
+            path,
+        )
     }
 
     /// Error when the OS denied filesystem access to the file - e.g. macOS
@@ -191,11 +230,10 @@ pub const PATH_TOO_LONG_CODE: &str = "FS_PATH_TOO_LONG";
 /// list could not be read, so the save was refused rather than rebuilding the
 /// file without it (#517).
 ///
-/// It needs a marker of its own because the frontend's failure router
-/// (`surfaceSaveFailure`) sends any UNMARKED failure to Review & Repair
-/// whenever `integritySaveBlocked` is set - and Review & Repair cannot fix a
-/// broken `resolved_warnings` table, so on a project with both problems this
-/// refusal would never reach a surface at all.
+/// The message after the marker is a full sentence: the frontend strips the
+/// marker and shows the rest (`saveFailureMessage`, `autosaveFailureMessage`).
+/// (0.6.0's failure router also needed it to keep this refusal out of the
+/// integrity banner's Review & Repair, which is gone.)
 pub const IGNORES_UNREADABLE_CODE: &str = "IGNORES_UNREADABLE";
 
 /// How much of an underlying error may be quoted into a user-facing message.
@@ -239,9 +277,9 @@ pub(crate) fn over_legacy_path_limit(path: &Path) -> bool {
 /// as readily for a missing folder, a disconnected drive or an over-`MAX_PATH`
 /// path - which is how a 335-character save destination came to be answered
 /// with macOS folder-permission instructions (#429). A caller that sees it must
-/// corroborate it against the filesystem itself: [`read_access_denied`] on the
-/// read side, `classify_save_failure` (`core::state::project_io`) on the write
-/// side.
+/// corroborate it against the filesystem itself (`classify_save_failure` in
+/// `core::state::project_io`). Reads see no such message: a project file is
+/// read as bytes first, so the OS answers with a typed io error.
 ///
 /// Deliberately conservative on the string side: it must NOT classify a
 /// genuine corruption ("integrity check failed") as a permission problem,
@@ -295,18 +333,6 @@ pub(crate) fn is_path_not_found(err: &anyhow::Error) -> bool {
     false
 }
 
-/// The schema refusal inside an open error, if that is why the open failed.
-pub(crate) fn refused_schema(err: &anyhow::Error) -> Option<&RefusedSchemaObject> {
-    err.chain()
-        .find_map(|cause| cause.downcast_ref::<RefusedSchemaObject>())
-}
-
-/// The newer-schema refusal inside an open error, if that is why it failed.
-pub(crate) fn newer_schema(err: &anyhow::Error) -> Option<&NewerSchema> {
-    err.chain()
-        .find_map(|cause| cause.downcast_ref::<NewerSchema>())
-}
-
 /// True if any cause carries SQLite's errno-free `SQLITE_CANTOPEN` message -
 /// the ambiguous one that means "the OS would not give me this file" and
 /// nothing more. See [`is_permission_denied`] for why it needs corroborating.
@@ -317,17 +343,6 @@ pub(crate) fn mentions_unopenable_database(err: &anyhow::Error) -> bool {
             .to_ascii_lowercase()
             .contains("unable to open database file")
     })
-}
-
-/// Corroborate the ambiguous message on a READ: the file is there (the caller
-/// has already established that) but the OS refuses to hand it over. That is
-/// the macOS lost-folder-access case, where SQLite reports `SQLITE_CANTOPEN`
-/// with nothing else to go on.
-pub(crate) fn read_access_denied(path: &Path) -> bool {
-    matches!(
-        std::fs::File::open(path),
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied
-    )
 }
 
 /// The whole `anyhow` chain on one line, outermost cause first. What a failing
@@ -536,12 +551,12 @@ fn parse_hidden_sections(stored: Option<&String>) -> Vec<SectionId> {
 /// The `weight()` method on this enum is provided for convenience/reference.
 /// The authoritative weights used for progress calculation are in ProgressEmitter's
 /// phase_weights vec, which allows different weight distributions per flow type.
-#[derive(Clone, Copy, Debug, Serialize, PartialEq, TS)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
 pub enum LoadingPhase {
     // Project opening phases (8 total)
-    OpeningDatabase,
+    OpeningFile,
     LoadingProjectData,
     LoadingLines,
     ComputingStations,
@@ -550,7 +565,7 @@ pub enum LoadingPhase {
     LoadingSettings,
     Finalizing,
     // Project creation phases (3 total)
-    CreatingDatabase,
+    CreatingFile,
     InitializingProject,
     SavingSettings,
     // Export phases (4 total)
@@ -569,7 +584,7 @@ impl LoadingPhase {
     /// Human-readable label for the phase.
     pub fn label(&self) -> &'static str {
         match self {
-            Self::OpeningDatabase => "Opening database...",
+            Self::OpeningFile => "Opening the project file...",
             Self::LoadingProjectData => "Loading survey data...",
             Self::LoadingLines => "Loading lines...",
             Self::ComputingStations => "Calculating station positions...",
@@ -577,7 +592,7 @@ impl LoadingPhase {
             Self::ValidatingData => "Validating data...",
             Self::LoadingSettings => "Loading display settings...",
             Self::Finalizing => "Finalizing...",
-            Self::CreatingDatabase => "Creating database...",
+            Self::CreatingFile => "Creating the project file...",
             Self::InitializingProject => "Initializing project...",
             Self::SavingSettings => "Saving settings...",
             Self::ExportPreparing => "Preparing export...",
@@ -597,7 +612,7 @@ impl LoadingPhase {
     pub fn weight(&self) -> f32 {
         match self {
             // Open phases sum to 100
-            Self::OpeningDatabase => 5.0,
+            Self::OpeningFile => 5.0,
             Self::LoadingProjectData => 20.0,
             Self::LoadingLines => 15.0,
             Self::ComputingStations => 20.0,
@@ -606,7 +621,7 @@ impl LoadingPhase {
             Self::LoadingSettings => 5.0,
             Self::Finalizing => 10.0,
             // Create phases sum to 100
-            Self::CreatingDatabase => 40.0,
+            Self::CreatingFile => 40.0,
             Self::InitializingProject => 40.0,
             Self::SavingSettings => 20.0,
             // Export phases sum to 100
@@ -715,7 +730,7 @@ impl ProgressEmitter {
     /// Create a new emitter for project open operations (8 phases summing to 100%).
     pub fn new_for_open(sink: Arc<dyn EventSink>, cancelled: Arc<AtomicBool>) -> Self {
         let weights = vec![
-            (LoadingPhase::OpeningDatabase, 5.0),
+            (LoadingPhase::OpeningFile, 5.0),
             (LoadingPhase::LoadingProjectData, 20.0),
             (LoadingPhase::LoadingLines, 15.0),
             (LoadingPhase::ComputingStations, 20.0),
@@ -734,7 +749,7 @@ impl ProgressEmitter {
     /// Create a new emitter for project create operations (3 phases summing to 100%).
     pub fn new_for_create(sink: Arc<dyn EventSink>, cancelled: Arc<AtomicBool>) -> Self {
         let weights = vec![
-            (LoadingPhase::CreatingDatabase, 40.0),
+            (LoadingPhase::CreatingFile, 40.0),
             (LoadingPhase::InitializingProject, 40.0),
             (LoadingPhase::SavingSettings, 20.0),
         ];
@@ -930,27 +945,69 @@ impl ProgressEmitter {
 pub struct LoadProjectFullResult {
     /// Unique ID for this load operation (for filtering stale events)
     pub loading_id: u64,
-    /// The loaded project. Serialized in positional wire form (like
-    /// `ProjectState`) so cross-references reach the frontend as
-    /// `StationRef { line_id, station_index }`, not the internal `StationKey`
-    /// shape derived serde would emit.
-    #[serde(serialize_with = "crate::models::project::serialize_project_ipc")]
-    pub project: crate::models::Project,
-    /// Computed station coordinates
+    /// The loaded project in its wire form (`survey::wire::ProjectWire`, the
+    /// TS `Project`): slot `StationRef`s, derived merges, metrics and
+    /// alignment.
+    pub project: crate::models::survey::wire::ProjectWire,
+    /// Computed station coordinates (one per slot)
     pub stations: Vec<crate::models::Station>,
     /// Project statistics
     pub stats: crate::models::ProjectStats,
     /// Project warnings (validation results)
     pub warnings: Vec<crate::models::ProjectWarning>,
-    /// Display settings from the project database
+    /// Display settings from the project file
     pub display_settings: DisplaySettings,
-    /// Is this a SpeleoDB project (it carries a `speleo_link` row)? The SAME
+    /// Is this a SpeleoDB project (it carries a `speleodb` link)? The SAME
     /// value this load derived the backend edit gate from (a linked project opens
     /// read-only until Start Editing binds a lock claim, `speleodb_edit_gate`),
     /// handed to the frontend so its read-only gate resolves
-    /// synchronously with the load instead of waiting on a `speleodb_link_status`
-    /// round trip that arrives after the project has already rendered (#270).
+    /// synchronously with the load (#270).
     pub is_remote: bool,
+    /// What only the binary envelope carries (frozen shots, hand moves and
+    /// comments per slot); not on the JSON wire.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub envelope_extra: EnvelopeExtra,
+}
+
+/// The parts of [`crate::models::survey::wire::LoadEnvelopeInput`] the JSON
+/// result does not carry.
+#[derive(Debug, Clone, Default)]
+pub struct EnvelopeExtra {
+    pub frozen_shots: Vec<crate::models::FrozenShotRef>,
+    pub station_offsets: Vec<(crate::models::StationRef, (f64, f64, f64))>,
+    pub station_comments_map: Vec<(crate::models::StationRef, String)>,
+}
+
+impl LoadProjectFullResult {
+    /// The result of a load from its envelope input.
+    pub fn from_envelope(
+        loading_id: u64,
+        input: crate::models::survey::wire::LoadEnvelopeInput,
+        warnings: Vec<crate::models::ProjectWarning>,
+        display_settings: DisplaySettings,
+        is_remote: bool,
+    ) -> Self {
+        let crate::models::survey::wire::LoadEnvelopeInput {
+            state,
+            station_offsets,
+            station_comments_map,
+        } = input;
+        Self {
+            loading_id,
+            project: state.project,
+            stations: state.stations,
+            stats: state.stats,
+            warnings,
+            display_settings,
+            is_remote,
+            envelope_extra: EnvelopeExtra {
+                frozen_shots: state.frozen_shots,
+                station_offsets,
+                station_comments_map,
+            },
+        }
+    }
 }
 
 // ============================================================================
@@ -965,11 +1022,8 @@ pub struct LoadProjectFullResult {
 pub struct CreateProjectFullResult {
     /// Unique ID for this load operation (for filtering stale events)
     pub loading_id: u64,
-    /// The created project. Serialized in positional wire form (see
-    /// `LoadProjectFullResult`); harmless for a fresh project (no cross-refs yet),
-    /// but keeps every Project-bearing IPC payload consistent.
-    #[serde(serialize_with = "crate::models::project::serialize_project_ipc")]
-    pub project: crate::models::Project,
+    /// The created project in its wire form (see `LoadProjectFullResult`).
+    pub project: crate::models::survey::wire::ProjectWire,
     /// Display settings (defaults for new project)
     pub display_settings: DisplaySettings,
 }
@@ -979,7 +1033,7 @@ pub struct CreateProjectFullResult {
 // ============================================================================
 
 #[cfg(test)]
-#[expect(clippy::expect_used)]
+#[expect(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -1240,21 +1294,34 @@ mod tests {
 
     #[test]
     fn test_loading_phase_labels() {
-        assert_eq!(LoadingPhase::OpeningDatabase.label(), "Opening database...");
+        assert_eq!(
+            LoadingPhase::OpeningFile.label(),
+            "Opening the project file..."
+        );
         assert_eq!(
             LoadingPhase::ComputingStations.label(),
             "Calculating station positions..."
         );
         assert_eq!(
-            LoadingPhase::CreatingDatabase.label(),
-            "Creating database..."
+            LoadingPhase::CreatingFile.label(),
+            "Creating the project file..."
         );
+    }
+
+    /// The open and create phases name the project file, not the SQLite
+    /// database of 0.6.0 (`opening_database` / `creating_database`): the
+    /// frontend keys its phase labels by these wire names.
+    #[test]
+    fn the_file_phases_are_named_for_the_file_on_the_wire() {
+        let wire = |phase: LoadingPhase| serde_json::to_value(phase).unwrap();
+        assert_eq!(wire(LoadingPhase::OpeningFile), "opening_file");
+        assert_eq!(wire(LoadingPhase::CreatingFile), "creating_file");
     }
 
     #[test]
     fn test_loading_phase_weights_sum_to_100_for_open() {
         let open_phases = [
-            LoadingPhase::OpeningDatabase,
+            LoadingPhase::OpeningFile,
             LoadingPhase::LoadingProjectData,
             LoadingPhase::LoadingLines,
             LoadingPhase::ComputingStations,
@@ -1273,7 +1340,7 @@ mod tests {
     #[test]
     fn test_loading_phase_weights_sum_to_100_for_create() {
         let create_phases = [
-            LoadingPhase::CreatingDatabase,
+            LoadingPhase::CreatingFile,
             LoadingPhase::InitializingProject,
             LoadingPhase::SavingSettings,
         ];
@@ -1310,82 +1377,70 @@ mod tests {
 
     #[test]
     fn load_and_create_results_serialize_project_cross_refs_in_wire_form() {
-        use crate::models::{LineData, Project, ProjectStats, ShotData, StationKey, StationMerge};
+        use crate::models::survey::{LineMeta, Project, StartAt};
+        use crate::models::ShotData;
 
-        // A project with one resolvable station merge, stored in the internal
-        // StationKey form.
-        let mut project = Project::new("Wire".to_string(), None);
+        // Two lines sharing their start station: one junction, which the wire
+        // shows as a derived merge between the two slots.
+        let mut project = Project::new("Wire", None);
         let a = project
-            .add_line(LineData {
-                shots: vec![ShotData {
+            .add_line(
+                LineMeta::default(),
+                StartAt::New,
+                vec![ShotData {
                     length: 1.0,
                     ..Default::default()
                 }],
-                ..Default::default()
-            })
-            .id;
-        let b = project
-            .add_line(LineData {
-                shots: vec![ShotData {
+            )
+            .unwrap();
+        let start = project.line(a).unwrap().start;
+        project
+            .add_line(
+                LineMeta::default(),
+                StartAt::Station(start),
+                vec![ShotData {
                     length: 1.0,
                     ..Default::default()
                 }],
-                ..Default::default()
-            })
-            .id;
-        project.ensure_shot_uuids();
-        project.record_station_merge(StationMerge {
-            station_a: StationKey::positional(a, 0),
-            station_b: StationKey::positional(b, 0),
-            merged_at: chrono::Utc::now(),
-        });
-
-        let stats = ProjectStats {
-            line_count: 2,
-            shot_count: 2,
-            total_length: 2.0,
-            min_depth: 0.0,
-            max_depth: 0.0,
-            station_count: 4,
-            loop_count: 0,
-            penetration_distance: 0.0,
-            first_survey_date: None,
-            last_survey_date: None,
-        };
+            )
+            .unwrap();
+        project.set_placement(start, 0.0, 0.0).unwrap();
+        assert!(project.validate().is_empty());
 
         // The merge endpoint must serialize as positional wire form
-        // ({line_id, station_index}), NOT the internal StationKey shape
-        // ({line_id, anchor}). This is what makes the JSON load/create routes
-        // match what the frontend reads (and the binary route emits).
+        // ({line_id, station_index}), NOT a station id or an internal key
+        // shape. This is what makes the JSON load/create routes match what
+        // the frontend reads (and the binary route emits).
         let assert_wire = |v: &serde_json::Value, label: &str| {
             let sa = &v["project"]["station_merges"][0]["station_a"];
             assert!(
-                sa.get("station_index").is_some(),
+                sa.get("station_index").is_some() && sa.get("line_id").is_some(),
                 "{label}: cross-ref must be positional wire form, got {sa}"
             );
             assert!(
                 sa.get("anchor").is_none(),
-                "{label}: cross-ref must NOT be the internal StationKey shape, got {sa}"
+                "{label}: cross-ref must NOT be an internal key shape, got {sa}"
             );
         };
 
-        let load = LoadProjectFullResult {
-            loading_id: 1,
-            project: project.clone(),
-            stations: Vec::new(),
-            stats,
-            warnings: Vec::new(),
-            display_settings: DisplaySettings::default(),
-            is_remote: false,
-        };
-        assert_wire(
-            &serde_json::to_value(&load).expect("serialize load result"),
-            "LoadProjectFullResult",
+        let raw = project.raw_positions();
+        let load = LoadProjectFullResult::from_envelope(
+            1,
+            project.load_envelope_input_with(&raw, false),
+            Vec::new(),
+            DisplaySettings::default(),
+            false,
+        );
+        let load_json = serde_json::to_value(&load).expect("serialize load result");
+        assert_wire(&load_json, "LoadProjectFullResult");
+        assert!(
+            load_json.get("envelope_extra").is_none(),
+            "the envelope-only parts never reach the JSON wire"
         );
 
         let create = CreateProjectFullResult {
             loading_id: 1,
-            project,
+            project: project.project_wire(),
             display_settings: DisplaySettings::default(),
         };
         assert_wire(
@@ -1399,31 +1454,29 @@ mod tests {
 mod unsafe_file_tests {
     #![expect(clippy::unwrap_used, reason = "test assertions")]
 
-    use super::{refused_schema, LoadError};
-    use crate::models::Project;
-    use crate::persistence::Database;
+    use crate::core::state::AppState;
 
-    /// A real refused open of a file carrying a view whose name hides a
-    /// right-to-left override: the load error is UNSAFE_FILE, names what was
+    /// The production load of a legacy file carrying a view whose name hides
+    /// a right-to-left override: the load error is UNSAFE_FILE, names what was
     /// found, and shows the override as `?` rather than echoing it.
     #[test]
     fn a_hostile_schema_becomes_an_unsafe_file_error_with_a_safe_name() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("crafted.stalx");
-        Database::open(&path)
-            .unwrap()
-            .save_project(&Project::new("Crafted".to_string(), None))
-            .unwrap();
+        let bytes = stalagmight_legacy::write_v18(
+            &stalagmight_legacy::LegacyProject::new("Crafted".to_string(), None),
+            &stalagmight_legacy::LegacyExtras::default(),
+        )
+        .unwrap();
+        std::fs::write(&path, bytes).unwrap();
         rusqlite::Connection::open(&path)
             .unwrap()
             .execute_batch("CREATE VIEW \"evil\u{202E}txt\" AS SELECT 1;")
             .unwrap();
 
-        let Err(err) = Database::open_existing(&path) else {
+        let Err(load) = AppState::new().unwrap().read_project_file(&path) else {
             unreachable!("a file with a view must be refused");
         };
-        let refused = refused_schema(&err).unwrap();
-        let load = LoadError::unsafe_file(refused, &path.display().to_string());
 
         assert_eq!(load.code, "UNSAFE_FILE");
         assert!(
@@ -1438,23 +1491,76 @@ mod unsafe_file_tests {
         );
     }
 
-    /// The production load maps a schema refusal to UNSAFE_FILE before the
-    /// permission and corruption classifiers can claim it. Guarded by order in
-    /// the source: the load needs a Wry AppHandle no unit test has (the idiom of
-    /// `the_production_load_refuses_a_managed_file_before_it_opens_the_database`).
+    /// The version 2 refusal routes of the production load (a version 2 file
+    /// has no schema SQL, so it has no UNSAFE_FILE case): a file that is
+    /// neither format, a newer major version, and a survey that breaks an
+    /// invariant (offered salvage: the recovery dialog).
     #[test]
-    fn the_production_load_reports_a_refused_schema_as_unsafe_file() {
-        let src = include_str!("state/project_load.rs");
-        let start = src.find("fn do_load_project_full").unwrap();
-        let body = &src[start..];
-        // The open's error arm: the refusal check, then (in the same arm) the
-        // permission and corruption classifiers it must run ahead of.
-        let open = body.find("Database::open_existing(&path)").unwrap();
-        let arm = &body[open..];
-        let refused = arm.find("loading::refused_schema(&e)").unwrap();
-        let unsafe_file = arm.find("LoadError::unsafe_file(").unwrap();
-        let permission = arm.find("loading::is_permission_denied(&e)").unwrap();
-        let corrupt = arm.find("LoadError::corrupt(").unwrap();
-        assert!(refused < unsafe_file && unsafe_file < permission && permission < corrupt);
+    fn the_production_load_refuses_version_2_files_by_route() {
+        use crate::core::state::AppState;
+        use crate::models::survey::{LineMeta, Project, StartAt};
+        use crate::persistence::stalx_v2::{self, Extras, Mode};
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut project = Project::new("Routes", None);
+        let line = project
+            .add_line(
+                LineMeta::default(),
+                StartAt::New,
+                vec![crate::models::ShotData {
+                    length: 2.0,
+                    ..Default::default()
+                }],
+            )
+            .unwrap();
+        let start = project.line(line).unwrap().start;
+        project.set_placement(start, 0.0, 0.0).unwrap();
+        let text = String::from_utf8(
+            stalx_v2::encode(&project, &Extras::default(), Mode::Normal).unwrap(),
+        )
+        .unwrap();
+        let at = text.find("\"placements\":[").unwrap();
+        let end = at + text[at..].find("],\n").unwrap() + 3;
+        let cases = [
+            (
+                "notes.stalx",
+                "plain text".to_string(),
+                "CORRUPT",
+                "not a Stalagmight project",
+            ),
+            (
+                "newer.stalx",
+                text.replacen("\"version\":2,", "\"version\":3,", 1),
+                "NEWER_SCHEMA",
+                "newer version of Stalagmight (file format 3; this version reads up to 2)",
+            ),
+            (
+                "invalid.stalx",
+                format!("{}{}", &text[..at], &text[end..]),
+                "CORRUPT",
+                "cannot be opened normally",
+            ),
+        ];
+        let state = AppState::new().unwrap();
+        for (name, content, code, says) in cases {
+            let path = dir.path().join(name);
+            std::fs::write(&path, &content).unwrap();
+
+            let Err(err) = state.read_project_file(&path) else {
+                unreachable!("{name} must be refused");
+            };
+
+            assert_eq!(err.code, code, "{name}: {}", err.message);
+            assert!(err.message.contains(says), "{name}: {}", err.message);
+            assert_eq!(
+                err.details.as_deref(),
+                Some(path.display().to_string().as_str())
+            );
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                content,
+                "never written"
+            );
+        }
     }
 }

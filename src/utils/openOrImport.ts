@@ -36,7 +36,7 @@
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
-import { isEditingBlockedNow } from '../hooks/useEditingBlocked';
+import { isEditingBlockedNow, selectFileReadOnly } from '../hooks/useEditingBlocked';
 import { getErrorMessage } from './ipc';
 import { extractFilename } from './path';
 import { openDialog, openOrImportFilters, DMP_EXTENSION } from './fileDialogs';
@@ -44,6 +44,7 @@ import { clearProjectActionSource } from './telemetry';
 import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from './speleoExit';
 import { confirmWorkspaceDrafts } from './workspaceDrafts';
 import { confirmSpeleoFileOpen } from './confirmSpeleoOpen';
+import { askOpenProjectUnsaved } from './unsavedChanges';
 import { TOAST_KEYS } from './toastKeys';
 import i18n from '../i18n';
 
@@ -290,6 +291,15 @@ export async function routeOpenedFile(
       const speleoReadOnly = selectSpeleoReadOnly(useSpeleoStore.getState());
       const nonSurveyMode = ui.appMode !== 'survey';
       const closureAdjusted = ui.geometryMode === 'closureAdjusted';
+      if (selectFileReadOnly(useProjectStore.getState())) {
+        // A file made with a newer Stalagmight is read-only whatever the mode,
+        // view or lock (plan 6.4): no switch fixes it, so the prompt has its
+        // own cause with no switch to offer. Checked first: offering the
+        // view's or mode's switch would re-route into this same guard (a loop).
+        ui.openDialog('import-blocked', { path, cause: 'file' });
+        handedOff = true;
+        return;
+      }
       if (!speleoReadOnly) {
         // Every non-SpeleoDB cause is one safe click from fixed, so it's a
         // choice, not an error: the import-blocked prompt offers the switch
@@ -362,26 +372,36 @@ export async function routeOpenedFile(
         if (await confirmWorkspaceDrafts() && await askSpeleoExit('switch')) {
           await useProjectStore.getState().loadProject(path, { accessConfirmed: true });
         }
-      } else if (store.project && store.isDirty) {
-        ui.openDialog('unsaved-changes', { pendingOpenPath: path });
-        handedOff = true;
-      } else if (store.project && !opts?.swapConfirmed) {
-        // A clean, locally-owned project is open - dirty and SpeleoDB already
-        // prompt above, but a clean project used to fall straight through to
-        // loadProject and get swapped out with no notice at all. Reuses the
-        // confirm this branch already raises for a `.stalx` the OS FORWARDS
-        // over a clean project (`launchWithFile.ts`) - it's the identical
-        // question ("swap the open project for this file?") asked by a
-        // different trigger, so every `.stalx`-open entry point (picker,
-        // drag-drop, Ctrl+O, and the launch channel) now shares one dialog.
-        // Confirming re-enters here with `swapConfirmed: true` so the second
-        // pass falls through to loadProject instead of asking again.
-        ui.openDialog('launch-open-confirm', { path, fileName: extractFilename(path) });
-        handedOff = true;
       } else {
-        // loadProject handles view switching and error display, and consumes the
-        // source itself (setView on success / its error paths on failure).
-        await store.loadProject(path);
+        // Unsaved changes, the frontend's or the backend's own (a 0.6.0 file's
+        // SpeleoDB bookkeeping): asked as every exit asks. A project that moved
+        // during the ask is not the one this open would replace: the open is
+        // routed again against what is open now.
+        const asked = store.project ? await askOpenProjectUnsaved() : null;
+        if (asked && !asked.stillOpen) {
+          handedOff = true;
+          await routeOpenedFile(path, errorTitle, opts);
+        } else if (asked?.unsaved) {
+          ui.openDialog('unsaved-changes', { pendingOpenPath: path });
+          handedOff = true;
+        } else if (store.project && !opts?.swapConfirmed) {
+          // A clean, locally-owned project is open - dirty and SpeleoDB already
+          // prompt above, but a clean project used to fall straight through to
+          // loadProject and get swapped out with no notice at all. Reuses the
+          // confirm this branch already raises for a `.stalx` the OS FORWARDS
+          // over a clean project (`launchWithFile.ts`) - it's the identical
+          // question ("swap the open project for this file?") asked by a
+          // different trigger, so every `.stalx`-open entry point (picker,
+          // drag-drop, Ctrl+O, and the launch channel) now shares one dialog.
+          // Confirming re-enters here with `swapConfirmed: true` so the second
+          // pass falls through to loadProject instead of asking again.
+          ui.openDialog('launch-open-confirm', { path, fileName: extractFilename(path) });
+          handedOff = true;
+        } else {
+          // loadProject handles view switching and error display, and consumes the
+          // source itself (setView on success / its error paths on failure).
+          await store.loadProject(path);
+        }
       }
     } else if (lowerPath.endsWith('.gpx')) {
       // GPX import creates a new project; importing into an open one isn't

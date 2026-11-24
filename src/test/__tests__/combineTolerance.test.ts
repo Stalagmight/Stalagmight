@@ -19,7 +19,7 @@ import { COMBINE_SIDE_BY_SIDE_M } from '../../utils/combineLines';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '../../../');
-const RUST_PATH = path.join(REPO_ROOT, 'src-tauri/crates/models/src/project/combine_candidate.rs');
+const RUST_PATH = path.join(REPO_ROOT, 'src-tauri/crates/models/src/line_combine.rs');
 
 describe('combine side-by-side tolerance', () => {
   it('matches the backend constant', () => {

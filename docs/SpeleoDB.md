@@ -277,9 +277,13 @@ before anything is sent:
   caller can send one.
 
 Downloads stream to an owned temporary file, with a 512 MiB limit. The cache
-installer and downloaded-revision policy probes open private copies through
-`open_existing_untrusted`, with a 64 MiB SQLite value limit and a 30-second
-processing deadline. The installer checks the schema, stages the replacement,
+installer reads a download of at most 64 MiB: a version 2 file through the
+decoder's limits, a legacy (SQLite) revision through the frozen 0.6.0 open and
+the migration, on a private copy, under the same caps 0.6.0 validated a download
+with (`migrate_untrusted_path_for_app`: a 64 MiB SQLite value limit and a
+30-second deadline for the load's SQLite statements, where a local open allows
+1 GiB and an hour). The downloaded-revision policy probe reads a legacy link row
+under the same pair. The installer checks the schema, stages the replacement,
 strips inherited undo unless an explicit Unwind requires it, and preserves local
 display preferences.
 The downloaded copy receives its validated SpeleoDB link before replacement. A
@@ -307,6 +311,13 @@ download can outlive a switch to another project, so it installs and reopens in 
 commit under the project lock, re-checking the session generation, the open link
 and the in-memory project there; if any moved, it replaces nothing, leaves the
 project open now untouched, and the frontend treats the late reply as stale.
+
+A Restore of a revision a newer Stalagmight saved (one that opens read-only here,
+plan 6.4) is refused before anything is replaced: the copy it would stamp
+un-pushed could never be saved, so never pushed, and would hold the lock until
+discarded. A View still shows it, read-only, and restoring the tip itself stamps
+nothing. A push whose save is refused says why (`READ_ONLY_FILE`,
+`EXTERNALLY_MODIFIED`) instead of a bare "failed to flush".
 
 ## Authentication and transport
 

@@ -1,5 +1,7 @@
-//! Project persistence (sqlite `.stalx` files, plnx import, undo history
-//! limits) plus the tile caches, extracted from the root crate.
+//! Project persistence: the `.stalx` version 2 codec, the migration of
+//! legacy SQLite `.stalx` files (read by the frozen 0.6.0 reader), the
+//! recovery dialog's legacy repair, `.plnx` dive plans and the undo history
+//! limits, plus the tile caches.
 //!
 //! Internal to the Stalagmight app. It is published to crates.io only because
 //! `stalx-reader` depends on it, and makes no semver promise: depend on

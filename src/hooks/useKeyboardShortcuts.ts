@@ -7,7 +7,7 @@ import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useGasPlanStore } from '../store/gasPlanStore';
 import { useShallow } from 'zustand/react/shallow';
-import { isEditingBlockedNow } from './useEditingBlocked';
+import { isEditingBlockedNow, notifyIfFileReadOnly } from './useEditingBlocked';
 import { isNonInteractiveTool, navigationToolsEnabled } from '../utils/toolUtils';
 import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
 import { runFileShortcutAction } from '../utils/fileShortcutActions';
@@ -461,7 +461,13 @@ export function useKeyboardShortcuts() {
         // GUARD: read-only - no deletes in the closure-adjusted view, in Plan/Export
         // (which can fall back to geometryMode 'measured' on a no-closures project, so
         // the appMode check is load-bearing), or on a locked remote SpeleoDB project.
-        if (isEditingBlockedNow()) return;
+        // A read-only FILE says why once, as Ctrl+Z does there, instead of
+        // swallowing the key (demo finding I-10); the other reasons have their
+        // own badge or banner.
+        if (isEditingBlockedNow()) {
+          if (selection) notifyIfFileReadOnly();
+          return;
+        }
         // GUARD: No delete for pan/zoom tools
         const currentToolDel = useUIStore.getState().activeTool;
         if (isNonInteractiveTool(currentToolDel)) return;

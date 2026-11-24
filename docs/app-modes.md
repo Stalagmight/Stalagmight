@@ -63,11 +63,32 @@ Every mutation entry point goes through `src/hooks/useEditingBlocked.ts`:
 `useEditingBlocked()` inside a component, `isEditingBlockedNow()` outside React
 (raw keydown handlers, plain utilities).
 
-Both compose `isMapReadOnly` with `selectSpeleoReadOnly`. Do not write that
-composition inline. `useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly)`
+They compose three terms:
+
+| Term | Store | Read-only when | Backend backstop |
+|---|---|---|---|
+| `isMapReadOnly` | `uiStore` | the Closures Computed View, or Plan / Export | none (above) |
+| `selectSpeleoReadOnly` | `speleoStore` | a SpeleoDB project open without the write lock (fails closed while the link kind is unknown) | `guard_mutation` refuses without the lock |
+| the file term (`fileReadOnlyReason !== null`) | `projectStore` | the open `.stalx` was made with a newer Stalagmight: an unknown `requires` feature or unknown survey content (file format 6.4) | every edit, undo, redo and save is refused with `READ_ONLY_FILE` |
+
+`notifyIfFileReadOnly()` (the same module) is how a frontend-side refusal
+says why when the file term blocks: the `READ_ONLY_FILE` notice, not stacked
+while it is on screen (the Delete key, the data table's `onLockedEdit`); the
+other terms have their badge or banner and stay silent there.
+
+`useEditingBlockedReason()` / `editingBlockedReasonNow()` say which term
+blocks, for copy: `'project'` for the SpeleoDB and file terms, `'view'` for the
+map term (the project wins, since leaving the view would not unblock it). The
+file's reason comes from `project_read_only_reason` after a load
+(`projectFileStatusActions.ts`) and is cleared with the rest of the file
+status (`FILE_STATUS_CLEARED`) at every reset site; the read-only banner shows
+it.
+
+Do not write the composition inline.
+`useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly)`
 is a Rules-of-Hooks violation: `||` short-circuits, so the second hook is skipped
 on any render where the first term is already true, and React throws "Rendered
-fewer hooks than expected" when it flips back. The hook calls both
+fewer hooks than expected" when it flips back. The hook calls every store hook
 unconditionally; `src/store/__tests__/mapReadOnlyComposition.test.tsx` pins that.
 
 ### What the lint enforces

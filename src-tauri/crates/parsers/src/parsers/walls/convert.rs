@@ -702,6 +702,7 @@ pub fn convert_walls_to_import_configs(
                 .unwrap_or(ImportPlacement::Origin),
             station_comments: chain.station_comments.clone(),
             station_names: Vec::new(),
+            station_external: external_names(&chain.names),
             azimuth_reference: Some(chain.azimuth_reference),
             explorers: None,
             override_date: None,
@@ -724,6 +725,19 @@ pub fn convert_walls_to_import_configs(
 /// component (`Cave/North branch` -> `North branch`), or the whole path when
 /// another path in the same import ends in the same component, so two
 /// different segments never fall into one Section.
+/// A chain's station names as the stations' external ids, by chain index
+/// (plan 10.5): the identity the Walls file gives each station. An anonymous
+/// wall endpoint has no name of its own (its graph name is synthetic), so it
+/// gets none.
+fn external_names(names: &[String]) -> Vec<(u32, String)> {
+    names
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| !name.is_empty() && !name.starts_with('\u{1}'))
+        .map(|(i, name)| (u32::try_from(i).unwrap_or(u32::MAX), name.clone()))
+        .collect()
+}
+
 pub(crate) fn segment_section_names<'a>(
     segments: impl Iterator<Item = &'a str>,
 ) -> HashMap<&'a str, String> {

@@ -1,12 +1,17 @@
-//! Foreign shot identity: Ariane's `<UUID>`/`<UU>` carried through a round trip
-//! (#423).
+//! Shot identity (#423): a shot's uuid is the project's, project-unique by
+//! invariant (`validate` refuses a repeat), and it survives every edit that
+//! keeps the shot; Ariane's `<UUID>`/`<UU>` is carried through an import and
+//! an export.
 //!
-//! Ariane 26 gives each `<SurveyData>` row a stable id and preserves it across
-//! edits. We used to discard it and mint our own, so a file that left Ariane and
-//! came back was re-identified shot by shot. These tests pin the contract at
-//! each place identity could be dropped: the parse, the import, the transforms
-//! that rebuild shots from `ShotData` (reverse, line split, project merge),
-//! the undo payload, and the export.
+//! These tests pin the contract at each place identity could be dropped or
+//! forged: the shot commands, the delete/split recipes, the undo, the
+//! import funnel, the exporters and Merge Projects (all on the
+//! station-graph API; every case runs).
+//!
+//! What changed with the station graph: a cross-reference is a station id,
+//! not a `(line, anchor uuid)` key, so "the anchor still resolves" becomes
+//! "the reference is still on its station"; a uuid repeated across lines is
+//! no longer legal anywhere, so every door that can meet one re-mints it.
 //!
 //! No fixture files: every `.tml`/`.tmlu` here is synthetic XML built in-test
 //! and written to a temp dir that the test owns.
@@ -16,9 +21,11 @@ use std::path::Path;
 
 use super::{AppState, VirtualShotMode};
 use crate::core::Command;
-use crate::export::tml::{export_tml, export_tml_for_speleodb};
-use crate::models::{LineData, Project, ShotData, StationKey, StationRef};
+use crate::export::survey::{export_tml, export_tml_for_speleodb};
+use crate::models::survey::{LineMeta, Project, StartAt};
+use crate::models::{LineId, ShotData, StationId};
 use crate::parsers::tml::{convert_tml_to_import_configs, parse_tml};
+use crate::persistence::stalx_v2::{self, Extras, Mode};
 
 // ---------------------------------------------------------------------------
 // Synthetic Ariane XML
@@ -133,16 +140,8 @@ fn write_tmlu(dir: &Path, name: &str, xml: &str) -> std::path::PathBuf {
 }
 
 /// The full Ariane import as the app runs it: parse the file, convert it to
-/// import configs, execute the import.
-///
-/// Deliberately shaped after `speleodb_pull::adopt_build_into` down to the
-/// entry point (`execute_tml_import_sections`, not the generic
-/// `execute_import_lines`) and the surface-elevation derivation (#431), so
-/// the adoption-idempotence claim below is about the pipeline that actually
-/// ships. `adoption_still_builds_through_the_pipeline_the_idempotence_test_drives`
-/// is the tripwire that keeps the two from drifting - it has already caught one
-/// divergence, when #443/#452 moved the conversion into `adopt_convert` and the
-/// import onto the TML-specific entry point.
+/// import configs, execute the import (the TML-specific entry point
+/// `speleodb_pull::adopt_build_into` uses, with the surface elevation #431).
 fn import_ariane_file(state: &AppState, path: &Path) {
     let tml = parse_tml(path).unwrap();
     let (lines, closures, _warnings) = convert_tml_to_import_configs(&tml, false, true).unwrap();
@@ -162,22 +161,88 @@ fn import_ariane_file(state: &AppState, path: &Path) {
 
 fn state_with_project() -> AppState {
     let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
+    let r = state.execute(Command::CreateProject {
         name: "Synthetic".to_string(),
         location: None,
     });
+    assert!(r.success, "{:?}", r.error);
     state
 }
 
-/// Every shot UUID of line `index`, in line order. `None` becomes an empty
-/// string so a missing identity fails an equality assertion loudly rather than
-/// being skipped.
+/// Every shot uuid of line `index` (list order), in line order.
 fn line_uuids(project: &Project, index: usize) -> Vec<String> {
-    project.lines[index]
+    project.lines()[index]
         .shots
         .iter()
-        .map(|s| s.uuid.clone().unwrap_or_default())
+        .map(|s| s.uuid.clone())
         .collect()
+}
+
+/// A level 10 m shot east, with `uuid`.
+fn shot_u(uuid: &str) -> ShotData {
+    ShotData {
+        uuid: Some(uuid.to_string()),
+        azimuth_in: 90.0,
+        azimuth_out: 90.0,
+        length: 10.0,
+        depth_in: 5.0,
+        depth_out: 5.0,
+        ..ShotData::default()
+    }
+}
+
+/// A one-line survey named `Main` whose shots carry `uuids` (what an Ariane
+/// import makes of a covered file), placed at the origin.
+fn survey_with_uuids(uuids: &[&str]) -> (Project, LineId) {
+    let mut p = Project::new("Synthetic", None);
+    let line = p
+        .add_line(
+            LineMeta {
+                name: Some("Main".to_string()),
+                ..LineMeta::default()
+            },
+            StartAt::New,
+            uuids.iter().map(|u| shot_u(u)).collect(),
+        )
+        .unwrap();
+    let start = p.line(line).unwrap().start;
+    p.set_placement(start, 0.0, 0.0).unwrap();
+    (p, line)
+}
+
+fn state_with(project: Project) -> AppState {
+    let violations = project.validate();
+    assert!(violations.is_empty(), "invalid test survey: {violations:?}");
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+    state
+}
+
+fn project(state: &AppState) -> Project {
+    state.get_project_state().unwrap()
+}
+
+fn st(p: &Project, line: LineId, index: usize) -> StationId {
+    p.line(line).unwrap().station(index).unwrap()
+}
+
+fn set_comment(p: &mut Project, station: StationId, text: &str) {
+    p.stations.get_mut(&station).unwrap().comment = Some(text.to_string());
+}
+
+/// Every uuid the project holds is held once (the invariant).
+fn assert_unique(p: &Project) {
+    let all: Vec<&str> = p
+        .lines()
+        .iter()
+        .flat_map(|l| l.shots.iter().map(|s| s.uuid.as_str()))
+        .collect();
+    assert_eq!(
+        all.iter().collect::<HashSet<_>>().len(),
+        all.len(),
+        "a shot uuid is held twice: {all:?}"
+    );
+    assert!(p.validate().is_empty(), "{:?}", p.validate());
 }
 
 // ---------------------------------------------------------------------------
@@ -185,9 +250,7 @@ fn line_uuids(project: &Project, index: usize) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 /// The file's `<UUID>` values come back out of the export verbatim, for both
-/// extensions. Red at `normalize_key_bytes` before #423 (the element was
-/// discarded and every shot got a fresh v4), and red again if the export ever
-/// starts re-minting.
+/// extensions.
 #[test]
 fn ariane_shot_uuids_survive_import_then_export_verbatim() {
     const U1: &str = "11111111-1111-4111-8111-111111111111";
@@ -205,20 +268,14 @@ fn ariane_shot_uuids_survive_import_then_export_verbatim() {
                 Row::new(3, 2, Some(U3)),
             ]),
         );
-
         let state = state_with_project();
         import_ariane_file(&state, &source);
-
-        let project = state.get_project_state().unwrap();
+        let project = project(&state);
         assert_eq!(
             line_uuids(&project, 0),
             vec![U1.to_string(), U2.to_string(), U3.to_string()],
             "the file's identities must be the imported shots' identities"
         );
-
-        // Round trip back out and in again: the exported document has to carry
-        // the same ids, in the same order, under whichever element spelling the
-        // extension selects (`<UUID>` for .tml, `<UU>` for .tmlu).
         let exported = dir.path().join(format!("out.{ext}"));
         export_tml(&project, &exported).unwrap();
         let reparsed = parse_tml(&exported).unwrap();
@@ -241,13 +298,9 @@ fn ariane_shot_uuids_survive_import_then_export_verbatim() {
 // 2. Partial coverage
 // ---------------------------------------------------------------------------
 
-/// Only the middle row carries an id. It must land on the middle shot - not the
-/// first, not the last - and the uncovered rows must still get distinct,
-/// non-empty identities of their own. Red if the carry misaligns by index.
 #[test]
 fn a_single_covered_shot_keeps_its_id_and_the_others_get_fresh_ones() {
     const MID: &str = "44444444-4444-4444-8444-444444444444";
-
     let dir = tempfile::tempdir().unwrap();
     let source = write_tmlu(
         dir.path(),
@@ -258,20 +311,14 @@ fn a_single_covered_shot_keeps_its_id_and_the_others_get_fresh_ones() {
             Row::new(3, 2, None),
         ]),
     );
-
     let state = state_with_project();
     import_ariane_file(&state, &source);
-
-    let project = state.get_project_state().unwrap();
-    let uuids = line_uuids(&project, 0);
+    let uuids = line_uuids(&project(&state), 0);
     assert_eq!(uuids.len(), 3);
     assert_eq!(uuids[1], MID, "the covered shot must keep the file's id");
-    assert_ne!(uuids[0], MID, "an uncovered shot must not inherit it");
-    assert_ne!(uuids[2], MID, "an uncovered shot must not inherit it");
-    assert!(
-        !uuids[0].is_empty() && !uuids[2].is_empty(),
-        "uncovered shots must still get an identity: {uuids:?}"
-    );
+    assert_ne!(uuids[0], MID);
+    assert_ne!(uuids[2], MID);
+    assert!(!uuids[0].is_empty() && !uuids[2].is_empty());
     assert_ne!(uuids[0], uuids[2], "fresh mints must be distinct");
 }
 
@@ -280,15 +327,11 @@ fn a_single_covered_shot_keeps_its_id_and_the_others_get_fresh_ones() {
 // ---------------------------------------------------------------------------
 
 /// A source file that repeats an id inside one line is REPAIRED, not
-/// rejected and not admitted: the FIRST occurrence keeps the foreign value and
-/// the rest are re-minted, which is what `resolve_key` (first match wins) needs.
-/// Red without the repair - and the import would not merely warn, it would be
-/// rolled back wholesale by the `duplicate_shot_uuid` Critical violation that
-/// `finalize_structural_edit` refuses to commit.
+/// rejected: the FIRST occurrence keeps the foreign value and the rest are
+/// re-minted, so the model's uniqueness invariant holds.
 #[test]
 fn a_repeated_uuid_inside_one_line_is_repaired_keeping_the_first() {
     const DUP: &str = "55555555-5555-4555-8555-555555555555";
-
     let dir = tempfile::tempdir().unwrap();
     let source = write_tmlu(
         dir.path(),
@@ -299,45 +342,26 @@ fn a_repeated_uuid_inside_one_line_is_repaired_keeping_the_first() {
             Row::new(3, 2, Some(DUP)),
         ]),
     );
-
     let state = state_with_project();
     import_ariane_file(&state, &source);
-
-    let project = state.get_project_state().unwrap();
+    let project = project(&state);
     let uuids = line_uuids(&project, 0);
-    assert_eq!(uuids.len(), 3);
     assert_eq!(uuids[0], DUP, "the FIRST occurrence keeps the foreign id");
-    assert_ne!(uuids[1], DUP, "the second must be re-minted");
-    assert_ne!(uuids[2], DUP, "the third must be re-minted");
-    assert_eq!(
-        uuids.iter().collect::<HashSet<_>>().len(),
-        3,
-        "all three identities must differ: {uuids:?}"
-    );
-    let dupes: Vec<_> = project
-        .check_structural_integrity()
-        .into_iter()
-        .filter(|v| v.category == "duplicate_shot_uuid")
-        .collect();
-    assert!(
-        dupes.is_empty(),
-        "import must not leave a duplicate_shot_uuid violation: {dupes:?}"
-    );
+    assert_ne!(uuids[1], DUP);
+    assert_ne!(uuids[2], DUP);
+    assert_unique(&project);
 }
 
 // ---------------------------------------------------------------------------
 // 4. Reverse on import
 // ---------------------------------------------------------------------------
 
-/// The import-time reverse (#24) moves each shot to the mirrored position.
-/// Identity travels inside the `ShotData` being reversed, so it moves with its
-/// own shot - the failure a parallel id vector would have had to keep in step by
-/// hand. Red if identity ever stops travelling in the payload.
+/// The import-time reverse (#24) moves each shot to the mirrored position;
+/// identity travels inside the `ShotData` being reversed.
 #[test]
 fn the_import_reverse_carries_each_id_with_its_own_shot() {
     const FIRST: &str = "66666666-6666-4666-8666-666666666666";
     const LAST: &str = "77777777-7777-4777-8777-777777777777";
-
     let dir = tempfile::tempdir().unwrap();
     let source = write_tmlu(
         dir.path(),
@@ -348,7 +372,6 @@ fn the_import_reverse_carries_each_id_with_its_own_shot() {
             Row::new(3, 2, Some(LAST)),
         ]),
     );
-
     let state = state_with_project();
     let tml = parse_tml(&source).unwrap();
     let (mut lines, closures, _warnings) =
@@ -364,10 +387,7 @@ fn the_import_reverse_carries_each_id_with_its_own_shot() {
         None,
     );
     assert!(result.success, "import failed: {:?}", result.error);
-
-    let project = state.get_project_state().unwrap();
-    let uuids = line_uuids(&project, 0);
-    assert_eq!(uuids.len(), 3);
+    let uuids = line_uuids(&project(&state), 0);
     assert_eq!(uuids[0], LAST, "the file's last id must be first now");
     assert_eq!(uuids[2], FIRST, "the file's first id must be last now");
 }
@@ -376,17 +396,10 @@ fn the_import_reverse_carries_each_id_with_its_own_shot() {
 // 5. Line split
 // ---------------------------------------------------------------------------
 
-/// Splitting a line keeps the foreign ids on BOTH halves (line B is
-/// rebuilt from `to_shot_data`), and every station cross-reference still points
-/// at the same physical station it did before.
-///
-/// This is also what pins the split's positional remap as still necessary. A
-/// `StationKey` is `(line_id, anchor)`, so a preserved uuid alone cannot
-/// follow a shot into the NEW line: drop the remap and the B-half comment's
-/// key keeps naming line A, where its anchoring shot no longer exists, and
-/// resolves to `None`.
+/// Splitting a line keeps every shot's uuid on whichever half holds it, and
+/// every station reference stays on its station, where it was.
 #[test]
-fn a_line_split_preserves_the_foreign_ids_and_the_cross_references_of_both_halves() {
+fn a_line_split_keeps_the_ids_on_both_halves_and_the_references_on_their_stations() {
     const IDS: [&str; 5] = [
         "aaaaaaaa-0000-4000-8000-000000000001",
         "aaaaaaaa-0000-4000-8000-000000000002",
@@ -394,210 +407,119 @@ fn a_line_split_preserves_the_foreign_ids_and_the_cross_references_of_both_halve
         "aaaaaaaa-0000-4000-8000-000000000004",
         "aaaaaaaa-0000-4000-8000-000000000005",
     ];
+    let (mut p, line) = survey_with_uuids(&IDS);
+    // One reference on each side of the coming split.
+    let (stays, moves) = (st(&p, line, 1), st(&p, line, 4));
+    set_comment(&mut p, stays, "stays in A");
+    set_comment(&mut p, moves, "moves into B");
+    let state = state_with(p);
+    let before = project(&state);
+    let mid = before.line(line).unwrap().shots[2].id;
 
-    let dir = tempfile::tempdir().unwrap();
-    let source = write_tmlu(
-        dir.path(),
-        "split.tmlu",
-        &cave_file_xml(&[
-            Row::new(1, 0, Some(IDS[0])),
-            Row::new(2, 1, Some(IDS[1])),
-            Row::new(3, 2, Some(IDS[2])),
-            Row::new(4, 3, Some(IDS[3])),
-            Row::new(5, 4, Some(IDS[4])),
-        ]),
-    );
-
-    let state = state_with_project();
-    import_ariane_file(&state, &source);
-
-    let line_id = state.get_project_state().unwrap().lines[0].id;
-    // One cross-reference on each side of the coming split: station 1 stays in
-    // A, station 4 moves into B.
-    for (index, text) in [(1u32, "stays in A"), (4u32, "moves into B")] {
-        let r = state.execute(Command::SetStationComment {
-            station_ref: StationRef::new(line_id, index),
-            comment: Some(text.to_string()),
-        });
-        assert!(r.success, "{:?}", r.error);
-    }
-
-    // Where each stored comment key physically sits before the split.
-    let before = state.get_project_state().unwrap();
-    let coords_before = |p: &Project, key: &StationKey| {
-        let sr = p.resolve_key(key).expect("comment key resolves");
-        p.compute_station_coordinates()
-            .into_iter()
-            .find(|s| s.station_ref == sr)
-            .expect("resolved station has coordinates")
-            .coordinates
-    };
-    let anchored: Vec<(StationKey, String, _)> = before
-        .station_comments
-        .iter()
-        .map(|(k, text)| (k.clone(), text.clone(), coords_before(&before, k)))
-        .collect();
-    assert_eq!(anchored.len(), 2);
-
-    // Split at the middle shot (index 2): A keeps shots 0..2, the shot at 2 is
-    // deleted, B receives shots 3..5.
-    let mid = before.lines[0].shots[2].id;
-    let r = state.execute_delete_shot_and_split(line_id, mid, "A".to_string(), "B".to_string());
+    let r = state.execute_delete_shot_and_split(line, mid, "A".to_string(), "B".to_string());
     assert!(r.success, "{:?}", r.error);
-
-    let after = state.get_project_state().unwrap();
-    assert_eq!(after.lines.len(), 2);
+    let after = project(&state);
+    let new_line = r.line_id.unwrap();
     assert_eq!(
         line_uuids(&after, 0),
-        vec![IDS[0].to_string(), IDS[1].to_string()],
-        "the A half lost its foreign ids"
+        vec![IDS[0].to_string(), IDS[1].to_string()]
     );
-    assert_eq!(
-        line_uuids(&after, 1),
-        vec![IDS[3].to_string(), IDS[4].to_string()],
-        "the B half lost its foreign ids - the case the side-channel design gave up on"
-    );
-
-    // Every cross-reference still resolves, and to the same physical station.
-    assert_eq!(after.station_comments.len(), 2);
-    for (_, text, coords) in &anchored {
-        let (key, _) = after
-            .station_comments
-            .iter()
-            .find(|(_, t)| *t == text)
-            .unwrap_or_else(|| panic!("comment {text:?} disappeared across the split"));
-        let sr = after
-            .resolve_key(key)
-            .unwrap_or_else(|| panic!("comment {text:?} dangles after the split"));
-        let now = after
-            .compute_station_coordinates()
-            .into_iter()
-            .find(|s| s.station_ref == sr)
-            .expect("resolved station has coordinates")
-            .coordinates;
-        let moved = (now.x - coords.x).abs() + (now.y - coords.y).abs() + (now.z - coords.z).abs();
+    let b: Vec<String> = after
+        .line(new_line)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| s.uuid.clone())
+        .collect();
+    assert_eq!(b, vec![IDS[3].to_string(), IDS[4].to_string()]);
+    for (station, text) in [(stays, "stays in A"), (moves, "moves into B")] {
+        assert_eq!(
+            after.station(station).unwrap().comment.as_deref(),
+            Some(text)
+        );
+        let (was, now) = (
+            before.raw_positions().xy(station).unwrap(),
+            after.raw_positions().xy(station).unwrap(),
+        );
         assert!(
-            moved < 1e-9,
-            "comment {text:?} re-anchored onto a different station: {coords:?} -> {now:?}"
+            (was[0] - now[0]).abs() + (was[1] - now[1]).abs() < 1e-9,
+            "{text:?} moved: {was:?} -> {now:?}"
         );
     }
+    assert_eq!(
+        after
+            .topology()
+            .slot_on(moves, new_line)
+            .map(|s| s.station_index),
+        Some(1)
+    );
+    assert_unique(&after);
 }
 
 // ---------------------------------------------------------------------------
 // 6. Project merge
 // ---------------------------------------------------------------------------
 
-/// Two projects that each imported the same Ariane file hold the same foreign
-/// ids. Shot UUIDs are unique across the whole project, so the merge keeps the
-/// FIRST source's copy verbatim (its Ariane identity survives) and gives the
-/// second source's shots the derived replacement for their line.
+/// Two projects that hold the same uuids: the merge keeps the FIRST source's
+/// copy verbatim and re-mints the second's, so the merged project holds each
+/// once.
 #[test]
-fn merging_two_projects_that_imported_one_file_keeps_the_first_copy_of_its_ids() {
+fn merging_two_projects_with_the_same_ids_keeps_the_first_copy() {
     const IDS: [&str; 3] = [
         "bbbbbbbb-0000-4000-8000-000000000001",
         "bbbbbbbb-0000-4000-8000-000000000002",
         "bbbbbbbb-0000-4000-8000-000000000003",
     ];
-
-    // What an Ariane import produces: shots whose ShotData already carries the
-    // file's ids.
-    let imported_project = |name: &str| {
-        let mut project = Project::new(name.to_string(), None);
-        project.add_line(LineData {
-            name: Some("Main".to_string()),
-            shots: IDS
-                .iter()
-                .map(|u| ShotData {
-                    uuid: Some((*u).to_string()),
-                    azimuth_in: 90.0,
-                    azimuth_out: 90.0,
-                    length: 10.0,
-                    depth_in: 5.0,
-                    depth_out: 5.0,
-                    ..Default::default()
-                })
-                .collect(),
-            ..Default::default()
-        });
-        project
-    };
-
-    let a = imported_project("A");
-    let b = imported_project("B");
-    assert_eq!(line_uuids(&a, 0), IDS.map(String::from).to_vec());
-
-    let (db_a, _keep_a) = crate::test_helpers::TestDb::with_project(&a).unwrap();
-    let (db_b, _keep_b) = crate::test_helpers::TestDb::with_project(&b).unwrap();
-    let out_dir = tempfile::tempdir().unwrap();
-    let out = out_dir.path().join("merged.stalx");
-
-    let state = AppState::new().unwrap();
-    let result = state.merge_projects(
-        vec![db_a.path().to_path_buf(), db_b.path().to_path_buf()],
-        out.clone(),
-        "Merged".to_string(),
-        false,
-    );
-    assert!(result.success, "merge failed: {:?}", result.error);
-
-    // The merge writes the output file rather than opening it, so read it back.
-    let merged = crate::persistence::Database::open_existing(&out)
-        .unwrap()
-        .load_project()
+    let dir = tempfile::tempdir().unwrap();
+    let write = |name: &str| {
+        let (mut p, _) = survey_with_uuids(&IDS);
+        p.name = name.to_string();
+        let path = dir.path().join(format!("{name}.stalx"));
+        std::fs::write(
+            &path,
+            stalx_v2::encode(&p, &Extras::default(), Mode::Normal).unwrap(),
+        )
         .unwrap();
-    assert_eq!(merged.lines.len(), 2, "both lines must survive");
-    let expected = IDS.map(String::from).to_vec();
-    assert_eq!(
-        line_uuids(&merged, 0),
-        expected,
-        "the first source's foreign ids must survive the merge"
-    );
-    let second = merged.lines[1].id;
-    assert_eq!(
-        line_uuids(&merged, 1),
-        IDS.iter()
-            .map(|id| crate::models::reminted_shot_uuid(second, id))
-            .collect::<Vec<_>>(),
-        "the second source's repeats must get the derived replacement"
-    );
-    assert!(
-        merged.check_structural_integrity().is_empty(),
-        "the merged project must hold every shot UUID once"
-    );
+        path
+    };
+    let (a, b) = (write("A"), write("B"));
+    let out = dir.path().join("merged.stalx");
+    let state = AppState::new().unwrap();
+    let result = state.execute(Command::MergeProjects {
+        source_paths: vec![a, b],
+        output_path: out.clone(),
+        output_name: "Merged".to_string(),
+        archive_originals: false,
+    });
+    assert!(result.success, "merge failed: {:?}", result.error);
+    let merged = stalx_v2::decode(
+        &std::fs::read(&out).unwrap(),
+        &stalx_v2::DecodeOptions::default(),
+    )
+    .unwrap()
+    .project;
+    assert_eq!(merged.lines().len(), 2, "both lines must survive");
+    assert_eq!(line_uuids(&merged, 0), IDS.map(String::from).to_vec());
+    assert!(line_uuids(&merged, 1)
+        .iter()
+        .all(|u| !IDS.contains(&u.as_str())));
+    assert_unique(&merged);
 }
 
 // ---------------------------------------------------------------------------
 // 7. Non-canonical spellings
 // ---------------------------------------------------------------------------
 
-/// `Shot::uuid` is no longer guaranteed to be a v4 we minted, so the two export
-/// profiles diverge on purpose. The user-facing file writes whatever the source
-/// said, verbatim. The SpeleoDB sidecar re-spells what it accepts into the
-/// `8-4-4-4-12` form its `UUID4` field requires, and drops what it does not
-/// (a nil uuid is not a v4).
+/// The user-facing export writes whatever the source said, verbatim; the
+/// SpeleoDB sidecar re-spells what it accepts into the `8-4-4-4-12` form its
+/// `UUID4` field requires, and drops what it does not (a nil uuid is not a
+/// v4).
 #[test]
 fn the_user_export_is_verbatim_while_the_speleodb_sidecar_canonicalises_or_drops() {
     const BRACED: &str = "{cccccccc-0000-4000-8000-000000000001}";
     const HYPHENLESS: &str = "cccccccc000040008000000000000002";
     const NIL: &str = "00000000-0000-0000-0000-000000000000";
-
-    let mut project = Project::new("Spellings".to_string(), None);
-    project.add_line(LineData {
-        name: Some("Main".to_string()),
-        shots: [BRACED, HYPHENLESS, NIL]
-            .iter()
-            .map(|u| ShotData {
-                uuid: Some((*u).to_string()),
-                azimuth_in: 90.0,
-                azimuth_out: 90.0,
-                length: 10.0,
-                depth_in: 5.0,
-                depth_out: 5.0,
-                ..Default::default()
-            })
-            .collect(),
-        ..Default::default()
-    });
+    let (project, _) = survey_with_uuids(&[BRACED, HYPHENLESS, NIL]);
     assert_eq!(
         line_uuids(&project, 0),
         vec![BRACED.to_string(), HYPHENLESS.to_string(), NIL.to_string()],
@@ -614,47 +536,21 @@ fn the_user_export_is_verbatim_while_the_speleodb_sidecar_canonicalises_or_drops
             "the user export must not rewrite {raw}"
         );
     }
-
     let sidecar = dir.path().join("sidecar.tmlu");
     export_tml_for_speleodb(&project, &sidecar).unwrap();
     let sidecar_xml = std::fs::read_to_string(&sidecar).unwrap();
-    assert!(
-        sidecar_xml.contains("<UU>cccccccc-0000-4000-8000-000000000001</UU>"),
-        "the sidecar must canonicalise the braced form"
-    );
-    assert!(
-        sidecar_xml.contains("<UU>cccccccc-0000-4000-8000-000000000002</UU>"),
-        "the sidecar must canonicalise the hyphenless form"
-    );
-    assert!(
-        !sidecar_xml.contains(BRACED),
-        "the braced spelling would fail the server's UUID4 field"
-    );
-    assert!(
-        !sidecar_xml.contains(NIL),
-        "a nil uuid is not a v4 and must be omitted from the sidecar"
-    );
+    assert!(sidecar_xml.contains("<UU>cccccccc-0000-4000-8000-000000000001</UU>"));
+    assert!(sidecar_xml.contains("<UU>cccccccc-0000-4000-8000-000000000002</UU>"));
+    assert!(!sidecar_xml.contains(BRACED));
+    assert!(!sidecar_xml.contains(NIL), "a nil uuid is not a v4");
 }
 
 // ---------------------------------------------------------------------------
 // 8. Adoption is idempotent
 // ---------------------------------------------------------------------------
 
-/// Adopting the same Ariane file twice must give the same shot identities.
-/// `speleodb_pull::adopt_build_into` re-imports `ariane.tml` from scratch, so
-/// before the file's `<UUID>` was read back every adoption re-identified every
-/// shot - the user-visible churn in the issue.
-///
-/// The assertion runs the identity-deciding pipeline (`parse_tml` ->
-/// `convert_tml_to_import_configs` -> `execute_tml_import_sections`) twice on the
-/// same file. `adopt_build_into` itself cannot be called from a unit test: it
-/// goes through `do_create_project_full`, which requires a real `AppHandle`
-/// (`tauri::test::mock_app` yields a `MockRuntime` handle, which `AppState`
-/// cannot hold). The tripwire below therefore pins that adoption really is that
-/// pipeline, so this test cannot pass while the shipped path diverges from it.
-///
-/// Full `<UUID>` coverage is load-bearing: an uncovered row legitimately mints
-/// per adoption, so a mixed file could only be compared over its covered subset.
+/// Adopting the same Ariane file twice must give the same shot identities
+/// (`speleodb_pull::adopt_build_into` re-imports `ariane.tml` from scratch).
 #[test]
 fn adopting_the_same_ariane_file_twice_gives_the_same_shot_uuids() {
     const IDS: [&str; 3] = [
@@ -662,7 +558,6 @@ fn adopting_the_same_ariane_file_twice_gives_the_same_shot_uuids() {
         "eeeeeeee-0000-4000-8000-000000000002",
         "eeeeeeee-0000-4000-8000-000000000003",
     ];
-
     let dir = tempfile::tempdir().unwrap();
     let source = write_tmlu(
         dir.path(),
@@ -673,42 +568,80 @@ fn adopting_the_same_ariane_file_twice_gives_the_same_shot_uuids() {
             Row::new(3, 2, Some(IDS[2])),
         ]),
     );
-
     let adopt_once = || {
         let state = state_with_project();
         import_ariane_file(&state, &source);
-        line_uuids(&state.get_project_state().unwrap(), 0)
+        line_uuids(&project(&state), 0)
     };
-
     let first = adopt_once();
-    let second = adopt_once();
-    assert_eq!(
-        first,
-        IDS.map(String::from).to_vec(),
-        "an adopted project must carry the file's own shot ids"
-    );
-    assert_eq!(
-        first, second,
-        "re-adopting the same file must not re-identify its shots"
-    );
+    assert_eq!(first, IDS.map(String::from).to_vec());
+    assert_eq!(first, adopt_once(), "re-adopting must not re-identify");
 }
 
 // ---------------------------------------------------------------------------
 // 9. Undo
 // ---------------------------------------------------------------------------
 
-/// Identity now travels in the undo payload, so both undo paths must give back
-/// the SAME ids rather than fresh ones: the per-shot restore (which replays a
-/// `ShotData` plus the uuid the entry recorded beside it) and the import's
-/// snapshot undo/redo.
+/// Undo gives a deleted shot its own identity back, not a fresh one, in the
+/// session and after a save and reopen (the persisted entry carries no
+/// session ids, but it carries the uuids).
 #[test]
-fn undo_restores_the_imported_identities_rather_than_minting_new_ones() {
+fn undoing_a_shot_delete_restores_the_shots_own_identity() {
     const IDS: [&str; 3] = [
         "dddddddd-0000-4000-8000-000000000001",
         "dddddddd-0000-4000-8000-000000000002",
         "dddddddd-0000-4000-8000-000000000003",
     ];
+    let (p, line) = survey_with_uuids(&IDS);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("undo.stalx");
+    std::fs::write(
+        &path,
+        stalx_v2::encode(&p, &Extras::default(), Mode::Normal).unwrap(),
+    )
+    .unwrap();
+    let state = AppState::new().unwrap();
+    assert!(
+        state
+            .execute(Command::OpenProject { path: path.clone() })
+            .success
+    );
+    let expected = IDS.map(String::from).to_vec();
+    let mid = project(&state).line(line).unwrap().shots[1].id;
 
+    assert!(
+        state
+            .execute(Command::DeleteShot {
+                line_id: line,
+                shot_id: mid
+            })
+            .success
+    );
+    assert!(state.undo().success);
+    assert_eq!(line_uuids(&project(&state), 0), expected, "in the session");
+    assert!(state.redo().success);
+    assert!(state.execute(Command::SaveProject { path: None }).success);
+
+    let reopened = AppState::new().unwrap();
+    assert!(reopened.execute(Command::OpenProject { path }).success);
+    assert_eq!(reopened.get_undo_stack().len(), 1);
+    assert!(reopened.undo().success, "the persisted entry steps");
+    assert_eq!(
+        line_uuids(&project(&reopened), 0),
+        expected,
+        "after a reopen"
+    );
+}
+
+/// The import's own undo and redo bring the file's identities back, not
+/// fresh mints.
+#[test]
+fn undoing_and_redoing_an_import_keeps_the_files_identities() {
+    const IDS: [&str; 3] = [
+        "dddddddd-1111-4000-8000-000000000001",
+        "dddddddd-1111-4000-8000-000000000002",
+        "dddddddd-1111-4000-8000-000000000003",
+    ];
     let dir = tempfile::tempdir().unwrap();
     let source = write_tmlu(
         dir.path(),
@@ -719,63 +652,23 @@ fn undo_restores_the_imported_identities_rather_than_minting_new_ones() {
             Row::new(3, 2, Some(IDS[2])),
         ]),
     );
-
     let state = state_with_project();
     import_ariane_file(&state, &source);
     let expected = IDS.map(String::from).to_vec();
-    assert_eq!(line_uuids(&state.get_project_state().unwrap(), 0), expected);
-
-    // Leg 1: delete a shot and undo it. The restored shot must come back with
-    // the file's id, not a new one.
-    let (line_id, mid_shot_id) = {
-        let p = state.get_project_state().unwrap();
-        (p.lines[0].id, p.lines[0].shots[1].id)
-    };
-    let r = state.execute(Command::DeleteShot {
-        line_id,
-        shot_id: mid_shot_id,
-    });
-    assert!(r.success, "{:?}", r.error);
-    let undone = state.undo();
-    assert!(undone.success, "{:?}", undone.error);
-    assert_eq!(
-        line_uuids(&state.get_project_state().unwrap(), 0),
-        expected,
-        "undoing a shot delete must restore the shot's own identity"
-    );
-
-    // Leg 2: undo the import itself, then redo it.
-    let undone = state.undo();
-    assert!(undone.success, "{:?}", undone.error);
-    assert!(
-        state.get_project_state().unwrap().lines.is_empty(),
-        "undoing the import must remove the imported line"
-    );
-    let redone = state.redo();
-    assert!(redone.success, "{:?}", redone.error);
-    assert_eq!(
-        line_uuids(&state.get_project_state().unwrap(), 0),
-        expected,
-        "redoing the import must bring back the file's identities, not fresh mints"
-    );
+    assert!(state.undo().success);
+    assert!(project(&state).lines().is_empty(), "the import is undone");
+    assert!(state.redo().success);
+    assert_eq!(line_uuids(&project(&state), 0), expected);
 }
 
 // ---------------------------------------------------------------------------
-// 10. The IPC boundary must not let a client name a shot's identity
+// 10. A client cannot name a shot's identity
 // ---------------------------------------------------------------------------
 
-/// `ShotData` is the argument type of the `create_shot` command, and since #423
-/// it has a `uuid` field. If that field were honoured, a caller could name an
-/// EXISTING shot's identity and insert the new shot BEFORE it: both first-wins
-/// repairs keep the first OCCURRENCE - now the injected record - and re-mint the
-/// original, moving every `AfterShot` anchor onto the injected shot.
-///
-/// The executor (`AppState::create_shot`, core/state/command_shot.rs) clears
-/// it, so the original keeps its identity. The fixture is deliberately an
-/// ALREADY-critical project, because
-/// `execute`'s structural epilogue rolls back only newly introduced criticals -
-/// on a sound project it refuses the create outright (pinned by the companion
-/// test), and that would hide the case where nothing objects at all.
+/// `ShotData` is the argument type of the `create_shot` command and carries
+/// a `uuid`. The executor clears it, so a client naming an EXISTING shot's
+/// identity (inserted before it, to take its place) gets a fresh mint, and
+/// the original keeps the identity every reference to it was made with.
 #[test]
 fn create_shot_cannot_name_an_existing_shots_identity() {
     const IDS: [&str; 3] = [
@@ -783,342 +676,164 @@ fn create_shot_cannot_name_an_existing_shots_identity() {
         "ffffffff-0000-4000-8000-000000000002",
         "ffffffff-0000-4000-8000-000000000003",
     ];
+    let (p, line) = survey_with_uuids(&IDS);
+    let victim = p.line(line).unwrap().shots[1].id;
+    let state = state_with(p);
 
-    let dir = tempfile::tempdir().unwrap();
-    let source = write_tmlu(
-        dir.path(),
-        "boundary.tmlu",
-        &cave_file_xml(&[
-            Row::new(1, 0, Some(IDS[0])),
-            Row::new(2, 1, Some(IDS[1])),
-            Row::new(3, 2, Some(IDS[2])),
-        ]),
-    );
-
-    let state = state_with_project();
-    import_ariane_file(&state, &source);
-
-    // Make the project ALREADY critical before the attack. `execute`'s
-    // structural epilogue only rolls back NEWLY introduced criticals
-    // (`finalize_structural_edit(pre_had_critical)`), so this is the state in
-    // which the duplicate is admitted and nothing objects until the pre-save
-    // repair re-mints the original - the silent shape of the hazard, and the
-    // reason the executor clear is load-bearing rather than belt-and-braces.
-    let (line_id, victim_shot_id) = {
-        let mut p = state.get_project_state().unwrap();
-        let ids = (p.lines[0].id, p.lines[0].shots[1].id);
-        p.add_line(LineData {
-            name: Some("Corrupt".to_string()),
-            shots: vec![ShotData {
-                length: f64::NAN,
-                ..Default::default()
-            }],
-            ..Default::default()
-        });
-        assert!(
-            p.has_critical_integrity_violations(),
-            "the fixture must start out critical or the epilogue masks the hazard"
-        );
-        state.set_project_for_tests(p);
-        ids
-    };
-
-    // The attack: create a shot that claims the victim's identity, placed
-    // BEFORE it so it becomes the first occurrence.
     let result = state.execute(Command::CreateShot {
-        line_id,
+        line_id: line,
         shot: ShotData {
-            uuid: Some(IDS[1].to_string()),
-            azimuth_in: 90.0,
-            azimuth_out: 90.0,
             length: 4.0,
-            depth_in: 5.0,
-            depth_out: 5.0,
-            ..Default::default()
+            ..shot_u(IDS[1])
         },
         after_shot_id: None,
-        before_shot_id: Some(victim_shot_id),
+        before_shot_id: Some(victim),
     });
     assert!(result.success, "{:?}", result.error);
-
-    let mut project = state.get_project_state().unwrap();
-    let claimants: Vec<u32> = project.lines[0]
+    let after = project(&state);
+    let claimants: Vec<u32> = after
+        .line(line)
+        .unwrap()
         .shots
         .iter()
-        .filter(|s| s.uuid.as_deref() == Some(IDS[1]))
+        .filter(|s| s.uuid == IDS[1])
         .map(|s| s.id)
         .collect();
     assert_eq!(
         claimants,
-        vec![victim_shot_id],
-        "only the original shot may hold its identity - the client named it and \
-         was inserted first, so a second claimant is the injection landing"
+        vec![victim],
+        "only the original holds its identity"
     );
-
-    // The pre-save repair is where the damage would land, so run it and check
-    // the victim - not the injected shot - still owns the identity.
-    let reminted = project.ensure_unique_shot_uuids();
-    assert_eq!(reminted, 0, "there was never a duplicate to repair");
-    let victim = project.lines[0]
-        .shots
-        .iter()
-        .find(|s| s.id == victim_shot_id)
-        .expect("the victim shot survives");
-    assert_eq!(
-        victim.uuid.as_deref(),
-        Some(IDS[1]),
-        "the original shot must keep the identity its anchors resolve through"
-    );
+    assert_unique(&after);
 }
 
-/// The same attack through the remaining command doors (pre-PR review, #423).
-/// `execute_batch` is a `#[tauri::command]` taking
-/// `Vec<Command>` verbatim from the webview; the batch allowlist
-/// (`is_batch_allowed`) refuses `CreateShot` today, and this pins that refusal
-/// - but `CreateLine` IS batch-allowed, and `state.execute` itself is
-/// reachable by any internal caller holding a constructed command. So the
-/// identity rule cannot live in one IPC wrapper: the executor
-/// (`AppState::create_shot`) and the two `CreateLine` dispatch arms clear
-/// it, and each surface is pinned here. Same already-critical fixture as
-/// above: a batch takes no integrity snapshot (`finalize_structural_edit`
-/// skips `Command::Batch`), so nothing downstream would roll an injection
-/// back.
+/// The same attack through the other doors: the batch allowlist refuses
+/// `CreateShot` outright, and a directly executed one is cleared.
 #[test]
-fn client_named_identities_are_stripped_at_every_command_door() {
+fn client_named_identities_are_stripped_at_the_shot_doors() {
     const IDS: [&str; 2] = [
         "ffffffff-0000-4000-8000-000000000011",
         "ffffffff-0000-4000-8000-000000000012",
     ];
-
-    let dir = tempfile::tempdir().unwrap();
-    let source = write_tmlu(
-        dir.path(),
-        "batch-boundary.tmlu",
-        &cave_file_xml(&[Row::new(1, 0, Some(IDS[0])), Row::new(2, 1, Some(IDS[1]))]),
-    );
-
-    let state = state_with_project();
-    import_ariane_file(&state, &source);
-
-    let (line_id, victim_shot_id) = {
-        let mut p = state.get_project_state().unwrap();
-        let ids = (p.lines[0].id, p.lines[0].shots[1].id);
-        p.add_line(LineData {
-            name: Some("Corrupt".to_string()),
-            shots: vec![ShotData {
-                length: f64::NAN,
-                ..Default::default()
-            }],
-            ..Default::default()
-        });
-        assert!(
-            p.has_critical_integrity_violations(),
-            "the fixture must start out critical or the epilogue masks the hazard"
-        );
-        state.set_project_for_tests(p);
-        ids
-    };
-
-    let smuggling_shot = ShotData {
-        uuid: Some(IDS[1].to_string()),
-        azimuth_in: 90.0,
-        azimuth_out: 90.0,
+    let (p, line) = survey_with_uuids(&IDS);
+    let victim = p.line(line).unwrap().shots[1].id;
+    let state = state_with(p);
+    let smuggling = ShotData {
         length: 4.0,
-        depth_in: 5.0,
-        depth_out: 5.0,
-        ..Default::default()
+        ..shot_u(IDS[1])
     };
 
-    // Surface 1: the batch allowlist refuses CreateShot outright. If someone
-    // ever allowlists it, the executor clear below still holds.
     let result = state.execute(Command::Batch {
         commands: vec![Command::CreateShot {
-            line_id,
-            shot: smuggling_shot.clone(),
+            line_id: line,
+            shot: smuggling.clone(),
             after_shot_id: None,
-            before_shot_id: Some(victim_shot_id),
+            before_shot_id: Some(victim),
         }],
         label: None,
     });
-    assert!(
-        !result.success,
-        "CreateShot inside a batch is refused by the allowlist"
-    );
+    assert!(!result.success, "CreateShot inside a batch is refused");
+    assert_eq!(state.get_undo_stack().len(), 0);
 
-    // Surface 2: `state.execute(Command::CreateShot ...)` directly - the
-    // dispatch arm any internal caller lands on. The executor clears the
-    // identity, so the victim keeps it and the new shot gets a mint.
     let result = state.execute(Command::CreateShot {
-        line_id,
-        shot: smuggling_shot.clone(),
+        line_id: line,
+        shot: smuggling,
         after_shot_id: None,
-        before_shot_id: Some(victim_shot_id),
+        before_shot_id: Some(victim),
     });
     assert!(result.success, "{:?}", result.error);
-
-    let project = state.get_project_state().unwrap();
-    let claimants: Vec<u32> = project.lines[0]
+    let after = project(&state);
+    let holders = after
+        .line(line)
+        .unwrap()
         .shots
         .iter()
-        .filter(|s| s.uuid.as_deref() == Some(IDS[1]))
-        .map(|s| s.id)
-        .collect();
-    assert_eq!(
-        claimants,
-        vec![victim_shot_id],
-        "a directly executed CreateShot must not smuggle an identity past the executor clear"
-    );
+        .filter(|s| s.uuid == IDS[1])
+        .count();
+    assert_eq!(holders, 1);
+    assert_unique(&after);
+}
 
-    // Surface 3: CreateLine IS batch-allowed, so the batched line door is
-    // live. The strip at the `execute_without_undo` dispatch arm must hold.
-    let batched = state.execute(Command::Batch {
-        commands: vec![Command::CreateLine {
-            name: Some("Batched smuggler".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            shots: vec![smuggling_shot.clone()],
-            cave_section_id: None,
-        }],
-        label: None,
-    });
-    assert!(batched.success, "{:?}", batched.error);
-    let project = state.get_project_state().unwrap();
-    let batched_line = project
-        .lines
-        .iter()
-        .find(|s| s.name.as_deref() == Some("Batched smuggler"))
-        .unwrap();
-    assert_ne!(
-        batched_line.shots[0].uuid.as_deref(),
-        Some(IDS[1]),
-        "a batched CreateLine must not adopt a client-named identity"
-    );
-
-    // The line-shaped door too: `Command::CreateLine` carries a whole
-    // `Vec<ShotData>` off IPC. Its executor is shared with the importers (whose
-    // identities are legitimate), so the strip lives at the dispatch arms - a
-    // client-named identity must not land through it either. Cross-line
-    // repeats are legal in the model, so the assertion is on the NEW line:
-    // its shot must come back with a fresh mint, not the named identity.
-    let created = state.execute(Command::CreateLine {
-        name: Some("Smuggler".to_string()),
+/// `CreateLine` carries a whole `Vec<ShotData>` off IPC, alone and in a
+/// batch; neither may adopt a client-named identity.
+#[test]
+fn create_line_takes_no_client_named_identity() {
+    const ID: &str = "ffffffff-0000-4000-8000-000000000021";
+    let (p, _) = survey_with_uuids(&[ID]);
+    let state = state_with(p);
+    let line_with = |name: &str| Command::CreateLine {
+        name: Some(name.to_string()),
         surveyor: None,
         date: None,
         color: "#4ecdc4".to_string(),
         direction: None,
-        shots: vec![ShotData {
-            uuid: Some(IDS[1].to_string()),
-            azimuth_in: 90.0,
-            azimuth_out: 90.0,
-            length: 4.0,
-            depth_in: 5.0,
-            depth_out: 5.0,
-            ..Default::default()
-        }],
+        shots: vec![shot_u(ID)],
         cave_section_id: None,
+    };
+    let batched = state.execute(Command::Batch {
+        commands: vec![line_with("Batched smuggler")],
+        label: None,
     });
+    assert!(batched.success, "{:?}", batched.error);
+    let created = state.execute(line_with("Smuggler"));
     assert!(created.success, "{:?}", created.error);
-    let project = state.get_project_state().unwrap();
-    let new_line = project.get_line(created.line_id.unwrap()).unwrap();
-    assert_ne!(
-        new_line.shots[0].uuid.as_deref(),
-        Some(IDS[1]),
-        "CreateLine must not adopt a client-named identity"
-    );
-    assert!(new_line.shots[0].uuid.is_some(), "and it still mints one");
+    let after = project(&state);
+    for line in after.lines().iter().skip(1) {
+        assert_ne!(
+            line.shots[0].uuid, ID,
+            "{:?} adopted a client identity",
+            line.name
+        );
+        assert!(!line.shots[0].uuid.is_empty());
+    }
+    assert_unique(&after);
 }
 
-/// The same attack on a SOUND project, with a cross-reference anchored on the
-/// victim: the anchor must still resolve to the victim's own station and the
-/// create must still succeed. Without the executor clear this fails earlier and
-/// differently - `duplicate_shot_uuid` is Critical, so `execute`'s epilogue
-/// rolls the whole create back with "Blocked: this action would corrupt the
-/// survey structure". Recorded as the second line of defence it is, and as
-/// evidence that leaving the field honoured would also break a legitimate edit.
+/// The same attack on a sound project with a reference on the station the
+/// victim shot ends at: the reference stays on that station (now one
+/// position later), never moving to the new shot's station.
 #[test]
-fn create_shot_cannot_move_an_existing_anchor_onto_a_new_shot() {
+fn create_shot_cannot_move_a_reference_onto_a_new_shot() {
     const IDS: [&str; 3] = [
         "ffffffff-1111-4000-8000-000000000001",
         "ffffffff-1111-4000-8000-000000000002",
         "ffffffff-1111-4000-8000-000000000003",
     ];
-
-    let dir = tempfile::tempdir().unwrap();
-    let source = write_tmlu(
-        dir.path(),
-        "anchored-boundary.tmlu",
-        &cave_file_xml(&[
-            Row::new(1, 0, Some(IDS[0])),
-            Row::new(2, 1, Some(IDS[1])),
-            Row::new(3, 2, Some(IDS[2])),
-        ]),
-    );
-
-    let state = state_with_project();
-    import_ariane_file(&state, &source);
-
-    // Anchor a comment on the station AFTER shot index 1, i.e. keyed on IDS[1].
-    let (line_id, victim_shot_id) = {
-        let p = state.get_project_state().unwrap();
-        (p.lines[0].id, p.lines[0].shots[1].id)
-    };
-    let r = state.execute(Command::SetStationComment {
-        station_ref: StationRef::new(line_id, 2),
-        comment: Some("anchored on the victim".to_string()),
-    });
-    assert!(r.success, "{:?}", r.error);
-    let anchored_key: StationKey = {
-        let p = state.get_project_state().unwrap();
-        let (key, _) = p.station_comments.iter().next().unwrap();
-        assert_eq!(
-            key.anchor,
-            crate::models::StationAnchor::AfterShot(IDS[1].to_string()),
-            "the comment must be anchored on the victim's own identity"
-        );
-        key.clone()
-    };
+    let (mut p, line) = survey_with_uuids(&IDS);
+    let victim = p.line(line).unwrap().shots[1].id;
+    let anchored = st(&p, line, 2);
+    set_comment(&mut p, anchored, "anchored on the victim");
+    let state = state_with(p);
 
     let result = state.execute(Command::CreateShot {
-        line_id,
+        line_id: line,
         shot: ShotData {
-            uuid: Some(IDS[1].to_string()),
-            azimuth_in: 90.0,
-            azimuth_out: 90.0,
             length: 4.0,
-            depth_in: 5.0,
-            depth_out: 5.0,
-            ..Default::default()
+            ..shot_u(IDS[1])
         },
         after_shot_id: None,
-        before_shot_id: Some(victim_shot_id),
+        before_shot_id: Some(victim),
     });
     assert!(result.success, "{:?}", result.error);
-
-    let project = state.get_project_state().unwrap();
+    let after = project(&state);
     assert_eq!(
-        project.resolve_key(&anchored_key),
-        Some(StationRef::new(line_id, 3)),
-        "the anchored comment must still resolve to the victim's own station \
-         (now one position later), not to the newly created shot"
+        st(&after, line, 3),
+        anchored,
+        "the victim's end is one further on"
     );
+    assert_eq!(
+        after.station(anchored).unwrap().comment.as_deref(),
+        Some("anchored on the victim")
+    );
+    assert_eq!(after.station(st(&after, line, 2)).unwrap().comment, None);
 }
 
 // ---------------------------------------------------------------------------
 // 11. The foreign id is bounded and characterised
 // ---------------------------------------------------------------------------
 
-/// A control character in `<UUID>` is not merely odd: the writer escapes only
-/// `<>&"'`, so it goes into the export as a raw byte and the document stops
-/// being valid XML 1.0. Our own quick-xml reader is lenient enough to read it
-/// straight back (measured), so the assertion below is on the emitted BYTES -
-/// checking re-import would pass either way and pin nothing. The cost lands on
-/// the strict consumers: Ariane and SpeleoDB's converter reject the file.
-///
-/// An unbounded value is a separate, resource lever: it is cloned into the
-/// project-wide uuid index and into every undo snapshot. Both cases fall back to
-/// a fresh mint, which costs that shot its foreign identity and nothing else.
+/// A control character or an over-long value in `<UUID>` falls back to a
+/// fresh mint, and the export stays valid XML 1.0 (asserted on the bytes).
 #[test]
 fn an_unstorable_foreign_uuid_falls_back_to_a_mint_and_the_export_stays_well_formed() {
     const GOOD: &str = "abcdabcd-0000-4000-8000-000000000001";
@@ -1129,7 +844,6 @@ fn an_unstorable_foreign_uuid_falls_back_to_a_mint_and_the_export_stays_well_for
                             aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\
                             aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\
                             aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-
     let dir = tempfile::tempdir().unwrap();
     let source = write_tmlu(
         dir.path(),
@@ -1140,35 +854,15 @@ fn an_unstorable_foreign_uuid_falls_back_to_a_mint_and_the_export_stays_well_for
             Row::new(3, 2, Some(OVERLONG)),
         ]),
     );
-
     let state = state_with_project();
     import_ariane_file(&state, &source);
-
-    let project = state.get_project_state().unwrap();
+    let project = project(&state);
     let uuids = line_uuids(&project, 0);
-    assert_eq!(uuids.len(), 3);
-    assert_eq!(uuids[0], GOOD, "a well-formed id is still adopted verbatim");
-    assert!(
-        !uuids[1].contains('\u{1}') && !uuids[1].is_empty(),
-        "a control-bearing id must be replaced by a mint, not stored: {:?}",
-        uuids[1]
-    );
-    assert!(
-        uuids[2].len() <= 128 && uuids[2] != OVERLONG,
-        "an over-long id must be replaced by a mint: {} chars",
-        uuids[2].len()
-    );
-    for u in &uuids {
-        assert!(
-            !u.chars().any(char::is_control),
-            "no stored identity may hold a control character: {u:?}"
-        );
-    }
+    assert_eq!(uuids[0], GOOD);
+    assert!(!uuids[1].contains('\u{1}') && !uuids[1].is_empty());
+    assert!(uuids[2].len() <= 128 && uuids[2] != OVERLONG);
+    assert!(uuids.iter().all(|u| !u.chars().any(char::is_control)));
 
-    // The whole point of the shape check: what we emit is valid XML 1.0. Assert
-    // on the BYTES - a raw C0 control in element content is exactly what the
-    // spec forbids and what a strict consumer rejects, and our own lenient
-    // reader would happily round-trip it, so re-parsing pins nothing.
     let exported = dir.path().join("out.tmlu");
     export_tml(&project, &exported).unwrap();
     let raw = std::fs::read(&exported).unwrap();
@@ -1177,132 +871,64 @@ fn an_unstorable_foreign_uuid_falls_back_to_a_mint_and_the_export_stays_well_for
         .copied()
         .filter(|b| b.is_ascii_control() && !matches!(b, b'\t' | b'\n' | b'\r'))
         .collect();
-    assert!(
-        illegal.is_empty(),
-        "the export must not contain characters XML 1.0 forbids in content: {illegal:?}"
-    );
-    let out: Vec<String> = parse_tml(&exported)
-        .unwrap()
-        .lines
-        .iter()
-        .flat_map(|s| s.shots.iter())
-        .filter_map(|s| s.uuid.clone())
-        .collect();
-    assert!(
-        out.contains(&GOOD.to_string()),
-        "the good id must survive the round trip: {out:?}"
-    );
+    assert!(illegal.is_empty(), "{illegal:?}");
 }
 
-/// A NUL is the case that would diverge silently rather than loudly: SQLite
-/// TEXT read-back can truncate at it, so a saved identity and a reloaded one
-/// would differ with nothing to show for it. The shape check keeps NUL out of
-/// the model entirely, so save and reload agree exactly.
+/// A NUL never reaches the model, so save and reload agree exactly.
 #[test]
 fn a_nul_bearing_uuid_cannot_diverge_across_save_and_reload() {
     let dir = tempfile::tempdir().unwrap();
-    // A literal NUL and a literal U+0001 in the element text, not entities.
     let xml = cave_file_xml(&[Row::new(1, 0, Some("aa\u{0}bb")), Row::new(2, 1, None)]);
     let source = write_tmlu(dir.path(), "nul.tmlu", &xml);
-
     let state = state_with_project();
     import_ariane_file(&state, &source);
-    let saved = state.get_project_state().unwrap();
+    let saved = project(&state);
     let before = line_uuids(&saved, 0);
-    assert!(
-        before.iter().all(|u| !u.contains('\u{0}') && !u.is_empty()),
-        "a NUL-bearing id must never reach the model: {before:?}"
-    );
-
-    let (db, _keep) = crate::test_helpers::TestDb::with_project(&saved).unwrap();
-    let reloaded = crate::persistence::Database::open_existing(db.path())
+    assert!(before.iter().all(|u| !u.contains('\u{0}') && !u.is_empty()));
+    let bytes = stalx_v2::encode(&saved, &Extras::default(), Mode::Normal).unwrap();
+    let reloaded = stalx_v2::decode(&bytes, &stalx_v2::DecodeOptions::default())
         .unwrap()
-        .load_project()
-        .unwrap();
-    assert_eq!(
-        line_uuids(&reloaded, 0),
-        before,
-        "identity must not change across save and reload"
-    );
+        .project;
+    assert_eq!(line_uuids(&reloaded, 0), before);
 }
 
 // ---------------------------------------------------------------------------
-// 12. Splitting one shot into two is a duplicate path
+// 12. Splitting one shot into two
 // ---------------------------------------------------------------------------
 
-/// `compute_split` is the one place a shot is cloned into two, and its
-/// `uuid: None` on the head is the load-bearing instance of the rule on
-/// [`ShotData::uuid`]: the TAIL keeps the parent's identity (which is what lets
-/// every existing anchor keep resolving with no remap), the head is new.
-///
-/// Red if the head copies the parent's uuid: the line then holds the id
-/// twice with the head FIRST, and the first-wins repair re-mints the tail -
-/// moving every anchor onto the head.
+/// Insert Station clones one shot into two: the TAIL keeps the parent's
+/// identity, the head is new; a reference on the shot's end station stays on
+/// it.
 #[test]
 fn splitting_a_shot_at_distance_leaves_the_identity_on_the_tail_only() {
     const IDS: [&str; 2] = [
         "cafecafe-0000-4000-8000-000000000001",
         "cafecafe-0000-4000-8000-000000000002",
     ];
+    let (mut p, line) = survey_with_uuids(&IDS);
+    let target = p.line(line).unwrap().shots[0].id;
+    let end = st(&p, line, 1);
+    set_comment(&mut p, end, "after the split shot");
+    let state = state_with(p);
 
-    let dir = tempfile::tempdir().unwrap();
-    let source = write_tmlu(
-        dir.path(),
-        "split-shot.tmlu",
-        &cave_file_xml(&[Row::new(1, 0, Some(IDS[0])), Row::new(2, 1, Some(IDS[1]))]),
-    );
-
-    let state = state_with_project();
-    import_ariane_file(&state, &source);
-
-    let (line_id, target) = {
-        let p = state.get_project_state().unwrap();
-        (p.lines[0].id, p.lines[0].shots[0].id)
-    };
-    // Anchor a comment on the station after the shot being split.
-    let r = state.execute(Command::SetStationComment {
-        station_ref: StationRef::new(line_id, 1),
-        comment: Some("after the split shot".to_string()),
-    });
+    let r = state.execute_split_shot_at_distance(line, target, 4.0);
     assert!(r.success, "{:?}", r.error);
-
-    let r = state.execute_split_shot_at_distance(line_id, target, 4.0);
-    assert!(r.success, "{:?}", r.error);
-
-    let mut project = state.get_project_state().unwrap();
-    let uuids = line_uuids(&project, 0);
+    let after = project(&state);
+    let uuids = line_uuids(&after, 0);
     assert_eq!(uuids.len(), 3, "the split adds one shot: {uuids:?}");
+    assert_eq!(uuids[1], IDS[0], "the TAIL keeps the parent's identity");
+    assert_ne!(uuids[0], IDS[0], "the HEAD is a new shot");
+    assert!(!uuids[0].is_empty());
+    assert_eq!(uuids[2], IDS[1]);
+    assert_unique(&after);
     assert_eq!(
-        uuids[1], IDS[0],
-        "the TAIL child must keep the parent's identity"
-    );
-    assert_ne!(
-        uuids[0], IDS[0],
-        "the HEAD child is a new shot and must not copy the parent's identity"
-    );
-    assert!(!uuids[0].is_empty(), "the head must still get an identity");
-    assert_eq!(uuids[2], IDS[1], "the untouched shot keeps its own id");
-    assert_eq!(
-        project.ensure_unique_shot_uuids(),
-        0,
-        "the split must not leave a duplicate for the repair to find"
-    );
-
-    // The anchored comment must still name the tail, so it lands on the station
-    // that is now one position later.
-    let (key, _) = {
-        let p = state.get_project_state().unwrap();
-        let (k, t) = p.station_comments.iter().next().unwrap();
-        (k.clone(), t.clone())
-    };
-    assert_eq!(
-        key.anchor,
-        crate::models::StationAnchor::AfterShot(IDS[0].to_string())
+        st(&after, line, 2),
+        end,
+        "the end station is one further on"
     );
     assert_eq!(
-        state.get_project_state().unwrap().resolve_key(&key),
-        Some(StationRef::new(line_id, 2)),
-        "the comment must follow the tail child, not snap onto the head"
+        after.station(end).unwrap().comment.as_deref(),
+        Some("after the split shot")
     );
 }
 
@@ -1310,9 +936,7 @@ fn splitting_a_shot_at_distance_leaves_the_identity_on_the_tail_only() {
 // 13. Adversarial element shapes
 // ---------------------------------------------------------------------------
 
-/// An empty or whitespace-only element is "no identity", not an identity that
-/// happens to be blank - an empty stored uuid reads as a real shared key to
-/// anything that consumes it (see `export::tml::shot_export_uuid`).
+/// An empty or whitespace-only element is "no identity": a mint.
 #[test]
 fn an_empty_or_whitespace_uuid_element_means_no_identity() {
     let dir = tempfile::tempdir().unwrap();
@@ -1325,35 +949,22 @@ fn an_empty_or_whitespace_uuid_element_means_no_identity() {
             Row::new(3, 2, Some("dadadada-0000-4000-8000-000000000001")),
         ]),
     );
-
     let state = state_with_project();
     import_ariane_file(&state, &source);
-
-    let project = state.get_project_state().unwrap();
+    let project = project(&state);
     let uuids = line_uuids(&project, 0);
-    assert_eq!(uuids.len(), 3);
-    for (i, u) in uuids.iter().take(2).enumerate() {
-        assert!(
-            !u.is_empty() && !u.trim().is_empty(),
-            "blank element {i} must yield a minted identity, not a blank one: {u:?}"
-        );
+    for u in uuids.iter().take(2) {
+        assert!(!u.trim().is_empty(), "a blank element yields a mint: {u:?}");
     }
-    assert_eq!(uuids[0..2].iter().collect::<HashSet<_>>().len(), 2);
     assert_eq!(uuids[2], "dadadada-0000-4000-8000-000000000001");
-    assert!(project
-        .check_structural_integrity()
-        .iter()
-        .all(|v| v.category != "duplicate_shot_uuid"));
+    assert_unique(&project);
 }
 
-/// A repeat across TWO lines of one file: shot UUIDs are unique across the
-/// project, so the first line keeps the file's id and the second gets the
-/// derived replacement for it. The import's integrity epilogue would roll the
-/// whole import back if the repeat survived.
+/// A repeat across TWO lines of one file: the first line keeps the file's
+/// id and the second gets a replacement, as the uniqueness invariant needs.
 #[test]
 fn the_same_uuid_in_two_lines_of_one_file_stays_in_the_first_line() {
     const SHARED: &str = "bebebebe-0000-4000-8000-000000000001";
-
     let dir = tempfile::tempdir().unwrap();
     let source = write_tmlu(
         dir.path(),
@@ -1363,34 +974,17 @@ fn the_same_uuid_in_two_lines_of_one_file_stays_in_the_first_line() {
             &[Row::new(3, 2, Some(SHARED)), Row::new(4, 3, None)],
         ),
     );
-
     let state = state_with_project();
     import_ariane_file(&state, &source);
-
-    let project = state.get_project_state().unwrap();
-    assert_eq!(project.lines.len(), 2, "the file must import as 2 lines");
-    let held: Vec<String> = (0..2).map(|i| line_uuids(&project, i)[0].clone()).collect();
-    let second = project.lines[1].id;
-    assert_eq!(
-        held,
-        vec![
-            SHARED.to_string(),
-            crate::models::reminted_shot_uuid(second, SHARED)
-        ],
-        "the first line keeps the id, the second gets the derived one"
-    );
-    assert!(
-        project.check_structural_integrity().is_empty(),
-        "no shot UUID may be held by two lines"
-    );
+    let project = project(&state);
+    assert_eq!(project.lines().len(), 2);
+    assert_eq!(line_uuids(&project, 0)[0], SHARED);
+    assert_ne!(line_uuids(&project, 1)[0], SHARED);
+    assert_unique(&project);
 }
 
-/// Entity-escaped text is one value after unescaping and must be stored whole.
-/// A CDATA-split value is the shape the field reader cannot represent - the
-/// `Text` handler overwrites per chunk, which predates #423 but only became
-/// identity-bearing with it. Whatever it yields, the invariant that matters
-/// holds: the stored id is a single non-empty value with no control characters,
-/// and the export re-parses.
+/// Entity-escaped text is one value after unescaping and is stored whole;
+/// the export re-escapes it.
 #[test]
 fn an_entity_escaped_uuid_is_stored_whole_and_a_split_one_stays_exportable() {
     let dir = tempfile::tempdir().unwrap();
@@ -1402,23 +996,15 @@ fn an_entity_escaped_uuid_is_stored_whole_and_a_split_one_stays_exportable() {
             Row::new(2, 1, Some("AA<![CDATA[&]]>BB")),
         ]),
     );
-
     let state = state_with_project();
     import_ariane_file(&state, &source);
-
-    let project = state.get_project_state().unwrap();
+    let project = project(&state);
     let uuids = line_uuids(&project, 0);
-    assert_eq!(uuids.len(), 2);
-    assert_eq!(
-        uuids[0], "AA&BB",
-        "an entity-escaped id must be unescaped once and stored whole"
-    );
+    assert_eq!(uuids[0], "AA&BB");
     for u in &uuids {
         assert!(!u.is_empty() && !u.chars().any(char::is_control), "{u:?}");
     }
-    assert_eq!(uuids.iter().collect::<HashSet<_>>().len(), 2);
-
-    // The escaping has to survive a round trip, or the export is unreadable.
+    assert_unique(&project);
     let exported = dir.path().join("escaped-out.tmlu");
     export_tml(&project, &exported).unwrap();
     let reparsed = parse_tml(&exported).expect("the export must be well-formed XML");
@@ -1428,67 +1014,40 @@ fn an_entity_escaped_uuid_is_stored_whole_and_a_split_one_stays_exportable() {
         .flat_map(|s| s.shots.iter())
         .filter_map(|s| s.uuid.clone())
         .collect();
-    assert!(
-        out.contains(&"AA&BB".to_string()),
-        "the ampersand must survive re-escaping: {out:?}"
-    );
+    assert!(out.contains(&"AA&BB".to_string()), "{out:?}");
 }
 
 // ---------------------------------------------------------------------------
 // 14. The export-character gate is the XML rule, not just the control range
 // ---------------------------------------------------------------------------
 
-/// U+FFFF is excluded by XML 1.0's `Char` production but is NOT a control
-/// character, so a gate written as `char::is_control` adopted it, stored it, and
-/// let `BytesText::new` (which escapes only `<>&"'`) write it raw into element
-/// content - producing the ill-formed document the gate exists to prevent.
-///
-/// The asymmetry is what makes this worth a hard check rather than a shrug: a
-/// rejected id costs ONE shot its foreign identity, an accepted bad byte costs
-/// the WHOLE file, because a strict consumer rejects the document rather than
-/// the row.
-///
-/// Asserted on the emitted BYTES: our own quick-xml reader is lenient enough to
-/// read such a document straight back, so a re-parse would pin nothing.
+/// U+FFFF and U+FFFE are outside XML 1.0's `Char` but not control
+/// characters: such an id falls back to a mint, and the export holds only
+/// characters XML allows (asserted on the bytes).
 #[test]
 fn a_uuid_outside_the_xml_char_set_falls_back_to_a_mint() {
     const GOOD: &str = "beefbeef-0000-4000-8000-000000000001";
-    // Neither of these is a control character; both are outside `Char`.
-    const NONCHAR_FFFF: &str = "a\u{FFFF}b";
-    const NONCHAR_FFFE: &str = "a\u{FFFE}b";
-
-    // The gate itself is unit-tested next to it, in `parsers::tml`
-    // (`foreign_shot_uuid_rejects_characters_xml_forbids`); this is the
-    // end-to-end consequence.
     let dir = tempfile::tempdir().unwrap();
     let source = write_tmlu(
         dir.path(),
         "nonchar.tmlu",
         &cave_file_xml(&[
             Row::new(1, 0, Some(GOOD)),
-            Row::new(2, 1, Some(NONCHAR_FFFF)),
-            Row::new(3, 2, Some(NONCHAR_FFFE)),
+            Row::new(2, 1, Some("a\u{FFFF}b")),
+            Row::new(3, 2, Some("a\u{FFFE}b")),
         ]),
     );
-
     let state = state_with_project();
     import_ariane_file(&state, &source);
-
-    let project = state.get_project_state().unwrap();
+    let project = project(&state);
     let uuids = line_uuids(&project, 0);
-    assert_eq!(uuids.len(), 3);
     assert_eq!(uuids[0], GOOD);
-    for (i, u) in uuids.iter().enumerate().skip(1) {
-        assert!(
-            !u.contains('\u{FFFF}') && !u.contains('\u{FFFE}') && !u.is_empty(),
-            "shot {i} adopted a non-Char identity: {u:?}"
-        );
+    for u in uuids.iter().skip(1) {
+        assert!(!u.contains('\u{FFFF}') && !u.contains('\u{FFFE}') && !u.is_empty());
     }
-
     let exported = dir.path().join("nonchar-out.tmlu");
     export_tml(&project, &exported).unwrap();
-    let raw = std::fs::read(&exported).unwrap();
-    let text = String::from_utf8(raw).expect("the export must be valid UTF-8");
+    let text = String::from_utf8(std::fs::read(&exported).unwrap()).unwrap();
     let forbidden: Vec<u32> = text
         .chars()
         .filter(|c| {
@@ -1500,128 +1059,5 @@ fn a_uuid_outside_the_xml_char_set_falls_back_to_a_mint() {
         })
         .map(u32::from)
         .collect();
-    assert!(
-        forbidden.is_empty(),
-        "the export must contain only characters XML 1.0 allows: {forbidden:x?}"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// 15. A legacy undo entry must not re-create a shot with no identity
-// ---------------------------------------------------------------------------
-
-/// The one insert arm that bypasses the `line.rs` helpers: a legacy
-/// `CreatedShotSnapshot` (both anchors `None`, no recorded uuid) redone as a
-/// TRUE APPEND takes the raw `line.shots.insert` path in
-/// `core/state/undo.rs`, which used to hand `Shot::with_uuid` a bare `None` -
-/// recreating the identity-less shot every other insert path mints for.
-#[test]
-fn a_legacy_created_shot_redo_append_mints_an_identity() {
-    let state = state_with_project();
-    let line_id = state
-        .execute(Command::CreateLine {
-            name: Some("LegacyRedoAppend".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            shots: vec![
-                ShotData {
-                    azimuth_in: 90.0,
-                    azimuth_out: 90.0,
-                    length: 10.0,
-                    depth_in: 5.0,
-                    depth_out: 5.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    azimuth_in: 90.0,
-                    azimuth_out: 90.0,
-                    length: 11.0,
-                    depth_in: 5.0,
-                    depth_out: 5.0,
-                    ..Default::default()
-                },
-            ],
-            cave_section_id: None,
-        })
-        .line_id
-        .unwrap();
-
-    // A pre-#423 persisted redo entry: no anchors, no uuid anywhere, and a
-    // position at/past the tail so the replay is a true append.
-    let entry = crate::core::undo::UndoEntry {
-        command_bytes: None,
-        command: Command::CreateShot {
-            line_id,
-            shot: ShotData {
-                azimuth_in: 45.0,
-                azimuth_out: 45.0,
-                length: 7.0,
-                depth_in: 5.0,
-                depth_out: 5.0,
-                ..Default::default()
-            },
-            after_shot_id: None,
-            before_shot_id: None,
-        },
-        undo_data: crate::core::undo::UndoData::CreatedShotSnapshot {
-            line_id,
-            shot_id: 9_999,
-            shot_data: ShotData {
-                azimuth_in: 45.0,
-                azimuth_out: 45.0,
-                length: 7.0,
-                depth_in: 5.0,
-                depth_out: 5.0,
-                ..Default::default()
-            },
-            position: 2,
-            station_shift_from: 3,
-            after_shot_id: None,
-            before_shot_id: None,
-            // A legacy persisted entry predates every uuid-anchor field and the
-            // captured-offsets map, so all of them deserialize to their defaults.
-            after_shot_uuid: None,
-            before_shot_uuid: None,
-            uuid: None,
-            previous_offsets: std::collections::HashMap::new(),
-            consumed_legacy: None,
-            created_station: None,
-        },
-        timestamp: None,
-    };
-    state.undo_stack.lock().unwrap().push_redo(entry);
-
-    let redone = state.redo();
-    assert!(redone.success, "{:?}", redone.error);
-
-    let project = state.get_project_state().unwrap();
-    let restored = project
-        .get_line(line_id)
-        .unwrap()
-        .shots
-        .iter()
-        .find(|s| s.id == 9_999)
-        .expect("the legacy redo appended its shot");
-    let uuid = restored
-        .uuid
-        .clone()
-        .expect("an appended shot must have an identity, or no anchor can name it");
-    assert!(!uuid.is_empty());
-
-    // The point of having one: an AfterShot anchor on it resolves.
-    let key = project
-        .key_for_ref(StationRef::new(line_id, 3))
-        .expect("the station after the appended shot must be nameable");
-    assert_eq!(
-        key.anchor,
-        crate::models::StationAnchor::AfterShot(uuid),
-        "the anchor must be keyed on the appended shot's own identity"
-    );
-    assert_eq!(
-        project.resolve_key(&key),
-        Some(StationRef::new(line_id, 3)),
-        "and it must resolve back to the same station"
-    );
+    assert!(forbidden.is_empty(), "{forbidden:x?}");
 }

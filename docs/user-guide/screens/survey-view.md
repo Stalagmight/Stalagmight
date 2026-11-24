@@ -104,7 +104,14 @@ SpeleoDB project**.
   the editing tools and **Import** are disabled.
 - An unpinned panel slides out when you hover its edge. `Ctrl+1`, `Ctrl+2` and
   `Ctrl+3` show or hide the left panel, **Details** and **Data**.
-- Status bar: number of lines and shots, total length, save state.
+- Status bar: number of lines and shots, total length, save state. It reads
+  **Old format: converted when you save** for a project from an earlier
+  version that has not been saved yet, and **Read-only** for a project made
+  with a newer version of Stalagmight, which this version opens to view,
+  measure and export only: **Save**, **Save As**, **Save and Close**,
+  **Import** and **Import from MNemo...** are off, and say why when you point
+  at them or click them (**Save and Close**: use **Close Project**). The
+  toolbar's **Import**, **Undo** and **Redo** say why the same way.
 - A project without data opens the map on the default location from Settings.
 - Satellite imagery by Esri.
 - Shortcuts can be changed in Settings. On macOS, use `Cmd` for `Ctrl`.

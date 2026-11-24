@@ -66,6 +66,19 @@ step immediately after `cargo test --workspace`, which fails if that tree has an
 modified or untracked file. Treat the tree exactly like `src/types/ipc/`: never hand-edit it;
 run the Rust tests and commit whatever they produce.
 
+**Imports the tree does not hold.** A bindings file imports the types its
+type names, and a few of those are never exported into this tree: a type
+whose `#[ts]` carries `export_to` without `export` (`StationRef`,
+`GpsCoordinates`, `Coordinates`, `ImportPlacement`: see the comment on
+`StationRef`), or one only `gen_ipc_types.rs` writes. Nothing consumes the
+tree, so such an import is inert, but it is pinned so no new one slips in:
+`src/test/__tests__/bindingsImports.test.ts` fails on any import of a file
+the tree does not hold except these, `GpxLinePlacement -> ImportPlacement`,
+`SpeleoFileAccess -> SpeleoProjectSummary`, `SpeleoLinkStatus -> Permission`,
+`TmlShot -> SurveyCredit` and `ProseStation -> StationRef`. The prose types
+(`ProsePart`, `ProseStation`, `ProseShot`, `ProseShotEnd`, `ProseLine`) are
+exported here because `ConversionNoticeView` names them (RS-PROSE fix 8).
+
 One gap the step cannot close: ts-rs only *writes* files, it never deletes them,
 so a `.ts` left behind after its Rust type is deleted leaves the worktree clean
 and passes. That orphan is inert (nothing imports it), but it does mean the tree

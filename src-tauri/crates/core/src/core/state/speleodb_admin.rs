@@ -3,9 +3,13 @@
 use super::speleodb::validate_project_id;
 use super::speleodb_session::LockClaim;
 use super::AppState;
+use crate::models::survey::Project;
 use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
+
+/// The refusal of a switch to read-only over work not yet saved or uploaded.
+const SAVE_FIRST: &str = "Save your changes using Save Changes before switching to read-only mode.";
 
 /// Map a local (non-endpoint) [`SpeleoDbError`] - a lock-resolution / not-linked
 /// failure raised before any HTTP call - into the IPC error DTO. Mirrors
@@ -32,23 +36,23 @@ impl AppState {
         Ok((link, endpoint, token, insecure_http))
     }
 
-    /// Inspect a linked SQLite file before replacing the open project. Reads only
-    /// local metadata and the existing project endpoint; never acquires a lock.
+    /// Inspect a linked `.stalx` before replacing the open project. Reads only
+    /// the file's link (the shared probe: a version 2 header, or a legacy
+    /// file's link row) and the existing project endpoint; never acquires a
+    /// lock.
     pub fn speleodb_project_access_at(
         &self,
         path: String,
         local_only: bool,
     ) -> Result<Option<crate::speleodb::SpeleoFileAccess>, SpeleoErrorDto> {
+        use super::speleodb_local_state::{probe_link, FileLink, LegacyRead};
         use crate::speleodb::{SpeleoAccessVerification, SpeleoFileAccess, SpeleoProjectSummary};
         let path = std::path::Path::new(&path);
-        let Ok(db) = crate::persistence::Database::open_for_metadata(path) else {
-            return Ok(None); // The normal loader reports invalid/missing files.
-        };
-        let Some(link) = db
-            .load_speleo_link()
-            .map_err(|e| admin_dto(SpeleoDbError::Io(e.to_string())))?
-        else {
-            return Ok(None);
+        let link = match probe_link(path, LegacyRead::ReadOnly) {
+            FileLink::Read(Some(link)) => link,
+            FileLink::Read(None) => return Ok(None),
+            // The normal loader reports invalid and missing files.
+            FileLink::Missing | FileLink::Unreadable(_) => return Ok(None),
         };
         validate_project_id(&link.project_id).map_err(admin_dto)?;
         // Unknown access (offline, signed out, another deployment) opens read-only.
@@ -149,9 +153,7 @@ impl AppState {
         let generation = self.speleodb_session_generation();
         let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
         if link.has_unpushed_edits {
-            return Err(admin_dto(SpeleoDbError::Io(
-                "Save your changes using Save Changes before switching to read-only mode.".into(),
-            )));
+            return Err(admin_dto(SpeleoDbError::Io(SAVE_FIRST.into())));
         }
         {
             let _commands = self
@@ -228,30 +230,29 @@ impl AppState {
         Ok(())
     }
 
-    /// Caller holds project and excludes command mutations.
+    /// Refuse unless the open project has nothing a switch to read-only would
+    /// strand: no survey change since the last save (`FileState::dirty`) and no
+    /// un-uploaded edits on its link. The caller holds `project` (passed in) and
+    /// excludes command mutations (`command_lock`); this takes only `file`, which
+    /// nests inside `project`.
     pub(super) fn speleodb_require_clean_project(
         &self,
-        project: Option<&crate::models::Project>,
+        project: Option<&Project>,
     ) -> Result<(), SpeleoDbError> {
-        let database = self
-            .database
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let db = database.as_ref().ok_or(SpeleoDbError::NoRemoteProject)?;
-        let saved = db
-            .load_project()
-            .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
-        let link = db
-            .load_speleo_link()
-            .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
-        if project.is_none_or(|p| p.modified_at != saved.modified_at)
-            || link.is_none_or(|link| link.has_unpushed_edits)
-        {
-            return Err(SpeleoDbError::Io(
-                "Save your changes using Save Changes before switching to read-only mode.".into(),
-            ));
+        if project.is_none() {
+            return Err(SpeleoDbError::NoRemoteProject);
         }
-        Ok(())
+        let clean = self.with_file(|file| {
+            !file.dirty
+                && file
+                    .speleo_link()
+                    .is_some_and(|link| !link.has_unpushed_edits)
+        });
+        if clean {
+            Ok(())
+        } else {
+            Err(SpeleoDbError::Io(SAVE_FIRST.into()))
+        }
     }
 
     /// Bind UI consent to the open project and authenticated backend session.

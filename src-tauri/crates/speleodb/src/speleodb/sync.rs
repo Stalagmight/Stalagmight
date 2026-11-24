@@ -278,6 +278,38 @@ pub(crate) fn base_is_ancestor_of_tip(
     }
 }
 
+/// After a server error answered an upload: is it CERTAIN that the upload did
+/// NOT land (plan 12.1)? Only then may the push call the error a refusal of the
+/// file (`contract::upload_refusal`); anything less stays the ambiguous
+/// "could not be confirmed", recovered by ancestry on the next push.
+///
+/// - A recorded `base`: the server tip is still that commit (compared
+///   case-insensitively, like every SHA here). A moved tip, a missing one or a
+///   fork is not certain.
+/// - No `base` (a just-published project whose create response named no commit):
+///   no commit in the history is authored by `my_email` - the server's own
+///   creation commit is not ours. An empty `my_email` cannot tell ours from
+///   anyone's, so it is never certain.
+///
+/// Pure over an already-fetched history, like [`plan_push`].
+#[must_use]
+pub fn upload_not_landed(
+    base: Option<&str>,
+    tip: Option<&str>,
+    commits: &[RevisionCommit],
+    my_email: &str,
+) -> bool {
+    match base {
+        Some(base) => tip.is_some_and(|tip| tip.eq_ignore_ascii_case(base)),
+        None => {
+            !my_email.trim().is_empty()
+                && !commits
+                    .iter()
+                    .any(|c| c.author_email.eq_ignore_ascii_case(my_email))
+        }
+    }
+}
+
 /// Whether a confirmed-landed push captured all our local edits - i.e. no edit
 /// happened after the push began. Biased to **false** (keep the dirty bit) on any
 /// uncertainty: a wrongly-kept dirty bit costs only a redundant no-op re-push,
@@ -725,6 +757,33 @@ mod tests {
             message: Some("[Automated] Project Creation".to_owned()),
             ..commit(id, &[], "contact@speleodb.org")
         }
+    }
+
+    #[test]
+    fn upload_not_landed_only_when_certain() {
+        use super::upload_not_landed;
+        let me = "me@example.com";
+        let history = [commit("b1", &[], me)];
+        // A recorded BASE: the tip is still it (either case), or it is not.
+        assert!(upload_not_landed(Some("b1"), Some("b1"), &history, me));
+        assert!(upload_not_landed(Some("B1"), Some("b1"), &history, me));
+        let landed = [commit("b1", &[], me), commit("p2", &["b1"], me)];
+        assert!(!upload_not_landed(Some("b1"), Some("p2"), &landed, me));
+        // A vanished tip or a fork is not certain.
+        assert!(!upload_not_landed(Some("b1"), None, &history, me));
+        // No BASE (a just-published project): the server's creation commit is
+        // not ours, so nothing of ours landed...
+        let created = [creation_commit("root")];
+        assert!(upload_not_landed(None, Some("root"), &created, me));
+        assert!(upload_not_landed(None, None, &[], me));
+        // ...one of ours on top of it did, whatever the case of the email...
+        let ours = [
+            creation_commit("root"),
+            commit("p2", &["root"], "ME@example.com"),
+        ];
+        assert!(!upload_not_landed(None, Some("p2"), &ours, me));
+        // ...and without our email nothing can be told apart.
+        assert!(!upload_not_landed(None, Some("root"), &created, " "));
     }
 
     const ME: &str = "me@example.com";

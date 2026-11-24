@@ -10,10 +10,11 @@
  * representative. The image export picks by the same rule
  * (`point_representatives` in `image_labels.rs`); keep the two in step.
  *
- * A merge group is a station plus its `stationMergedWith` refs (transitive, so
- * every member lists the whole group). A member on a line the SoA leaves out
- * (a hidden Section) resolves to nothing and is not a candidate, so the
- * visible part of a group still gets its label.
+ * A merge group is the slots that share one Station ID: on the station graph a
+ * junction is ONE station, so every slot of it carries the same `stationIds`
+ * entry (plan 9.3), as well as one name. A slot on a line the SoA leaves out
+ * (a hidden Section) is simply not in the SoA, so the visible part of a group
+ * still gets its label.
  *
  * PURE: no DOM, no GL.
  */
@@ -30,6 +31,56 @@ export interface MergedStationLabels {
 }
 
 /**
+ * The junctions of one SoA: the global indices of the slots of every Station
+ * ID two or more slots carry, slot order. Built once per `stationIds` array
+ * (the SoA is rebuilt, never written in place, as `stationIdentity` relies on
+ * too), so a label rebuild on pan or zoom does no per-station work here and a
+ * survey with no junction costs nothing (H-frontend-wire-10).
+ */
+const junctionCache = new WeakMap<Uint32Array, number[][]>();
+
+function junctionsOf(data: SurveyData): number[][] {
+  const cached = junctionCache.get(data.stationIds);
+  if (cached) return cached;
+  // The first slot of each id; a group array only for an id seen twice.
+  const firstSlot = new Map<number, number>();
+  const byId = new Map<number, number[]>();
+  for (let g = 0; g < data.stationCount; g++) {
+    const id = data.stationIds[g];
+    if (id === undefined) continue;
+    const first = firstSlot.get(id);
+    if (first === undefined) {
+      firstSlot.set(id, g);
+      continue;
+    }
+    const slots = byId.get(id);
+    if (slots) slots.push(g);
+    else byId.set(id, [first, g]);
+  }
+  const junctions = [...byId.values()];
+  junctionCache.set(data.stationIds, junctions);
+  return junctions;
+}
+
+const junctionSlotCache = new WeakMap<Uint32Array, ReadonlySet<number>>();
+
+/**
+ * The global index of every slot that is part of a junction (its Station ID
+ * on two or more slots of the SoA), built once per `stationIds` array like
+ * {@link junctionsOf}. A line name avoids anchoring on one: there the
+ * junction's station label sits, and the name would take its spot (RS-FX8,
+ * N1).
+ */
+export function junctionSlots(data: SurveyData): ReadonlySet<number> {
+  const cached = junctionSlotCache.get(data.stationIds);
+  if (cached) return cached;
+  const slots = new Set<number>();
+  for (const group of junctionsOf(data)) for (const g of group) slots.add(g);
+  junctionSlotCache.set(data.stationIds, slots);
+  return slots;
+}
+
+/**
  * The representative of every merge group. `lineFirst` / `lineLast` give each
  * line's first and last station index in the SoA (the FIRST_IN_LINE predicate
  * and its counterpart); `hasLabel(g)` says whether a station has text to draw
@@ -38,19 +89,18 @@ export interface MergedStationLabels {
  */
 export function mergedStationLabels(
   data: SurveyData,
-  lookup: ReadonlyMap<number, ReadonlyMap<number, number>>,
   lineFirst: ReadonlyMap<number, number>,
   lineLast: ReadonlyMap<number, number>,
   hasLabel: (g: number) => boolean,
 ): MergedStationLabels | null {
-  if (data.stationMergedWith.size === 0) return null;
+  const junctions = junctionsOf(data);
+  if (junctions.length === 0) return null;
+  const n = data.stationCount;
   const lineOrder = new Map<number, number>();
   data.lines.forEach((line, order) => lineOrder.set(line.id, order));
-  const n = data.stationCount;
   const representative = new Int32Array(n);
   for (let g = 0; g < n; g++) representative[g] = g;
   const members = new Map<number, number[]>();
-  const done = new Uint8Array(n);
   // Lower is better: not first, then not last, then line order, then index.
   const rank = (g: number): [number, number, number, number] => {
     const line = data.stationLineIds[g]!;
@@ -70,19 +120,7 @@ export function mergedStationLabels(
     }
     return false;
   };
-  for (const [g, refs] of data.stationMergedWith) {
-    if (g >= n || done[g]) continue;
-    // The groups are disjoint, so marking members as they join keeps each
-    // group a single pass over one member's refs.
-    done[g] = 1;
-    const group = [g];
-    for (const ref of refs) {
-      const m = lookup.get(ref.line_id)?.get(ref.station_index);
-      if (m === undefined || done[m]) continue;
-      done[m] = 1;
-      group.push(m);
-    }
-    if (group.length < 2) continue;
+  for (const group of junctions) {
     let best = -1;
     for (const m of group) {
       if (hasLabel(m) && (best < 0 || better(m, best))) best = m;

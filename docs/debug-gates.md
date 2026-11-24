@@ -41,19 +41,19 @@ follow module paths, so they carry the workspace crate names: the app crate is
 RUST_LOG=stalagmight=debug pnpm tauri dev
 
 # Just the parts you care about
-RUST_LOG=stalagmight_persistence::persistence::sqlite=debug,\
+RUST_LOG=stalagmight_legacy=debug,\
 stalagmight_parsers::parsers::tml=debug pnpm tauri dev
 ```
 
 ### Categories of `debug!` worth knowing about
 
-**Load-phase timings** (`debug!` in
-`src-tauri/crates/persistence/src/persistence/sqlite/open.rs::open_existing` and
-`src-tauri/crates/models/src/project/coordinates.rs::compute_station_coordinates_with_progress`):
-break down `Database::open_existing` and `compute_station_coordinates` into
-sub-phases (validate_integrity, has_project_data, ensure_schema_version,
+**Legacy load-phase timings** (`debug!` in the frozen 0.6.0 reader,
+`src-tauri/crates/legacy/src/persistence/sqlite/open.rs` and
+`src-tauri/crates/legacy/src/models/project/coordinates.rs`): break down the
+old SQLite open and `compute_station_coordinates` into sub-phases
+(validate_integrity, has_project_data, ensure_schema_version,
 validate_foreign_keys, build_colocated_groups, depths loop, xyz walk, …).
-Enable when investigating slow project opens.
+Enable when investigating a slow open of an old file.
 
 **TML import loop progress** (`debug!` in
 `src-tauri/crates/core/src/core/state/command_import.rs::execute_import_lines`): per-100-line
@@ -66,14 +66,10 @@ merged", "Shot updated", etc. On by default like every other `debug!` (see the
 level table) - they fire N times during a 14k-line import and don't help in
 release, so silence them with `RUST_LOG=info`.
 
-**SQLite open / save chatter** (`debug!` across
-`src-tauri/crates/persistence/src/persistence/sqlite/` - `open.rs`, `write.rs`,
-`read.rs`): per-open / per-save / per-row-count
-diagnostics. Enable when debugging persistence bugs.
-
-**Recent-projects metadata timings** (`debug!` in
-`sqlite/read.rs::load_metadata`): fires once per recent project on every
-refresh. Enable when chasing slow startup.
+**Legacy SQLite read chatter** (`debug!` across
+`src-tauri/crates/legacy/src/persistence/sqlite/` - `open.rs`, `read.rs`):
+per-open / per-row-count diagnostics of an old file's read. Enable when
+debugging a migration.
 
 ### `debug_assert_*` and `#[cfg(debug_assertions)]`
 
@@ -88,26 +84,23 @@ and document that fact at the call site, the way that function does.
 
 ### Profile harnesses
 
-`profile_tml_import_full` and `profile_stalx_load` live in
-`src-tauri/crates/core/src/core/state/tests.rs`. They are unit tests with `#[ignore]` -
-they never run with `cargo test` unless explicitly opted in:
+`profile_tml_import_full` lives in
+`src-tauri/crates/core/src/core/state/import_commands_tests.rs`. It is a unit test with
+`#[ignore]` - it never runs with `cargo test` unless explicitly opted in:
 
 ```bash
 # Profile a TML import end-to-end (parse + convert + execute_import_lines)
 STALAGMIGHT_PROFILE_TML=/path/to/file.tml \
   cargo test --release --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
-  core::state::tests::profile_tml_import_full -- --nocapture --ignored
-
-# Profile a stalx load end-to-end (open + load + station coords + warnings +
-# undo/redo + binary encode)
-STALAGMIGHT_PROFILE_STALX=/path/to/file.stalx \
-  cargo test --release --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
-  core::state::tests::profile_stalx_load -- --nocapture --ignored
+  core::state::import_commands_tests::profile_tml_import_full -- --nocapture --ignored
 ```
 
+The 0.6.0 `profile_stalx_load` harness (a SQLite open) is retired with the
+SQLite file; a v2 open is one decode plus the derived views.
+
 Combine with `RUST_LOG=stalagmight=debug` to also get the in-code sub-phase
-timings. Both harnesses print a pretty per-phase table to stderr and exit
-clean - they're meant to be run on demand by hand.
+timings. The harness prints a pretty per-phase table to stderr and exits
+clean - it is meant to be run on demand by hand.
 
 ## TypeScript frontend
 

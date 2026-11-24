@@ -6,6 +6,9 @@ import { useUIStore } from '../../store/uiStore';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { getErrorMessage } from '../../utils/ipc';
 import { setSource } from '../../utils/telemetry';
+import { showBlockedNotice } from '../../utils/blockedNotice';
+import { DisabledReason } from '../common/DisabledReason';
+import { BackendProse } from '../common/Prose';
 import { formatDate, formatRelativeTime, formatNumber } from '../../i18n/format';
 import type { CommandResult, UndoHistoryItem, PreviewData } from '../../types/commands';
 import {
@@ -22,6 +25,13 @@ import {
   TargetIcon,
   TrashIcon,
 } from '../common/icons';
+
+/**
+ * The attribute that marks the chevron inside an Undo / Redo trigger: a click
+ * on it opens the history list instead of undoing (demo finding I-11). The
+ * toolbar puts it on the chevron it passes as `children`.
+ */
+export const HISTORY_TOGGLE_ATTR = 'data-history-toggle';
 
 /**
  * True when `relatedTarget` is a DOM node contained by `container`. WebKit
@@ -70,6 +80,13 @@ interface UndoHistoryDropdownProps {
    * is the reason for `disabled` - that reason must still suppress the panel.
    */
   hoverableWhenEmpty?: boolean;
+  /**
+   * Why the button is `disabled`, when a read-only file turned it off (demo
+   * finding V-5): the button is then `aria-disabled` instead, shows the reason
+   * in `DisabledReason` on hover, as the menu rows do, and a click shows it as
+   * the blocked-edit notice, never an undo. Ignored while enabled.
+   */
+  reason?: string | undefined;
 }
 
 /** Map command types to icon components (matching toolbar icon style) */
@@ -133,13 +150,10 @@ function formatTimestamp(timestamp: string | null, t: (key: string) => string): 
   return formatDate(date, undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
-/** Truncate description to ~40 chars with ellipsis */
-function truncateDescription(description: string, maxLength = 40): string {
-  if (description.length <= maxLength) {
-    return description;
-  }
-  return description.slice(0, maxLength - 1) + '\u2026';
-}
+/** A history row's description wraps to at most this many lines (RS-FX6,
+ *  P3-16): a one-line cut at 40 characters hid the end of "Merge Side / 0
+ *  into Main / 12 (keeps 12)", the part that says which station was kept. */
+export const HISTORY_ROW_CLASS = 'text-sm text-text-primary whitespace-normal break-words line-clamp-3';
 
 interface DetailPreviewPopupProps {
   previewData: PreviewData | null;
@@ -267,6 +281,7 @@ export default function UndoHistoryDropdown({
   testId,
   ariaLabel,
   compact = false,
+  reason,
 }: UndoHistoryDropdownProps) {
   const { t } = useTranslation();
   const modeLabel = mode === 'undo' ? t('undo.actions.undo') : t('undo.actions.redo');
@@ -786,8 +801,28 @@ export default function UndoHistoryDropdown({
   // Handle button click - when dropdown is open, perform action and stay open; when closed, delegate to parent
   // Note: when open, we call store undo/redo directly (not onSingleAction) because we need the Promise
   // to chain refresh logic. onSingleAction is fire-and-forget and used only for the closed-dropdown path.
-  const handleButtonClick = useCallback(() => {
-    if (disabledRef.current) return;
+  const handleButtonClick = useCallback((event?: React.MouseEvent) => {
+    if (disabledRef.current) {
+      if (reason !== undefined) showBlockedNotice(reason);
+      return;
+    }
+    // The chevron inside the trigger (`HISTORY_TOGGLE_ATTR`) reads as "show the
+    // list": a click on it opens the history, never performs an undo (demo
+    // finding I-11). An open list stays open, so a click that lands after the
+    // hover already opened it does not close it again.
+    if (event?.target instanceof Element && event.target.closest(`[${HISTORY_TOGGLE_ATTR}]`)) {
+      if (isOpenRef.current) return;
+      hoverTokenRef.current += 1;
+      if (hoverTimeoutRef.current) {
+        clearTimeout(hoverTimeoutRef.current);
+        hoverTimeoutRef.current = null;
+      }
+      const token = hoverTokenRef.current;
+      void fetchStack().then((stack) => {
+        if (hoverTokenRef.current === token && !disabledRef.current && stack.length > 0) setIsOpen(true);
+      });
+      return;
+    }
     setSource('toolbar');
 
     if (isOpenRef.current) {
@@ -805,7 +840,7 @@ export default function UndoHistoryDropdown({
       hardClose();
       onSingleAction();
     }
-  }, [mode, undo, redo, enqueueAction, onSingleAction, hardClose, items, t]);
+  }, [mode, undo, redo, enqueueAction, onSingleAction, hardClose, items, t, fetchStack, reason]);
 
   // Close on Escape - use hardClose and return focus to button
   useEffect(() => {
@@ -932,6 +967,46 @@ export default function UndoHistoryDropdown({
     ? `${menuId}-item-${activeIndex}`
     : undefined;
 
+  // A read-only file's reason (V-5): the button stays reachable by the
+  // pointer (`aria-disabled`), so the reason can show and a click can say it.
+  const explained = disabled && reason !== undefined;
+  const button = (
+    <button
+      ref={buttonRef}
+      onClick={handleButtonClick}
+      onKeyDown={handleButtonKeyDown}
+
+      // entry reachable by mouse only - the panel behind it had no keyboard route at
+
+      // The button performs nothing either way: `handleButtonClick` still returns on
+      // `disabledRef`, and the styling below stays keyed on the ORIGINAL `disabled` so
+      // it reads inert.
+      //
+      // The accepted cost is a tab stop that can open a panel with nothing in it (the
+
+      // worse deal: the toolbar passes it as `!placementModeActive`, so it is true on a
+      // LOCAL project too, and there the panel can never open - a tab stop that does
+
+      // `openDropdown` opens on, which keeps focusable and can-open the same set.
+      disabled={explained ? undefined : disabled}
+      aria-disabled={explained ? true : undefined}
+      aria-label={ariaLabel}
+      aria-expanded={isOpen}
+      aria-haspopup="menu"
+      aria-controls={isOpen ? `${menuId}-menu` : undefined}
+      className={`
+        ${compact ? 'px-1.5 py-1' : 'px-3 py-1.5'} text-sm rounded transition-colors
+        ${disabled
+          ? 'opacity-50 cursor-not-allowed'
+          : 'bg-background hover:bg-background-80'
+        }
+      `}
+      data-testid={testId}
+    >
+      {children}
+    </button>
+  );
+
   return (
     <div
       ref={containerRef}
@@ -939,39 +1014,13 @@ export default function UndoHistoryDropdown({
       onMouseEnter={openDropdown}
       onMouseLeave={closeDropdown}
     >
-      <button
-        ref={buttonRef}
-        onClick={handleButtonClick}
-        onKeyDown={handleButtonKeyDown}
-
-        // entry reachable by mouse only - the panel behind it had no keyboard route at
-
-        // The button performs nothing either way: `handleButtonClick` still returns on
-        // `disabledRef`, and the styling below stays keyed on the ORIGINAL `disabled` so
-        // it reads inert.
-        //
-        // The accepted cost is a tab stop that can open a panel with nothing in it (the
-
-        // worse deal: the toolbar passes it as `!placementModeActive`, so it is true on a
-        // LOCAL project too, and there the panel can never open - a tab stop that does
-
-        // `openDropdown` opens on, which keeps focusable and can-open the same set.
-        disabled={disabled}
-        aria-label={ariaLabel}
-        aria-expanded={isOpen}
-        aria-haspopup="menu"
-        aria-controls={isOpen ? `${menuId}-menu` : undefined}
-        className={`
-          ${compact ? 'px-1.5 py-1' : 'px-3 py-1.5'} text-sm rounded transition-colors
-          ${disabled
-            ? 'opacity-50 cursor-not-allowed'
-            : 'bg-background hover:bg-background-80'
-          }
-        `}
-        data-testid={testId}
-      >
-        {children}
-      </button>
+      {explained ? (
+        <DisabledReason reason={reason} placement="below" testId={`${testId}-reason`}>
+          {button}
+        </DisabledReason>
+      ) : (
+        button
+      )}
 
       {isOpen && (
         <div
@@ -1050,11 +1099,14 @@ export default function UndoHistoryDropdown({
 
                     {/* Description and timestamp */}
                     <div className="flex-1 min-w-0">
+                      {/* The names the label says are prose pills (RS-PROSE,
+                          `descriptionParts`); the tooltip stays plain. */}
                       <div
-                        className="text-sm text-text-primary truncate"
+                        className={HISTORY_ROW_CLASS}
                         title={item.description}
+                        data-testid={`${testId}-description-${item.index}`}
                       >
-                        {truncateDescription(item.description)}
+                        <BackendProse text={item.description} parts={item.descriptionParts} />
                       </div>
                       <div className="text-xs text-text-secondary">
                         {formatTimestamp(item.timestamp, t)}

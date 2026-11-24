@@ -1,10 +1,17 @@
 //! Restoring a project file from a backup: the recovery dialog's "Restore from
-//! Backup" (#720).
+//! Backup" (#720), and the list it picks from.
+//!
+//! Backups and projects come in both formats (plan 10.4): a version 2 JSON
+//! file (a `.backup` copy, a `.tmp` a save left behind) is checked with the
+//! full decode, a legacy SQLite file (an old `.backup`, or the pre-upgrade
+//! original the first version 2 save kept in the app-data `backups/` folder,
+//! C3) with the conversion the load runs. Either way the staged copy must open
+//! the way a load would open it, or nothing is written.
 //!
 //! A restore used to `std::fs::copy` the backup over the project, and a copy of
 //! the project over `<project>.stalx.pre-restore`, both IN PLACE. A copy opens
 //! its destination with `O_TRUNC` before it reads the source, and a loaded
-//! project is memory-mapped (up to 256 MB) by its live connection, so:
+//! project was memory-mapped (up to 256 MB) by its live connection, so:
 //!
 //! - over the open project, the app went on showing (and later saved) the old
 //!   project, and an empty backup crashed the next read with SIGBUS (F1);
@@ -45,16 +52,28 @@
 //!
 //! SQLite finds a database's `-journal`, `-wal` and `-shm` by NAME
 //! ([`super::speleodb_sidecars`] explains the hazard). An armed journal, or a
-//! WAL with frames, holds committed changes that the file alone does not, so a
-//! restore refuses rather than copy, replace or put back a file without them.
-//! Any other sidecar beside a name that is about to be replaced is moved out of
+//! WAL with frames, beside a SQLite file holds committed changes that the file
+//! alone does not. A SQLite backup is restored WITH them: its staged copy is
+//! the file with them folded in, worked out on a private copy as an open does
+//! (`legacy_upgrade::settled_bytes`; the backup and its sidecars are only
+//! read), so the restored file is the survey the pair opens as. The project
+//! and the safety copy are only ever replaced, never copied with their
+//! sidecars, so a restore refuses rather than replace or put back such a file
+//! without them. Any other sidecar beside a name that is about to be replaced
+//! (beside a version 2 file a sidecar belongs to no database) is moved out of
 //! SQLite's sight first, so the new file never picks up the old one's.
 
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
-use super::speleodb_sidecars::{has_hot_journal, sidecar_path, SetAsideSidecars};
+use super::speleodb_sidecars::{sidecar_path, SetAsideSidecars};
 use super::AppState;
-use crate::persistence::{same_file_on_disk, Database};
+use crate::models::NewerSchema;
+use crate::persistence::migrate::{LegacyError, MigrateError};
+use crate::persistence::stalx_v2::{
+    self, DecodeError, DecodeOptions, Fingerprint, Format, MAX_PROJECT_FILE_BYTES,
+};
+use crate::persistence::{same_file_on_disk, BackupInfo, BackupKind};
 
 /// Where a restore keeps a copy of the file it replaces.
 pub(super) fn pre_restore_path(project: &Path) -> PathBuf {
@@ -99,27 +118,20 @@ impl AppState {
                 .active_loading
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            files.refuse_busy(project_slot.as_ref(), loading.is_some())?;
+            files.refuse_busy(open_path(project_slot.as_ref()), loading.is_some())?;
         }
         // 1. The backup's bytes, staged and checked before anything is written.
-        // Only the staged copy is opened: SQLite may create a `-wal`/`-shm`
-        // beside a file it opens, even read-only, and the backup is only read.
-        let staged = stage_copy(&files.backup_real, &files.dir, &files.project)?;
-        let checked = Database::check_not_newer_at(&staged)
-            .map_err(|newer| {
-                // A backup a newer Stalagmight saved would put a file this
-                // build cannot open in the project's place (#649).
-                let newer = crate::persistence::NewerSchema {
-                    file: name(backup),
-                    ..newer
-                };
-                format!("Not restored: {newer}")
-            })
-            .and_then(|()| {
-                Database::open_readonly(&staged)
-                    .map(drop)
-                    .map_err(|e| unopenable_backup(backup, &staged, &e))
-            });
+        // Only the staged copy is read: the legacy conversion copies it to a
+        // private folder first, and the backup itself is never opened. A SQLite
+        // backup's unfinished changes are folded into the staged copy.
+        let staged = if is_sqlite(&files.backup_real)
+            && super::legacy_upgrade::unfinished(&files.backup_real).is_some()
+        {
+            stage_settled(&files.backup_real, backup, &files.dir, &files.project)?
+        } else {
+            stage_copy(&files.backup_real, &files.dir, &files.project)?
+        };
+        let checked = self.check_opens(&staged, backup);
         remove_sidecars_of(&staged);
         checked?;
 
@@ -133,13 +145,330 @@ impl AppState {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Again under the locks: a load may have started, and the files may have
         // changed, while the backup was being copied.
-        files.refuse_busy(project_slot.as_ref(), loading.is_some())?;
+        files.refuse_busy(open_path(project_slot.as_ref()), loading.is_some())?;
         files.check()?;
         let result = files.replace(staged);
         drop(loading);
         drop(project_slot);
         result
     }
+
+    /// Whether the staged copy of `backup` opens the way a load opens a
+    /// project: the version 2 decode (format, version, conventions, limits,
+    /// invariants), or, for a legacy file, the frozen 0.6.0 open and the
+    /// conversion. A backup a newer Stalagmight saved would put a file this
+    /// build cannot open in the project's place (#649).
+    pub(super) fn check_opens(&self, staged: &Path, backup: &Path) -> Result<(), String> {
+        // Bounded as an open is: the staging already refused a larger backup,
+        // and nothing larger is read into memory here either.
+        let (bytes, _) = Fingerprint::read(staged, MAX_PROJECT_FILE_BYTES).map_err(|e| {
+            format!(
+                "Not restored: could not read {} ({e}). Nothing was changed.",
+                name(backup)
+            )
+        })?;
+        match stalx_v2::sniff(&bytes) {
+            Format::V2 => match stalx_v2::decode(&bytes, &DecodeOptions::default()) {
+                Ok(_) => Ok(()),
+                Err(DecodeError::NewerVersion { found, supported }) => {
+                    Err(newer_refusal(backup, found, supported))
+                }
+                Err(e) => Err(unopenable_backup(backup, &Unopenable::of_v2(&e, &bytes))),
+            },
+            Format::Legacy => {
+                drop(bytes);
+                let adjustment = self.get_config().closure_adjustment;
+                match crate::persistence::migrate::migrate_path_for_app(staged, &adjustment) {
+                    Ok(_) => Ok(()),
+                    Err(MigrateError::Legacy(LegacyError::NewerSchema { found, supported })) => {
+                        Err(format!(
+                            "Not restored: {}",
+                            NewerSchema {
+                                file: name(backup),
+                                found,
+                                supported,
+                            }
+                        ))
+                    }
+                    Err(e) => Err(unopenable_backup(backup, &Unopenable::of_legacy(&e))),
+                }
+            }
+            Format::Unknown if bytes.is_empty() => {
+                Err(unopenable_backup(backup, &Unopenable::Empty))
+            }
+            Format::Unknown => Err(unopenable_backup(backup, &Unopenable::NotStalagmight)),
+        }
+    }
+
+    /// Every backup of the project at `path` the recovery dialog can offer,
+    /// newest first, each with its [`BackupKind`]:
+    ///
+    /// - beside the project, a file named after it plus a suffix with
+    ///   `.backup` in it ([`BackupKind::Backup`]), or ending in `.tmp`
+    ///   ([`BackupKind::InterruptedSave`]): `cave.stalx.backup`,
+    ///   `cave.stalx.backup.1`, `cave.stalx.tmp` (the temp a version 2 save
+    ///   writes through, left behind by a save that never renamed it). Only
+    ///   the suffix decides, so a project whose own name contains `.backup`
+    ///   (`cave.backup.stalx`) is never offered as a backup of itself (#720);
+    /// - the copy the last restore kept, `<project>.stalx.pre-restore`
+    ///   ([`BackupKind::PreRestore`]), so a restore can be undone: restoring
+    ///   it swaps the two files;
+    /// - in the app-data `backups/` folder, the SQLite original the first
+    ///   version 2 save of this project kept (`<stem>.<path key>.<UTC stamp>.pre-v2.stalx`,
+    ///   C3, [`BackupKind::PreUpgrade`]).
+    ///
+    /// SQLite's `-journal`, `-wal` and `-shm` files are never offered, nor the
+    /// project itself under another name (a hard link: among others the
+    /// `.tmp` a first save's hard-link placement leaves when its unlink
+    /// fails, which is the saved project, not an interrupted save), and
+    /// neither is a file
+    /// a restore would only refuse: one that is empty, that is neither a SQLite
+    /// file nor a version 2 file, or a version 2 file that does not end (a
+    /// save torn before it finished).
+    pub fn list_project_backups(path: &Path) -> Vec<BackupInfo> {
+        let mut backups = Vec::new();
+        // Where a restore keeps its copy: beside the file a link names.
+        let safety = pre_restore_path(&follow_link(path).unwrap_or_else(|_| path.to_path_buf()));
+        if !same_file_on_disk(&safety, path) {
+            backups.extend(restorable(&safety, BackupKind::PreRestore));
+        }
+        let own_name = path.file_name().unwrap_or_default().to_string_lossy();
+        let dir = path.parent().map(|p| {
+            if p.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                p
+            }
+        });
+        for entry in dir
+            .and_then(|d| std::fs::read_dir(d).ok())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            let Some(suffix) = file_name.strip_prefix(&*own_name) else {
+                continue;
+            };
+            let suffix = suffix.to_ascii_lowercase();
+            let is_sidecar = ["-journal", "-wal", "-shm"]
+                .iter()
+                .any(|sidecar| suffix.ends_with(sidecar));
+            let kind = if suffix.is_empty() || is_sidecar {
+                None
+            } else if suffix.contains(".backup") {
+                Some(BackupKind::Backup)
+            } else if suffix
+                .rsplit_once('.')
+                .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("tmp"))
+            {
+                Some(BackupKind::InterruptedSave)
+            } else {
+                None
+            };
+            if let Some(kind) = kind.filter(|_| !same_file_on_disk(&entry.path(), path)) {
+                backups.extend(restorable(&entry.path(), kind));
+            }
+        }
+        if let Some(folder) = super::project_io::upgrade_backup_dir() {
+            for kept in kept_originals_in(&folder, path) {
+                backups.extend(restorable(&kept, BackupKind::PreUpgrade));
+            }
+        }
+        // Newest first; the same time by name, so the order is stable.
+        backups.sort_by(|(a_time, a), (b_time, b)| {
+            b_time.cmp(a_time).then_with(|| a.path.cmp(&b.path))
+        });
+        backups.into_iter().map(|(_, info)| info).collect()
+    }
+}
+
+/// The pre-upgrade originals of the project at `project` in the app-data
+/// backups `folder`: `<stem>.<path key>.<UTC stamp>.pre-v2.stalx`
+/// ([`super::project_io::upgrade_backup_prefix`]). Hidden partial copies and
+/// sidecars do not match.
+pub(super) fn kept_originals_in(folder: &Path, project: &Path) -> Vec<PathBuf> {
+    let prefix = super::project_io::upgrade_backup_prefix(project);
+    std::fs::read_dir(folder)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .strip_prefix(&prefix)
+                .and_then(|rest| rest.strip_suffix(".pre-v2.stalx"))
+                .is_some_and(is_upgrade_stamp)
+        })
+        .map(|entry| entry.path())
+        .collect()
+}
+
+/// Whether `backup` is a pre-upgrade original in the app-data backups folder
+/// (`*.pre-v2.stalx`).
+fn is_kept_original(backup: &Path) -> bool {
+    let in_folder = super::project_io::upgrade_backup_dir().is_some_and(|folder| {
+        backup
+            .parent()
+            .is_some_and(|parent| same_file_on_disk(parent, &folder))
+    });
+    in_folder
+        && backup
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().ends_with(".pre-v2.stalx"))
+}
+
+/// The file the open project's slot names, if any.
+fn open_path(slot: Option<&crate::models::survey::Project>) -> Option<&Path> {
+    slot.and_then(|p| p.file_path.as_deref())
+}
+
+/// `Not restored: <file> was saved by a newer version ...` for a version 2
+/// file of a newer major version.
+fn newer_refusal(file: &Path, found: u64, supported: u64) -> String {
+    format!(
+        "Not restored: {}",
+        NewerSchema {
+            file: name(file),
+            found: i32::try_from(found).unwrap_or(i32::MAX),
+            supported: i32::try_from(supported).unwrap_or(i32::MAX),
+        }
+    )
+}
+
+/// The first bytes of the file at `path` (at most `n`).
+fn head_of(path: &Path, n: u64) -> Option<Vec<u8>> {
+    let mut head = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(n)
+        .read_to_end(&mut head)
+        .ok()?;
+    Some(head)
+}
+
+/// Whether the file at `path` is a SQLite file (a legacy `.stalx`).
+fn is_sqlite(path: &Path) -> bool {
+    head_of(path, 16).is_some_and(|head| stalx_v2::sniff(&head) == Format::Legacy)
+}
+
+/// The refusal for a file at `path` that a newer Stalagmight saved (#649):
+/// a version 2 file of a higher major version, or a SQLite file stamped with a
+/// schema above the one the legacy reader knows. `None` for anything else,
+/// unreadable files included: it may be exactly the damaged file a restore is
+/// for.
+fn newer_on_disk(path: &Path) -> Option<NewerSchema> {
+    let head = head_of(path, 4096)?;
+    match stalx_v2::sniff(&head) {
+        Format::V2 => {
+            let found = stalx_v2::probe_bytes(&head).version?;
+            (found > stalx_v2::VERSION).then(|| NewerSchema {
+                file: name(path),
+                found: i32::try_from(found).unwrap_or(i32::MAX),
+                supported: i32::try_from(stalx_v2::VERSION).unwrap_or(i32::MAX),
+            })
+        }
+        Format::Legacy => {
+            // The SQLite header's user version (offset 60, big-endian): what
+            // `PRAGMA user_version` stamps.
+            let stamp: [u8; 4] = head.get(60..64)?.try_into().ok()?;
+            let found = i32::from_be_bytes(stamp);
+            (found > crate::persistence::SCHEMA_VERSION).then(|| NewerSchema {
+                file: name(path),
+                found,
+                supported: crate::persistence::SCHEMA_VERSION,
+            })
+        }
+        Format::Unknown => None,
+    }
+}
+
+/// A file the dialog can offer, with its size and time (also returned as a
+/// `SystemTime`, for the sort), or `None` when a restore would only refuse it
+/// (see [`AppState::list_project_backups`]).
+fn restorable(path: &Path, kind: BackupKind) -> Option<(std::time::SystemTime, BackupInfo)> {
+    let meta = std::fs::metadata(path)
+        .ok()
+        .filter(std::fs::Metadata::is_file)?;
+    if meta.len() == 0 {
+        return None;
+    }
+    let head = head_of(path, 64)?;
+    let offered = match stalx_v2::sniff(&head) {
+        Format::Legacy => true,
+        Format::V2 => ends_like_a_complete_file(path, meta.len()),
+        Format::Unknown => false,
+    };
+    let modified = meta.modified().ok();
+    offered.then(|| {
+        (
+            modified.unwrap_or(std::time::UNIX_EPOCH),
+            BackupInfo {
+                path: path.display().to_string(),
+                size_bytes: meta.len(),
+                modified_at: modified
+                    .map(|t| {
+                        chrono::DateTime::<chrono::Utc>::from(t)
+                            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                    })
+                    .unwrap_or_default(),
+                kind,
+            },
+        )
+    })
+}
+
+/// Whether a version 2 file of `len` bytes ends with its end marker (a torn
+/// temp does not).
+fn ends_like_a_complete_file(path: &Path, len: u64) -> bool {
+    use std::io::{Seek as _, SeekFrom};
+    const TAIL: u64 = 64;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    if file
+        .seek(SeekFrom::Start(len.saturating_sub(TAIL)))
+        .is_err()
+    {
+        return false;
+    }
+    let mut tail = Vec::new();
+    if file.take(TAIL).read_to_end(&mut tail).is_err() {
+        return false;
+    }
+    ends_with_end_marker(&tail)
+}
+
+/// `"end":true}` and nothing but whitespace after it, at the end of `bytes`.
+fn ends_with_end_marker(bytes: &[u8]) -> bool {
+    let tail = bytes
+        .get(bytes.len().saturating_sub(64)..)
+        .unwrap_or_default();
+    let compact: Vec<u8> = tail
+        .iter()
+        .copied()
+        .filter(|b| !b.is_ascii_whitespace())
+        .collect();
+    compact.ends_with(b"\"end\":true}")
+}
+
+/// `20261120T101112.123456789Z`: the stamp `UpgradeBackup` names a
+/// pre-upgrade original with, so a project named `cave` is not offered the
+/// originals of `cave.old`.
+pub(super) fn is_upgrade_stamp(stamp: &str) -> bool {
+    let b = stamp.as_bytes();
+    let digits = |range: std::ops::Range<usize>| {
+        b.get(range)
+            .is_some_and(|s| s.iter().all(u8::is_ascii_digit))
+    };
+    b.len() == 26
+        && digits(0..8)
+        && b.get(8) == Some(&b'T')
+        && digits(9..15)
+        && b.get(15) == Some(&b'.')
+        && digits(16..25)
+        && b.get(25) == Some(&b'Z')
 }
 
 /// The files one restore touches.
@@ -203,12 +532,9 @@ impl<'a> Files<'a> {
                 return Err(format!("Not restored: {} is not a file.", name(path)));
             }
         }
-        // Before SQLite opens a file: an open acts on the sidecars it finds.
-        refuse_unfinished(
-            &self.backup_real,
-            &format!("the backup {}", name(self.backup)),
-            "a copy of the file alone would lose them. Pick another backup.",
-        )?;
+        // Before SQLite opens a file: an open acts on the sidecars it finds. The
+        // backup's unfinished changes ride with it (step 1).
+        refuse_odd_sidecars(&self.backup_real)?;
         refuse_unfinished(
             &self.project,
             &format!("the project {}", name(&self.project)),
@@ -227,24 +553,22 @@ impl<'a> Files<'a> {
         // Copying a backup over a project a newer Stalagmight saved would put an
         // older file in its place (#649). The backup's own check is on its
         // staged copy.
-        Database::check_not_newer_at(&self.project).map_err(|e| format!("Not restored: {e}"))?;
+        if let Some(newer) = newer_on_disk(&self.project) {
+            return Err(format!("Not restored: {newer}"));
+        }
         Ok(())
     }
 
     /// A restore never runs while a project is being opened, and never touches
     /// the file the app has open: see the module docs.
-    fn refuse_busy(
-        &self,
-        open_project: Option<&crate::models::Project>,
-        loading: bool,
-    ) -> Result<(), String> {
+    fn refuse_busy(&self, open_project: Option<&Path>, loading: bool) -> Result<(), String> {
         if loading {
             return Err(
                 "Not restored: a project is being opened. Try again once it has opened."
                     .to_string(),
             );
         }
-        let Some(open) = open_project.and_then(|p| p.file_path.as_deref()) else {
+        let Some(open) = open_project else {
             return Ok(());
         };
         if same_file_on_disk(open, &self.project) {
@@ -312,14 +636,21 @@ impl<'a> Files<'a> {
                 name(&self.safety)
             ));
         }
+        // Named the way the dialog lists it: a pre-upgrade original's file name
+        // (a hash and a nanosecond stamp in the app-data folder) means nothing.
+        let restored = if is_kept_original(self.backup) {
+            "Restored the original from before the upgrade to the new format.".to_string()
+        } else {
+            format!("Restored from {}.", name(self.backup))
+        };
         Ok(if kept {
             format!(
-                "Restored from {}. The file it replaced is kept as {}.",
-                self.backup.display(),
+                "{restored} The file it replaced is kept as {} and is listed with the earlier \
+                 copies, so you can switch back.",
                 name(&self.safety)
             )
         } else {
-            format!("Restored from {}.", self.backup.display())
+            restored
         })
     }
 
@@ -414,22 +745,68 @@ fn park(safety: &Path, dir: &Path) -> Result<Previous, String> {
     Ok(Previous::File(parked))
 }
 
+/// Why a backup does not open, as the dialog says it.
+enum Unopenable {
+    Empty,
+    NotStalagmight,
+    /// A version 2 file cut short (a save that never finished writing it).
+    Incomplete,
+    /// It breaks the survey's invariants, or SQLite's integrity check.
+    Damaged,
+    Other(String),
+}
+
+impl Unopenable {
+    /// `bytes` is the file: malformed text in a file that does not end with
+    /// its end marker is a torn file (a save cut short mid-token), not a
+    /// malformed one.
+    fn of_v2(error: &DecodeError, bytes: &[u8]) -> Self {
+        tracing::warn!(reason = %error, "The version 2 backup does not open as a project");
+        match error {
+            DecodeError::NotStalx | DecodeError::ByteOrderMark | DecodeError::Legacy => {
+                Self::NotStalagmight
+            }
+            DecodeError::Truncated { .. } | DecodeError::MissingEnd => Self::Incomplete,
+            DecodeError::Syntax { .. } if !ends_with_end_marker(bytes) => Self::Incomplete,
+            DecodeError::Invalid { .. } | DecodeError::DuplicateStation { .. } => Self::Damaged,
+            other => Self::Other(other.to_string()),
+        }
+    }
+
+    fn of_legacy(error: &MigrateError) -> Self {
+        let reason = format!("{error:#}");
+        tracing::warn!(%reason, "The legacy backup does not open as a project");
+        match error {
+            MigrateError::Legacy(LegacyError::NotSqlite) => Self::NotStalagmight,
+            MigrateError::Legacy(LegacyError::Corrupt(detail))
+                if detail.contains("may be corrupted") =>
+            {
+                Self::Damaged
+            }
+            MigrateError::Legacy(LegacyError::Corrupt(detail))
+                if detail.contains("not a database")
+                    || detail.contains("does not contain a valid Stalagmight project") =>
+            {
+                Self::NotStalagmight
+            }
+            _ => Self::Other(reason),
+        }
+    }
+}
+
 /// Why the backup cannot be restored, in the dialog's words. The full reason
 /// goes to the log; the dialog says what it means for the user.
-fn unopenable_backup(backup: &Path, staged: &Path, error: &anyhow::Error) -> String {
-    let reason = format!("{error:#}");
-    tracing::warn!(backup = %backup.display(), %reason, "The backup does not open as a project");
-    let empty = std::fs::metadata(staged).is_ok_and(|m| m.len() == 0);
-    let what = if empty {
-        "is empty".to_string()
-    } else if reason.contains("may be corrupted") {
-        "is damaged too: it fails the same integrity check".to_string()
-    } else if reason.contains("not a database")
-        || reason.contains("does not contain a valid Stalagmight project")
-    {
-        "is not a Stalagmight project".to_string()
-    } else {
-        format!("cannot be opened as a Stalagmight project ({reason})")
+fn unopenable_backup(backup: &Path, why: &Unopenable) -> String {
+    let what = match why {
+        Unopenable::Empty => "is empty".to_string(),
+        Unopenable::NotStalagmight => "is not a Stalagmight project".to_string(),
+        Unopenable::Incomplete => {
+            "is incomplete: the save that wrote it never finished".to_string()
+        }
+        Unopenable::Damaged => "is damaged too: it fails the same integrity check".to_string(),
+        Unopenable::Other(reason) => {
+            format!("cannot be opened as a Stalagmight project ({reason})")
+        }
     };
     format!(
         "Not restored: {} {what}. Nothing was changed. Pick another backup.",
@@ -452,26 +829,30 @@ fn follow_link(path: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// Refuse a file whose committed state is partly in a sidecar, or whose
-/// sidecar is not a regular file (which nothing here opens).
-fn refuse_unfinished(db: &Path, what: &str, consequence: &str) -> Result<(), String> {
-    let journal = sidecar_path(db, "-journal");
-    let wal = sidecar_path(db, "-wal");
-    for sidecar in [&journal, &wal] {
-        if std::fs::symlink_metadata(sidecar).is_ok_and(|m| !m.is_file()) {
+/// Refuse a file whose sidecar is not a regular file (which nothing here
+/// opens).
+fn refuse_odd_sidecars(db: &Path) -> Result<(), String> {
+    for sidecar in [sidecar_path(db, "-journal"), sidecar_path(db, "-wal")] {
+        if std::fs::symlink_metadata(&sidecar).is_ok_and(|m| !m.is_file()) {
             return Err(format!(
                 "Not restored: {} beside {} is not a file. Move it away, then restore.",
-                name(sidecar),
+                name(&sidecar),
                 name(db)
             ));
         }
     }
-    let wal_has_frames = std::fs::metadata(&wal).is_ok_and(|m| m.len() > 0);
-    let unfinished = if has_hot_journal(db) {
-        journal
-    } else if wal_has_frames {
-        wal
-    } else {
+    Ok(())
+}
+
+/// Refuse a SQLite file whose committed state is partly in a sidecar, or a
+/// file whose sidecar is not a regular file. Beside a version 2 file (or none)
+/// a sidecar is debris, moved aside when a name is replaced.
+fn refuse_unfinished(db: &Path, what: &str, consequence: &str) -> Result<(), String> {
+    refuse_odd_sidecars(db)?;
+    if !is_sqlite(db) {
+        return Ok(());
+    }
+    let Some(unfinished) = super::legacy_upgrade::unfinished(db) else {
         return Ok(());
     };
     Err(format!(
@@ -490,6 +871,95 @@ fn stage_copy(source: &Path, dir: &Path, project: &Path) -> Result<tempfile::Tem
             name(source)
         )
     };
+    let mut reader = std::fs::File::open(source).map_err(|e| failed("read", &e))?;
+    let metadata = reader.metadata().map_err(|e| failed("read", &e))?;
+    // A backup the restore could never open is refused before a byte of it
+    // is copied (the user picks the file: it may be anything).
+    if metadata.len() > MAX_PROJECT_FILE_BYTES {
+        return Err(too_large(source));
+    }
+    let staged = stage_from(
+        &mut std::io::Read::take(&mut reader, MAX_PROJECT_FILE_BYTES.saturating_add(1)),
+        metadata.permissions(),
+        source,
+        dir,
+        project,
+    )?;
+    // It grew while it was copied: the copy stopped one byte past the cap.
+    if std::fs::metadata(&staged)
+        .map_err(|e| failed("copy", &e))?
+        .len()
+        > MAX_PROJECT_FILE_BYTES
+    {
+        return Err(grew_too_large(source));
+    }
+    Ok(staged)
+}
+
+/// The refusal of a backup larger than any project Stalagmight reads, before
+/// a byte of it is copied.
+fn too_large(source: &Path) -> String {
+    format!(
+        "Not restored: {} is larger than {} MiB, the most Stalagmight reads. Nothing was changed.",
+        name(source),
+        MAX_PROJECT_FILE_BYTES / (1024 * 1024)
+    )
+}
+
+/// The refusal of a backup that passed [`too_large`]'s check and then grew
+/// past the cap while it was copied (the copy stops one byte past it). Its
+/// own words, so the check before the copy can be told from this one.
+fn grew_too_large(source: &Path) -> String {
+    format!(
+        "Not restored: {} grew past {} MiB, the most Stalagmight reads, while it was copied. \
+         Nothing was changed.",
+        name(source),
+        MAX_PROJECT_FILE_BYTES / (1024 * 1024)
+    )
+}
+
+/// [`stage_copy`] of a SQLite `backup` (`named` as the caller named it) with
+/// the unfinished changes beside it folded in: the survey the pair opens as.
+fn stage_settled(
+    backup: &Path,
+    named: &Path,
+    dir: &Path,
+    project: &Path,
+) -> Result<tempfile::TempPath, String> {
+    let read = Fingerprint::read(backup, MAX_PROJECT_FILE_BYTES)
+        .and_then(|(bytes, _)| std::fs::metadata(backup).map(|meta| (bytes, meta.permissions())));
+    let (bytes, permissions) = read.map_err(|e| {
+        format!(
+            "Not restored: could not read {} ({e}). Nothing was changed.",
+            name(named)
+        )
+    })?;
+    let settled = super::legacy_upgrade::settled_bytes(&bytes, backup).map_err(|e| {
+        tracing::warn!(reason = %e, backup = %backup.display(), "Could not finish a backup's unfinished changes");
+        format!(
+            "Not restored: the changes that were never finished beside {} could not be \
+             finished ({e}). Nothing was changed. Pick another backup.",
+            name(named)
+        )
+    })?;
+    stage_from(&mut settled.as_slice(), permissions, backup, dir, project)
+}
+
+/// Write everything `reader` yields to a staged file beside the project, sync
+/// it and give it `permissions` (those of `source`, named in messages).
+fn stage_from(
+    reader: &mut dyn std::io::Read,
+    permissions: std::fs::Permissions,
+    source: &Path,
+    dir: &Path,
+    project: &Path,
+) -> Result<tempfile::TempPath, String> {
+    let failed = |what: &str, e: &dyn std::fmt::Display| {
+        format!(
+            "Not restored: could not {what} {} ({e}). Nothing was changed.",
+            name(source)
+        )
+    };
     let mut staged = tempfile::Builder::new()
         .prefix(&format!(".{}.restore-", name(project)))
         .suffix(".stalx")
@@ -500,12 +970,7 @@ fn stage_copy(source: &Path, dir: &Path, project: &Path) -> Result<tempfile::Tem
                 name(project)
             )
         })?;
-    let mut reader = std::fs::File::open(source).map_err(|e| failed("read", &e))?;
-    let permissions = reader
-        .metadata()
-        .map_err(|e| failed("read", &e))?
-        .permissions();
-    std::io::copy(&mut reader, staged.as_file_mut()).map_err(|e| failed("copy", &e))?;
+    std::io::copy(reader, staged.as_file_mut()).map_err(|e| failed("copy", &e))?;
     // Through the handle that wrote it, so a read-only source does not stop it.
     staged
         .as_file()
@@ -567,7 +1032,7 @@ pub(super) fn sync_dir(dest: &Path) {
     let _ = dest;
 }
 
-fn name(path: &Path) -> String {
+pub(super) fn name(path: &Path) -> String {
     path.file_name().map_or_else(
         || path.display().to_string(),
         |n| n.to_string_lossy().into_owned(),

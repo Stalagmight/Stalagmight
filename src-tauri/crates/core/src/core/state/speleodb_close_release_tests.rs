@@ -17,11 +17,11 @@ use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use super::stalx_fixtures::write_v2;
 use super::tests_support::sdk_fixture;
 use super::AppState;
 use crate::core::LockReleaseOutcome;
-use crate::models::{Project, SpeleoLink};
-use crate::persistence::Database;
+use crate::models::SpeleoLink;
 use crate::speleodb::auth::TokenStore;
 
 const ID: &str = "77777777-7777-7777-7777-777777777777";
@@ -136,21 +136,20 @@ fn scripted(
 /// lock is the same release, without the authorship licence).
 fn editing(dir: &Path, server: &str, authored: bool) -> (Arc<AppState>, PathBuf) {
     let path = dir.join("remote.stalx");
-    let mut db = Database::open(&path).expect("open db");
-    db.save_project(&Project::new("Remote".to_owned(), None))
-        .expect("save project");
-    db.save_speleo_link(Some(&SpeleoLink {
-        endpoint: server.to_owned(),
-        project_id: ID.to_owned(),
-        project_name: "Remote".to_owned(),
-        base_commit_sha: Some("abc123".to_owned()),
-        has_unpushed_edits: false,
-        last_edit_at: None,
-        last_verify_at: None,
-        undo_mode: None,
-    }))
-    .expect("save link");
-    drop(db);
+    write_v2(
+        &path,
+        "Remote",
+        Some(&SpeleoLink {
+            endpoint: server.to_owned(),
+            project_id: ID.to_owned(),
+            project_name: "Remote".to_owned(),
+            base_commit_sha: Some("abc123".to_owned()),
+            has_unpushed_edits: false,
+            last_edit_at: None,
+            last_verify_at: None,
+            undo_mode: None,
+        }),
+    );
     let state = AppState::new().expect("state");
     {
         let mut session = state.speleodb_session_lock().expect("session");

@@ -460,7 +460,7 @@ export interface UIStore extends SectionsViewSlice {
   // Data-table fullscreen mode: the table overlays the whole window below the
   // toolbar. Session-only - never persisted, so the app always starts windowed.
   dataTableFullScreen: boolean;
-  /** Raw sqlite table browsed read-only while fullscreen (null = the normal
+  /** Saved-file member browsed read-only while fullscreen (null = the normal
    *  Lines-backed view). Only reachable from the fullscreen toolbar. */
   rawTableSelection: string | null;
   enterDataTableFullScreen: () => void;
@@ -648,6 +648,13 @@ export interface UIStore extends SectionsViewSlice {
   dismissToast: (id: number) => void;
   /** Drop one toast outright. ToastStack calls this when a toast's life ends. */
   removeToast: (id: number) => void;
+  /**
+   * Begin the exit of every live toast under `key`: a notice of a wait that is
+   * over, e.g. "Checking merge compatibility..." once its dialog is up (demo
+   * finding I-9). The stack runs the exit animation and drops it, as for the
+   * per-toast dismiss button.
+   */
+  dismissToastsByKey: (key: string) => void;
   /**
    * Drop every toast immediately - no exit animation, no eviction bookkeeping.
    *
@@ -1855,6 +1862,11 @@ export const useUIStore = create<UIStore>((set) => ({
     });
   },
   saveDisplaySetting: async (key, value) => {
+    // A display toggle never makes the project unsaved: a version 2 file
+    // writes it at once, and a 0.6.0 file keeps it for the next save, which
+    // writes it with the conversion. Marking the project unsaved here would
+    // arm autosave, and autosave would convert a file the user only looked
+    // at (demo issue I-6; the backend's `has_unsaved_changes` agrees).
     try {
       const storageKey = displaySettingStorageKey(key);
       await invokeIpc('save_display_setting', { key: storageKey, value: String(value) }, {
@@ -2077,6 +2089,12 @@ export const useUIStore = create<UIStore>((set) => ({
   dismissToast: (id) =>
     set((s) => ({ toasts: s.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t)) })),
   removeToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+  dismissToastsByKey: (key) =>
+    set((s) =>
+      s.toasts.some((t) => t.key === key && !t.leaving)
+        ? { toasts: s.toasts.map((t) => (t.key === key ? { ...t, leaving: true } : t)) }
+        : s,
+    ),
   clearToast: () => set({ toasts: [] }),
   toastBottomOffsets: {},
   registerToastBottomOffset: (owner, px) =>

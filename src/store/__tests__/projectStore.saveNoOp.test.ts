@@ -24,7 +24,6 @@ describe('projectStore.saveProject no-op identity (#mem)', () => {
     // Neutralize the post-save side effects that are irrelevant here.
     useProjectStore.setState({
       refreshUndoState: vi.fn().mockResolvedValue(undefined),
-      checkProjectIntegrity: vi.fn().mockResolvedValue(undefined),
       refreshProjectState: vi.fn().mockResolvedValue(undefined),
     } as Partial<ReturnType<typeof useProjectStore.getState>> as never);
   });
@@ -35,7 +34,7 @@ describe('projectStore.saveProject no-op identity (#mem)', () => {
 
   it('keeps the same project reference on an autosave to the same path', async () => {
     const project = { file_path: '/cave.stalx' } as never;
-    useProjectStore.setState({ project, integrityIssues: [] } as never);
+    useProjectStore.setState({ project } as never);
     invokeIpcMock.mockResolvedValue({
       success: true,
       saved_path: '/cave.stalx',
@@ -54,7 +53,7 @@ describe('projectStore.saveProject no-op identity (#mem)', () => {
 
   it('mints a new project object with the new path on a Save As', async () => {
     const project = { file_path: '/cave.stalx' } as never;
-    useProjectStore.setState({ project, integrityIssues: [] } as never);
+    useProjectStore.setState({ project } as never);
     invokeIpcMock.mockResolvedValue({
       success: true,
       saved_path: '/cave-copy.stalx',
@@ -69,7 +68,7 @@ describe('projectStore.saveProject no-op identity (#mem)', () => {
 
   it('mints a new project object on the first save of a deferred (unsaved) project', async () => {
     const project = { file_path: undefined } as never;
-    useProjectStore.setState({ project, integrityIssues: [] } as never);
+    useProjectStore.setState({ project } as never);
     invokeIpcMock.mockResolvedValue({
       success: true,
       saved_path: '/new.stalx',

@@ -12,6 +12,7 @@ import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { trackDialogComplete, setProjectActionSource } from '../../utils/telemetry';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { backendProse } from '../../utils/prose';
 
 /**
  * MergeProjectsDialog allows users to merge multiple projects into a single new project.
@@ -110,12 +111,14 @@ export default function MergeProjectsDialog() {
         // this is the only place watching `result.warnings`. Per
         // docs/notifications.md the dialog has already closed and there is no
         // decision left to make, so this rides a toast, not a second modal.
-        // Only the first warning is surfaced: the backend itself only ever
-        // reports the first disagreement.
-        const [firstWarning] = result.warnings ?? [];
-        if (firstWarning) {
+        // One toast for the action: the backend reports the first elevation
+        // disagreement and each source it converted as it read it (RS 8.2,
+        // 8.3), joined in one message (a name a warning says, as a prose
+        // pill: RS-PROSE).
+        const messages = (result.warnings ?? []).map((w) => backendProse(w.message, w.parts));
+        if (messages.length > 0) {
           showToast(
-            t('dialogs.mergeProjects.warningToast', { message: firstWarning.message }),
+            t('dialogs.mergeProjects.warningToast', { message: messages.join('; ') }),
             TOAST_KEYS.MERGE_WARNING,
             'warning'
           );

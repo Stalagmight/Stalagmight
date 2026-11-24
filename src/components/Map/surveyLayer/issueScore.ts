@@ -152,10 +152,11 @@ export function computeIssueScores(
     }
   }
 
-  // (6) A datum warning (`datum_gps_gap`, #741) is attached to a shot next to
-  //     its station but names the station itself in `datumStationIndex`, so
-  //     colour that station directly. After the sharing: a datum's own warning
-  //     is not averaged away.
+  // (6) A warning about a station (`datum_gps_gap`, #741; a junction whose
+  //     depth readings disagree, `JUNCTION_DEPTH_SPREAD`) is attached to a shot
+  //     next to its station but names the station itself in
+  //     `datumStationIndex`, so colour that station directly. After the
+  //     sharing: a station's own warning is not averaged away.
   for (const w of warnings) {
     if (w.isResolved || w.datumStationIndex === undefined) continue;
     const s = w.severity === 'error' ? SCORE_MAX : SCORE_WARNING;

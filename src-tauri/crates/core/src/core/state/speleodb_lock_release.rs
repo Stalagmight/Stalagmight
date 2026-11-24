@@ -187,7 +187,7 @@ impl AppState {
     /// Cheap + non-blocking (reads the open link + config, no network), so a caller
     /// that must not block on the OLD project's server - the app-exit path, a
     /// project switch - can hand the actual HTTP release to a bounded / detached
-    /// thread. Reads the link BEFORE the caller tears down or swaps the database.
+    /// thread. Reads the link BEFORE the caller tears down or swaps the open project.
     pub(super) fn speleodb_held_lock_release_params(&self) -> Option<LockReleaseParams> {
         self.speleodb_lock_release_params(ReleaseIntent::Silent)
     }
@@ -223,7 +223,7 @@ impl AppState {
         intent: ReleaseIntent,
     ) -> Result<Option<LockReleaseParams>, SpeleoDbError> {
         // A `.ok()?` here used to collapse REAL failures into the ordinary "nothing
-        // to release" no-op with no trace at all: `speleodb_open_link` returns
+        // to release" no-op with no trace at all: `speleodb_open_link` once returned
         // `Io("database lock poisoned")` as readily as `NoRemoteProject`. A poisoned
         // mutex at close / switch / quit then stranded the server lock permanently
         // and silently - the exact outcome this module exists to prevent, and
@@ -841,6 +841,7 @@ impl AppState {
                      still there, and the project stays reserved for you on SpeleoDB."
                 ),
                 severity: WarningSeverity::Warning,
+                parts: None,
             }])
             .with_session_closed(true)
     }
@@ -907,9 +908,10 @@ impl AppState {
     reason = "unit test fixtures fail loudly on setup errors; the panic POISONS a mutex on purpose"
 )]
 mod tests {
+    use super::super::stalx_fixtures::write_v2;
     use super::AppState;
-    use crate::models::{Project, SpeleoLink};
-    use crate::persistence::Database;
+    use crate::models::survey::Project;
+    use crate::models::SpeleoLink;
     use crate::speleodb::auth::TokenStore;
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
@@ -940,22 +942,20 @@ mod tests {
         let temp = tempfile::TempDir::new().expect("temp");
         let root = temp.path().join("speleodb");
         let path = super::super::speleodb_local_state::cache_path_in(&root, PID);
-        std::fs::create_dir_all(path.parent().expect("parent")).expect("cache dir");
-        let mut db = Database::open(&path).expect("open db");
-        db.save_project(&Project::new("Remote".to_owned(), None))
-            .expect("save project");
-        db.save_speleo_link(Some(&SpeleoLink {
-            endpoint: endpoint.to_owned(),
-            project_id: PID.to_owned(),
-            project_name: "Remote".to_owned(),
-            base_commit_sha: Some("abc123".to_owned()),
-            has_unpushed_edits: false,
-            last_edit_at: None,
-            last_verify_at: None,
-            undo_mode: None,
-        }))
-        .expect("save link");
-        drop(db);
+        write_v2(
+            &path,
+            "Remote",
+            Some(&SpeleoLink {
+                endpoint: endpoint.to_owned(),
+                project_id: PID.to_owned(),
+                project_name: "Remote".to_owned(),
+                base_commit_sha: Some("abc123".to_owned()),
+                has_unpushed_edits: false,
+                last_edit_at: None,
+                last_verify_at: None,
+                undo_mode: None,
+            }),
+        );
         let state = AppState::new().expect("state");
         assert!(
             state.open_project(path.clone()).success,
@@ -989,12 +989,14 @@ mod tests {
     /// `mark_remote_forward_edit`, and this is setup, not a writer.
     fn set_unpushed_edits(state: &AppState) {
         state
-            .database
-            .lock()
-            .expect("database")
-            .as_ref()
-            .expect("open")
-            .touch_speleo_link_dirty("2026-11-09T10:00:00Z")
+            .mutate_speleo_link(|link| {
+                let Some(link) = link.as_mut() else {
+                    return false;
+                };
+                link.has_unpushed_edits = true;
+                link.last_edit_at = Some("2026-11-09T10:00:00Z".to_owned());
+                true
+            })
             .expect("stamp the dirty bit");
     }
 
@@ -1012,6 +1014,17 @@ mod tests {
     /// absence assertion is not just a race the release had not run yet.
     fn settle() {
         std::thread::sleep(std::time::Duration::from_millis(400));
+    }
+
+    /// Wait (up to 10 s) until `done` holds: a release that must land runs on
+    /// its own thread, and a fixed [`settle`] raced it on a loaded host
+    /// (about one run in five at load 40). Where a release must NOT land,
+    /// [`settle`] still gives a stray one its chance.
+    fn settle_until(done: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     type Release = fn(&AppState);
@@ -1173,6 +1186,10 @@ mod tests {
             let (server, seen) = recording_server();
             let (_temp, _root, _path, state) = managed_editing_session(&server);
             release(&state);
+            settle_until(|| {
+                release_requests(&seen) >= 1 && !state.speleodb_lock_acquired_here(PID)
+            });
+            // And a duplicate its chance.
             settle();
             assert_eq!(
                 release_requests(&seen),
@@ -1210,7 +1227,7 @@ mod tests {
         // #668 scenario: a project with no SpeleoDB link closes without any
         // network call or credentials.
         let state = AppState::new().expect("state");
-        state.set_project_for_tests(Project::new("Synthetic local".into(), None));
+        state.set_project_for_tests(Project::new("Synthetic local", None));
         let closed = state.speleodb_close_releasing_lock();
         assert!(closed.success);
         assert_eq!(closed.lock_release, None, "nothing was released");
@@ -1421,32 +1438,32 @@ mod tests {
     }
 
     #[test]
-    fn a_poisoned_database_lock_declines_the_release_without_panicking() {
+    fn a_poisoned_file_lock_declines_the_release_without_panicking() {
         // A poisoned mutex is not "there is nothing to release". Both reads in
-        // `speleodb_lock_release_params` used to be `.ok()?`, which folded
-        // `Io("database lock poisoned")` and `Io("SpeleoDB session lock poisoned")` into
-        // the ordinary no-op with no trace at all - so a poisoned mutex at close /
-        // switch / quit stranded the server lock permanently and silently, which is the
-        // exact outcome this module exists to prevent. The failures are now matched and
-        // logged (the veto three lines down always was).
+        // `speleodb_lock_release_params` used to be `.ok()?`, which folded a poisoned
+        // lock into the ordinary no-op with no trace at all - so a poisoned mutex at
+        // close / switch / quit stranded the server lock permanently and silently,
+        // which is the exact outcome this module exists to prevent. The link now
+        // lives in `FileState`, whose reader recovers a poisoned guard rather than
+        // failing; the claim read still matches and logs its failure.
         //
-        // Behaviourally the answer is still `None` - keeping the lock held is the
-        // recoverable direction - so what is pinned here is that the poisoned path is
-        // reached and handled rather than panicking, and the log side is pinned by
-        // `both_release_param_reads_log_their_real_failures`.
+        // Behaviourally the answer is still `None` here (nothing is open) - keeping
+        // the lock held is the recoverable direction - so what is pinned is that the
+        // poisoned path is reached and handled rather than panicking, and the log
+        // side is pinned by `both_release_param_reads_log_their_real_failures`.
         let state = AppState::new().expect("state");
         state.set_edit_enabled(true);
-        let db = &state.database;
+        let file = &state.file;
         let _ = std::thread::scope(|s| {
             s.spawn(|| {
-                let _guard = db.lock().expect("lock to poison");
-                panic!("poison the database mutex on purpose");
+                let _guard = file.lock().expect("lock to poison");
+                panic!("poison the file-state mutex on purpose");
             })
             .join()
         });
         assert!(
-            state.database.is_poisoned(),
-            "precondition: the database mutex is poisoned"
+            state.file.is_poisoned(),
+            "precondition: the file-state mutex is poisoned"
         );
 
         assert!(
@@ -1565,7 +1582,7 @@ mod tests {
             "and gave up on its budget ({took:?})"
         );
         // The release still lands once the span frees, if the process lives on.
-        settle();
+        settle_until(|| release_requests(&seen) >= 1);
         assert_eq!(release_requests(&seen), 1);
     }
 }

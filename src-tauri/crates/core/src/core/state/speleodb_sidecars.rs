@@ -1,6 +1,14 @@
 //! SQLite's sidecar files beside a cached `.stalx`, and the rule every cache
 //! install follows for them.
 //!
+//! Every cache file this build writes is a version 2 (JSON) file, which has no
+//! sidecars. They exist only beside a LEGACY copy an older build left in the
+//! cache, until an install replaces it or its first save upgrades it. This
+//! build never reads a journal into a JSON file, but an older build opening the
+//! file would: so the rule below still runs on every install, and a hot
+//! journal still makes a legacy copy's state unknown (the copy's committed
+//! state is in it).
+//!
 //! A SQLite database is not one file. Beside `project.stalx` the library keeps a
 //! rollback journal (`project.stalx-journal`) for the length of every write
 //! transaction, and in WAL mode (which no `.stalx` this app writes uses, but a
@@ -12,11 +20,12 @@
 //! corrupt cache ("Page 35: never used") or, worse, a silently mixed file that
 //! is linked and pushable.
 //!
-//! Hence the rule, applied at every rename into the cache (the session-bound
-//! install, the unbound replace and the prepared reload): with no connection of
-//! ours left on the destination, move every sidecar out of SQLite's sight and
-//! make that durable BEFORE the new file appears under the name; delete them
-//! once it has; put them back if it never does ([`SetAsideSidecars`]).
+//! Hence the rule, applied at every write into the cache (the session-bound
+//! install and the prepared reload, both through
+//! `speleodb_reload::install_cache_bytes`): move every sidecar out of SQLite's
+//! sight and make that durable BEFORE the new file appears under the name;
+//! delete them once it has; put them back if it never does
+//! ([`SetAsideSidecars`]). This build holds no connection to a cache file.
 //!
 //! What a sidecar may HOLD decides who may throw it away:
 //!
@@ -98,10 +107,12 @@ pub(super) struct SetAsideSidecars {
 impl SetAsideSidecars {
     /// Move every sidecar of `db` aside and make the move durable.
     ///
-    /// The caller must hold NO connection to `db`: a live connection's journal is
-    /// mid-transaction state, not debris. Every caller either closed the open
-    /// project's handle (under the `project` guard) or established that `db` is
-    /// not the open project.
+    /// No connection may be open on `db`: a live connection's journal is
+    /// mid-transaction state, not debris. This build never opens one on a cache
+    /// file (it keeps no database handle; a legacy copy is read through a private
+    /// temp copy), so a sidecar here is always a leftover of an older build.
+    /// Project restore (`project_restore`) uses the same rule beside a file it
+    /// replaces.
     ///
     /// A sidecar that cannot be moved fails the install before anything is
     /// replaced (and puts back what had already moved): installing next to it is

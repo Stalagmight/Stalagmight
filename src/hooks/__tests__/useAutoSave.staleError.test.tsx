@@ -39,7 +39,6 @@ describe('useAutoSave error status', () => {
       project: { file_path: '/cave.stalx' } as never,
       config: { general: { auto_save: true, auto_save_interval_seconds: 1 } } as never,
       isDirty: false,
-      integritySaveBlocked: false,
     } as never);
   });
 

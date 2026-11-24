@@ -28,13 +28,51 @@ export const FS_PATH_TOO_LONG = 'FS_PATH_TOO_LONG';
  * (#517) - saving would have rebuilt the file without it. Mirrors
  * `IGNORES_UNREADABLE_CODE` in `src-tauri/crates/core/src/core/loading.rs`.
  *
- * Unlike the `FS_*` markers this one exists for ROUTING, not wording: an
- * unmarked failure is sent to Review & Repair whenever `integritySaveBlocked` is
- * set, and Review & Repair repairs cross-references, not a broken
- * `resolved_warnings` table - so without the marker this refusal reaches no
- * surface at all on a project that has both problems.
+ * The message after the marker is already a full sentence, so the surfaces
+ * strip the marker and show the backend's text (`saveFailureMessage`,
+ * `autosaveFailureMessage`). (0.6.0 also needed it for routing, to keep this
+ * refusal out of the integrity banner's Review & Repair, which is gone.)
  */
 export const IGNORES_UNREADABLE = 'IGNORES_UNREADABLE';
+
+/**
+ * Marker for a save the external-modification guard refused (`.stalx` v2, plan
+ * 6.5): the file on disk is not what the app last read or wrote, so another
+ * program changed, moved or deleted it ({@link FILE_MISSING} tells the last
+ * two apart), or a first save found a file at its path ({@link FILE_EXISTS}). Mirrors `EXTERNALLY_MODIFIED_CODE` in
+ * `src-tauri/crates/core/src/core/state/open_file.rs`. Routed to the save
+ * prompt (reload / overwrite / save as), never to a bare error.
+ */
+export const EXTERNALLY_MODIFIED = 'EXTERNALLY_MODIFIED';
+
+/**
+ * Marker right after {@link EXTERNALLY_MODIFIED} when the guard refused
+ * because the file is GONE - moved or deleted by another program
+ * (`EXTERNALLY_MODIFIED: FILE_MISSING: <path> was moved or deleted ...`).
+ * Mirrors `FILE_MISSING_MARKER` (same Rust file as the code). Still routed to
+ * the save prompt, which then offers no "Use the file's version": there is no
+ * file to reopen, and the reopen would fail after the close dropped the
+ * unsaved changes.
+ */
+export const FILE_MISSING = 'FILE_MISSING';
+
+/**
+ * Marker right after {@link EXTERNALLY_MODIFIED} when a FIRST save (the
+ * project's path was chosen free) found a file at that path
+ * (`EXTERNALLY_MODIFIED: FILE_EXISTS: <path> already exists`). Mirrors
+ * `FILE_EXISTS_MARKER` (same Rust file as the code). Still routed to the save
+ * prompt, which then offers no "Use the file's version": the file there is
+ * not this project's, and opening it would put a stranger's file in the
+ * project's place.
+ */
+export const FILE_EXISTS = 'FILE_EXISTS';
+
+/**
+ * Marker for a save refused because the project is open read-only: the file
+ * was made with a newer Stalagmight (plan 6.4). Mirrors `READ_ONLY_FILE_CODE`
+ * (same file). Edits and undo carry it too.
+ */
+export const READ_ONLY_FILE = 'READ_ONLY_FILE';
 
 /** What a failed save's `CommandResult.error` says went wrong. */
 export type SaveErrorKind =
@@ -42,6 +80,8 @@ export type SaveErrorKind =
   | 'path-not-found'
   | 'path-too-long'
   | 'ignores-unreadable'
+  | 'externally-modified'
+  | 'read-only-file'
   | 'other';
 
 /**
@@ -55,6 +95,8 @@ export function classifySaveError(error?: string | null): SaveErrorKind {
   if (error.startsWith(FS_PATH_NOT_FOUND)) return 'path-not-found';
   if (error.startsWith(FS_PATH_TOO_LONG)) return 'path-too-long';
   if (error.startsWith(IGNORES_UNREADABLE)) return 'ignores-unreadable';
+  if (error.startsWith(EXTERNALLY_MODIFIED)) return 'externally-modified';
+  if (error.startsWith(READ_ONLY_FILE)) return 'read-only-file';
   return 'other';
 }
 
@@ -65,6 +107,24 @@ export function classifySaveError(error?: string | null): SaveErrorKind {
  */
 export function stripSaveErrorMarker(error: string, marker: string): string {
   return error.startsWith(marker) ? error.slice(marker.length).replace(/^:\s*/, '') : error;
+}
+
+/**
+ * True if the guard refused the save because the file is gone (moved or
+ * deleted), not changed: {@link FILE_MISSING} right after the guard's code.
+ */
+export function isFileMissingError(error?: string | null): boolean {
+  if (!error || classifySaveError(error) !== 'externally-modified') return false;
+  return stripSaveErrorMarker(error, EXTERNALLY_MODIFIED).startsWith(`${FILE_MISSING}:`);
+}
+
+/**
+ * True if the guard refused a first save because a file appeared at its path:
+ * {@link FILE_EXISTS} right after the guard's code.
+ */
+export function isFileExistsError(error?: string | null): boolean {
+  if (!error || classifySaveError(error) !== 'externally-modified') return false;
+  return stripSaveErrorMarker(error, EXTERNALLY_MODIFIED).startsWith(`${FILE_EXISTS}:`);
 }
 
 /** True if a save `CommandResult.error` carries the permission marker. */

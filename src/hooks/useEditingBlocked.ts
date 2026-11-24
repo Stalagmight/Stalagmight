@@ -31,12 +31,25 @@
  */
 import { useUIStore, isMapReadOnly } from '../store/uiStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
+import { useProjectStore } from '../store/projectStore';
+import { showReadOnlyFileNotice } from '../utils/blockedNotice';
+
+/**
+ * The third term: the open FILE is read-only because a newer Stalagmight made
+ * it (`.stalx` v2, plan 6.4: an unknown `requires` feature or survey field).
+ * The backend refuses every edit of such a file with `READ_ONLY_FILE`, so this
+ * term has a server backstop like the SpeleoDB one; gating on it here keeps the
+ * controls from offering edits that can only fail. It reports as `'project'`.
+ */
+export const selectFileReadOnly = (s: { fileReadOnlyReason?: string | null }): boolean =>
+  (s.fileReadOnlyReason ?? null) !== null;
 
 /** React-hook form: subscribes to both stores and recomposes on change. */
 export function useEditingBlocked(): boolean {
   const mapReadOnly = useUIStore(isMapReadOnly);
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
-  return mapReadOnly || speleoReadOnly;
+  const fileReadOnly = useProjectStore(selectFileReadOnly);
+  return mapReadOnly || speleoReadOnly || fileReadOnly;
 }
 
 /**
@@ -45,12 +58,33 @@ export function useEditingBlocked(): boolean {
  * subscription.
  */
 export function isEditingBlockedNow(): boolean {
-  return isMapReadOnly(useUIStore.getState()) || selectSpeleoReadOnly(useSpeleoStore.getState());
+  return (
+    isMapReadOnly(useUIStore.getState()) ||
+    selectSpeleoReadOnly(useSpeleoStore.getState()) ||
+    selectFileReadOnly(useProjectStore.getState())
+  );
 }
 
 /**
- * Which of the two terms blocks editing, for copy that says why: `'project'`
- * for a remote SpeleoDB project open without the write lock, `'view'` for the
+ * Say why an action did nothing when the open FILE is read-only (made with a
+ * newer Stalagmight): the worded notice the backend's `READ_ONLY_FILE`
+ * refusal gets (Ctrl+Z, a dialog), for what the frontend refuses before any
+ * command leaves - a key typed into a data-table cell, the Delete key on a
+ * selection (demo finding I-10), Save, Save As and Import (N-1). Once: while
+ * that notice is on screen a repeat (every further keystroke) adds nothing
+ * (`showReadOnlyFileNotice`). Returns whether the file is read-only; any
+ * other reason editing is blocked stays silent here.
+ */
+export function notifyIfFileReadOnly(): boolean {
+  if (!selectFileReadOnly(useProjectStore.getState())) return false;
+  showReadOnlyFileNotice();
+  return true;
+}
+
+/**
+ * Which term blocks editing, for copy that says why: `'project'` for a remote
+ * SpeleoDB project open without the write lock or a file made with a newer
+ * Stalagmight, `'view'` for the
  * closure-adjusted view or Plan/Export, `null` when editing is open. The
  * project wins when both hold, since leaving the view would not unblock it.
  */
@@ -65,10 +99,14 @@ function blockedReason(mapReadOnly: boolean, speleoReadOnly: boolean): EditingBl
 export function useEditingBlockedReason(): EditingBlockedReason {
   const mapReadOnly = useUIStore(isMapReadOnly);
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
-  return blockedReason(mapReadOnly, speleoReadOnly);
+  const fileReadOnly = useProjectStore(selectFileReadOnly);
+  return blockedReason(mapReadOnly, speleoReadOnly || fileReadOnly);
 }
 
 /** Imperative twin of `useEditingBlockedReason`, read via `getState()`. */
 export function editingBlockedReasonNow(): EditingBlockedReason {
-  return blockedReason(isMapReadOnly(useUIStore.getState()), selectSpeleoReadOnly(useSpeleoStore.getState()));
+  return blockedReason(
+    isMapReadOnly(useUIStore.getState()),
+    selectSpeleoReadOnly(useSpeleoStore.getState()) || selectFileReadOnly(useProjectStore.getState()),
+  );
 }

@@ -2,7 +2,7 @@
 //!
 //! A Section is an arbitrary region of a cave the user (or an importer) groups
 //! lines into - "Upper level", "Downstream sump". Each line belongs to at most
-//! one Section ([`crate::Line::section_id`]); a line in none is "ungrouped".
+//! one Section ([`crate::survey::LineMeta::section_id`]); a line in none is "ungrouped".
 //! A Section holds no survey data of its own, so nothing geometric reads it.
 //!
 //! Before the rename to Line, "section" was the name of the survey line
@@ -59,7 +59,7 @@ pub const SECTION_PALETTE: [&str; 8] = [
 
 /// `name` made fit for a Section on automatic paths (an import, a file, an
 /// undo record): the characters a typed name is refused for
-/// ([`crate::project::station_naming::is_forbidden_name_char`]) go - a control
+/// ([`crate::station_naming::is_forbidden_name_char`]) go - a control
 /// character becomes a space, an invisible formatting one is dropped - then
 /// it is trimmed and cut to [`MAX_SECTION_NAME_CHARS`].
 pub fn clamp_section_name(name: &str) -> String {
@@ -68,7 +68,7 @@ pub fn clamp_section_name(name: &str) -> String {
         .filter_map(|c| {
             if c.is_control() {
                 Some(' ')
-            } else if crate::project::station_naming::is_forbidden_name_char(c) {
+            } else if crate::station_naming::is_forbidden_name_char(c) {
                 None
             } else {
                 Some(c)

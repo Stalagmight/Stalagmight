@@ -20,7 +20,7 @@ async function openRecoveryDialog(page: import('./fixtures/coverage').Page): Pro
 
     e2e.uiStore.getState().openDialog('corruption-recovery', {
       corruptPath: '/mock/corrupt-project.stalx',
-      errorMessage: 'Database integrity check failed: index corruption detected.',
+      errorMessage: 'The project breaks an invariant and cannot be opened normally: a line passes a station twice.',
     });
   });
 }
@@ -37,9 +37,10 @@ test.describe('Recovery Integrity Workflow', () => {
 
       next.list_backups = [
         {
-          path: '/mock/corrupt-project.stalx.bak.1',
-          modifiedAt: '2026-02-11 14:30:00',
+          path: '/mock/corrupt-project.stalx.backup',
+          modifiedAt: '2026-02-11T14:30:00.000Z',
           sizeBytes: 51200,
+          kind: 'backup',
         },
       ];
       next.restore_from_backup = 'File restored successfully from backup.';
@@ -56,6 +57,7 @@ test.describe('Recovery Integrity Workflow', () => {
     await expect(recoveryBackupItems(page)).toHaveCount(1);
 
     await recoveryBackupItems(page).first().click();
+    await page.getByTestId('recovery-backup-restore').click();
     await expect(page.getByText('Restore Succeeded')).toBeVisible({ timeout: 5000 });
 
     await page.getByTestId('corruption-recovery-dialog').getByRole('button', { name: 'Open Project' }).click();

@@ -13,6 +13,7 @@ import {
   type EditableShotLike,
   type OverlapParams,
 } from '../overlapHelpers';
+import { averageAzimuth, normalizeAzimuth } from '../azimuth';
 
 // ─── Test data helpers ──────────────────────────────────────────────────────
 
@@ -564,6 +565,38 @@ describe('reverseTargetShot matches Project::reverse_line', () => {
     const reversed = reverseTargetShot(makeTargetShot({ azimuth_in: 45, azimuth_out: 225 }));
     expect(reversed.azimuth_in).toBe(225);
     expect(reversed.azimuth_out).toBe(45);
+  });
+
+  it('turns a shot whose readings are typed exactly opposite but one ulp off 180', () => {
+    // 338.1 - 158.1 is 180.00000000000003, so a bit-exact antipodal test missed
+    // the pair while averageAzimuth resolves it by its tie-break: the shot kept
+    // its bearing (shot_reverse.rs). The backend now swaps it, values as typed.
+    expect(normalizeAzimuth(338.1 - 158.1)).not.toBe(180);
+    const reversed = reverseTargetShot(makeTargetShot({ azimuth_in: 158.1, azimuth_out: 338.1 }));
+    expect(reversed.azimuth_in).toBe(338.1);
+    expect(reversed.azimuth_out).toBe(158.1);
+    const twice = reverseTargetShot(reversed);
+    expect(twice.azimuth_in).toBe(158.1);
+    expect(twice.azimuth_out).toBe(338.1);
+  });
+
+  it('turns every bearing on a 0.1 grid at and beside opposite, and twice gives it back', () => {
+    const apart = (a: number, b: number) => {
+      const d = normalizeAzimuth(a - b);
+      return d > 180 ? 360 - d : d;
+    };
+    for (let i = 0; i < 3600; i++) {
+      for (const offset of [1799, 1800, 1801]) {
+        const azimuthIn = i / 10;
+        const azimuthOut = ((i + offset) % 3600) / 10;
+        const bearing = averageAzimuth(azimuthIn, azimuthOut);
+        const once = reverseTargetShot(makeTargetShot({ azimuth_in: azimuthIn, azimuth_out: azimuthOut }));
+        expect(apart(averageAzimuth(once.azimuth_in, once.azimuth_out), bearing)).toBeCloseTo(180, 9);
+        const twice = reverseTargetShot(once);
+        expect(apart(twice.azimuth_in, azimuthIn)).toBeLessThan(1e-9);
+        expect(apart(twice.azimuth_out, azimuthOut)).toBeLessThan(1e-9);
+      }
+    }
   });
 
   it('keeps both legs in [0, 360) for an out-of-range reading', () => {

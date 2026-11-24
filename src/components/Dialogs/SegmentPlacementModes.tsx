@@ -15,9 +15,12 @@ import type { Line } from '../../types/project';
 import type { LineEditState } from '../../utils/batchImportHelpers';
 import type { SkippedSuggestionPlacement } from './DmpNewImportDialog';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useProse } from '../../hooks/useProse';
 import { displayStationName } from '../../utils/formatters';
 import { lineDisplayName } from '../../utils/stationIdentity';
-import { dmpFileStationName, importStationChoices, suggestionTargetStationLabel } from '../../utils/importStationNames';
+import { dmpFileStationName, importStationChoices } from '../../utils/importStationNames';
+import { suggestionTargetStationProse } from '../../utils/importStationProse';
+import { Prose } from '../common/Prose';
 import { toEmittedStationIndex } from '../common/emittedShots';
 
 export type SegmentPlacementMode = 'suggestion' | 'origin' | 'fromExisting' | 'manual' | 'discard';
@@ -68,6 +71,7 @@ export function SegmentPlacementModes({
 }: SegmentPlacementModesProps) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
+  const prose = useProse();
   const stationOption = (i: number, name: string): SelectOption => ({
     value: String(i),
     label: t('dialogs.dmpNewImport.manualPlacing.stationNamed', { name: displayStationName(name) }),
@@ -119,13 +123,16 @@ export function SegmentPlacementModes({
             />
             <div className="text-sm">
               <div className="font-medium">{t('dialogs.dmpNewImport.manualPlacing.suggestion')}</div>
-              <div className="text-xs text-text-secondary">
-                → {suggestionTargetStationLabel(
-                  labels,
-                  segmentSkippedSuggestion.suggestion,
-                  segmentSkippedSuggestion.mergeExistingStation,
-                  (i) => lineEdits.get(i)?.name,
-                )}
+              {/* The station the skipped suggestion connects to, a prose pill (RS-PROSE). */}
+              <div className="text-xs text-text-secondary" data-testid="segment-mode-suggestion-target">
+                → <Prose
+                  text={suggestionTargetStationProse(
+                    prose,
+                    segmentSkippedSuggestion.suggestion,
+                    segmentSkippedSuggestion.mergeExistingStation,
+                    (i) => lineEdits.get(i)?.name,
+                  )}
+                />
                 {' · '}{segmentSkippedSuggestion.suggestion.matchedShots} shots matched
               </div>
             </div>
@@ -221,7 +228,7 @@ export function SegmentPlacementModes({
                           value={String(fromExistingStationIdx)}
                           onChange={(v) => onFromExistingStationChange(Number(v))}
                           options={Array.from({ length: fromExistingStationCount }, (_, i) =>
-                            stationOption(i, labels.stationName({ line_id: fromExistingLineId, station_index: i })),
+                            stationOption(i, labels.station({ line_id: fromExistingLineId, station_index: i })),
                           )}
                           className="flex-1"
                           data-testid="from-existing-station-select"

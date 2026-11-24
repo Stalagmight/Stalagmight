@@ -202,16 +202,6 @@ pub struct CombineJoinedMove {
     pub shift_m: f64,
 }
 
-/// What `Project::combine_lines_reporting` did besides the join, for the
-/// command to report: the ties it removed across one shot (#746) and the
-/// closures it replaced (#749), each as the plan the dialog showed named
-/// them.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CombineOutcome {
-    pub removed_across_one_shot: Vec<CombineRemovedClosure>,
-    pub replaced: Vec<CombineReplacedClosure>,
-}
-
 /// Why the kept line's side is the one that moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -283,6 +273,14 @@ pub struct CombinePlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub station_renames: Option<CombineStationRenames>,
+    /// The join station not kept, when it stays archived for lines of its
+    /// own besides the absorbed one (it was also on a third line): those
+    /// lines show the kept join station from now on, its comment stays
+    /// with it (hidden until Detach Line from Station brings it back), and
+    /// the comment choice does not apply. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub join_archived: Option<crate::ArchivedStationWire>,
 }
 
 /// Why a combine renames stations (`station_naming::plan_combine_prefixes`).
@@ -412,3 +410,21 @@ pub struct CombineCandidate {
     /// What changes when `b` is kept.
     pub plan_keeping_b: CombinePlan,
 }
+
+/// How far apart (metres) the two join stations may be and still count as the
+/// same point (side by side); also the bound on how far a co-located join
+/// moves a side, which it does by the residual (#740, `combine_plan.rs`).
+pub const COMBINE_TOLERANCE_M: f64 = 0.001;
+
+/// Above this depth gap (metres) between two co-located, unmerged join
+/// stations, the candidate reports it and the dialog shows it: the joined
+/// station takes their average, so each end moves by half the gap. Half the
+/// 0.1 m resolution depth gauges and dive computers record; a smaller gap is
+/// below what the survey can tell apart.
+pub const COMBINE_DEPTH_NOTICE_M: f64 = 0.05;
+
+/// The most other line ends the station query lists at one point. Past it
+/// the point is a pile (unplaced lines all start at the origin), not a
+/// junction to choose from in a menu, and every partner costs a pair query;
+/// the Sections panel still combines any two of them.
+pub const MAX_COMBINE_PARTNERS: usize = 16;

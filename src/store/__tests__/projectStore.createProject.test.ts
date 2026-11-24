@@ -33,7 +33,6 @@ describe('projectStore.createProject', () => {
             loop_closures: [],
             file_path: args?.savePath ?? '/mock/Documents/stalagmight/Untitled_Project.stalx',
             next_line_id: 1,
-            line_offsets: {},
             imported_file_hashes: [],
             imported_line_hashes: [],
             next_closure_id: 1n,

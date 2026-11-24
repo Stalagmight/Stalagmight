@@ -47,13 +47,14 @@ function isInstallRefusedForTransfer(error: unknown): boolean {
  * @param message - The message to show in the confirmation dialog
  * @param onConfirm - Optional callback to run cleanup before closing (e.g., delete placed lines)
  * @param guard - Optional in-app guard run after any `shouldBlock` confirmation.
- *   Returns true when it opened a dialog and the close must be abandoned.
+ *   Returns (or resolves to) true when it opened a dialog and the close must be
+ *   abandoned. `guardQuit` asks the backend first, so it is awaited.
  */
 export function useBeforeUnload(
   shouldBlock: boolean,
   message: string,
   onConfirm?: () => Promise<void>,
-  guard?: () => boolean
+  guard?: () => boolean | Promise<boolean>
 ) {
   // Track if a dialog is currently being shown to prevent duplicates
   const isShowingDialog = useRef(false);
@@ -173,9 +174,16 @@ export function useBeforeUnload(
           if (!preConfirmed) tier1Confirmed.current = false;
 
           // The questions. Latched (see above) until they are answered, and
-          // released synchronously as this block ends - before the tier-2 guard,
-          // which may re-issue the close itself.
+          // released synchronously as this block ends. The tier-2 guard's own
+          // question is asked inside: it awaits the backend's unsaved-changes
+          // flag first, bounded (`UNSAVED_ASK_BOUND_MS`: a backend that never
+          // answers gets the prompt, not a latch held for good), and a close
+          // request arriving during that round trip joins this attempt like
+          // any other. What the guard starts (a dialog,
+          // a lock hand-back) re-issues the close only after an IPC of its own,
+          // so that close always finds the latch released.
           askingQuestions.current = true;
+          let guardTookOver = false;
           try {
             // Unsent SpeleoDB input (frontend#10) next - after the tier-0 wait, so a
             // re-issued quit asks it against the settled state, and before any tier
@@ -225,19 +233,20 @@ export function useBeforeUnload(
               }
               tier1Confirmed.current = true;
             }
+
+            // Tier 2: the app's own exit guards (unpushed SpeleoDB edits under our
+            // write lock, then unsaved changes). Opening a dialog abandons this
+            // close; the dialog's own action re-issues it via performQuit, which
+            // arms `preConfirmed` so we land past this branch next time. "Quit
+            // now" re-issues its close pre-confirmed, so it never reaches the
+            // guard; a close that does is another attempt, and a forced-quit arm
+            // left from "Quit now" goes with it - a re-issued quit waits for the
+            // work again rather than cutting it.
+            guardTookOver = !preConfirmed && (await guardRef.current?.()) === true;
           } finally {
             askingQuestions.current = false;
           }
-
-          // Tier 2: the app's own exit guards (unpushed SpeleoDB edits under our
-          // write lock, then unsaved-to-disk changes). Opening a dialog abandons
-          // this close; the dialog's own action re-issues it via performQuit,
-          // which arms `preConfirmed` so we land past this branch next time.
-          // "Quit now" re-issues its close pre-confirmed, so it never reaches the
-          // guard; a close that does is another attempt, and a forced-quit arm
-          // left from "Quit now" goes with it - a re-issued quit waits for the
-          // work again rather than cutting it.
-          if (!preConfirmed && guardRef.current?.()) {
+          if (guardTookOver) {
             abandonForcedQuit();
             debugLog('[useBeforeUnload] In-app guard opened a dialog, aborting close');
             return;

@@ -1432,6 +1432,7 @@ pub fn convert_tml_with_options(
             placement,
             station_comments,
             station_names: Vec::new(),
+            station_external: ariane_station_ids(&line.shots, include_excluded),
             azimuth_reference: Some(azimuth_reference),
             explorers: None,
             override_date: None,
@@ -1973,6 +1974,28 @@ pub fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
 /// two nodes they tie, so `Length` is only zero on a loop that closes perfectly);
 /// their topology is captured in `TmlClosure`. Excluded rows are dropped unless
 /// the user asked for them.
+/// The Ariane station ID of every station of an imported line, by station
+/// index, as the stations' external ids (plan 10.5): station 0 is where the
+/// first imported row starts (its `FromID`; none for a negative one, the
+/// cave's start), station `i` where the `i`-th one ends (its `ID`). Rows are
+/// the ones [`convert_shots_to_shot_data`] imports, so the indices line up
+/// with the line's shots.
+fn ariane_station_ids(shots: &[TmlShot], include_excluded: bool) -> Vec<(u32, String)> {
+    let rows: Vec<&TmlShot> = shots
+        .iter()
+        .filter(|s| is_imported_row(s, include_excluded))
+        .collect();
+    let Some(first) = rows.first() else {
+        return Vec::new();
+    };
+    std::iter::once(first.from_id)
+        .chain(rows.iter().map(|s| s.id))
+        .enumerate()
+        .filter(|(_, id)| *id >= 0)
+        .map(|(i, id)| (u32::try_from(i).unwrap_or(u32::MAX), id.to_string()))
+        .collect()
+}
+
 fn is_imported_row(shot: &TmlShot, include_excluded: bool) -> bool {
     shot.shot_type != TmlShotType::Closure && (include_excluded || !shot.excluded)
 }
@@ -4749,14 +4772,22 @@ mod tests {
     }
 
     /// End-to-end coordinate verification: parse a real TML file, import all
-    /// lines into a Project, compute station coordinates, and compare
-    /// against independently calculated expected values.
+    /// lines into the frozen 0.6.0 model (`stalagmight-legacy`, the coordinate
+    /// oracle), compute station coordinates, and compare against
+    /// independently calculated expected values.
     ///
     /// Run with:  TML_NAHARON_PATH=/path/to/ariane.tml cargo test --manifest-path src-tauri/Cargo.toml --lib parse_tml_naharon_coordinates -- --ignored
     #[test]
     #[ignore]
     fn parse_tml_naharon_coordinates() {
-        use crate::models::{ImportPlacement, LineData, Project, StationRef};
+        use crate::models::ImportPlacement;
+        use stalagmight_legacy::models::{LineData, Project, StationRef};
+
+        // The frozen model's types serialize like the live ones.
+        fn relive<T: Serialize, U: serde::de::DeserializeOwned>(value: &T) -> U {
+            serde_json::from_value(serde_json::to_value(value).expect("serialize"))
+                .expect("the frozen type reads the live value")
+        }
 
         let path_str = std::env::var("TML_NAHARON_PATH").unwrap_or_else(|_| {
             "/home/user/tmp/467b76f1-5909-4e00-b96f-c30931ac81db/ariane.tml".into()
@@ -4786,9 +4817,9 @@ mod tests {
                 surveyor: config.surveyor.clone(),
                 date: config.date,
                 color: config.color.clone(),
-                direction: config.direction,
+                direction: config.direction.as_ref().map(relive),
                 quality: config.quality,
-                shots: config.shots.clone(),
+                shots: config.shots.iter().map(relive).collect(),
             };
             let line_id = project.add_line(line_data).id;
             created_ids.insert(config.line_index, line_id);

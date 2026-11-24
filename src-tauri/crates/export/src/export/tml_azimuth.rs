@@ -4,7 +4,7 @@
 //! decision, and the export's only choice that can change a NUMBER rather than
 //! a label.
 
-use crate::models::{AzimuthReference, CorrectionSource, Line, NorthReference, Project};
+use crate::models::{AzimuthReference, CorrectionSource, NorthReference};
 
 /// How this document declares its azimuths (#438).
 ///
@@ -54,13 +54,11 @@ pub(super) enum AzimuthExport {
 }
 
 impl AzimuthExport {
-    pub(super) fn decide(project: &Project) -> Self {
-        let references: Vec<AzimuthReference> = project
-            .lines
-            .iter()
-            .filter(|line| !line.shots.is_empty())
-            .map(|line| project.azimuth_reference_for(line))
-            .collect();
+    /// The declaration for a document whose lines with shots resolve to
+    /// `references` (`Project::azimuth_reference_for`), in any order (the
+    /// decision does not depend on it).
+    pub(super) fn decide_from(references: impl IntoIterator<Item = AzimuthReference>) -> Self {
+        let references: Vec<AzimuthReference> = references.into_iter().collect();
 
         // A line with no correction on record cannot be rotated anywhere.
         let any_unknown = references
@@ -161,12 +159,12 @@ impl AzimuthExport {
         }
     }
 
-    /// The reference to push each of `line`'s azimuths through on the way
-    /// out. Identity except on the mixed path, so an ordinary export is
-    /// byte-for-byte what it always was.
-    pub(super) fn emit_reference(self, project: &Project, line: &Line) -> AzimuthReference {
+    /// The reference to push each azimuth of a line whose resolved reference
+    /// is `reference` through on the way out. Identity except on the mixed
+    /// path, so an ordinary export is byte-for-byte what it always was.
+    pub(super) fn emit(self, reference: AzimuthReference) -> AzimuthReference {
         match self {
-            AzimuthExport::MixedToTrue => project.azimuth_reference_for(line),
+            AzimuthExport::MixedToTrue => reference,
             _ => AzimuthReference::default(),
         }
     }

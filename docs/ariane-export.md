@@ -93,8 +93,8 @@ is written per shot:
 
 | Internal field | TML element | Notes |
 |----------------|-------------|-------|
-| Sequential integer | `ID` | Assigned starting from 0, incrementing across all lines |
-| Previous shot ID | `FromID` / `FRID` | Chains shots linearly within a line; START has -1 |
+| Station ID of the station the row ends at | `ID` | A START's is the station it stands on; CLOSURE rows and GPS-fix STARTs are numbered above the highest Station ID. See [ID assignment](#id-assignment) |
+| Station ID of the station the row starts from | `FromID` / `FRID` | Chains the rows of a line; a line entered at a junction hangs off the junction's row; START has -1 |
 | `shot.azimuth_in` | `Azimut` / `AZ` | Front-sight azimuth |
 | `shot.azimuth_out` | - | Not exported. Ariane does not encode backsight azimuth. |
 | `shot.length` | `Length` / `LG` | |
@@ -102,7 +102,7 @@ is written per shot:
 | `shot.depth_in` | `DepthIn` / `DPI` | -1.0 sentinel when equal to previous `depth_out` |
 | `shot.pitch_in` | `Inclination` / `INC` | 0.0 if unset. Collides with a genuinely measured level shot (`Some(0.0)`) the same way LRUD does; see the "Inclination zero/null collision" entry in [Ariane import](ariane-import.md) for the import-side rule that keeps this from fabricating validator warnings on re-import (#482). |
 | LRUD | `Left`/`Right`/`Up`/`Down` | `0.0` for `None` - Ariane's format has no null, so an UNMEASURED passage dimension and one MEASURED as zero are written as the same `0.0`. See [The LRUD zero/null collision](#the-lrud-zeronull-collision). |
-| `shot.comment` | `Comment` / `CM` | Empty string if unset. Also carries the **to-station's** `project.station_comments` entry, joined with the shot comment via the ZWSP marker - see [Station-comment co-encoding](#station-comment-co-encoding). |
+| `shot.comment` | `Comment` / `CM` | Empty string if unset. Also carries the comment of the station the row ends at (`Station.comment`), joined with the shot comment via the ZWSP marker - see [Station-comment co-encoding](#station-comment-co-encoding). |
 | `shot.kind` | `Type` / `TY` | Both `Jump` and `Reference` export as `VIRTUAL`; `Normal` as `REAL`. Ariane has a single virtual category, so the #27 distinction is lossy on export by design (q9) and is preserved locally instead. |
 | `shot.uuid` | `UUID` / `UU` | Emitted for every block that stands for a real project shot - the forward blocks and the reversed / pre-zero-datum legs alike; omitted on the blocks the exporter synthesizes (START, CLOSURE, and the SpeleoDB VIRTUAL padding shot), and on a sidecar shot whose value is a per-document repeat or not a v4. See [Shot UUIDs](#shot-uuids). |
 | - | `Locked` / `LCK` | `false` for normal shots, `true` for START |
@@ -113,54 +113,53 @@ is written per shot:
 ## Shot UUIDs
 
 Every real forward shot carries its persistent `shot.uuid` into the export as
-`<UUID>` (`<UU>` in `.tmlu`). This is what makes a re-export of an unchanged
-project **byte-identical**, which the SpeleoDB push depends on: the `.tml` is
-rendered as a sidecar so the server can regenerate GeoJSON.
-`Project::ensure_shot_uuids` settles the UUIDs before every save and before that
-render, so nothing is minted per-export (a project loaded but never saved is the
-one case where a UUID is minted on the fly, and it is persisted by the next
-save).
+`<UUID>` (`<UU>` in `.tmlu`), so a re-export of an unchanged project is
+**byte-identical**. Every shot of the model holds a uuid (the model mints one
+when a line is built without it), so nothing is minted per export;
+`export_uuid` still mints for an empty value, a fallback that keeps the writer
+total.
 
-A shot UUID is unique across the whole project:
+A shot UUID is unique across the whole project. It is an invariant of the
+model (`Project::validate`, invariant 1 of the
+[survey model](survey-model.md)):
 
-- **Doors rename repeats.** An Ariane import, `create_line_and_merge`, project
-  merge and Add .stalx bring ids from outside. Each renames the ids its new
-  lines share with the project (`Project::reassign_repeated_shot_uuids`): the
-  project keeps its id, the newcomer gets a derived replacement
-  (`reminted_shot_uuid`, a v5 hash of the line and the old id re-stamped as a
-  v4, so the SpeleoDB sidecar keeps it). Importing the same file twice therefore
-  gives the second copy derived ids, and only the first copy round-trips to the
-  file's `<UUID>`s.
-- **The load heals older files.** A file saved before this can hold one id in
-  several lines. The load keeps it in the lowest line and gives the others
-  the derived replacement (`Project::make_shot_uuids_project_unique`), and
-  translates the persisted undo/redo history through the same renames (see
-  [Undo/Redo](undo-redo.md#a-loaded-history-follows-the-loads-shot-uuid-heal)).
-  Derived, so every open of an unsaved file agrees.
-- **The integrity check flags a repeat** (`duplicate_shot_uuid_across_lines`,
-  Critical). The guard refuses only NEWLY introduced corruption, so on a project
-  that is otherwise sound a door that forgot its rename is rolled back; on one
-  that already holds a Critical violation (for example after undoing a Repair) it
-  is not, and the next load heals the repeat instead.
-- **The export keeps a safety net.** `build_export_shots` still settles repeats
-  after assembling the full shot list, for the one state that can hold one in
-  memory: an undo of an integrity Repair restores the recorded state verbatim
-  until the next load heals it. The user export re-mints later occurrences
-  (`remint_duplicate_uuids`), and the SpeleoDB sidecar drops them
+- **Doors re-mint repeats.** An import (`LineBuilder::claim_uuid` in the import
+  funnel), Add .stalx and Merge Projects bring ids from outside. A newcomer
+  whose id the project already holds gets a derived replacement
+  (`reminted_shot_uuid_avoiding`, a v5 hash of the line and the old id
+  re-stamped as a v4, so the SpeleoDB sidecar keeps it); the project keeps
+  its own. Importing the same file twice therefore gives the second copy
+  derived ids, and only the first copy round-trips to the file's `<UUID>`s.
+- **Older files are healed when they are converted.** A legacy (SQLite) file
+  saved before this can hold one id in several lines. The frozen 0.6.0 reader
+  keeps it in the lowest line and gives the others the derived replacement
+  (`make_shot_uuids_project_unique` in `crates/legacy`), so the migrated
+  project holds each id once; a legacy file's undo history is not kept (see
+  [Undo/Redo](undo-redo.md#persisted-entries)). Derived, so every open of an
+  unsaved file agrees.
+- **A version 2 file that repeats a shot uuid is refused** at load (it breaks
+  the invariant), with the repair offer.
+- **Every edit and every history step is validated** (an edit that would break
+  an invariant is rolled back; a history step read from a file is rolled back
+  from a copy of the project, [Undo/Redo](undo-redo.md)), so a project the
+  app holds never repeats a uuid.
+- **The export keeps a safety net** that a valid project never trips: after
+  the rows are built, the user export re-mints a later occurrence of a uuid
+  (`remint_duplicate_uuids`), and the SpeleoDB sidecar drops it
   (`harden_for_speleodb`), because a repeat would alias two shots onto one
   GeoJSON feature id.
 
-Keys stored OUTSIDE the project against an id the load renamed - an ignored
-warning, a dive-plan point - still find their shot through the derived id
-(`live_shot_uuid_for_stored`), and the next save re-keys an ignore to it. They
-try the first derived candidate only. A replacement is stepped past it only when
-the file itself already holds that derived value on another shot of the line,
-and then a key stored against the old id names that other shot - one the same
-file could have named directly.
+Keys stored OUTSIDE the project against an id a heal renamed - a dive-plan
+anchor, a legacy file's ignored warning while it is converted - still find
+their shot through the derived id (`live_shot_uuid_for_stored`); the
+conversion re-keys an ignore to the shot's final uuid. They try the first
+derived candidate only. A replacement is stepped past it only when the file
+itself already holds that derived value on another shot of the line, and then
+a key stored against the old id names that other shot - one the same file
+could have named directly.
 
 So a consumer may key a shot on `<UUID>` alone, within one document and across
-re-exports. The one exception is the in-memory state an undo of a Repair puts
-back, whose repeat the export re-mints per export until the next open heals it.
+re-exports.
 
 The importer reads the element back (#423): a `<UUID>`/`<UU>` on a `<SurveyData>`
 row becomes that shot's identity verbatim, so an Ariane-authored file that leaves
@@ -179,8 +178,8 @@ Ariane 26.3.0's own Save fills any row missing `<UUID>` with a fresh v4
 (verified 2026-07-31), so the synthesized-shot gaps above do not survive a
 round-trip through Ariane itself. Every consumer of the file *as we export
 it* - SpeleoDB, the GeoJSON feature ids - still sees the omissions.
-It exists for the SpeleoDB render and for any consumer that wants a stable
-per-shot key. Ariane 26+ round-trips it; Ariane 25 and older drop it silently,
+It exists for the SpeleoDB sidecar profile and for any consumer that wants a
+stable per-shot key. Ariane 26+ round-trips it; Ariane 25 and older drop it silently,
 which is harmless here.
 
 ## Topology
@@ -190,17 +189,17 @@ per entrance, matching what Ariane itself writes for multi-entrance caves.
 
 ### START shots - one per entrance
 
-The **root line** and any line left parentless after link resolution (a
-genuinely detached component) each get a synthesized START shot with
-`FromID = -1`. A START carries the GPS of the datum on its own station; the
+The **root line** and the first line of every other connected piece each get
+a synthesized START shot with `FromID = -1` (see
+[Line connectivity](#line-connectivity) for which line roots a piece). A START carries the GPS of the datum on its own station; the
 entrance split puts the START on that station. A START with no datum of its own
 carries the GPS of where the raw survey puts its station, relative to the frame
 datum (see [no two STARTs on one point](#no-two-starts-on-one-point)). An
 unanchored START would land at lat/lon 0, and the view would open on the
 Atlantic. A component's
 entrance is a line holding a **placement** datum; a GPS fix never roots one.
-All other lines connect to their parent via `FromID` on their first
-real/reference shot.
+All other lines connect to the line they were reached from via `FromID` on
+their first row, which hangs off the junction's row.
 
 ### Every datum is written as a START (#741)
 
@@ -218,16 +217,16 @@ Stalagmight itself such a fix is not an entrance for Plan mode or penetration.
 
 
 - A datum on an entrance's station is written on that entrance's START.
-- A datum anywhere else - a GPS fix part-way through a line, or at a
-  line's first station that a merge aliases onto its parent - gets a
+- A datum anywhere else - a GPS fix part-way through a line, or on a
+  junction a child line starts from - gets a
   **zero-length START of its own at its GPS, tied to the fix station by a
   zero-length CLOSURE** (`FromID` = the fix station's row,
   `ClosureToID` = the new START). That is the shape Ariane's own files use for
   a loop that ends on an entrance, and it adds no station: the START is a leaf
   and the CLOSURE carries no length. Both are minted after every other row and
   take the line name, colour, date and people of the row the tie hangs off
-  (the row that ends at the fix station; for a station a merge aliases onto
-  its parent, the parent's row). The START sits at that row's depth.
+  (the one row that ends at the fix station: at a junction, the row of the
+  line the walk reached it on). The START sits at that row's depth.
 
 Datums claim Ariane nodes in list order, so the placement datum always claims
 its node first. A datum is **unwritten**, and the export returns the
@@ -284,9 +283,9 @@ and a re-import of the file, put a datum-less piece of survey on top of the
 frame's entrance, wherever the map showed it.
 
 The app does not let such a piece keep a loop closure back to the survey: after
-every command and on load, a closure that is the only link between two pieces
-becomes a merge (`convert_orphan_closures_to_merges`), so "merge, close the loop,
-unmerge" ends with the piece merged again. The collapse is therefore reachable
+every topology edit, a closure that is the only link between two pieces
+becomes a junction (the orphan-closure sweep, `models::survey::sweep`), so
+"merge, close the loop, detach" ends with the piece joined again. The collapse is therefore reachable
 only from a project built outside the app, but the misplaced piece is not: any separate
 piece with no datum of its own exported onto the frame's entrance.
 
@@ -319,13 +318,28 @@ invariant on the exporter alone:
 
 ### Line connectivity
 
-Parent-child relationships are derived from `station_merges`. When line B's entry station merges with a station in line A, line B's first shot has its `FromID` set to the Ariane ID of the corresponding station in line A.
+The walk reads the station graph (plan Deviations X2, `export/tml_survey.rs`):
 
-When a root line is split at a non-zero zero datum, the generated pre-zero segment is exported in reverse direction. Its azimuth is always synthesized as `azimuth_in + 180°` (normalized), not from `azimuth_out`.
+- **Roots.** The frame datum's line roots the document; with no datum, the
+  first line in list order that shares no station with a line of lower id.
+  Every other connected piece is rooted at its first line in list order that
+  holds a placement datum, else its first line.
+- **Children.** Lines are visited breadth first from each root through their
+  junctions: a line's children are the unvisited lines it shares a station
+  with, in line-id order, each entered at the station the two share (one, in
+  a valid project: two would close a loop). A junction is one station, so every line through it
+  is adjacent to every other; the walk expands each station once, so it is
+  linear in the slots however many lines meet at one station.
+- **Rows.** Each line is walked once, outwards from the station it was entered
+  at: its shots after that station forwards, the ones before it reversed
+  (`"<line> (reversed)"`). A child line's first row has its `FromID` set to the
+  junction's Station ID, which is the id of the parent's row ending there.
+
+When a root line is split at a non-zero zero datum, the generated pre-zero segment is exported in reverse direction (`"<line> (pre-zero-datum)"`). Its azimuth is always synthesized as `azimuth_in + 180°` (normalized), not from `azimuth_out`.
 
 ### Loop closures
 
-`loop_closures` are exported as CLOSURE-type shots with `ClosureToID` / `CID` pointing to the target station's Ariane ID. These encode the same loop-closure metadata that Ariane uses internally.
+Every loop closure (`Tie`s included: a migrated cycle-closing merge is a loop like any other) is exported as a CLOSURE-type shot from its first station's row, with `ClosureToID` / `CID` pointing to the second station's Station ID. These encode the same loop-closure metadata that Ariane uses internally.
 
 A CLOSURE row carries the date and people of the row it hangs off (its
 `FromID`). A CLOSURE off a station part-way along a line re-imports as a
@@ -336,11 +350,28 @@ re-imported survey (1.8 degrees for a synthetic 2015 survey).
 
 ### ID assignment
 
-IDs are assigned sequentially starting from 0:
-- Root line: START (ID 0), then shots (ID 1, 2, …)
-- Subsequent lines: shots continue the global counter
-- CLOSURE shots are appended at the end
-- Each GPS fix's START and its tying CLOSURE come last, one pair per fix
+IDs are Station IDs, so they are stable across exports and need not start at
+0 or be contiguous (plan Deviations X1):
+
+- a REAL or VIRTUAL row's `ID` is the Station ID of the station it ends at,
+  its `FromID` that of the station it starts from;
+- a START's `ID` is the Station ID of the station it stands on;
+- CLOSURE rows, then each GPS fix's START and its tying CLOSURE (one pair per
+  fix), are numbered from the highest Station ID + 1, in that order.
+
+IDs are node ids (the station graph's vertices), not the identity the app
+shows (kept and archived stations, RS 9): Ariane keys geometry by id and
+writes no station names. A junction is one node, so it has its kept
+station's Station ID; a loop end a closure archives (shown in the app as its
+kept end) is a point of its own, so it keeps its own Station ID as its node
+number although the app shows that id nowhere.
+
+In a valid project every `ID` is unique: each line is walked once, from the
+one station it shares with the lines walked before it (the forest invariant),
+so each station ends exactly one row (or stands under one START), and the
+synthesized rows are numbered above every station. `harden_for_speleodb`
+still checks the sidecar for a repeated `ID` (it would fail the whole file
+on the server), and logs one as an error.
 
 ## Color Format Conversion
 
@@ -349,8 +380,8 @@ Internal `#RRGGBB` hex colors are converted to Ariane's `0xRRGGBBff` format (8-d
 ## The LRUD zero/null collision
 
 `ExportShot.left` and its three siblings are plain `f64`, filled with
-`shot.left.unwrap_or(0.0)` (`export/tml.rs:893-896` and the three reversed-leg
-constructors beside it), because Ariane's `Left`/`Right`/`Up`/`Down` elements
+`shot.left.unwrap_or(0.0)` (`line_rows` in `export/tml_survey.rs`, forward
+and reversed rows alike), because Ariane's `Left`/`Right`/`Up`/`Down` elements
 have no null. So the file cannot distinguish these two facts about a passage:
 
 - **unmeasured** - nobody put a tape across it (`None` in the model);
@@ -379,11 +410,15 @@ so, not because the oracle was losing.
 
 Ariane's `.tml` format has one `<Comment>` field per shot and no per-station
 comment field, so a Stalagmight station comment otherwise has nowhere to live
-in `.tml`. To round-trip both `shot.comment` and `project.station_comments`
-through Ariane, the exporter packs both into the shot's `<Comment>`:
+in `.tml`. To round-trip both `shot.comment` and the station comment
+(`Station.comment`) through Ariane, the exporter packs both into the shot's
+`<Comment>`:
 
-- Each station comment is attached to the shot whose **`to` station** matches
-  it - the shot that "creates" that station, i.e. the one at `shot_index + 1`.
+- Each station comment is attached to the one REAL or VIRTUAL row that ends at
+  the station (its `ID` is the station's), so a junction's one comment, its
+  kept station's, is written once (plan Deviations X4). A loop end a closure
+  archives writes no comment: its own comment is hidden in the app (RS 9),
+  and the kept end's is written at the kept end.
 - Shot vs station lines inside the resulting Comment are distinguished by a
   zero-width-space (`U+200B`) prefix: lines prefixed with `ZWSP` are shot
   comments; lines without the prefix are station comments.
@@ -403,20 +438,14 @@ Caveats:
 
 The fold walks the emitted REAL/VIRTUAL shots and skips START (its `"START"`
 content is hardcoded) and CLOSURE (no `to` station in the create-station sense).
-Every station whose Ariane id **is** the START shot's therefore loses its comment
-on export. Three ways a station ends up there:
+A station whose only row is a START therefore loses its comment on export:
 
-- **Root station 0.** In an unsplit root line, station 0 *is* the START shot,
-  so a comment on it is dropped. Add the note one shot downstream if you need it
-  to survive.
-- **The primary zero datum's station.** When the root line is split at a
-  non-zero zero datum, the datum's own station is aliased onto the synthesized
-  START shot, so a comment on that station is dropped too - even though a real
-  shot of the project sits at that index.
-- **A station merged onto either of the above.** The parent-link pass maps a
-  merged child station to the *parent's* Ariane id, so a child station merged
-  into root station 0 (or into the aliased datum station) inherits the START id
-  and is dropped with it.
+- **An entrance's station.** The station an entrance line's START stands on
+  (station 0 of an unsplit root line, or the datum's station when the line is
+  split at a mid-line datum) has no REAL row ending at it, so a comment on it
+  is dropped. Add the note one shot downstream if you need it to survive. A
+  junction is one station, so a child line starting on that station does not
+  bring the comment back.
 
 Comments that survive but move:
 
@@ -425,20 +454,12 @@ Comments that survive but move:
   onto that synthetic leg's shots. The text survives, but it re-imports onto a
   *fabricated* line that never existed in the project - not onto the line
   the surveyor wrote it in.
-- **Two StationRefs on one Ariane shot.** When a child line's station 0 is
-  merged into a parent station that *is* a real shot, both refs alias that shot
-  id, so both station comments are concatenated into its exported Comment
-  (sorted by `(line_id, station_index)` for reproducibility).
 
-A fourth, rarer drop: a station the Ariane topology does not represent at all
-(nothing in the exporter's station-to-node map), which is what happens when the
-shape of a merge leaves a station with no node of its own.
-
-Every one of these drops emits a `tracing::debug!` naming the line id and
-station index (plus the Ariane node id where there is one), so a lost comment is
-diagnosable from a debug-level log rather than silent. Which comments get dropped
-is deliberately unchanged - the logging exists so the loss is observable, not to
-change the behaviour.
+Every drop emits a `tracing::debug!` naming the station id, so a lost comment is
+diagnosable from a debug-level log, and an export that dropped any returns the
+`station-comments-not-written` note, which the app shows as a warning
+("Comments on entrance stations were left out"; 0.6.0 said nothing, demo
+issue N-14).
 
 The same split logic is applied in reverse on `.tml` import
 (`models::comment_split::split`) when the import dialog's "comments on
@@ -457,7 +478,9 @@ one is broken it either fails the whole file or silently skips the map - the
 upload still returns 200, so nothing surfaces to the user.
 
 `export_tml` and `export_tml_for_speleodb` therefore build the same document
-under different profiles. The **user** profile is what it has always been, down
+under different profiles. No push renders the sidecar today: since the move to
+the SpeleoDB SDK a push uploads the project file only. The profile is kept,
+and its tests pin it, for when the co-push returns. The **user** profile is what it has always been, down
 to the byte. The **sidecar** profile additionally:
 
 | Concession | Why |
@@ -479,13 +502,21 @@ dropped or capped.
 
 | Component | File | Role |
 |-----------|------|------|
-| Export logic | `src-tauri/crates/export/src/export/tml.rs` | XML generation, ZIP packaging, topology resolution, the two profiles |
+| Rows | `src-tauri/crates/export/src/export/tml_survey.rs` | The walk over the station graph, Station IDs, comments, CLOSURE rows; `export_tml` and `export_tml_for_speleodb` (re-exported as `export::survey`) |
+| Export logic | `src-tauri/crates/export/src/export/tml.rs` | XML generation, ZIP packaging, the GPS stamp, the geometry repair, the orphan guard, the two profiles |
 | Export command | `src-tauri/src/commands/export.rs` | `export_tml` IPC handler |
-| SpeleoDB sidecar | `src-tauri/crates/core/src/core/state/speleodb_push.rs` | `speleodb_render_tml` renders the co-push sidecar via `export_tml_for_speleodb` |
+| SpeleoDB sidecar | `export_tml_for_speleodb` | The sidecar profile; nothing in a push calls it today (see above) |
 | Store method | `src/store/projectStore.ts` | `exportTml()` frontend binding |
 | Export dialog | `src/components/Dialogs/ExportDialog.tsx` | UI with TML format option |
 
 ## Limitations
+
+- Kept and archived stations do not round-trip (declared, RS 9): Ariane has
+  no names, so a re-imported file has no archived stations (the identities
+  a merge archived are not written) and no closure archives (every closure
+  re-imports archiving an end by the import's own rule). Ariane ids follow
+  the nodes, so they change once where an upgrade or a merge kept the moving
+  station.
 
 - Shape/cross-section geometry (`Shape`/`SH` elements) is not exported (not stored in the internal model)
 - GPS coordinates are not written per-shot: latitude and longitude are `0.0`

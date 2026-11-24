@@ -6,7 +6,7 @@ turn dots, the stage drops, the pressure gauges - is a view onto that answer.
 
 Plan is one of the three workspace modes, read-only over the survey
 ([SPEC.md 6.1](SPEC.md#61-workspace-modes)). The engine is
-`src-tauri/crates/models/src/project/gas.rs` (+ `gas/model.rs`, `gas/physics.rs`),
+`src-tauri/crates/models/src/survey/gas.rs` (+ `survey/gas/*.rs`; the plan types in `models/src/gas.rs`),
 reached through the single `compute_gas_reach_field` command. Umbrella issue
 [#38](https://github.com/Stalagmight/Stalagmight/issues/38); its design PRD was
 removed from the repo before open-sourcing, so this page is the reference.
@@ -46,8 +46,9 @@ sub-metre amounts - same reasoning as the distance field, see
 
 ### What the graph contains
 
-`build_survey_graph_weighted` (`models/project/pathfinding.rs`) emits every shot,
-plus a zero-weight edge per station merge and per loop closure. Zero is correct
+`survey_graph_weighted` (`models/src/survey/graph.rs`) emits every shot, one
+node per station (a junction is one node, so a merge needs no edge), plus a
+zero-weight edge per loop closure. Zero is correct
 because both join points that are physically the same - which is also why the walk
 re-settles gas across zero-cost edges (`relax_zero_cost`). Without that, one node
 of a merged pair reads reachable and its twin, in the same spot, reads unreachable
@@ -219,6 +220,19 @@ gap (a closure's misclosure) was never swum, so it is excluded from the length a
 the depth weighting. `route_max_depth_m` is max `z` over *all* route stations, tie
 endpoints included - both ends of a tie are surveyed stations the diver passes
 through. `route_avg_depth_m` is distance-weighted over the swum legs.
+
+A loop closure that keeps one end shows both ends as one station (the kept
+end's identity, plan 2026-11-23 RS 6), yet they stay two graph nodes joined by a
+tie. So after the engine has walked, priced and measured the node route,
+`GasReach::collapse_route` (`survey/gas/collapse.rs`) lists each run of
+consecutive route nodes that show one station across such ties as ONE route
+entry: no tie leg, no zero-length profile point, the drop and way-point indices
+moved onto the collapsed route, the run's deepest depth on its profile point.
+Every number is still the node route's (a tie costs nothing). `route_ends` keeps
+each entry's arriving and leaving node, so the highlight is still drawn between
+each shot's own slots. The turn frontier lists each shown station once, and a
+drop pinned on the loop end of its default station is a no-op, as on another
+slot of a junction (D18). A closure that keeps both names collapses nothing.
 
 None of this is the length of the highlight on screen: the engine measures 3-D
 swum distance on measured coordinates, while `SurveyLayer.applyGasRoute` draws

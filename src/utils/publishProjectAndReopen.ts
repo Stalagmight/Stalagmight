@@ -6,7 +6,8 @@ import { invokeIpc } from './ipc';
 import { beginProjectMutation, isProjectMutationCurrent, reserveProjectRequest } from './projectTransition';
 import { speleoErrorAction } from './speleoError';
 
-export type PublishReopenOutcome = 'opened' | 'upload_pending' | 'reload_failed' | 'recent_cleanup_failed' | 'stale';
+export type PublishReopenOutcome =
+  | 'opened' | 'upload_pending' | 'upload_refused' | 'reload_failed' | 'recent_cleanup_failed' | 'stale';
 
 /** The outcome, plus whether the first upload left the undo history out to fit the
  *  server's size limit (sdk#3) - orthogonal to the outcome, so reported beside it. */
@@ -57,11 +58,15 @@ async function publishAndReopen(
     if (!current()) return 'stale';
     if (!status.is_remote || status.project_id !== published.project_id) return 'reload_failed';
     useSpeleoStore.getState().seedFromStatus(status);
+    // Plan 12.1: a server that refused this build's file format holds an empty
+    // project; the work stays here, linked and un-uploaded, and is never
+    // downloaded over. Said instead of "use Save Changes", which it would refuse.
+    const pending: PublishReopenOutcome = published.upload_format_refused === true ? 'upload_refused' : 'upload_pending';
     const latest = useProjectStore.getState();
-    if (latest.projectTreeGeneration !== tree && latest.isDirty) return 'upload_pending';
+    if (latest.projectTreeGeneration !== tree && latest.isDirty) return pending;
     // The publish command saved this version before attempting its first upload.
     useProjectStore.setState({ isDirty: false });
-    if (status.has_unpushed_edits) return 'upload_pending';
+    if (status.has_unpushed_edits || pending === 'upload_refused') return pending;
     const downloaded = await invokeIpc<SpeleoOpenResult>('speleodb_open_project', {
       projectId: published.project_id, projectName: params.name, latestCommitSha: null,
     });

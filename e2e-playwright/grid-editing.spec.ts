@@ -377,3 +377,31 @@ test.describe('Grid clipboard without OS clipboard access', () => {
     });
   });
 });
+
+// Demo finding N-9: a merge joins two comments with a blank line, and the
+// one-line Comment cell ran them together ("... points out Silt bank, ...").
+// The cell shows the parts separated by " / "; the editor keeps the breaks.
+test.describe('A comment of several lines', () => {
+  test('reads its parts separated in the cell and whole in the editor', async ({ page }) => {
+    const joined = 'T-junction, line arrow points out\n\nSilt bank, low visibility';
+    await setupMockedPage(page);
+    await createProject(page, 'Grid Comment Test');
+    await seedProjectWithLines(page, [
+      {
+        ...lineSeeds[0]!,
+        shots: lineSeeds[0]!.shots.map((s, i) => (i === 1 ? { ...s, comment: joined } : s)),
+      },
+    ]);
+    await waitForMapReady(page);
+    await waitForNoDialogs(page);
+    await openDataTable(page);
+
+    const cell = page.getByTestId('grid-cell-1-comment');
+    await expect(cell).toHaveText('T-junction, line arrow points out / Silt bank, low visibility');
+    await expect(cell.locator('.sg-cell-text')).toHaveAttribute('title', joined);
+    await cell.dblclick();
+    await expect(page.getByTestId('grid-cell-editor')).toHaveValue(joined);
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('grid-cell-editor')).toHaveCount(0);
+  });
+});

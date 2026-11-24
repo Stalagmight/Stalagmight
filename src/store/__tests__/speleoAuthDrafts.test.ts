@@ -72,7 +72,9 @@ describe('applyPendingAuth and unsent SpeleoDB input', () => {
     const pending = useSpeleoStore.getState().applyPendingAuth(ENDPOINT, false);
     await answerDrafts(false);
     expect(await pending).toEqual({ ok: false, cancelled: true });
-    expect(order).toEqual(['sign-out guard', 'drafts question']);
+    // The account change asks the backend whether the project holds unsaved
+    // changes (it does not here), then the one question.
+    expect(order).toEqual(['sign-out guard', 'has_unsaved_changes', 'drafts question']);
     expect(getUploadContinuation(PATH)?.message).toBe('Synthetic description');
   });
 
@@ -83,7 +85,7 @@ describe('applyPendingAuth and unsent SpeleoDB input', () => {
     const pending = useSpeleoStore.getState().applyPendingAuth(ENDPOINT, false);
     await answerDrafts(true);
     expect(await pending).toEqual({ ok: true });
-    expect(order.slice(0, 3)).toEqual(['sign-out guard', 'drafts question', 'speleodb_login']);
+    expect(order.slice(0, 4)).toEqual(['sign-out guard', 'has_unsaved_changes', 'drafts question', 'speleodb_login']);
     expect(getUploadContinuation(PATH)).toBeNull();
   });
 
@@ -126,6 +128,29 @@ describe('applyPendingAuth and unsent SpeleoDB input', () => {
 });
 
 describe('one question for unsaved edits and unsent SpeleoDB input', () => {
+  /**
+   * Pre-PR review finding 2: an account change closes the open project, and
+   * changes only the backend tracks (a 0.6.0 file's SpeleoDB bookkeeping, with
+   * `isDirty` false) went with it unasked. Injection: reading `isDirty` alone
+   * in protectAccountTransition asks nothing here and signs out.
+   */
+  it('asks about changes only the backend tracks before a sign-out drops them', async () => {
+    signedInAs('writer@example.com');
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      order.push(cmd);
+      return cmd === 'has_unsaved_changes' ? true : null;
+    });
+    useSpeleoStore.getState().setPendingAuth({ kind: 'logout' });
+    const pending = useSpeleoStore.getState().applyPendingAuth(ENDPOINT, false);
+    await vi.waitFor(() => expect(useExitConfirm.getState().request).not.toBeNull());
+    // The project has a file, so the question offers to save it first.
+    expect(useExitConfirm.getState().request?.saveLabel).toBeTruthy();
+    useExitConfirm.getState().request?.answer(false);
+    expect(await pending).toEqual({ ok: false, cancelled: true });
+    expect(order).toContain('has_unsaved_changes');
+    expect(order).not.toContain('speleodb_logout');
+  });
+
   it('lists the drafts in the unsaved-changes question, and Save keeps the edits but drops the drafts', async () => {
     signedInAs('writer@example.com');
     parkDescription();
@@ -160,7 +185,7 @@ describe('applyPendingAuth beforeApply (Settings saves its staged settings there
     const pending = useSpeleoStore.getState().applyPendingAuth(ENDPOINT, false, { beforeApply: save });
     await answerDrafts(true);
     expect(await pending).toEqual({ ok: true });
-    expect(order.slice(0, 4)).toEqual(['sign-out guard', 'drafts question', 'save', 'speleodb_login']);
+    expect(order.slice(0, 5)).toEqual(['sign-out guard', 'has_unsaved_changes', 'drafts question', 'save', 'speleodb_login']);
   });
 
   it('a cancelled question never runs it', async () => {

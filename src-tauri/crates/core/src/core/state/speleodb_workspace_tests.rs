@@ -109,13 +109,13 @@ fn workspace_reload_failed_download_preserves_pending_work_and_mode_without_acqu
     let (base, _listener, seen) = recording_stub(WORKSPACE_NEWER_BODY);
     let (_temp, state) = editing_fixture(&base);
     state.mark_remote_dirty();
-    let before = state.capture_project_snapshot_text().expect("before");
+    let before = state.get_project_state().expect("before");
     let expected = workspace_context(&state);
     assert!(
         state.speleodb_reload(true, Some(expected)).is_err(),
-        "JSON is not a native project"
+        "an API body is not a project file"
     );
-    assert_eq!(state.capture_project_snapshot_text().expect("after"), before);
+    assert_eq!(state.get_project_state().expect("after"), before);
     assert!(state.speleodb_open_link().expect("link").has_unpushed_edits);
     assert!(state.edit_enabled());
     let requests = seen.lock().expect("requests");
@@ -136,7 +136,7 @@ fn workspace_local_settings_refuses_linked_rename_through_direct_calls() {
         .clone();
     assert!(
         !state
-            .update_project_settings("Other name".into(), project.validation.clone())
+            .update_project_settings("Other name".into(), project.settings.validation.clone())
             .success
     );
     assert_eq!(
@@ -225,38 +225,38 @@ fn workspace_prepared_reload_commits_validated_bytes_and_preserves_each_editing_
             .file_path
             .clone()
             .expect("path");
-        let mut remote = Database::open(&source).expect("source");
-        remote
-            .save_project(&Project::new("New server version".into(), None))
-            .expect("project");
         let mut link = state.speleodb_open_link().expect("link");
         link.has_unpushed_edits = false;
+        link.last_edit_at = None;
         link.base_commit_sha = Some("def4567".into());
-        remote.save_speleo_link(Some(&link)).expect("linked");
-        drop(remote);
-        let expected = (
-            state.speleodb_session_generation(),
-            serde_json::to_vec(&*state.project.lock().expect("project")).expect("snapshot"),
-        );
-        assert!(
-            state
-                .open_project_download(source, dest.clone(), expected, editing)
-                .expect("install")
-                .success
-        );
+        write_v2(&source, "New server version", Some(&link));
+        let consent = {
+            let _project = state.project.lock().expect("project");
+            state.open_project_token_locked()
+        };
+        let prepared = state
+            .prepare_download(
+                &source,
+                link,
+                InheritedUndo::Drop,
+                &crate::persistence::stalx_v2::DecodeOptions::default(),
+            )
+            .expect("prepare");
+        state
+            .open_project_download(prepared, dest.clone(), consent, editing)
+            .expect("install");
         assert_eq!(
             state.get_project_state().expect("open").name,
             "New server version"
         );
         assert_eq!(state.edit_enabled(), editing);
-        assert!(!state.speleodb_open_link().expect("link").has_unpushed_edits);
-        assert_eq!(
-            Database::open_existing(&dest)
-                .expect("saved")
-                .load_project()
-                .expect("project")
-                .name,
-            "New server version"
+        let reopened = state.speleodb_open_link().expect("link");
+        assert!(!reopened.has_unpushed_edits);
+        assert_eq!(reopened.base_commit_sha.as_deref(), Some("def4567"));
+        assert_eq!(name_at(&dest), "New server version");
+        assert!(
+            !state.has_unsaved_changes(),
+            "the reloaded copy is what the file holds"
         );
     }
 }
@@ -277,25 +277,29 @@ fn workspace_prepared_reload_rejects_newer_edits_and_invalid_files_without_repla
             .expect("path");
         let bytes = std::fs::read(&dest).expect("original bytes");
         std::fs::copy(&dest, &source).expect("stage");
-        let expected = (
-            state.speleodb_session_generation(),
-            serde_json::to_vec(&*state.project.lock().expect("project")).expect("snapshot"),
-        );
+        let consent = {
+            let _project = state.project.lock().expect("project");
+            state.open_project_token_locked()
+        };
         if invalid {
-            std::fs::write(&source, b"not SQLite").expect("invalid file");
+            std::fs::write(&source, b"not a project").expect("invalid file");
         } else {
-            state
-                .project
-                .lock()
-                .expect("project")
-                .as_mut()
-                .expect("open")
-                .name = "Newer edit".into();
+            let _ = state.with_project_mut(|project| {
+                project.name = "Newer edit".into();
+                crate::core::CommandResult::success()
+            });
         }
-        let before = state.capture_project_snapshot_text().expect("before");
-        let result = state.open_project_download(source, dest.clone(), expected, true);
-        assert!(result.is_err() || result.is_ok_and(|result| !result.success));
-        assert_eq!(state.capture_project_snapshot_text().expect("after"), before);
+        let before = state.get_project_state().expect("before");
+        let result = state
+            .prepare_download(
+                &source,
+                state.speleodb_open_link().expect("link"),
+                InheritedUndo::Drop,
+                &crate::persistence::stalx_v2::DecodeOptions::default(),
+            )
+            .and_then(|prepared| state.open_project_download(prepared, dest.clone(), consent, true));
+        assert!(result.is_err(), "{invalid}: {result:?}");
+        assert_eq!(state.get_project_state().expect("after"), before);
         assert_eq!(std::fs::read(&dest).expect("unchanged bytes"), bytes);
         assert!(state.edit_enabled());
     }
@@ -372,6 +376,7 @@ fn workspace_reload_rejects_edits_made_during_live_revision_verification() {
         state
             .get_project_state()
             .expect("project")
+            .settings
             .surface_elevation,
         Some(12.5)
     );

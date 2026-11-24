@@ -6,8 +6,8 @@ use ts_rs::TS;
 
 use crate::models::{
     shot_display_position, ClosureStrategy, Coordinates, CreditEdit, CreditTargets, GpsCoordinates,
-    LineId, LineUpdates, SectionId, ShotData, ShotId, ShotKind, ShotUpdates, StationRef,
-    SurveyDirection,
+    LineId, LineUpdates, SectionId, ShotData, ShotId, ShotKind, ShotUpdates, StationId, StationRef,
+    StationRename, SurveyDirection,
 };
 
 /// Identifies either a station or a shot as a comment holder
@@ -71,7 +71,7 @@ pub enum Command {
         updates: LineUpdates,
     },
     /// Reverse a line end-to-end so the far end becomes station 0, keeping
-    /// every station's world coordinate (see [`crate::models::Project::reverse_line`]).
+    /// every station's world coordinate (see [`crate::models::survey::Project::reverse_line`]).
     /// `swap_left_right` also mirrors the `left`/`right` passage dimensions; it
     /// is opt-in because whether LRUD was recorded facing along travel is a
     /// survey convention we cannot infer.
@@ -131,24 +131,64 @@ pub enum Command {
     },
 
     // Station commands
+    //
+    // The kept-station answers (RS 4.1, 4.2, 5.2, 5.3) ride the topology
+    // commands. `renames` are the dialog's answers to the name collisions
+    // the command makes (each renames the identity with that Station ID in
+    // the same step); a collision they leave unanswered refuses the
+    // command. Absent `renames` means no dialog asked: rule L letters every
+    // collision and the result's `identities` notice names each letter.
+    // Every field is `serde(default)`, so undo history and batches written
+    // before them still read.
+    /// Merge two stations (RS 4.1). `keep` is the Station ID of the station
+    /// kept (one of the two slots' stations): its identity is shown on every
+    /// line through the merged node and the other is archived. Absent: the
+    /// station whose piece stays put is kept. A loop closure between the two
+    /// that archives one forces its kept end (4.1 step 4).
     MergeStations {
         station_a: StationRef,
         station_b: StationRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        keep: Option<StationId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        renames: Option<Vec<StationRename>>,
     },
+    /// Detach the slot's line from its junction (RS 4.2). `rest_keep` picks
+    /// the record the other lines take when the line keeps the junction and
+    /// several records name them (default: rule K).
     UnmergeStations {
         station_ref: StationRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        renames: Option<Vec<StationRename>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rest_keep: Option<StationId>,
     },
     UnmergeStationPair {
         station_a: StationRef,
         station_b: StationRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        renames: Option<Vec<StationRename>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rest_keep: Option<StationId>,
     },
+    /// Create a loop closure (RS 5.2). `keep` is the Station ID of the end
+    /// kept (the other end is archived: it shows the kept end's identity);
+    /// absent: "Keep both names" (the closure archives nothing).
     CreateLoopClosure {
         station_a: StationRef,
         station_b: StationRef,
         closure_strategy: ClosureStrategy,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        keep: Option<StationId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        renames: Option<Vec<StationRename>>,
     },
+    /// Remove a loop closure (RS 5.3): the end it archived shows its own
+    /// identity again.
     RemoveLoopClosure {
         closure_id: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        renames: Option<Vec<StationRename>>,
     },
     SetZeroDatum {
         station_ref: StationRef,
@@ -175,7 +215,7 @@ pub enum Command {
     },
     /// Rename a station. The name is trimmed and must be non-empty, free of
     /// control and invisible formatting characters, and unique within the
-    /// station's line ([`crate::models::Project::validate_station_name`]).
+    /// station's line (a name taken on any line through the station refuses).
     /// Metadata only: no geometry, no references. Undone by the inverse
     /// rename. The name the station already has (after trimming) succeeds as
     /// a no-op with no undo entry and no dirty flag (`execute()` returns
@@ -312,11 +352,12 @@ pub enum Command {
         /// The file's own name, no directory, sanitized: the history label.
         file_name: String,
     },
-    /// Repair the open project's structural integrity (drop dangling refs, re-mint
-    /// duplicate UUIDs, re-cascade offsets). Applied directly via the
-    /// `repair_project_integrity` IPC command, which records its own snapshot-pair
-    /// undo entry; this variant exists only to LABEL that entry in the undo
-    /// history and is never run through `execute()`.
+    /// 0.6.0's integrity Repair (drop dangling refs, re-mint duplicate UUIDs,
+    /// re-cascade offsets), which recorded its own snapshot-pair undo entry; this
+    /// variant only LABELLED that entry and is never run through `execute()`.
+    /// Nothing records one on the station graph (the Repair and its
+    /// `repair_project_integrity` command are gone: the open project always
+    /// validates); the variant stays with the history kinds.
     RepairIntegrity,
     /// Per-project settings change (name + validation thresholds, #57). Like
     /// RepairIntegrity, applied via `update_project_settings` which records its
@@ -587,6 +628,25 @@ pub struct CommandResult {
     /// can select it. Same wire contract as the optional fields above.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cave_section_id: Option<SectionId>,
+    /// Set when this save wrote the new format for a project opened from a
+    /// 0.6.0 (SQLite) file (demo issue I-5): `saved` over the file itself,
+    /// its original kept in the backups folder; `saved_as_new_file` for a
+    /// Save As elsewhere, the 0.6.0 file left as it was. The frontend turns
+    /// the conversion banner's sentence on saving to say so, or, with no
+    /// banner showing, confirms it with a toast. Same wire contract as the
+    /// optional fields above.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub legacy_converted: Option<crate::core::state::ConversionFile>,
+    /// What the command did to station identities on its own (plan
+    /// 2026-11-23, RS 7 "Notices"): the stations rule L gave a letter, the
+    /// archived stations it brought back because a junction lost its own
+    /// lines, and the loop closures whose hidden end shows its own name
+    /// again. The frontend raises one notice per action from it. Absent when
+    /// the command did none of these (the dialogs' own renames are the
+    /// user's, not reported). Same wire contract as the optional fields
+    /// above.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub identities: Option<crate::models::IdentityNotice>,
 }
 
 /// What one holder-checked release of the open project's lock came to (see
@@ -607,46 +667,58 @@ pub enum LockReleaseOutcome {
     Failed,
 }
 
-/// Result of an explicit "repair project integrity" action. `fixed` and
-/// `remaining` are the drop in the FULL violation set (structural + merge/
-/// closure alignment + orphan closures) measured before vs after the repair, so
-/// they stay consistent with the integrity banner's count - unlike summing
-/// per-operation counters that mix different units. `remaining` is whatever the
-/// repair could not auto-fix (detect-only: a drifted aligned loop closure to
-/// recompute/remove, or non-finite shot geometry to correct by hand).
-///
-/// `changed` is true when the repair actually mutated the project (an undo entry
-/// was recorded). It is a STRICTLY broader signal than `fixed > 0`: the repair
-/// always re-solves offsets, which heals sub-reporting-tolerance drift that never
-/// counted as a violation - so `fixed` can be 0 while the project genuinely
-/// changed. The frontend dirties the project on `changed` (not `fixed`) so that
-/// silent sub-tolerance fixes are still auto-saved / prompted on close.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct IntegrityRepairResult {
-    pub fixed: u32,
-    pub remaining: u32,
-    pub changed: bool,
-}
-
-/// Result of a structural-integrity check. `messages` is the human-readable
-/// violation list (critical first; empty = sound). `save_blocked` is true when
-/// the project currently has unresolvable cross-references - the exact condition
-/// that refuses a save (manual AND auto-save). The frontend uses it to keep the
-/// integrity banner non-dismissable while saving is blocked (so the Repair entry
-/// point can't be hidden on a project that can't be saved), while still allowing
-/// dismissal of detect-only issues that don't block saving.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
-pub struct IntegrityCheckResult {
-    pub messages: Vec<String>,
-    pub save_blocked: bool,
-}
-
 /// Validation warning from command execution
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ValidationWarning {
     pub code: String,
     pub message: String,
     pub severity: WarningSeverity,
+    /// `message` as prose parts (RS-PROSE, `models::prose`): the same words,
+    /// each shot, station or line the message names as a part the frontend
+    /// draws as a pill (the removed-closure toast, the create-time shot
+    /// warnings). `prose::plain` of the parts is `message`, byte for byte.
+    /// Absent when the message names nothing. A name worded before the edit
+    /// carries no `slot` (the slot may name another station after it); one
+    /// worded after it may (a session handle, never persisted). Plain-text
+    /// sinks (logs, the catch-all) read `message`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parts: Option<Vec<crate::models::ProsePart>>,
+}
+
+impl ValidationWarning {
+    /// A warning whose message names nothing.
+    pub fn plain(code: &str, message: String, severity: WarningSeverity) -> Self {
+        Self {
+            code: code.to_string(),
+            message,
+            severity,
+            parts: None,
+        }
+    }
+
+    /// A warning worded with marked names (`prose::mark`): split at this
+    /// boundary into its plain message and its parts, so the marked string
+    /// never leaves the backend.
+    pub fn marked(code: &str, marked: &str, severity: WarningSeverity) -> Self {
+        let (message, parts) = crate::models::prose::split(marked);
+        Self {
+            code: code.to_string(),
+            message,
+            severity,
+            parts: crate::models::prose::named(parts),
+        }
+    }
+
+    /// [`Self::marked`] for a message worded before the edit it reports:
+    /// its parts lose their slots, which may name other stations after it.
+    pub fn marked_before_edit(code: &str, marked: &str, severity: WarningSeverity) -> Self {
+        let warning = Self::marked(code, marked, severity);
+        Self {
+            parts: warning.parts.map(crate::models::prose::without_slots),
+            ..warning
+        }
+    }
 }
 
 pub use crate::models::warning::WarningSeverity;
@@ -667,6 +739,8 @@ impl CommandResult {
             import_receipt: None,
             lock_release: None,
             cave_section_id: None,
+            legacy_converted: None,
+            identities: None,
         }
     }
 
@@ -685,12 +759,21 @@ impl CommandResult {
             import_receipt: None,
             lock_release: None,
             cave_section_id: None,
+            legacy_converted: None,
+            identities: None,
         }
     }
 
     /// Attach validation warnings to this result.
     pub fn with_warnings(mut self, warnings: Vec<ValidationWarning>) -> Self {
         self.warnings = warnings;
+        self
+    }
+
+    /// Attach what the command did to identities on its own (RS 7
+    /// "Notices"); an empty notice leaves the field absent.
+    pub fn with_identities(mut self, notice: crate::models::IdentityNotice) -> Self {
+        self.identities = (!notice.is_empty()).then_some(notice);
         self
     }
 
@@ -769,11 +852,11 @@ impl CommandResult {
 
     /// Attach a single warning message to this result.
     pub fn with_warning(mut self, message: &str) -> Self {
-        self.warnings.push(ValidationWarning {
-            code: "SYSTEM".to_string(),
-            message: message.to_string(),
-            severity: WarningSeverity::Warning,
-        });
+        self.warnings.push(ValidationWarning::plain(
+            "SYSTEM",
+            message.to_string(),
+            WarningSeverity::Warning,
+        ));
         self
     }
 }
@@ -1033,21 +1116,22 @@ impl Command {
                 station_b,
                 ..
             } => format!("Merge stations {station_a} and {station_b}"),
-            Command::UnmergeStations { station_ref } => {
-                format!("Unmerge station {station_ref}")
+            Command::UnmergeStations { station_ref, .. } => {
+                format!("Detach line at {station_ref} from its station")
             }
             Command::UnmergeStationPair {
                 station_a,
                 station_b,
+                ..
             } => {
-                format!("Unmerge station pair {station_a} and {station_b}")
+                format!("Detach line at {station_b} from station {station_a}")
             }
             Command::CreateLoopClosure {
                 station_a,
                 station_b,
                 ..
             } => format!("Create loop closure between {station_a} and {station_b}"),
-            Command::RemoveLoopClosure { closure_id } => {
+            Command::RemoveLoopClosure { closure_id, .. } => {
                 format!("Remove loop closure #{closure_id}")
             }
             Command::SetZeroDatum { station_ref, .. } => {
@@ -1305,12 +1389,16 @@ mod tests {
                 Command::MergeStations {
                     station_a,
                     station_b,
+                    keep: None,
+                    renames: None,
                 },
                 true,
             ),
             (
                 Command::UnmergeStations {
                     station_ref: station_a,
+                    renames: None,
+                    rest_keep: None,
                 },
                 true,
             ),
@@ -1318,6 +1406,8 @@ mod tests {
                 Command::UnmergeStationPair {
                     station_a,
                     station_b,
+                    renames: None,
+                    rest_keep: None,
                 },
                 true,
             ),
@@ -1326,10 +1416,18 @@ mod tests {
                     station_a,
                     station_b,
                     closure_strategy: ClosureStrategy::ProportionalByLength,
+                    keep: None,
+                    renames: None,
                 },
                 true,
             ),
-            (Command::RemoveLoopClosure { closure_id: 1 }, true),
+            (
+                Command::RemoveLoopClosure {
+                    closure_id: 1,
+                    renames: None,
+                },
+                true,
+            ),
             (
                 Command::SetZeroDatum {
                     station_ref: station_a,
@@ -1524,11 +1622,8 @@ mod tests {
 
     #[test]
     fn command_result_builder_sets_fields() {
-        let warning = ValidationWarning {
-            code: "test".to_string(),
-            message: "warn".to_string(),
-            severity: WarningSeverity::Warning,
-        };
+        let warning =
+            ValidationWarning::plain("test", "warn".to_string(), WarningSeverity::Warning);
 
         let success = CommandResult::success();
         assert!(success.success);
@@ -1798,6 +1893,8 @@ mod tests {
                 Command::MergeStations {
                     station_a,
                     station_b,
+                    keep: None,
+                    renames: None,
                 },
                 "Merge stations 1:0 and 1:1",
             ),
@@ -1806,24 +1903,33 @@ mod tests {
                     station_a,
                     station_b,
                     closure_strategy: ClosureStrategy::ProportionalByLength,
+                    keep: None,
+                    renames: None,
                 },
                 "Create loop closure between 1:0 and 1:1",
             ),
             (
                 Command::UnmergeStations {
                     station_ref: station_a,
+                    renames: None,
+                    rest_keep: None,
                 },
-                "Unmerge station 1:0",
+                "Detach line at 1:0 from its station",
             ),
             (
                 Command::UnmergeStationPair {
                     station_a,
                     station_b,
+                    renames: None,
+                    rest_keep: None,
                 },
-                "Unmerge station pair 1:0 and 1:1",
+                "Detach line at 1:1 from station 1:0",
             ),
             (
-                Command::RemoveLoopClosure { closure_id: 42 },
+                Command::RemoveLoopClosure {
+                    closure_id: 42,
+                    renames: None,
+                },
                 "Remove loop closure #42",
             ),
             (

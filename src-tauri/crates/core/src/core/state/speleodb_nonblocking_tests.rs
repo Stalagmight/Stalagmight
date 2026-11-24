@@ -20,13 +20,13 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use super::stalx_fixtures::{extras_for, line_survey, write_file};
 use super::tests_support::sdk_fixture;
 use super::AppState;
 use crate::config::Config;
 use crate::core::command::{EDIT_DISABLED_CODE, EDIT_REVERIFY_DIVERGED_CODE};
 use crate::core::Command;
-use crate::models::{Project, SpeleoLink};
-use crate::persistence::Database;
+use crate::models::SpeleoLink;
 use crate::speleodb::auth::TokenStore;
 use crate::speleodb::SpeleoReleaseContext;
 use crate::test_helpers::{with_isolated_config, ConfigHandoff};
@@ -162,21 +162,20 @@ fn read_request(stream: &mut std::net::TcpStream) -> String {
 /// The config names the same instance, so a Settings save can change it.
 fn editing_session(dir: &Path, endpoint: &str) -> AppState {
     let path = dir.join("remote.stalx");
-    let mut db = Database::open(&path).expect("open db");
-    db.save_project(&Project::new("Remote".to_owned(), None))
-        .expect("save project");
-    db.save_speleo_link(Some(&SpeleoLink {
-        endpoint: endpoint.to_owned(),
-        project_id: ID.to_owned(),
-        project_name: "Remote".to_owned(),
-        base_commit_sha: Some("abc123".to_owned()),
-        has_unpushed_edits: false,
-        last_edit_at: None,
-        last_verify_at: None,
-        undo_mode: None,
-    }))
-    .expect("save link");
-    drop(db);
+    write_file(
+        &path,
+        &line_survey("Remote"),
+        &extras_for(Some(&SpeleoLink {
+            endpoint: endpoint.to_owned(),
+            project_id: ID.to_owned(),
+            project_name: "Remote".to_owned(),
+            base_commit_sha: Some("abc123".to_owned()),
+            has_unpushed_edits: false,
+            last_edit_at: None,
+            last_verify_at: None,
+            undo_mode: None,
+        })),
+    );
 
     let state = AppState::new().expect("state");
     {
@@ -218,16 +217,14 @@ fn release_context(state: &AppState, endpoint: &str) -> SpeleoReleaseContext {
     }
 }
 
-/// A small edit through the `execute()` chokepoint.
-fn an_edit(name: &str) -> Command {
-    Command::CreateLine {
-        name: Some(name.to_owned()),
-        surveyor: None,
-        date: None,
-        color: "#336699".to_owned(),
-        direction: None,
-        shots: Vec::new(),
-        cave_section_id: None,
+/// A small edit through the `execute()` chokepoint: reverse the fixture's line
+/// (`_why` says which step of the test it is).
+fn an_edit(_why: &str) -> Command {
+    let survey = line_survey("Remote");
+    let line_id = survey.lines().first().expect("the fixture line").id;
+    Command::ReverseLine {
+        line_id,
+        swap_left_right: false,
     }
 }
 
@@ -238,10 +235,7 @@ fn assert_no_guard_is_held(state: &AppState, during: &str) {
         state.command_lock.try_lock().is_ok(),
         "`command_lock` held {during}"
     );
-    assert!(
-        state.database.try_lock().is_ok(),
-        "`database` held {during}"
-    );
+    assert!(state.file.try_lock().is_ok(), "`file` held {during}");
     assert!(
         state.undo_stack.try_lock().is_ok(),
         "`undo_stack` held {during}"

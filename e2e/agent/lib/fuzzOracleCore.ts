@@ -40,18 +40,22 @@
  *     while a targeted restore (`restore_line`, a re-created shot) only ever
  *     raises them, so comparing them would fire on every mixed history.
  *
- * Everything else is compared: shot uuids, `reverse_parity`, the gauge anchors,
- * `StationMerge.merged_at`, every `LoopClosure` metric, both imported-hash
- * vectors, and all geometry.
+ * Everything else is compared: shot uuids, every `LoopClosure` metric, both
+ * imported-hash vectors, the junction identity (shared Station IDs, names,
+ * comments, `merged_with`), and all geometry. On the station-graph wire a few
+ * fields are CONSTANT and so compare trivially: `reverse_parity` is `false`,
+ * the gauge anchors are `null` (plan W5), and every derived
+ * `StationMerge.merged_at` is the project's `created_at` (W4). They are kept
+ * rather than dropped, so a backend that started filling them again would be
+ * seen.
  *
  * Two other classes of noise are handled without dropping anything. Object keys
- * are sorted recursively, which canonicalizes `Project::line_offsets` (a
- * `HashMap`, so its JSON key order is not stable across a snapshot restore)
- * without hiding a value. And numbers are rounded to 12 significant digits,
- * because geometry is RE-DERIVED after every undo/redo rather than copied. The
- * rounding is only the fast path: when two canonical strings still disagree,
- * Node re-compares with an absolute tolerance too (see `projectSnapshot.ts`),
- * which is what catches values either side of a true zero.
+ * are sorted recursively, so no map's key order can leak in. And numbers are
+ * rounded to 12 significant digits, because geometry is RE-DERIVED from the
+ * model after every undo/redo rather than copied. The station graph derives it
+ * deterministically, so an exact restore gives the same bits; the rounding is
+ * only the fast path, and when two canonical strings still disagree Node
+ * re-compares with an absolute tolerance too (see `projectSnapshot.ts`).
  */
 
 /** Documentation mirror of the list inlined in `canonicalProjectSnapshot`. */
@@ -120,11 +124,11 @@ export function canonicalProjectSnapshot(state: unknown, idAgnostic?: boolean): 
 
   const normalized = walk(state, '');
   // ID-AGNOSTIC mode, used ONLY for comparisons that cross a save/reload.
-  // `Shot::id` is not persisted: the loader renumbers every shot to
-  // `line_id * FEATURE_ID_STRIDE + sequence_order`
-  // (src-tauri/src/persistence/sqlite/read.rs:372), so a session that deleted or
-  // inserted a shot mid-line comes back with different ids for the same
-  // shots. Replacing each id with its position makes the comparison independent
+  // `Shot::id` is a session handle, never persisted (plan 1.1): the load
+  // numbers every shot `line_id * FEATURE_ID_STRIDE + index`
+  // (`Line::assign_session_shot_ids`, models/src/survey/types.rs), so a session
+  // that deleted or inserted a shot mid-line comes back with different ids for
+  // the same shots. Replacing each id with its position makes the comparison independent
   // of that renumbering while leaving everything else - uuids, geometry,
   // ordering, every other field - compared exactly. Line ids ARE persisted
   // and are NOT touched here.
@@ -302,7 +306,6 @@ export function oracleInjectionSource(): string {
     '  epoch: 0,',
     '  epochs: [],',
     '  snapshots: [],',
-    '  integrity: [],',
     '  lastExpected: null,',
     '  lastActual: null,',
     '  mismatchIndex: -1,',
@@ -322,31 +325,45 @@ export function oracleInjectionSource(): string {
  * every snapshot matches and nothing fires. These are the checks that do not
  * care what the previous state was.
  *
- * ## What lives here vs in `check_project_integrity`
+ * ## What lives here vs in `Project::validate`
  *
- * The app already has a structural-integrity checker
- * (`AppState::integrity_check` -> `Project::check_structural_integrity`,
- * `src-tauri/src/models/project/integrity.rs`). Duplicating it would be noise,
- * so this suite deliberately does NOT re-check what it owns:
+ * The app already has a structural-integrity checker, `Project::validate`
+ * (plan section 2), which it runs after every edit, import, load and
+ * file-decoded history step, rolling back (with an error log) whatever would
+ * break it. Duplicating it would be noise, so this suite deliberately does NOT
+ * re-check what it owns:
  *
  *   - non-finite (NaN/inf) shot geometry
  *   - two shots in ONE line sharing a uuid (note: the app's contract is
  *     per-line, not global - `ensure_unique_shot_uuids` dedupes per line -
  *     so global uniqueness is NOT asserted here either)
- *   - dangling merge / loop-closure / zero-datum refs, orphan station offsets
- *     and comments, orphan `line_offsets` keys
+ *   - dangling merge / loop-closure / zero-datum refs, stale hand moves
  *
- * Those are covered instead by the integrity-DELTA oracle, which records the
- * checker's own verdict per depth and asserts undo/redo restores it. Two further
- * reasons not to duplicate them: several are `Warning`, i.e. states the app
+ * Those are covered by the app's own validation (its rollback logs an error,
+ * which the sweeps report) and by the strict roundtrip, which sees any state
+ * an undo or redo fails to restore. Two further reasons not to duplicate them: several are `Warning`, i.e. states the app
  * considers repairable rather than corrupt, and the ref checks are largely
  * unobservable from this payload anyway - `ProjectIpc` emits merges, closures
  * and datums through `filter_map(..._to_wire)`, so a dangling ref is DROPPED on
  * the way out rather than shown.
  *
  * What is left, and what this suite asserts, is well-formedness nothing else
- * checks: id uniqueness, id-allocator dominance, and agreement between the
- * model and the derived arrays computed from it.
+ * checks: id uniqueness, id-allocator dominance, agreement between the model
+ * and the derived arrays computed from it, and the station graph's identity
+ * on the wire (plan 9.2, kept and archived stations RS 3, 5 and 6): a line
+ * passes a node (`id`) once, and two native slots of a line (no `shown`)
+ * that show different identities have different names (N8; a foreign slot
+ * or a loop end counts for no name uniqueness, RS-FX5, so Main / 12 kept at
+ * Branch's start leaves Branch its own 12); the slots of one node show one
+ * identity (its name,
+ * comment, records and shown Station ID) and list exactly each other in
+ * `merged_with`; its records hold A1 to A4; a loop closure archives a node
+ * at most once and never in a cycle (C1, C2); every slot shows what its
+ * closures resolve it to, by that station's name and comment, and carries
+ * `shown` exactly when it is foreign or a loop end, with the right flags,
+ * home line and closure; and every `station_merges` pair joins two slots of
+ * one node. The model enforces most of it (`validate`); the wire
+ * projection's half is a contract nothing else checks from the outside.
  *
  * Keep this dependency-free - it is injected into the webview verbatim.
  */
@@ -415,9 +432,9 @@ export function checkProjectInvariants(state: unknown): string[] {
     }
   }
 
-  // Every station ref ON THE WIRE must address a real station. The integrity
-  // checker validates StationKeys BEFORE the wire conversion drops the ones that
-  // do not resolve; this validates what consumers actually index into.
+  // Every station ref ON THE WIRE must address a real station. The model's
+  // validation checks its own references BEFORE the wire conversion drops the
+  // ones that do not resolve; this validates what consumers actually index into.
   const checkRef = (label: string, value: unknown): void => {
     const ref = (value ?? {}) as Record<string, unknown>;
     const lineId = Number(ref.line_id);
@@ -477,6 +494,263 @@ export function checkProjectInvariants(state: unknown): string[] {
     }
   }
 
+  // The station graph's identity on the wire (plan 9.2, kept and archived
+  // stations RS 3, 5 and 6). Checked only on slots that carry an `id` (every
+  // real payload does); a slot is named by its line and index. `id` is the
+  // NODE (every grouping keys on it); the slot shows the node's shown
+  // identity, `shown.id` when present else `id`, by `name` and `comment`;
+  // `archived` lists the node's records; `shown` is present exactly on a
+  // foreign slot (its line is not a native line of the node holding the
+  // shown identity) and on a loop end (a closure archives the node).
+  const slotName = (lineId: number, index: number): string => `${lineId}/${index}`;
+  const lineOrder: Record<string, number> = {};
+  for (let i = 0; i < lines.length; i++) {
+    lineOrder[String(Number(((lines[i] ?? {}) as Record<string, unknown>).id))] = i;
+  }
+  const shownKeyOf = (slot: Record<string, unknown>): string => {
+    const shown = slot.shown as Record<string, unknown> | undefined | null;
+    return String(Number(shown && shown.id !== undefined && shown.id !== null ? shown.id : slot.id));
+  };
+  const recordsOf = (slot: Record<string, unknown>): Array<Record<string, unknown>> =>
+    (Array.isArray(slot.archived) ? slot.archived : []) as Array<Record<string, unknown>>;
+  const byStationId: Record<string, Array<Record<string, unknown>>> = {};
+  const linesOfNode: Record<string, Record<string, true>> = {};
+  const idAt: Record<string, string> = {};
+  const perLineIds: Record<string, Record<string, true>> = {};
+  const perLineNames: Record<string, Record<string, string>> = {};
+  for (let i = 0; i < stations.length; i++) {
+    const station = (stations[i] ?? {}) as Record<string, unknown>;
+    if (station.id === undefined || station.id === null) continue;
+    const ref = (station.station_ref ?? {}) as Record<string, unknown>;
+    const lineKey = String(Number(ref.line_id));
+    const idKey = String(Number(station.id));
+    const here = slotName(Number(ref.line_id), Number(ref.station_index));
+    const ids = (perLineIds[lineKey] = perLineIds[lineKey] ?? {});
+    if (ids[idKey] === true) violations.push(`line ${lineKey} passes Station ID ${idKey} twice (at ${here})`);
+    ids[idKey] = true;
+    // N8 (RS-FX5): native slots (no `shown`) that show different
+    // identities have different names. A foreign slot or a loop end shows
+    // another station's identity (with a dot or the loop mark) and counts
+    // for no name uniqueness, against native slots or each other.
+    if (typeof station.name === 'string' && (station.shown === undefined || station.shown === null)) {
+      const names = (perLineNames[lineKey] = perLineNames[lineKey] ?? {});
+      const prior = names[station.name];
+      if (prior !== undefined && prior !== idKey) {
+        violations.push(
+          `line ${lineKey} shows two stations named ${JSON.stringify(station.name)} ` +
+            `(Station IDs ${prior} and ${idKey}, at ${here})`,
+        );
+      }
+      names[station.name] = idKey;
+    }
+    (byStationId[idKey] = byStationId[idKey] ?? []).push(station);
+    (linesOfNode[idKey] = linesOfNode[idKey] ?? {})[lineKey] = true;
+    idAt[here] = idKey;
+  }
+  // Each node: its slots agree, list each other, and its records hold A1 to
+  // A4 (RS 3) and A6 (RS-FX4). `nativeOf` is its native lines in the model's
+  // line order.
+  const nativeOf: Record<string, string[]> = {};
+  const recordHolder: Record<string, string> = {};
+  const idKeys = Object.keys(byStationId);
+  for (let k = 0; k < idKeys.length; k++) {
+    const idKey = idKeys[k] as string;
+    const slots = byStationId[idKey] as Array<Record<string, unknown>>;
+    const first = slots[0] as Record<string, unknown>;
+    const members: string[] = [];
+    for (let j = 0; j < slots.length; j++) {
+      const ref = ((slots[j] as Record<string, unknown>).station_ref ?? {}) as Record<string, unknown>;
+      members.push(slotName(Number(ref.line_id), Number(ref.station_index)));
+    }
+    const records = recordsOf(first);
+    const named: Record<string, true> = {};
+    for (let r = 0; r < records.length; r++) {
+      const record = records[r] as Record<string, unknown>;
+      const recordKey = String(Number(record.id));
+      if (byStationId[recordKey] !== undefined) {
+        violations.push(`record ${recordKey} of Station ID ${idKey} is also a live Station ID (A1)`);
+      }
+      if (recordHolder[recordKey] !== undefined) {
+        violations.push(
+          `record ${recordKey} is archived in both Station ID ${recordHolder[recordKey] as string} and ${idKey} (A1)`,
+        );
+      }
+      recordHolder[recordKey] = idKey;
+      const recordLines = Array.isArray(record.lines) ? record.lines : [];
+      for (let l = 0; l < recordLines.length; l++) {
+        const lineKey = String(Number(recordLines[l]));
+        if ((linesOfNode[idKey] as Record<string, true>)[lineKey] !== true) {
+          violations.push(`record ${recordKey} of Station ID ${idKey} names line ${lineKey}, which does not pass it (A2)`);
+        }
+        if (named[lineKey] === true) {
+          violations.push(`Station ID ${idKey} has two records naming line ${lineKey} (A3)`);
+        }
+        named[lineKey] = true;
+      }
+    }
+    // A6 (RS-FX4): a record's `into` names another record of the node that
+    // names a line, and following `into` never comes back to a record.
+    const recordById: Record<string, Record<string, unknown>> = {};
+    for (let r = 0; r < records.length; r++) {
+      const record = records[r] as Record<string, unknown>;
+      recordById[String(Number(record.id))] = record;
+    }
+    for (let r = 0; r < records.length; r++) {
+      const record = records[r] as Record<string, unknown>;
+      if (record.into === undefined || record.into === null) continue;
+      const recordKey = String(Number(record.id));
+      const ownerKey = String(Number(record.into));
+      const owner = recordById[ownerKey];
+      if (owner === undefined || ownerKey === recordKey) {
+        violations.push(`record ${recordKey} of Station ID ${idKey} is archived under ${ownerKey}, no other record of it (A6)`);
+        continue;
+      }
+      if (!Array.isArray(owner.lines) || owner.lines.length === 0) {
+        violations.push(`record ${recordKey} of Station ID ${idKey} is archived under history record ${ownerKey} (A6)`);
+      }
+      let at: Record<string, unknown> | undefined = owner;
+      for (let hops = 0; at !== undefined && hops <= records.length; hops++) {
+        if (at.into === undefined || at.into === null) break;
+        if (String(Number(at.into)) === recordKey) {
+          violations.push(`record ${recordKey} of Station ID ${idKey} is archived under itself through other records (A6)`);
+          break;
+        }
+        at = recordById[String(Number(at.into))];
+      }
+    }
+    const native = Object.keys(linesOfNode[idKey] as Record<string, true>)
+      .filter((lineKey) => named[lineKey] !== true)
+      .sort((x, y) => (lineOrder[x] ?? 0) - (lineOrder[y] ?? 0));
+    nativeOf[idKey] = native;
+    if (native.length === 0) violations.push(`Station ID ${idKey} has no native line (A4)`);
+    const facts = (slot: Record<string, unknown>): string =>
+      JSON.stringify([slot.name ?? null, slot.comment ?? null, recordsOf(slot), shownKeyOf(slot)]);
+    for (let j = 0; j < slots.length; j++) {
+      const slot = slots[j] as Record<string, unknown>;
+      const here = members[j] as string;
+      // RS 4.1: a junction shows one identity, by one name, on every line.
+      if (facts(slot) !== facts(first)) {
+        violations.push(
+          `Station ID ${idKey} has a different name, comment, records or shown station at ${here} than at ${members[0] as string}`,
+        );
+      }
+      const listed: string[] = [];
+      const mergedWith = Array.isArray(slot.merged_with) ? slot.merged_with : [];
+      for (let m = 0; m < mergedWith.length; m++) {
+        const ref = (mergedWith[m] ?? {}) as Record<string, unknown>;
+        listed.push(slotName(Number(ref.line_id), Number(ref.station_index)));
+      }
+      const expected = members.filter((name) => name !== here);
+      if (listed.slice().sort().join(',') !== expected.slice().sort().join(',')) {
+        violations.push(
+          `${here} (Station ID ${idKey}) lists merged_with [${listed.join(', ')}] ` +
+            `but the slots sharing its Station ID are [${expected.join(', ')}]`,
+        );
+      }
+    }
+  }
+  // Loop closures that archive an end (RS 5): at most one per node (C1), and
+  // following archived end -> kept end never cycles (C2).
+  const keptOf: Record<string, string> = {};
+  const archivingClosure: Record<string, number> = {};
+  for (let i = 0; i < closures.length; i++) {
+    const closure = (closures[i] ?? {}) as Record<string, unknown>;
+    const archive = closure.archived as Record<string, unknown> | undefined | null;
+    if (!archive) continue;
+    const a = (closure.station_a ?? {}) as Record<string, unknown>;
+    const b = (closure.station_b ?? {}) as Record<string, unknown>;
+    const [end, other] = archive.end === 'a' ? [a, b] : [b, a];
+    const node = idAt[slotName(Number(end.line_id), Number(end.station_index))];
+    const kept = idAt[slotName(Number(other.line_id), Number(other.station_index))];
+    if (node === undefined || kept === undefined) continue;
+    const own = (archive.station ?? {}) as Record<string, unknown>;
+    if (String(Number(own.id)) !== node) {
+      violations.push(`loop_closures[${i}] archives Station ID ${node} but names it ${String(own.id)}`);
+    }
+    if (keptOf[node] !== undefined) {
+      violations.push(`Station ID ${node} is archived by two loop closures (C1)`);
+      continue;
+    }
+    keptOf[node] = kept;
+    archivingClosure[node] = Number(closure.id);
+  }
+  const resolve = (node: string): string | null => {
+    let current = node;
+    for (let step = 0; step <= idKeys.length; step++) {
+      const next = keptOf[current];
+      if (next === undefined) return current;
+      current = next;
+    }
+    return null;
+  };
+  for (let k = 0; k < idKeys.length; k++) {
+    const idKey = idKeys[k] as string;
+    const target = resolve(idKey);
+    if (target === null) {
+      violations.push(`the loop closures archiving Station ID ${idKey} cycle (C2)`);
+      continue;
+    }
+    const slots = byStationId[idKey] as Array<Record<string, unknown>>;
+    const holder = ((byStationId[target] ?? [])[0] ?? {}) as Record<string, unknown>;
+    const loopEnd = keptOf[idKey] !== undefined;
+    for (let j = 0; j < slots.length; j++) {
+      const slot = slots[j] as Record<string, unknown>;
+      const ref = (slot.station_ref ?? {}) as Record<string, unknown>;
+      const lineKey = String(Number(ref.line_id));
+      const here = slotName(Number(ref.line_id), Number(ref.station_index));
+      if (shownKeyOf(slot) !== target) {
+        violations.push(
+          `${here} (Station ID ${idKey}) shows Station ID ${shownKeyOf(slot)}, but its loop closures make it ${target}`,
+        );
+        continue;
+      }
+      if (target !== idKey && ((slot.name ?? null) !== (holder.name ?? null) || (slot.comment ?? null) !== (holder.comment ?? null))) {
+        violations.push(
+          `${here} (Station ID ${idKey}) shows ${JSON.stringify(slot.name)}, but Station ID ${target} (which it shows) is ${JSON.stringify(holder.name)}`,
+        );
+      }
+      const native = nativeOf[target] ?? [];
+      const foreign = native.indexOf(lineKey) < 0;
+      const shown = slot.shown as Record<string, unknown> | undefined | null;
+      if (!shown) {
+        if (foreign || loopEnd) {
+          violations.push(
+            `${here} (Station ID ${idKey}) is ${loopEnd ? 'a loop end' : 'a foreign slot'} but carries no shown station`,
+          );
+        }
+        continue;
+      }
+      const home = native.length > 0 ? Number(native[0]) : undefined;
+      const homeLine = shown.home_line === undefined || shown.home_line === null ? undefined : Number(shown.home_line);
+      const closureId = shown.loop_closure === undefined || shown.loop_closure === null ? undefined : Number(shown.loop_closure);
+      if (
+        shown.foreign !== foreign ||
+        shown.loop_end !== loopEnd ||
+        homeLine !== home ||
+        closureId !== (loopEnd ? archivingClosure[idKey] : undefined) ||
+        (!foreign && !loopEnd)
+      ) {
+        violations.push(
+          `${here} (Station ID ${idKey}) carries shown ${JSON.stringify(shown)}, but it is ` +
+            `foreign=${String(foreign)} loop_end=${String(loopEnd)} with home line ${String(home)}`,
+        );
+      }
+    }
+  }
+  for (let i = 0; i < merges.length; i++) {
+    const merge = (merges[i] ?? {}) as Record<string, unknown>;
+    const a = (merge.station_a ?? {}) as Record<string, unknown>;
+    const b = (merge.station_b ?? {}) as Record<string, unknown>;
+    const nameA = slotName(Number(a.line_id), Number(a.station_index));
+    const nameB = slotName(Number(b.line_id), Number(b.station_index));
+    const idA = idAt[nameA];
+    const idB = idAt[nameB];
+    if (idA === undefined || idB === undefined) continue;
+    if (nameA === nameB || idA !== idB) {
+      violations.push(`station_merges[${i}] joins ${nameA} and ${nameB}, which are not two slots of one station`);
+    }
+  }
+
   // Derived stats vs the model. Cheap, and it catches a stats computation that
   // has drifted from the project it summarizes.
   if (Number.isFinite(Number(stats.line_count)) && Number(stats.line_count) !== lines.length) {
@@ -485,8 +759,16 @@ export function checkProjectInvariants(state: unknown): string[] {
   if (Number.isFinite(Number(stats.shot_count)) && Number(stats.shot_count) !== totalShots) {
     violations.push(`stats.shot_count ${Number(stats.shot_count)} != ${totalShots} shot(s)`);
   }
-  if (Number.isFinite(Number(stats.station_count)) && Number(stats.station_count) !== stations.length) {
-    violations.push(`stats.station_count ${Number(stats.station_count)} != ${stations.length} station(s)`);
+  // `station_count` counts stations, not slots: a junction once, a loop
+  // end (a closure-archived node) as a station of its own (RS 6, U-P3-11).
+  // Counted only when the slots carry their `id` (every real payload does).
+  const distinctStations = idKeys.length;
+  if (
+    distinctStations > 0 &&
+    Number.isFinite(Number(stats.station_count)) &&
+    Number(stats.station_count) !== distinctStations
+  ) {
+    violations.push(`stats.station_count ${Number(stats.station_count)} != ${distinctStations} station(s)`);
   }
 
   return violations;

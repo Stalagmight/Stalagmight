@@ -6,6 +6,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { Button } from '../common/Button';
 import { ChevronLeftIcon, CenterMapIcon } from '../common/icons';
+import { BackendProse } from '../common/Prose';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useActiveStations } from '../../hooks/useActiveStations';
@@ -24,6 +25,7 @@ import type { Line, Shot, ShotUpdates } from '../../types/project';
 import type { GeometryPreview } from '../../store/uiStore';
 import type { ProjectWarning } from '../../types/commands';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { removeClosureAsking } from '../../utils/keptStationActions';
 
 /** Color for the on-map resolution preview ghost (issue #57). */
 const PREVIEW_COLOR = '#38bdf8';
@@ -289,11 +291,10 @@ export function WarningResolution({
   const { t } = useTranslation();
   const identity = useIdentityLabels();
   const precision = useDecimalPrecision();
-  const { updateShot, deleteShot, removeLoopClosure, resolveWarning, isShotFrozen } = useProjectStore(
+  const { updateShot, deleteShot, resolveWarning, isShotFrozen } = useProjectStore(
     useShallow((s) => ({
       updateShot: s.updateShot,
       deleteShot: s.deleteShot,
-      removeLoopClosure: s.removeLoopClosure,
       resolveWarning: s.resolveWarning,
       isShotFrozen: s.isShotFrozen,
     })),
@@ -529,6 +530,17 @@ export function WarningResolution({
           { id: 'go-to-station', label: t('detailPanel.warnings.resolveOptions.goToStation'), navigate: true },
           ...maybeIgnore,
         ];
+      case 'JUNCTION_DEPTH_SPREAD':
+      case 'JUNCTION_DEPTH_SPREAD_START':
+        // A junction whose depth readings disagree (demo issue I-4): the
+        // station takes their mean. The reading to fix can be on any line
+        // through it, so offer the way to the station; the surveyor may know
+        // the readings are right, so it can be ignored. (`_START` is the same
+        // warning on a leaving shot, its own code so Ignores cannot collide.)
+        return [
+          { id: 'go-to-station', label: t('detailPanel.warnings.resolveOptions.goToStation'), navigate: true },
+          ...maybeIgnore,
+        ];
       case 'CLOSURE_ADJUSTMENT_FAILED':
         // A part of the survey the closure solve could not adjust (#737). The
         // fix is in that part's closures or datums, so offer the way there. It
@@ -737,9 +749,11 @@ export function WarningResolution({
     if (opt.id === 'remove-closure') {
       if (warning.closureId === undefined) return 'failed';
       // Undoable like any closure removal; failure surfacing is owned by
-      // executeCommand's catch-all toast.
-      const result = await removeLoopClosure(BigInt(warning.closureId));
-      return result.success ? 'resolved' : 'failed';
+      // executeCommand's catch-all toast. When its hidden end comes back or a
+      // name would repeat, Remove Closure asks first (RS 7): the flow leaves
+      // for the dialog, as for a jump to the station.
+      const outcome = await removeClosureAsking(BigInt(warning.closureId), closureStation ?? undefined);
+      return outcome === 'done' ? 'resolved' : outcome === 'asked' ? 'navigated' : 'failed';
     }
 
     if (opt.id === 'delete-shot') {
@@ -857,9 +871,10 @@ export function WarningResolution({
 
       {/* The warning + current values */}
       <div className="px-1 mb-3">
-        {/* The backend names the shot (`Shot Main Line: 4 → 5 ...`). */}
+        {/* The backend names the shot (`Shot Main Line: 4 → 5 ...`), and each
+            name it says is a prose pill (RS-PROSE, `messageParts`). */}
         <div className="text-sm text-text-primary" data-testid="warning-resolution-message">
-          {warning.message}
+          <BackendProse text={warning.message} parts={warning.messageParts} />
         </div>
         {shot && (warning.code === 'AZIMUTH_DEVIATION' || warning.code === 'INVALID_AZIMUTH') && (
           <div className="text-xs text-text-secondary mt-1">

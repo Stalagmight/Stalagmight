@@ -19,6 +19,7 @@ import { useUIStore } from '../../../store/uiStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import type { Project, Station } from '../../../types/project';
+import { accessibleText } from '../../../test/accessibleText';
 
 const MUTATIONS = new Set(['set_station_name', 'set_station_comment', 'set_zero_datum', 'remove_zero_datum']);
 const mutations = () =>
@@ -41,7 +42,6 @@ function ok() {
     if (MUTATIONS.has(command)) return { success: true, warnings: [], error: null, line_ids: [3] };
     if (command === 'can_undo' || command === 'can_redo') return false;
     if (command === 'get_project_state') return null;
-    if (command.includes('integrity')) return { messages: [] };
     if (command.startsWith('get_') || command.startsWith('validate')) return [];
     return null;
   });
@@ -107,6 +107,13 @@ describe('Edit Station name', () => {
     expect(screen.getByTestId('station-name-error')).toHaveTextContent(
       'Main Line already has a station named "6". Station names must be unique within their line.',
     );
+    // RS-PROSE: the line is a pill; the field's description and the Save
+    // tooltip read the plain sentence.
+    const taken = 'Main Line already has a station named "6". Station names must be unique within their line.';
+    expect(accessibleText(screen.getByTestId('station-name-error'))).toBe(taken);
+    expect(screen.getByTestId('station-name-error').querySelector('.sh-ppill')?.getAttribute('data-prose-kind')).toBe('line');
+    expect(nameInput()).toHaveAccessibleDescription(taken);
+    expect(saveButton()).toHaveAttribute('title', taken);
     expect(saveButton()).toBeDisabled();
     await save();
     expect(mutations()).toEqual([]);
@@ -175,7 +182,6 @@ describe('Edit Station name', () => {
       if (command === 'set_station_name') return { success: false, warnings: [], error: refusal, line_ids: [] };
       if (command === 'can_undo' || command === 'can_redo') return false;
       if (command === 'get_project_state') return null;
-      if (command.includes('integrity')) return { messages: [] };
       if (command.startsWith('get_') || command.startsWith('validate')) return [];
       return null;
     });

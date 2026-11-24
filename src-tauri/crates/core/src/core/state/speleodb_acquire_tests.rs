@@ -9,9 +9,9 @@ use std::io::{Read as _, Write as _};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use super::stalx_fixtures::write_v2;
 use super::AppState;
-use crate::models::{Project, SpeleoLink};
-use crate::persistence::Database;
+use crate::models::SpeleoLink;
 use crate::speleodb::StartEditingResult;
 
 const ID: &str = "44444444-4444-4444-4444-444444444444";
@@ -158,21 +158,20 @@ fn serve(acquire: AcquireReply, after: AfterAcquire) -> Stub {
 /// A clean linked copy at BASE `abc123`, open read-only, signed in on `base`.
 fn open_linked(dir: &Path, base: &str) -> AppState {
     let path = dir.join("linked.stalx");
-    let mut db = Database::open(&path).expect("open db");
-    db.save_project(&Project::new("Linked".to_owned(), None))
-        .expect("save project");
-    db.save_speleo_link(Some(&SpeleoLink {
-        endpoint: base.to_owned(),
-        project_id: ID.to_owned(),
-        project_name: "Linked".to_owned(),
-        base_commit_sha: Some("abc123".to_owned()),
-        has_unpushed_edits: false,
-        last_edit_at: None,
-        last_verify_at: None,
-        undo_mode: None,
-    }))
-    .expect("save link");
-    drop(db);
+    write_v2(
+        &path,
+        "Linked",
+        Some(&SpeleoLink {
+            endpoint: base.to_owned(),
+            project_id: ID.to_owned(),
+            project_name: "Linked".to_owned(),
+            base_commit_sha: Some("abc123".to_owned()),
+            has_unpushed_edits: false,
+            last_edit_at: None,
+            last_verify_at: None,
+            undo_mode: None,
+        }),
+    );
     let state = AppState::new().expect("state");
     {
         let mut session = state.speleodb_session_lock().expect("session");

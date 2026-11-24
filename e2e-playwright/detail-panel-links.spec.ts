@@ -18,6 +18,7 @@ import {
   waitForMapIdle,
   type LineSeed,
 } from './helpers/app';
+import { expectProse } from './helpers/proseSentence';
 
 /**
  * Test data with multiple lines, shots, and stations.
@@ -572,8 +573,9 @@ test.describe('Detail Panel Links', () => {
       const stationDetail = page.getByTestId('station-detail');
       await expect(stationDetail).toBeVisible();
 
-      // Verify the "Merged with" line is displayed
-      await expect(stationDetail.locator('text=Merged with')).toBeVisible();
+      // The other lines through the junction are listed under "Also on"
+      // (one heading for every junction, I-9).
+      await expect(page.getByTestId('station-detail-merged-with')).toContainText('Also on:');
 
       // Find and click the merged station link
       // The merged station is at sideLineId:0, displayed as position 0 (0-indexed)
@@ -612,8 +614,9 @@ test.describe('Detail Panel Links', () => {
       const stationDetail = page.getByTestId('station-detail');
       await expect(stationDetail).toBeVisible();
 
-      // Verify the "Merged with" line is displayed
-      await expect(stationDetail.locator('text=Merged with')).toBeVisible();
+      // The other lines through the junction are listed under "Also on"
+      // (one heading for every junction, I-9).
+      await expect(page.getByTestId('station-detail-merged-with')).toContainText('Also on:');
 
       // Main line has 3 shots, so last station is at index 3 (position 3, 0-indexed)
       const mergedLink = page.getByTestId(`station-${mainLineId}-3-link`);
@@ -633,7 +636,7 @@ test.describe('Detail Panel Links', () => {
       expect(selection?.stationRef?.station_index).toBe(3);
     });
 
-    test('clicking broken-chain icon unmerges the listed station pair', async ({ page }) => {
+    test('clicking broken-chain icon opens Detach on that line when its own station comes back, and detaches', async ({ page }) => {
       await createProjectWithLines(page);
 
       const lineIds = await getLineIds(page);
@@ -654,6 +657,14 @@ test.describe('Detail Panel Links', () => {
       await expect(unmergeButton).toBeVisible();
       await unmergeButton.click();
 
+      // Side Passage's own station 0 comes back (RS 4.2), so the button asks
+      // first (RS 7): Detach Line from Station opens on Side Passage.
+      const dialog = page.getByTestId('unmerge-stations-dialog');
+      await expect(dialog).toBeVisible();
+      await expect(page.getByTestId('unmerge-stations-naming')).toContainText('Side Passage comes off');
+      await page.getByTestId('unmerge-stations-confirm').click();
+      await expect(dialog).toBeHidden();
+
       await expect.poll(async () => {
         return page.evaluate(({ a, b }) => {
           const state = (window as any).__E2E_TEST__.projectStore.getState();
@@ -673,6 +684,70 @@ test.describe('Detail Panel Links', () => {
           });
         }, { a: { line_id: mainLineId, station_index: 3 }, b: { line_id: sideLineId, station_index: 0 } });
       }).toBe(false);
+    });
+
+    test('a junction lists the shots that meet it on the other lines, and shows the kept station on both', async ({ page }) => {
+      // On the station graph a merge is ONE station two lines pass (plan 9.3):
+      // its Connected section names the other line's shot too, both slots
+      // show the one Station ID, and every line shows the kept station
+      // (RS 4.1: the mock keeps the first slot, Main Tunnel's 3); Side
+      // Passage's own 0 is archived in it.
+      await createProjectWithLines(page);
+
+      const lineIds = await getLineIds(page);
+      const mainLineId = lineIds[0]!;
+      const sideLineId = lineIds[1]!;
+
+      await createDirectMerge(
+        page,
+        { line_id: mainLineId, station_index: 3 },
+        { line_id: sideLineId, station_index: 0 }
+      );
+
+      await selectStation(page, mainLineId, 3);
+      const stationDetail = page.getByTestId('station-detail');
+      await expect(stationDetail).toBeVisible();
+      const otherShot = page.getByTestId(`station-detail-other-shot-${sideLineId}-0`);
+      await expect(otherShot).toBeVisible();
+      await expect(otherShot).toContainText('On ');
+      const id = await page.getByTestId('station-detail-id').textContent();
+      // "Also on" names the other line only, never the station itself (UX-7)
+      // nor a name of its own (RS 6); the station of that line archived here
+      // (the mock's retired slot: Side Passage 0) is listed once, under
+      // "Archived here" (N-3), and there is no Junction row.
+      const mergedLink = page.getByTestId(`station-${sideLineId}-0-link`);
+      await expect(mergedLink).toHaveText('Side Passage');
+      const retiredId = sideLineId * 100_000;
+      await expect(page.getByTestId('station-detail-merged-with')).toHaveText('Also on:Side Passage');
+      // The record's name and its line are prose pills (RS-PROSE).
+      await expectProse(
+        page.getByTestId(`station-detail-record-${retiredId}-text`),
+        `0 (Station ID ${retiredId}), Side Passage's own station`,
+        ['station', 'line'],
+      );
+      // The line is named once, by the Line row (V-8), not on the Name row too.
+      await expect(page.getByTestId('station-detail-name')).toHaveText('Name:3');
+      await expect(page.getByTestId('station-detail-line')).toHaveText('Line:Main Tunnel');
+      await expect(page.getByTestId('station-detail-junction')).toHaveCount(0);
+
+      await selectStation(page, sideLineId, 0);
+      await expect(page.getByTestId('station-detail-id')).toHaveText(id ?? '');
+      await expect(page.getByTestId('station-detail-name')).toHaveText('Name:3');
+      // A foreign slot says whose station it shows (RS 6).
+      await expectProse(page.getByTestId('station-detail-belongs'), '3 belongs to Main Tunnel.', ['station', 'line']);
+      await expect(page.getByTestId('station-detail-line')).toHaveText('Line:Side Passage');
+      await expect(page.getByTestId(`station-${mainLineId}-3-link`)).toHaveText('Main Tunnel');
+      // Side Passage's own station, archived in the junction.
+      // The record's name and its line are prose pills (RS-PROSE).
+      await expectProse(
+        page.getByTestId(`station-detail-record-${retiredId}-text`),
+        `0 (Station ID ${retiredId}), Side Passage's own station`,
+        ['station', 'line'],
+      );
+      await expect(page.getByTestId(`detail-unmerge-${mainLineId}-3`)).toHaveAttribute(
+        'aria-label',
+        /^Detach .+ from this station$/
+      );
     });
 
     test('clicking broken-chain icon removes the listed closure', async ({ page }) => {
@@ -1147,17 +1222,34 @@ test.describe('Detail Panel Links', () => {
       await selectShot(page, mainLineId, shotIds[0]!);
       // The shot's ends are named, never `line:index`; the aria-label adds the line.
       await expect(page.getByTestId('shot-detail-label')).toHaveText('Shot:7 \u2192 8');
-      await expect(page.getByTestId(`station-${mainLineId}-0-link`)).toHaveText('7');
-      await expect(page.getByTestId(`station-${mainLineId}-0-link`)).toHaveAttribute('aria-label', 'Select station Main Tunnel / 7');
-      await expect(page.getByTestId(`station-${mainLineId}-1-link`)).toHaveText('8');
+      // At the Full level the pill ends with the Station ID (the mock's
+      // lineId * 100000 + index), which the accessible name reads too.
+      await expect(page.getByTestId(`station-${mainLineId}-0-link`).locator('.sh-lpill-main')).toHaveText('7');
+      await expect(page.getByTestId(`station-${mainLineId}-0-link-station-id`)).toHaveText(`#${mainLineId * 100_000}`);
+      await expect(page.getByTestId(`station-${mainLineId}-0-link`)).toHaveAttribute(
+        'aria-label',
+        `Select station Main Tunnel / 7, Station ID ${mainLineId * 100_000}`,
+      );
+      await expect(page.getByTestId(`station-${mainLineId}-1-link`).locator('.sh-lpill-main')).toHaveText('8');
 
       await selectStation(page, mainLineId, 1);
+      // Every line shows the kept station (RS 4.1): Main Tunnel's "8", on
+      // Side Passage too; Side Passage's own "0" is archived in it.
       await expect(page.getByTestId('station-detail-name')).toHaveText('Name:8');
-      // The merge partner is named with its line: this is where two lines meet.
+      // The merge partner is the SAME station on the other line (the station
+      // graph, plan 9.3): the entry names that line, never the station's own
+      // name again (UX-7); its accessible name still says which slot it is.
+      // Side Passage's slot is foreign: its plain label says whose station
+      // it shows (U-P3-8).
       const partner = page.getByTestId(`station-${sideLineId}-0-link`);
-      await expect(partner).toHaveAttribute('aria-label', 'Select station Side Passage / 0');
-      await expect(partner).toContainText('0');
-      await expect(partner).toContainText('Side Passage');
+      await expect(partner).toHaveAttribute('aria-label', 'Select station Side Passage / 8 (Main Tunnel)');
+      await expect(partner).toHaveText('Side Passage');
+      // Side Passage's own station, archived here, is listed once (N-3).
+      await expectProse(
+        page.getByTestId(`station-detail-record-${sideLineId * 100_000}-text`),
+        `0 (Station ID ${sideLineId * 100_000}), Side Passage's own station`,
+        ['station', 'line'],
+      );
 
       // Every station has a name: one never renamed keeps the one seeded from its index.
       await selectStation(page, mainLineId, 2);
@@ -1247,13 +1339,13 @@ test.describe('Detail Panel Links', () => {
       // The start station is station 0, named "0" (seeded from its index).
       const startLink = page.getByTestId(`station-${mainLineId}-0-link`);
       await expect(startLink).toBeVisible();
-      await expect(startLink).toHaveText('0');
-      await expect(startLink).toHaveAttribute('aria-label', 'Select station Main Tunnel / 0');
+      await expect(startLink.locator('.sh-lpill-main')).toHaveText('0');
+      await expect(startLink).toHaveAttribute('aria-label', `Select station Main Tunnel / 0, Station ID ${mainLineId * 100_000}`);
 
       // The end station is station 1, named "1".
       const endLink = page.getByTestId(`station-${mainLineId}-1-link`);
       await expect(endLink).toBeVisible();
-      await expect(endLink).toHaveText('1');
+      await expect(endLink.locator('.sh-lpill-main')).toHaveText('1');
     });
 
     test('verifies station at index 0 has no previous shot', async ({ page }) => {

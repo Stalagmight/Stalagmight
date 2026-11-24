@@ -1,5 +1,9 @@
 //! Synthetic conversion contract; this separate process owns its temporary app dirs.
-#![expect(clippy::expect_used, reason = "synthetic HTTP and SQLite test setup")]
+//! Every project file is a `.stalx` version 2 file written by the encoder.
+#![expect(
+    clippy::expect_used,
+    reason = "synthetic HTTP and project-file test setup"
+)]
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{
@@ -8,8 +12,20 @@ use std::sync::{
 };
 
 use serde_json::json;
+use stalagmight_lib::core::{AppState, Command};
+use stalagmight_lib::models::survey::Project;
+use stalagmight_lib::persistence::stalx_v2::{self, DecodeOptions, Extras, Mode};
 use stalagmight_lib::speleodb::{SpeleoPublishParams, Visibility};
-use stalagmight_lib::{core::AppState, models::Project, persistence::Database};
+
+/// The link (identity and sync state) a version 2 file at `path` holds.
+fn link_at(path: &std::path::Path) -> Option<(String, bool)> {
+    let header = stalx_v2::probe_path(path).expect("probe");
+    let link = header.speleodb?;
+    let dirty = header
+        .local
+        .is_some_and(|local| local.speleodb.unpushed_edits);
+    Some((link.project_id, dirty))
+}
 
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
@@ -129,14 +145,31 @@ fn conversion_saves_unsaved_survey_uploads_once_and_requires_verified_editing_af
             }
         });
         let original_path = temp.path().join(format!("local-{attempt}.stalx"));
-        let mut db = Database::open(&original_path).expect("local database");
-        let mut project = Project::new("Local original".into(), None);
-        db.save_project(&project).expect("original save");
-        project.name = "Latest local edits".into();
-        project.touch();
+        let original = Project::new("Local original", None);
+        std::fs::write(
+            &original_path,
+            stalx_v2::encode(&original, &Extras::default(), Mode::Normal).expect("encode"),
+        )
+        .expect("original save");
         let state = AppState::new().expect("state");
-        state.set_project_for_tests(project);
-        state.set_database_for_tests(db);
+        assert!(
+            state
+                .execute(Command::OpenProject {
+                    path: original_path.clone()
+                })
+                .success,
+            "open the local project"
+        );
+        // An unsaved survey edit the conversion has to save before it uploads.
+        assert!(
+            state
+                .update_project_settings(
+                    "Latest local edits".into(),
+                    original.settings.validation.clone()
+                )
+                .success,
+            "rename"
+        );
         state
             .speleodb_login(Some(base), None, None, None, Some("synthetic-token".into()))
             .expect("sign in");
@@ -151,26 +184,23 @@ fn conversion_saves_unsaved_survey_uploads_once_and_requires_verified_editing_af
                 message: Some("Project Creation".into()),
             })
             .expect("creation converges on a linked project even when upload fails");
-        let cached =
-            Database::open_existing(std::path::Path::new(&result.local_path)).expect("saved cache");
-        assert_eq!(
-            cached.load_project().expect("saved project").name,
-            "Latest local edits"
-        );
-        let link = cached
-            .load_speleo_link()
-            .expect("link")
-            .expect("managed project");
-        assert_eq!(link.has_unpushed_edits, fail_upload);
+        let cached_path = std::path::Path::new(&result.local_path);
+        let cached = stalx_v2::decode(
+            &std::fs::read(cached_path).expect("saved cache"),
+            &DecodeOptions::default(),
+        )
+        .expect("a valid cache file");
+        assert_eq!(cached.project.name, "Latest local edits");
+        let (_, dirty) = link_at(cached_path).expect("managed project");
+        assert_eq!(dirty, fail_upload);
         assert!(
             !state.set_surface_elevation(Some(10.0)).success,
             "editing requires a fresh verified acquisition"
         );
-        assert!(Database::open_existing(&original_path)
-            .expect("original local file")
-            .load_speleo_link()
-            .expect("original link")
-            .is_none());
+        assert!(
+            link_at(&original_path).is_none(),
+            "the original local file stays unlinked"
+        );
         state
             .speleodb_logout()
             .expect("disconnect before next synthetic server");
@@ -195,8 +225,8 @@ fn conversion_saves_unsaved_survey_uploads_once_and_requires_verified_editing_af
         assert!(
             requests
                 .iter()
-                .any(|request| request.contains("SQLite format 3")),
-            "upload carries the saved native project"
+                .any(|request| request.contains("{\"format\":\"stalx\",\"version\":2")),
+            "upload carries the saved version 2 project"
         );
     }
 }

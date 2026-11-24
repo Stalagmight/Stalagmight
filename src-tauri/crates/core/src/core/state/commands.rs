@@ -1,1245 +1,235 @@
-use super::command_shot::OnePointCause;
-use super::AppState;
-#[cfg(test)]
-use crate::core::CommentHolder;
-use crate::core::{
-    Command, CommandResult, IntegrityCheckResult, IntegrityRepairResult, ReversedLine, UndoData,
-    ValidationWarning,
-};
-use crate::models::{
-    ClosuresBeforeSweep, DatumLayout, LineData, LineId, Project, ViolationSeverity,
-};
-#[cfg(test)]
-use crate::models::{ShotData, ShotId, ShotUpdates};
+//! The execute pipeline of the station-graph model (plan 9.1; C0).
+//!
+//! One pipeline runs every recorded edit: [`AppState::execute`] for a
+//! command or a batch, and every bypass recipe (split, combine, delete-split,
+//! imports, repair, settings, elevation) through [`AppState::run_recorded`]
+//! with its own record:
+//!
+//! 1. `command_lock` (the caller holds it), the read-only gates (SpeleoDB
+//!    edit session; a file made with a newer Stalagmight);
+//! 2. the record (kind, label worded with the names in force now, stable
+//!    refs, recorded preview rows);
+//! 3. `before = project.clone()`;
+//! 4. the mutation through the survey operations, which resolve positional
+//!    slots to `StationId`s (`resolve_slot`, refusing an out-of-range slot),
+//!    settle anchors and run the orphan-closure sweep themselves for the
+//!    topology edits; a refusal restores `before`;
+//! 5. `validate()`: a violation restores `before` and refuses;
+//! 6. `capture(&before, &project)`: an empty changeset is a provable no-op
+//!    (no entry, the redo branch kept, nothing dirtied);
+//! 7. `modified_at` stamped (the model never does), the revision bumped,
+//!    the entry pushed (redo cleared), the file marked dirty, the SpeleoDB
+//!    dirty bit and Unwind position updated.
 
-/// The integrity-relevant capabilities of a [`Command`], declared in ONE place
-/// ([`AppState::command_integrity`]). The `execute()` epilogue reads these flags
-/// instead of three separate hand-maintained allow/deny lists, so a new command
-/// variant can't silently skip an integrity step.
-#[derive(Debug, Clone, Copy)]
-struct CommandIntegrity {
-    /// Can introduce a dangling/out-of-range cross-reference - by removing a
-    /// referenced entity or renumbering station indices - and so needs the
-    /// (expensive) whole-project rollback snapshot to reject corruption at the
-    /// source. Geometry-only commands add valid refs or shift offsets but cannot
-    /// dangle a reference, so they skip the serialize.
-    can_dangle_refs: bool,
-    /// Can REMOVE connectivity and strand a line so its only attachment is a
-    /// loop closure - which must then be converted to a merge (issue #8). Commands
-    /// that add or keep connectivity are excluded (a move must leave an inert
-    /// closure independent).
-    can_orphan_closures: bool,
+use super::AppState;
+use crate::core::{Command, CommandResult, ReversedLine, ValidationWarning};
+use crate::models::survey::changeset::{capture, HistoryRefs, RecordedPreview};
+use crate::models::survey::{HistoryEntry, Project};
+
+/// What a recorded edit says about itself (plan 8.3's entry minus the time
+/// and the changeset).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Record {
+    pub(crate) kind: String,
+    pub(crate) label: String,
+    /// `label` as prose parts (RS-PROSE, `HistoryEntry::label_parts`): set
+    /// with the label by [`Self::set_label`]; empty for a plain label.
+    pub(crate) label_parts: Vec<crate::models::ProsePart>,
+    pub(crate) refs: HistoryRefs,
+    pub(crate) preview: RecordedPreview,
+}
+
+impl Record {
+    /// The record of `cmd` on `project` before it runs.
+    pub(crate) fn of(project: &Project, cmd: &Command) -> Self {
+        let label = super::labels::entry_label(project, cmd);
+        Self {
+            kind: crate::core::command_kind(cmd).to_string(),
+            label: label.text,
+            label_parts: label.parts,
+            refs: super::labels::command_refs(project, cmd),
+            preview: super::labels::command_preview(project, cmd),
+        }
+    }
+
+    /// Word the record with `label` and its parts (a recipe's label).
+    pub(crate) fn set_label(&mut self, label: super::labels::Label) {
+        self.label = label.text;
+        self.label_parts = label.parts;
+    }
+}
+
+/// What a command's mutation reports besides the new state.
+#[derive(Debug, Default)]
+pub(crate) struct Applied {
+    pub(crate) warnings: Vec<ValidationWarning>,
+    pub(crate) line_id: Option<u32>,
+    pub(crate) line_ids: Vec<u32>,
+    pub(crate) shot_id: Option<u32>,
+    pub(crate) reversed: Vec<ReversedLine>,
+    /// The Section a `CreateCaveSection` created (#327).
+    pub(crate) cave_section_id: Option<u32>,
+    /// What the command did to identities on its own (RS 7 "Notices"):
+    /// rule-L letters, restored archived identities, dropped closure
+    /// archives.
+    pub(crate) identities: crate::models::IdentityNotice,
+}
+
+impl Applied {
+    /// A batch sub-command's report folded into the batch's, as 0.6.0's
+    /// `execute_batch` folded it: every sub-command's `line_id` and
+    /// `line_ids` go to `line_ids` (the batch itself names no `line_id`),
+    /// the warnings in order; the reverses are parity-reduced at the end
+    /// ([`Self::into_result`]).
+    fn merge(&mut self, other: Applied) {
+        self.warnings.extend(other.warnings);
+        self.line_ids.extend(other.line_id);
+        self.line_ids.extend(other.line_ids);
+        if other.shot_id.is_some() {
+            self.shot_id = other.shot_id;
+        }
+        self.reversed.extend(other.reversed);
+        self.identities.extend(other.identities);
+    }
+
+    fn into_result(self) -> CommandResult {
+        let mut result = CommandResult::success().with_warnings(self.warnings);
+        result.line_id = self.line_id;
+        result.line_ids = self.line_ids;
+        result.shot_id = self.shot_id;
+        result.cave_section_id = self.cave_section_id;
+        if !self.identities.is_empty() {
+            result.identities = Some(self.identities);
+        }
+        let reversed = net_reversed(self.reversed);
+        if !reversed.is_empty() {
+            result = result.with_reversed_lines(reversed);
+        }
+        result
+    }
+}
+
+/// The lines reversed an ODD number of times, in first-occurrence order
+/// (0.6.0's `Command::net_reversed`): a line a batch reverses twice is not
+/// renumbered at all, so it is not reported.
+fn net_reversed(reversed: Vec<ReversedLine>) -> Vec<ReversedLine> {
+    let mut counts: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    for r in &reversed {
+        *counts.entry(r.line_id).or_insert(0) += 1;
+    }
+    let mut seen = std::collections::HashSet::new();
+    reversed
+        .into_iter()
+        .filter(|r| counts.get(&r.line_id).is_some_and(|n| n % 2 == 1) && seen.insert(r.line_id))
+        .collect()
+}
+
+/// The message a frozen shot's geometry edit is refused with (S12: the
+/// model's operations do not check it; the command layer does).
+pub(crate) const FROZEN_GEOMETRY: &str =
+    "Cannot edit geometry of a frozen shot. This shot is part of an adjusted survey network.";
+
+/// Apply one command's mutation to `project` (no snapshot, no validation:
+/// the pipeline does both). Each family's `apply` lives in its own file.
+/// `record` is the entry being recorded, for the preview rows or label
+/// refinements only the result can say.
+pub(crate) fn apply_command(
+    project: &mut Project,
+    record: &mut Record,
+    cmd: &Command,
+) -> Result<Applied, String> {
+    use super::{
+        command_cave_section, command_comment, command_credit, command_line, command_move,
+        command_shot, command_station, command_station_name, import_tracking,
+    };
+    match cmd {
+        Command::CreateLine { .. }
+        | Command::DeleteLine { .. }
+        | Command::UpdateLineMetadata { .. }
+        | Command::ReverseLine { .. } => command_line::apply(project, record, cmd),
+        Command::CreateShot { .. }
+        | Command::UpdateShot { .. }
+        | Command::DeleteShot { .. }
+        | Command::SetShotKind { .. } => command_shot::apply(project, record, cmd),
+        Command::EditShotCredit { .. } => command_credit::apply(project, record, cmd),
+        Command::MergeStations { .. }
+        | Command::UnmergeStations { .. }
+        | Command::UnmergeStationPair { .. }
+        | Command::CreateLoopClosure { .. }
+        | Command::RemoveLoopClosure { .. }
+        | Command::SetZeroDatum { .. }
+        | Command::RemoveZeroDatum { .. } => command_station::apply(project, record, cmd),
+        Command::SetStationName { .. } => command_station_name::apply(project, record, cmd),
+        Command::SetStationComment { .. } | Command::MoveComment { .. } => {
+            command_comment::apply(project, record, cmd)
+        }
+        Command::MoveLine { .. } | Command::MoveSegment { .. } | Command::MoveStation { .. } => {
+            command_move::apply(project, record, cmd)
+        }
+        Command::CreateCaveSection { .. }
+        | Command::UpdateCaveSection { .. }
+        | Command::DeleteCaveSection { .. }
+        | Command::MoveLinesToCaveSection { .. }
+        | Command::ApplyCaveSectionColor { .. } => {
+            command_cave_section::apply(project, record, cmd)
+        }
+        Command::UntrackImport { .. } => import_tracking::apply(project, record, cmd),
+        Command::Batch { commands, .. } => {
+            let mut applied = Applied::default();
+            // Several slots of one station move it once (plan 9.1).
+            let mut station_moves = command_move::StationMoves::default();
+            let mut rest = commands.as_slice();
+            while let Some((sub, tail)) = rest.split_first() {
+                if !AppState::is_batch_allowed(sub) {
+                    // 0.6.0's words, naming the command as the history would.
+                    return Err(format!(
+                        "Command '{}' is not allowed in batch context",
+                        super::labels::command_label(project, sub)
+                    ));
+                }
+                if station_moves.repeats(project, sub) {
+                    rest = tail;
+                    continue;
+                }
+                // A run of shot updates (a data-table paste) is one survey
+                // pass: the same updates one after another, to the bit
+                // (`ShotEditRun`). An update reports nothing to fold.
+                let updates = rest
+                    .iter()
+                    .take_while(|c| matches!(c, Command::UpdateShot { .. }))
+                    .count();
+                if updates > 0 {
+                    command_shot::apply_updates(project, &rest[..updates])?;
+                    rest = &rest[updates..];
+                    continue;
+                }
+                applied.merge(apply_command(project, record, sub)?);
+                rest = tail;
+            }
+            // A reverse is reported for the lines the batch leaves (0.6.0's
+            // `settle_reversed_lines`): a line it reversed and then deleted
+            // has nothing for the frontend to mirror.
+            applied
+                .reversed
+                .retain(|r| project.line(r.line_id).is_some_and(|l| !l.shots.is_empty()));
+            Ok(applied)
+        }
+        Command::CreateProject { .. }
+        | Command::OpenProject { .. }
+        | Command::SaveProject { .. }
+        | Command::CloseProject
+        | Command::MergeProjects { .. }
+        | Command::AddProjectFile { .. }
+        | Command::RepairIntegrity
+        | Command::UpdateProjectSettings
+        | Command::SetSurfaceElevation => Err(format!(
+            "{} is not an edit of the open project",
+            crate::core::command_kind(cmd)
+        )),
+    }
 }
 
 impl AppState {
-    /// Declare every command's integrity-relevant capabilities in one exhaustive
-    /// match, so adding a [`Command`] variant FORCES a decision here (the compiler
-    /// rejects a non-exhaustive match) rather than silently defaulting across three
-    /// separate allow/deny lists - where a miss fails open: a skipped rollback
-    /// snapshot commits corruption, a missing reconcile leaves merges drifted, and
-    /// a missing orphan-closure conversion leaves a phantom loop closure.
-    /// Whether a command is a lifecycle pass-through that the read-only edit gate
-    /// (#191, D-B6/D-B16) must NOT block: Save/Open/Close/Create/MergeProjects.
-    /// Autosave (a `SaveProject`) must keep working on a read-only remote project,
-    /// and opening/closing/creating/merging are not "edits of the open project".
-    /// An exhaustive `match` (like `command_integrity`) forces a deliberate choice
-    /// for every new `Command` variant - anti-fail-open: a new mutating variant
-    /// defaults to gated.
-    fn is_lifecycle_passthrough(cmd: &Command) -> bool {
-        use Command::*;
-        match cmd {
-            CreateProject { .. }
-            | OpenProject { .. }
-            | SaveProject { .. }
-            | CloseProject
-            | MergeProjects { .. } => true,
-            CreateLine { .. }
-            | DeleteLine { .. }
-            | UpdateLineMetadata { .. }
-            | ReverseLine { .. }
-            | CreateShot { .. }
-            | UpdateShot { .. }
-            | DeleteShot { .. }
-            | SetShotKind { .. }
-            | EditShotCredit { .. }
-            | MergeStations { .. }
-            | UnmergeStations { .. }
-            | UnmergeStationPair { .. }
-            | CreateLoopClosure { .. }
-            | RemoveLoopClosure { .. }
-            | SetZeroDatum { .. }
-            | RemoveZeroDatum { .. }
-            | SetStationComment { .. }
-            | SetStationName { .. }
-            | MoveLine { .. }
-            | MoveSegment { .. }
-            | MoveStation { .. }
-            | MoveComment { .. }
-            | Batch { .. }
-            | UntrackImport { .. }
-            | CreateCaveSection { .. }
-            | UpdateCaveSection { .. }
-            | DeleteCaveSection { .. }
-            | MoveLinesToCaveSection { .. }
-            | ApplyCaveSectionColor { .. }
-            // Adding a file INTO the open project is an edit of it (#674),
-            // unlike MergeProjects, which writes a new file.
-            | AddProjectFile { .. }
-            | RepairIntegrity
-            | UpdateProjectSettings
-            | SetSurfaceElevation => false,
-        }
-    }
-
-    /// The lines a command reverses, WITHOUT the parity reduction
-    /// `Command::reversed_line_ids` applies - `None` when the command is not purely
-    /// reverses. Parity reduction is right for the settle step (which asks "what moved?") and
-    /// wrong here, where a `[A, A]` batch must still be recognised as touching A.
-    fn reverse_only_lines(cmd: &Command) -> Option<Vec<LineId>> {
-        match cmd {
-            Command::ReverseLine { line_id, .. } => Some(vec![*line_id]),
-            Command::Batch { commands, .. } => {
-                let mut out = Vec::with_capacity(commands.len());
-                for c in commands {
-                    match c {
-                        Command::ReverseLine { line_id, .. } => out.push(*line_id),
-                        // Anything else in the batch can change something.
-                        _ => return None,
-                    }
-                }
-                (!out.is_empty()).then_some(out)
-            }
-            _ => None,
-        }
-    }
-
-    /// Whether `cmd` is a `SetStationName` giving a station the name it
-    /// already holds, compared trimmed as the rename stores it.
-    fn is_unchanged_station_name(&self, cmd: &Command) -> bool {
-        let Command::SetStationName { station_ref, name } = cmd else {
-            return false;
-        };
-        let guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.as_ref().is_some_and(|project| {
-            let name = name.trim();
-            !name.is_empty() && project.station_name_at(*station_ref) == Some(name)
-        })
-    }
-
-    /// Whether this command is a reverse (or a batch of reverses) whose every named line has
-    /// no shots - i.e. provably a no-op, so it must not consume the redo branch or dirty a
-    /// remote project. A missing line counts as "nothing to change" for the same reason.
-    fn is_provable_reverse_noop(&self, cmd: &Command) -> bool {
-        let Some(lines) = Self::reverse_only_lines(cmd) else {
-            return false;
-        };
-        let guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let Some(project) = guard.as_ref() else {
-            return false;
-        };
-        // A MISSING line is not a no-op - it is an error, and must still fall through so the
-        // command fails. Only a line that exists and has no shots is provably inert.
-        lines
-            .iter()
-            .all(|sid| project.get_line(*sid).is_some_and(|s| s.shots.is_empty()))
-    }
-
-    fn command_integrity(cmd: &Command) -> CommandIntegrity {
-        use Command::*;
-        // Named profiles keep the table readable; every variant maps to exactly one.
-        const SAFE_REFS: CommandIntegrity = CommandIntegrity {
-            can_dangle_refs: false,
-            can_orphan_closures: false,
-        };
-        const REMOVES: CommandIntegrity = CommandIntegrity {
-            can_dangle_refs: true,
-            can_orphan_closures: true,
-        };
-        const CREATE_SHOT: CommandIntegrity = CommandIntegrity {
-            can_dangle_refs: true,
-            can_orphan_closures: false,
-        };
-        const UNMERGE: CommandIntegrity = CommandIntegrity {
-            can_dangle_refs: false,
-            can_orphan_closures: true,
-        };
-        // Same flags as UNMERGE, kept apart because the reason is different and
-        // less obvious: removing a GPS anchor changes no topology at all. What it
-        // changes is whether the conversion is ALLOWED to run - see the arm below.
-        const REMOVE_DATUM: CommandIntegrity = CommandIntegrity {
-            can_dangle_refs: false,
-            can_orphan_closures: true,
-        };
-        // Same flags again, for a third reason: a merge ADDS connectivity, so it
-        // strands nothing, but since #741 it may join two placed pieces tied by
-        // an inert closure, and then that closure's two ends are one point. The
-        // sweep removes and reports it (#738), inside the merge's undo pair.
-        const MERGE: CommandIntegrity = CommandIntegrity {
-            can_dangle_refs: false,
-            can_orphan_closures: true,
-        };
-        match cmd {
-            // Lifecycle + pure metadata edits: touch no geometry and no refs.
-            // RepairIntegrity never runs through execute() (it records its own
-            // snapshot-pair undo and returns failure here), so its flags are never
-            // read; grouped here as it disturbs nothing.
-            CreateProject { .. }
-            | OpenProject { .. }
-            | SaveProject { .. }
-            | CloseProject
-            | UpdateLineMetadata { .. }
-            | SetShotKind { .. }
-            // Survey credit is per-shot metadata: no geometry, no references.
-            | EditShotCredit { .. }
-            // Station comments are metadata keyed by station identity; they are
-            // never geometry-derived and can never introduce merge drift, so they
-            // must NOT run the reconcile epilogue. Classifying them GEOMETRY_ONLY
-            // would heal an already-drifted project as a side effect of a comment
-            // edit, while their undo (restore the previous comment) does not invert
-            // that geometry change - an asymmetric undo.
-            | SetStationComment { .. }
-            // A station name is metadata keyed by station identity, exactly
-            // like a comment (see above).
-            | SetStationName { .. }
-            | MoveComment { .. }
-            | RepairIntegrity
-            | UpdateProjectSettings
-            // Import-dedup bookkeeping: a set of hashes, referenced by nothing.
-            | UntrackImport { .. }
-            // Sections (#327) group lines by id: no station reference, no
-            // geometry, nothing a closure hangs on.
-            | CreateCaveSection { .. }
-            | UpdateCaveSection { .. }
-            | DeleteCaveSection { .. }
-            | MoveLinesToCaveSection { .. }
-            | ApplyCaveSectionColor { .. }
-            | SetSurfaceElevation => SAFE_REFS,
-
-            // Remove an entity / renumber stations: can dangle refs AND strand a
-            // line behind a sole-bridge closure.
-            DeleteLine { .. } | DeleteShot { .. } | MergeProjects { .. } => REMOVES,
-
-            // A batch is exactly as dangerous as the worst thing in it. Taking
-            // the union rather than a blanket REMOVES matters for the data
-            // table's fill-drag and paste, which emit a Batch of UpdateShots: a
-            // bulk Jump/Reference reclassify is metadata-only, and grading it
-            // REMOVES would run the reconcile epilogue - healing an
-            // already-drifted project as a side effect of an edit whose undo
-            // does not invert that geometry change (the asymmetric-undo hazard
-            // spelled out for SetStationComment above).
-            Batch { commands, .. } => commands.iter().fold(SAFE_REFS, |acc, c| {
-                let f = Self::command_integrity(c);
-                CommandIntegrity {
-                    can_dangle_refs: acc.can_dangle_refs || f.can_dangle_refs,
-                    can_orphan_closures: acc.can_orphan_closures || f.can_orphan_closures,
-                }
-            }),
-
-            // Inserting a shot renumbers later stations (can dangle a positional
-            // ref) but cannot strand a line.
-            CreateShot { .. } => CREATE_SHOT,
-
-            // Unmerge removes connectivity (can strand a line) but adds no
-            // dangling reference.
-            UnmergeStations { .. } | UnmergeStationPair { .. } => UNMERGE,
-
-            // Removing a GPS anchor strands nothing - it changes no shot and no
-            // merge, so the set of sole-bridge closures is exactly what it was.
-            // What it changes is the conversion's own DOUBLE-ANCHOR GUARD: a
-            // sole-bridge closure between two independently anchored groups is
-            // left as a closure (converting it would put two GPS anchors in one
-            // rigid merge component), and dropping one of the two anchors is
-            // precisely what stops that refusal. The closure becomes convertible
-            // at this instant, and `redrive_offsets_after_load` WILL convert it on
-            // the next open - so unless this command converts it too, memory and
-            // disk disagree from here on and a reload silently reclassifies
-            // (#413, the orphan-closure observation; the same convergence
-            // argument as finding 10, one command further out).
-            RemoveZeroDatum { .. } => REMOVE_DATUM,
-
-            MergeStations { .. } => MERGE,
-
-            // Everything else keeps references valid and cannot strand a closure.
-            // Whether it also needs geometry reconciliation is the separate,
-            // exhaustive Command::affects_geometry classification.
-            ReverseLine { .. }
-            | CreateLine { .. }
-            | UpdateShot { .. }
-            | CreateLoopClosure { .. }
-            | RemoveLoopClosure { .. }
-            // ADDING an anchor moves the guard the other way - it can only turn a
-            // convertible orphan into a refused one, and a refused orphan is what
-            // the loader leaves alone too, so session and disk already agree.
-            | SetZeroDatum { .. }
-            | MoveLine { .. }
-            | MoveSegment { .. }
-            | MoveStation { .. } => SAFE_REFS,
-
-            // A pure addition (#674): it copies a source's own references
-            // between the lines it creates and links nothing existing, so
-            // it can neither dangle a ref nor strand a closure. No rollback
-            // snapshot either - `add_project_file` blocks introduced corruption
-            // itself by removing what it appended, which costs the size of the
-            // file being added rather than of the open project.
-            AddProjectFile { .. } => SAFE_REFS,
-        }
-    }
-
-    /// Convert any sole-bridge loop closures in the open project to merges, and
-    /// remove any closure between merged stations (#738). With `before` (the
-    /// capture a command took before it ran), the removed closures come back as
-    /// warnings named by the stations they had before it, saying `cause` made
-    /// them one point; without it they are only logged (`execute()`'s epilogue
-    /// for a Batch, whose `execute_batch` already swept and reported).
-    fn convert_orphan_closures_in_open_project(
-        &self,
-        before: Option<&ClosuresBeforeSweep>,
-        cause: OnePointCause,
-    ) -> Vec<ValidationWarning> {
-        let mut guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let Some(project) = guard.as_mut() else {
-            return Vec::new();
-        };
-        let sweep = project.sweep_orphan_closures();
-        if sweep.converted > 0 {
-            tracing::info!(
-                converted = sweep.converted,
-                purpose = "enforce closures-are-loops invariant",
-                "Converted sole-bridge loop closures to merges after a removal"
-            );
-        }
-        if let Some(before) = before {
-            return super::command_shot::report_swept_closures(
-                project,
-                before,
-                &sweep,
-                "after a removal",
-                cause,
-            );
-        }
-        sweep.log_removed("batch");
-        Vec::new()
-    }
-
-    /// [`Project::closures_before_sweep`] of the open project, if one is open.
-    fn closures_before_sweep_in_open_project(&self) -> Option<ClosuresBeforeSweep> {
-        let guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.as_ref().map(Project::closures_before_sweep)
-    }
-
-    /// The open project's datums and their roles (an empty layout with no
-    /// project). Read BEFORE a command runs; handed back to
-    /// [`Self::settle_datum_layout`] after it.
-    pub(super) fn datum_layout(&self) -> DatumLayout {
-        let guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard
-            .as_ref()
-            .map(Project::datum_layout)
-            .unwrap_or_default()
-    }
-
-    /// Settle the datums after the command that just ran
-    /// ([`Project::settle_datum_layout`]): a datum that has just become its
-    /// piece's placement datum (a GPS fix promoted by a remove, an unmerge or a
-    /// split, #741) places that piece on its GPS against the frame in effect
-    /// before the command; then, if the command changed WHICH station defines
-    /// the georeference frame, the survey is translated onto the new origin
-    /// ([`Project::renormalize_frame`], #469 item 1).
-    ///
-    /// Run once per command. `execute_batch` settles inside its own snapshot
-    /// pair, so `execute()` skips its epilogue call for a `Batch`: a second
-    /// call with the same `before` would place a promoted datum against a
-    /// frame that is no longer the origin.
-    ///
-    /// Derived, not hooked. At least six routes can promote a different datum to
-    /// first - `remove_zero_datum`, `cleanup_line_references` on a
-    /// `DeleteLine`, the delete/split entry points, `repair_structural_integrity`,
-    /// `set_zero_datum`, and the `ZeroDatumInfo` undo arm - and a hook set that is
-    /// one call site short does not degrade, it silently skips. Comparing the frame
-    /// station across the command catches all of them, including the ones nobody
-    /// thought of, and asks the state rather than the command what happened.
-    ///
-    /// # The AFTER side must be `Some`
-    ///
-    /// * `Some -> None` removed the last anchor: there is no frame left to
-    ///   renormalise onto, and translating onto nothing would move the survey for
-    ///   no reason. No-op.
-    /// * `None -> Some` ESTABLISHED the survey's first georeference, which gives
-    ///   local `(0, 0)` a meaning it did not have, so the survey moves onto it -
-    ///   the whole survey, rigidly, exactly as any other promotion does.
-    ///   `Project::set_zero_datum` already does that inline (its subsequent-datum
-    ///   arithmetic reads the invariant, so it cannot wait for an epilogue that
-    ///   the import loop and redo's re-execute never reach), which makes this a
-    ///   measured no-op on that route and a safety net on any other.
-    ///
-    /// # Never on the inverse
-    ///
-    /// This is the FORWARD epilogue only, alongside the orphan-closure conversion,
-    /// and deliberately not inside `reconcile_geometry` - which `undo()`/`redo()`
-    /// share. An inverse must RESTORE, not re-derive. Nor on the LOAD path:
-    /// `resolve_offsets`' cascade is translation-invariant, so save/reopen
-    /// converges with the loader untouched, and a load-time renormalisation would
-    /// silently translate a merged project whose datums legitimately do not sit at
-    /// the origin.
-    ///
-    /// # What the undo side actually guarantees
-    ///
-    /// Stated as what holds rather than as a blanket claim, because the gate now
-    /// admits `None -> Some` as well and that is a different set of routes:
-    ///
-    /// * The commands that PROMOTE a datum (`RemoveZeroDatum`, `DeleteLine`,
-    ///   `DeleteShot`, the delete/split entry points, `RepairIntegrity`, any
-    ///   `Batch`) each record a `ProjectSnapshotPair`, so their undo hands the old
-    ///   map back verbatim.
-    /// * `SetZeroDatum` - the command that ordinarily ESTABLISHES a frame -
-    ///   records `UndoData::ZeroDatumInfo` with a whole-project
-    ///   `previous_offsets` (`Project::capture_all_line_offsets`, taken before
-    ///   the mutation), which is exactly the blast radius of the translation it
-    ///   performs.
-    /// * `AddProjectFile` (#674) can establish one too, when the copied file
-    ///   carries a datum and the open project has none. It lands that datum on
-    ///   the origin itself, moving only what it copied, so this gate measures
-    ///   zero; a pre-existing offset that moves anyway is recorded in its
-    ///   `AddedContent::moved_offsets` and handed back by the undo.
-    ///
-    /// KNOWN LIMITATION, pre-existing and NOT introduced here: a datum stored
-    /// against a legacy POSITIONAL anchor (`StationAnchor::Index`, written by
-    /// pre-anchor builds) can go from dangling to resolving when a command GROWS
-    /// its line - `CreateShot` is the reachable one - which flips the frame
-    /// key under a command whose undo captures only its rigid group
-    /// (`CreatedShotSnapshot`). The resulting translation is then not restored
-    /// exactly by that undo. It is reachable on master already in the
-    /// `Some -> Some` form (an index datum un-dangling ahead of the datum that
-    /// was the frame); widening the gate adds the `None -> Some` form of the same
-    /// shape. Anchors written by any current build are `LineStart`/`AfterShot`,
-    /// which no forward command can un-dangle, so this stays a legacy-file
-    /// question and is deliberately left to the anchor work rather than patched
-    /// here.
-    ///
-    /// # Why `MergeProjects` cannot fire this
-    ///
-    /// It is classified `affects_geometry` and dispatched through `execute()`, so
-    /// it reaches this call - but `merge_projects` builds a `Project` locally,
-    /// writes it to a NEW file and returns; it never touches `self.project` (there
-    /// is no reference to it anywhere in `project_merge.rs`). Both reads therefore
-    /// see the same unchanged open project, `before == after`, and the gate
-    /// returns without measuring anything. That matters because a merged project
-    /// is laid out by its own sources' datums (#682), not by the open project's
-    /// frame, so a fire here would translate one onto the other. Pinned by
-    /// `merge_projects_does_not_renormalise_the_open_project`.
-    pub(super) fn settle_datum_layout(&self, before: &DatumLayout) {
-        let mut guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let Some(project) = guard.as_mut() else {
-            return;
-        };
-        project.settle_datum_layout(before);
-        // The same forward epilogue drops the records that name a shot the edit
-        // removed, so the edit's undo entry carries them (see the method).
-        project.prune_dangling_shot_records();
-    }
-
-    /// Bring `held_gauges` to one entry per connected component, as a load
-    /// does (`Project::normalize_held_gauges`), for an edit that may have
-    /// joined two components that each held one - a Merge Stations, or a
-    /// batch or repair holding one. Left to the load, a save and a reopen
-    /// would change the project with no undo entry to say so, and an Add
-    /// (which normalizes the whole project) would drop one of the project's
-    /// own with an undo that cannot put it back.
-    ///
-    /// Only for edits whose entry captures the whole state (a snapshot pair,
-    /// stored as a compact delta), so the entry records the entry it drops and
-    /// the undo restores it. A typed entry records nothing of `held_gauges`:
-    /// a loop closure that joins two held components is left as the load
-    /// leaves it (see #809).
-    fn normalize_held_gauges_in_open_project(&self) {
-        let mut guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if let Some(project) = guard.as_mut() {
-            project.normalize_held_gauges();
-        }
-    }
-
-    /// True iff the open project currently holds a Critical integrity violation.
-    pub(super) fn project_has_critical(&self) -> bool {
-        self.project
-            .lock()
-            .ok()
-            .and_then(|g| g.as_ref().map(Project::has_critical_integrity_violations))
-            .unwrap_or(false)
-    }
-
-    /// Integrity gate shared by [`Self::execute`] and [`Self::execute_batch`]: if
-    /// the project was clean before (`!pre_had_critical`) but the command made it
-    /// Critical, roll back to `snapshot` and return the standard "blocked"
-    /// failure; otherwise return `None` and let the caller proceed. Corruption
-    /// must be rejected BEFORE any undo entry is pushed, or a later undo+redo
-    /// would reinstate the corrupt state the guard rejected (#1).
-    fn guard_introduced_corruption(
-        &self,
-        pre_had_critical: bool,
-        snapshot: &crate::core::ProjectText,
-        cmd_desc: &str,
-    ) -> Option<CommandResult> {
-        if pre_had_critical || !self.project_has_critical() {
-            return None;
-        }
-        self.rollback_project(snapshot);
-        tracing::error!(
-            command = cmd_desc,
-            purpose = "block corruption at the source",
-            "Rejected command that would corrupt survey structure; rolled back"
-        );
-        Some(CommandResult::failure(
-            "Blocked: this action would corrupt the survey structure \
-             (it leaves dangling references). No changes were made."
-                .to_string(),
-        ))
-    }
-
-    /// Shared structural-edit epilogue for the custom `execute_*` paths that
-    /// bypass [`Self::execute`]'s gated epilogue (TML import).
-    /// Reconciles derived offsets, then reports whether this edit INTRODUCED a
-    /// CRITICAL integrity violation
-    /// (dangling ref / out-of-range index / non-finite geometry). A caller that
-    /// captured a pre-edit snapshot rolls back to it when this returns `true`,
-    /// giving these paths the same "block corruption at the source" guarantee the
-    /// standard command path gets (#integrity Root 4).
-    ///
-    /// `pre_had_critical` is the project's critical state BEFORE the edit. Matching
-    /// `guard_introduced_corruption` / `execute`, an already-critical project (one
-    /// opened with a dangling ref or non-finite shot - permitted; the banner offers
-    /// Repair) does not block an otherwise-clean import: only NEWLY introduced
-    /// corruption rolls back.
-    ///
-    /// No sole-bridge scan runs here. Only an operation that can SEVER
-    /// connectivity can strand a line behind a sole-bridge closure (issue #8),
-    /// and the one remaining caller is a pure-addition path (a fresh import) that
-    /// never creates one - so it would only pay the O(closures × connectivity)
-    /// cost that used to dominate a large import.
-    pub(super) fn finalize_structural_edit(&self, pre_had_critical: bool) -> bool {
-        self.reconcile_geometry();
-        !pre_had_critical && self.project_has_critical()
-    }
-
-    /// Structural-integrity violation messages for the open project, critical
-    /// first. Empty when the project is sound or none is open. Used by the
-    /// load-time "warn and offer repair" surface.
-    pub fn integrity_violation_messages(&self) -> Vec<String> {
-        self.integrity_check().messages
-    }
-
-    /// Full integrity check for the open project: the violation messages
-    /// (critical first; empty = sound) plus whether the project is currently
-    /// save-blocked (has unresolvable cross-references - the exact condition that
-    /// refuses both manual and auto-save). The frontend uses `save_blocked` to keep
-    /// the integrity banner non-dismissable while saving is blocked, so the Repair
-    /// entry point can't be hidden on a project that can't be saved.
-    pub fn integrity_check(&self) -> IntegrityCheckResult {
-        let Some(project) = self.get_project_state() else {
-            return IntegrityCheckResult::default();
-        };
-        // Structural (dangling refs) + geometric (drifted merges + stale,
-        // still-marked-closed loop closures) + topological (a closure that is
-        // really a sole-bridge merge).
-        let mut violations = project.check_structural_integrity();
-        violations.extend(project.check_merge_alignment());
-        violations.extend(project.check_closure_alignment());
-        violations.extend(project.check_orphan_closures());
-        violations.sort_by_key(|v| match v.severity {
-            ViolationSeverity::Critical => 0,
-            ViolationSeverity::Warning => 1,
-        });
-        IntegrityCheckResult {
-            save_blocked: project.has_unresolvable_cross_references(),
-            messages: violations.into_iter().map(|v| v.message).collect(),
-        }
-    }
-
-    /// Repair the open project's integrity: drop dangling refs/orphans, re-mint
-    /// duplicate shot UUIDs, then re-cascade line offsets so drifted merges
-    /// line up again. Returns `{ fixed, remaining }` measured as the change in
-    /// the FULL violation set (the same set the banner counts), so the reported
-    /// numbers match what the user sees. `remaining > 0` means some issues are
-    /// detect-only and need manual attention (a drifted aligned loop closure to
-    /// recompute/remove; non-finite shot geometry to correct).
-    pub fn repair_open_project_integrity(&self) -> IntegrityRepairResult {
-        // Serialize against execute()/undo()/redo() for the WHOLE operation. Repair
-        // captures before_snapshot, mutates, and pushes a snapshot-pair undo across
-        // several independent project locks; without command_lock a concurrent
-        // command could commit a mutation in the window between before_snapshot and
-        // repair's own mutation, so undoing the Repair would restore a stale `before`
-        // and silently drop that command's changes. Deadlock-safe: none of the
-        // helpers repair calls take command_lock (execute holds it while calling the
-        // same capture/snapshot/undo helpers).
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return IntegrityRepairResult {
-                fixed: 0,
-                remaining: 0,
-                changed: false,
-            };
-        };
-        // Read-only edit gate (#191, D-B5): Repair mutates the project, so it is
-        // gated on a read-only remote project. It returns IntegrityRepairResult
-        // (not CommandResult), so it can't carry the EDIT_DISABLED code; instead
-        // return `changed: false` and log - the FE treats changed:false as
-        // "nothing happened" (it dirties only on changed). The coded-failure
-        // surface for repair is #204's; #191 just refuses to mutate. (The
-        // integrity banner stays dismissable for non-blocking corruption - see
-        // OPEN-3/D-B5.)
-        if self.guard_mutation("Repair integrity").is_err() {
-            tracing::info!(
-                purpose = "read-only remote project",
-                "repair_open_project_integrity rejected: edit disabled (no-op)"
-            );
-            return IntegrityRepairResult {
-                fixed: 0,
-                remaining: 0,
-                changed: false,
-            };
-        }
-        // Count over the full violation set before repairing. Locks the project
-        // internally, so it must run with no project guard held.
-        let before = self.integrity_violation_messages().len();
-        // Snapshot the project BEFORE mutating so the repair can be undone: it
-        // drops dangling refs, re-mints duplicate UUIDs and re-cascades offsets,
-        // all reversible by restoring this snapshot. (capture locks the project
-        // internally, so take it with no guard held.)
-        let before_snapshot = self.capture_project_snapshot().ok();
-        let demoted;
-        {
-            let mut guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            let Some(project) = guard.as_mut() else {
-                return IntegrityRepairResult {
-                    fixed: 0,
-                    remaining: 0,
-                    changed: false,
-                };
-            };
-            // Demote any torn merge that bridges two independently datum-placed
-            // groups back to a loop closure, as the open path does (#741 D6):
-            // left a merge, the re-solve below would heal it by moving the
-            // later group off its GPS. FIRST: the demoted closure gives the
-            // later datum back its own piece, which it already placed, so the
-            // layout read below must see it as a placement datum or the settle
-            // would re-place it. Before the conversion too, so that sees the
-            // healed topology; the converter's double-anchor guard leaves the
-            // new closure alone.
-            demoted = project.demote_double_anchoring_merges();
-            // The frame-defining datum station before the repair. Repair never runs
-            // through `execute()`, so it carries its own frame check (#469, item 1).
-            //
-            // No route through today's repair is known to trip it, and that is worth
-            // stating rather than leaving as an unexamined "it might":
-            // `repair_structural_integrity` drops zero datums whose anchor does not
-            // resolve, and a datum that does not resolve is ALREADY not the frame
-            // (`Project::frame_datum_key` takes the first RESOLVABLE one, matching
-            // the wire, which drops dangling datums before the frontend ever sees
-            // them). The check is here because the alternative is asserting that no
-            // future repair step can promote a datum - which is exactly the kind of
-            // claim the derive-don't-hook rule exists to avoid having to make.
-            let datums_before = project.datum_layout();
-            // Drop dangling refs/orphans and re-mint duplicate shot UUIDs.
-            let repaired = project.repair_structural_integrity();
-            // A cross-line repeat is healed by renaming, exactly as a load
-            // does, so ignores stored against the old ids need the same alias
-            // lookup until the next save re-keys them.
-            if repaired
-                .iter()
-                .any(|v| v.category == "duplicate_shot_uuid_across_lines")
-            {
-                self.load_renamed_shots
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
-            }
-            project.convert_orphan_closures_to_merges();
-            // Same order as execute()'s epilogue: renormalise onto the new frame
-            // before the solve that lands on it.
-            project.settle_datum_layout(&datums_before);
-            project.prune_dangling_shot_records();
-            project.normalize_held_gauges();
-            project.resolve_offsets();
-            // Repair does not go through `reconcile_geometry`, so it carries the
-            // closure re-measure itself, last and off the geometry the re-solve
-            // settled on (#469 item 2). Without it Repair would be the one path
-            // that leaves an alignment claim untrue of the state it just built,
-            // and the NEXT command's reconcile would correct it - landing on a
-            // state Repair's own undo snapshot never recorded.
-            project.remeasure_closure_alignment();
-        } // release the guard before re-measuring (integrity_violation_messages re-locks)
-          // Repair mutated measured geometry (and convert_orphan_closures_to_merges
-          // doesn't bump modified_at), so drop any cached closure-adjusted solve.
-        self.invalidate_adjusted_cache();
-        // A repair can re-mint a shot uuid and drop a dangling key: settle the
-        // station identities before the after-snapshot records the repair.
-        self.settle_station_identities();
-        let after = self.integrity_violation_messages().len();
-        // Record an undo entry (before -> after) so the user can revert the repair.
-        // Only when it actually changed the project, so a no-op repair doesn't add
-        // a spurious history entry. Undo restores the pre-repair (corrupt) state -
-        // which the save guard still refuses to persist - and redo re-applies the
-        // fix; both go through the snapshot-pair restore, never re-executing.
-        //
-        // `changed` mirrors that same before != after condition: it is the honest
-        // "the project was mutated" signal the frontend dirties on. It is broader
-        // than `fixed > 0` because resolve_offsets() above heals sub-tolerance drift
-        // that never registered as a counted violation (fixed == 0, yet changed).
-        let mut changed = false;
-        if let Some(before_json) = before_snapshot {
-            if let Ok(after_json) = self.capture_project_snapshot() {
-                if before_json != after_json {
-                    changed = true;
-                    self.push_snapshot_undo(Command::RepairIntegrity, before_json, after_json);
-                    // Dirty-bit flip (#191, D-B16): repair mutated a remote project.
-                    self.mark_remote_forward_edit();
-                }
-            }
-        }
-        IntegrityRepairResult {
-            // Each demoted merge was a counted `merge_misaligned` violation that
-            // the demotion clears; the floor keeps an explicit repair from
-            // reporting "0 fixed" if the rest of the set churns in the same pass.
-            fixed: before.saturating_sub(after).max(demoted) as u32,
-            remaining: after as u32,
-            changed,
-        }
-    }
-
-    /// Execute a command and return the result
-    pub fn execute(&self, cmd: Command) -> CommandResult {
-        // Serialize all command execution to prevent concurrent interleaving
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
-        // Read-only edit gate (#191, D-B6): reject mutations on a remote project
-        // opened read-only, BUT lifecycle commands (Save/Open/Close/Create/
-        // MergeProjects) always pass through (autosave must not be blocked).
-        // `execute_move_comment` is reached via this `execute()` (an early
-        // `return self.execute_move_comment(..)`), so it inherits this guard -
-        // see the chokepoint enumeration test
-        // (`gate_rejects_every_mutation_entrypoint`).
-        if !Self::is_lifecycle_passthrough(&cmd) {
-            // A background lock re-verify (#202) that found the write lock gone
-            // shuts the gate and refuses this edit with the re-verify code, which
-            // routes to the divergence prompt. Ahead of `guard_mutation`, which
-            // would otherwise report the gate it shuts as a plain read-only refusal.
-            if let Err(f) = self.speleodb_collect_reverify() {
-                return f;
-            }
-            if let Err(f) = self.guard_mutation_for(&cmd) {
-                return f;
-            }
-            // Lazy 20-min lock re-verify (#202): on a lock-held remote edit through
-            // this chokepoint, check (at most ~3x/hr) that we still hold the write
-            // lock. The GET runs in the background - this is reached from sync
-            // commands on the main thread - and its verdict is collected above by a
-            // later edit. No-op for local / read-only projects and when recently
-            // verified. Deliberately scoped to the `execute()` path (the direct
-            // mutation entrypoints - undo/redo etc. - do not re-verify; the
-            // release-time fence + a 403 on push are the correctness backstops).
-            self.speleodb_verify_lock_if_expired();
-        }
-        // A reverse of a line that has no shots provably changes nothing (#24):
-        // `Project::reverse_line` returns `true` on `shot_count == 0` without touching a
-        // single field. Returning here - BEFORE the cache invalidation, the undo/redo epilogue
-        // and the dirty flip - is what makes that a true no-op. Previously it fell through,
-        // cleared the whole redo branch and stamped `has_unpushed_edits`, proliferating a
-        // phantom edit to SpeleoDB for an operation with no effect.
-        //
-        // Guarded in the BACKEND rather than trusting the dialog's filter: the batch path, the
-        // raw IPC command and the agent harness all reach this function without passing through
-        // that filter, and shot-less lines are real (a GPX waypoint imports as one).
-        if self.is_provable_reverse_noop(&cmd) {
-            tracing::debug!(
-                command = ?cmd.description(),
-                "Reverse of shot-less line(s) changes nothing; skipping undo, redo-clear and dirty flip"
-            );
-            return CommandResult::success();
-        }
-        // Renaming a station to the name it already has (after trimming, as
-        // the rename stores it) is the same kind of no-op: it succeeds with no
-        // undo entry, no redo-clear and no dirty flip, so the Edit Station
-        // dialog's Save with the name untouched leaves no history behind.
-        if self.is_unchanged_station_name(&cmd) {
-            tracing::debug!(
-                command = ?cmd.description(),
-                "Station already has that name; skipping undo, redo-clear and dirty flip"
-            );
-            return CommandResult::success();
-        }
-        // Any mutation invalidates the derived closure-adjusted view.
-        self.invalidate_adjusted_cache();
-        tracing::info!(
-            command = ?cmd.description(),
-            purpose = "apply user action",
-            "Executing command to update project state"
-        );
-
-        // Generate undo data before executing the command
-        let undo_data = if Self::is_undoable(&cmd) {
-            self.generate_undo_data(&cmd)
-        } else {
-            UndoData::None
-        };
-
-        // The command's integrity capabilities, computed once and read by the
-        // epilogue below (snapshot / orphan-closure conversion / reconcile).
-        let integrity = Self::command_integrity(&cmd);
-
-        // The station that currently defines the georeference frame, read before
-        // dispatch so the epilogue can tell whether this command changed it
-        // (#469, item 1). A walk of `zero_datums` with a `resolve_key` and a
-        // shot walk to the station each. The roles and station positions come
-        // with it, so the epilogue can also tell which datums became placement
-        // datums (#741).
-        let datums_before = self.datum_layout();
-
-        // Snapshot before a ref-removing/renumbering command so a result that
-        // introduces dangling references can be rejected and rolled back -
-        // corruption must not enter through the command path (#17). Only those
-        // commands can dangle a ref, so geometry-only commands (moves, merges,
-        // datums) skip the expensive whole-project serialize (#8).
-        // Batch owns its own snapshot + integrity guard inside execute_batch
-        // (which must reject corruption BEFORE pushing its undo entry, #1), so it
-        // is excluded here to avoid a redundant whole-project serialize and a
-        // double rollback.
-        //
-        // A command whose undo captures a snapshot pair holds that snapshot
-        // already: the project as it is now, which is the rollback point too,
-        // so it is not serialized a second time.
-        let guards_integrity = integrity.can_dangle_refs && !matches!(cmd, Command::Batch { .. });
-        let integrity_snapshot = if guards_integrity && undo_data.captured_before().is_none() {
-            self.capture_project_snapshot().ok()
-        } else {
-            None
-        };
-        let has_rollback_point = integrity_snapshot.is_some()
-            || (guards_integrity && undo_data.captured_before().is_some());
-        // If the project is ALREADY corrupt (loaded that way), don't block - the
-        // user repairs via the banner. We only reject commands that newly
-        // introduce corruption into a clean project.
-        let pre_had_critical = has_rollback_point && self.project_has_critical();
-        // What the epilogue's orphan sweep needs to name the closures it removes
-        // by the stations they had before this command (#738).
-        // A Batch takes its own inside `execute_batch`, where its sweep runs.
-        let closures_before =
-            if integrity.can_orphan_closures && !matches!(cmd, Command::Batch { .. }) {
-                self.closures_before_sweep_in_open_project()
-            } else {
-                None
-            };
-
-        let mut result = match &cmd {
-            Command::CreateProject { name, location } => {
-                self.create_project(name.clone(), location.clone())
-            }
-            Command::OpenProject { path } => self.open_project(path.clone()),
-            Command::SaveProject { path } => self.save_project(path.clone()),
-            Command::CloseProject => self.close_project(),
-            Command::CreateLine {
-                name,
-                surveyor,
-                date,
-                color,
-                direction,
-                shots,
-                cave_section_id,
-            } => self.create_line_command(
-                LineData {
-                    name: name.clone(),
-                    surveyor: surveyor.clone(),
-                    date: *date,
-                    color: color.clone(),
-                    direction: *direction,
-                    quality: 1.0,
-                    shots: shots.clone(),
-                },
-                *cave_section_id,
-            ),
-            Command::DeleteLine { line_id } => self.delete_line(*line_id),
-            Command::UpdateLineMetadata { line_id, updates } => self
-                .refuse_line_rename(&cmd)
-                .unwrap_or_else(|| self.update_line(*line_id, updates.clone())),
-            Command::ReverseLine {
-                line_id,
-                swap_left_right,
-            } => self.reverse_line(*line_id, *swap_left_right),
-            Command::CreateShot {
-                line_id,
-                shot,
-                after_shot_id,
-                before_shot_id,
-            } => self.create_shot(*line_id, shot.clone(), *after_shot_id, *before_shot_id),
-            Command::UpdateShot {
-                line_id,
-                shot_id,
-                updates,
-            } => self.update_shot(*line_id, *shot_id, updates.clone()),
-            Command::DeleteShot { line_id, shot_id } => self.delete_shot(*line_id, *shot_id),
-            Command::SetShotKind {
-                line_id,
-                shot_id,
-                kind,
-            } => self.set_shot_kind(*line_id, *shot_id, *kind),
-            Command::EditShotCredit { targets, edit } => self.edit_shot_credit(targets, edit),
-            Command::MergeStations {
-                station_a,
-                station_b,
-            } => self.merge_stations(*station_a, *station_b),
-            Command::UnmergeStations { station_ref } => self.unmerge_stations(*station_ref),
-            Command::UnmergeStationPair {
-                station_a,
-                station_b,
-            } => self.unmerge_station_pair(*station_a, *station_b),
-            Command::CreateLoopClosure {
-                station_a,
-                station_b,
-                closure_strategy,
-            } => self.create_loop_closure(*station_a, *station_b, *closure_strategy),
-            Command::RemoveLoopClosure { closure_id } => self.remove_loop_closure(*closure_id),
-            Command::SetZeroDatum {
-                station_ref,
-                coordinates,
-                accuracy_m,
-                entrance,
-            } => self.set_zero_datum(*station_ref, *coordinates, *accuracy_m, *entrance),
-            Command::RemoveZeroDatum { station_ref } => self.remove_zero_datum(*station_ref),
-            Command::SetStationComment {
-                station_ref,
-                comment,
-            } => self.set_station_comment(*station_ref, comment.clone()),
-            Command::SetStationName { station_ref, name } => {
-                self.set_station_name(*station_ref, name)
-            }
-            Command::MoveLine { line_id, offset } => self.move_line(*line_id, *offset),
-            Command::MoveSegment { line_id, offset } => self.move_segment(*line_id, *offset),
-            Command::MoveStation {
-                station_ref,
-                offset,
-            } => self.move_station(*station_ref, *offset),
-            Command::MoveComment {
-                source,
-                target,
-                swap,
-            } => return self.execute_move_comment(source.clone(), target.clone(), *swap, cmd),
-            Command::Batch { commands, label } => {
-                self.execute_batch(commands.clone(), label.clone(), true)
-            }
-            Command::MergeProjects {
-                source_paths,
-                output_path,
-                output_name,
-                archive_originals,
-            } => self.merge_projects(
-                source_paths.clone(),
-                output_path.clone(),
-                output_name.clone(),
-                *archive_originals,
-            ),
-            // Never routed here: repair is applied via `repair_project_integrity`,
-            // which records its own snapshot-pair undo entry. Present only for match
-            // exhaustiveness.
-            Command::UntrackImport {
-                file_hashes,
-                line_hashes,
-            } => self.untrack_import(file_hashes, line_hashes),
-            Command::CreateCaveSection {
-                name,
-                color,
-                line_ids,
-            } => self.create_cave_section(name, color, line_ids),
-            Command::UpdateCaveSection {
-                section_id,
-                name,
-                color,
-            } => self.update_cave_section(*section_id, name.as_deref(), color.as_deref()),
-            Command::DeleteCaveSection { section_id } => self.delete_cave_section(*section_id),
-            Command::MoveLinesToCaveSection {
-                line_ids,
-                section_id,
-            } => self.move_lines_to_cave_section(line_ids, *section_id),
-            Command::ApplyCaveSectionColor { section_id } => {
-                self.apply_cave_section_color(*section_id)
-            }
-            Command::AddProjectFile { path, .. } => {
-                self.add_project_file(path, Self::add_slot_generation(&undo_data))
-            }
-            Command::RepairIntegrity => CommandResult::failure(
-                "RepairIntegrity is applied via repair_project_integrity, not execute()"
-                    .to_string(),
-            ),
-            Command::UpdateProjectSettings => CommandResult::failure(
-                "UpdateProjectSettings is applied via update_project_settings, not execute()"
-                    .to_string(),
-            ),
-            Command::SetSurfaceElevation => CommandResult::failure(
-                "SetSurfaceElevation is applied via set_surface_elevation, not execute()"
-                    .to_string(),
-            ),
-        };
-
-        // Block corruption at the source: if a structural command left the
-        // project with dangling references, roll back to the pre-command
-        // snapshot and reject it rather than committing (and later persisting)
-        // a corrupt state (#17).
-        if result.success && !pre_had_critical && has_rollback_point {
-            let snapshot = integrity_snapshot
-                .as_ref()
-                .or_else(|| undo_data.captured_before());
-            if let Some(snapshot) = snapshot {
-                if let Some(failure) =
-                    self.guard_introduced_corruption(pre_had_critical, snapshot, &cmd.description())
-                {
-                    return failure;
-                }
-            }
-        }
-
-        // A command that REMOVES connectivity (delete shot/line, unmerge) can
-        // strand a line so its only attachment is a loop closure - which is
-        // then a merge, not a loop. Convert before reconciling offsets so the new
-        // merge is solved immediately (#8). Scoped to removal commands so a move
-        // still leaves an inert closure independent.
-        if result.success && integrity.can_orphan_closures {
-            let swept = self.convert_orphan_closures_in_open_project(
-                closures_before.as_ref(),
-                OnePointCause::of(&cmd),
-            );
-            result.warnings.extend(swept);
-        }
-
-        // Local (0, 0) MEANS `zero_datums[0]`'s GPS, so a command that promoted a
-        // different datum to first just re-defined what every stored coordinate
-        // means. Translate the survey onto the new origin before the reconcile, so
-        // the geometry the reconcile solves - and the after-half of any snapshot
-        // pair - is the renormalised one (#469, item 1). Gated on
-        // `affects_geometry` exactly as the reconcile below is: that classification
-        // is what excludes the lifecycle commands, and OpenProject in particular,
-        // where "the frame station changed" means a DIFFERENT PROJECT is open and
-        // renormalising would translate a file the user just loaded. The same
-        // call first places any piece whose GPS fix this command promoted to
-        // placement (#741). A batch settles inside `execute_batch`, so that its
-        // snapshot pair holds the result; settling twice is not idempotent.
-        if result.success && cmd.affects_geometry() && !matches!(cmd, Command::Batch { .. }) {
-            self.settle_datum_layout(&datums_before);
-            if undo_data.captured_before().is_some() {
-                self.normalize_held_gauges_in_open_project();
-            }
-        }
-
-        // Treat line offsets as derived: after any structural command,
-        // reconcile geometry so no command path can leave merged stations
-        // drifted (a no-op when nothing moved; skipped during bulk import). A
-        // metadata-only UpdateShot (comment/LRUD/reference) is excluded - see
-        // `Command::affects_geometry` - so it can't silently heal drift with no undo.
-        if result.success && cmd.affects_geometry() {
-            self.reconcile_geometry();
-        }
-
-        // Every station a command created gets its Station ID (and, when the
-        // command did not name it, its name) here, BEFORE the undo entry below
-        // is finalized, so the entry records the state with the ids in it.
-        // Lifecycle commands load or create a project that the load path has
-        // already settled; a Batch settles once, inside `execute_batch`, before
-        // its after-snapshot; a command that cannot change station identity
-        // (`Command::can_change_station_identity`) leaves a settled project
-        // settled, so it skips the whole-project pass.
-        if result.success
-            && !Self::is_lifecycle_passthrough(&cmd)
-            && !matches!(cmd, Command::Batch { .. })
-            && cmd.can_change_station_identity()
-        {
-            self.settle_station_identities();
-        }
-
-        // An add finalizes and pushes under ONE `project` guard, bound to the
-        // slot generation its stub was captured against (#674): a project
-        // committed into the slot since must neither be recorded as the add's
-        // content nor receive its undo entry.
-        if result.success && matches!(cmd, Command::AddProjectFile { .. }) {
-            if let Some(failure) = self.push_add_undo(&cmd, undo_data) {
-                return failure;
-            }
-            self.mark_remote_forward_edit();
-        } else if result.success && Self::is_undoable(&cmd) && !matches!(cmd, Command::Batch { .. })
-        {
-            // Push to undo stack if successful and undoable.
-            // Batch commands handle their own undo push inside execute_batch()
-            // (with before+after snapshots), so skip them here.
-            // For create commands, finalize undo data with snapshot-based ID preservation
-            let mut final_undo_data = self.finalize_undo_data(&cmd, undo_data);
-            if let Ok(guard) = self.project.lock() {
-                if let Some(project) = guard.as_ref() {
-                    final_undo_data.keep_changed_offsets(&project.line_offsets);
-                }
-            }
-
-            // An entry `undo()` cannot apply must never enter the stack: `undo()`
-            // pops it, maps `UndoData::None` to a failure, and its epilogue pushes
-            // the entry straight BACK - so that pop is unproductive forever and
-            // every older entry underneath it is permanently unreachable. The
-            // stack is persisted, so the wedge survives close/reopen (stacks
-            // written before this guard are healed at load - see
-            // `UndoStack::is_applicable`). Reachable today by reversing a shot-less
-            // line (a GPX waypoint line, and the context menu offers Reverse
-            // with no shot-count guard): the command succeeds as a no-op while
-            // `generate_undo_data` returns `None`. Guarded here rather than per
-            // command so any future command with the same shape is covered.
-            //
-            // The redo stack is cleared REGARDLESS. `None` here does NOT imply the
-            // command changed nothing: `UnmergeStations` on a station that is in no
-            // merge returns `CommandResult::success()` unconditionally
-            // (`command_station.rs`) while `generate_undo_data` yields `None`, and
-            // it is classified as affecting geometry - so the epilogue above has
-            // already reconciled derived state. What the entry loses is the ability
-            // to be undone, not the fact that a forward command ran; the redo branch
-            // replays onto a state the project has left either way. (Accepted cost:
-            // a provably-no-op forward command, such as reversing a shot-less
-            // line, also drops the redo branch. "A successful forward command
-            // invalidates redo" outranks preserving redo across a no-op.)
-            // A snapshot pair becomes its compact delta here, outside the
-            // stack's lock: the conversion diffs two whole projects.
-            let final_undo_data = final_undo_data.compact(&cmd);
-            if let Ok(mut undo_stack) = self.undo_stack.lock() {
-                if matches!(final_undo_data, UndoData::None) {
-                    tracing::debug!(
-                        command = ?cmd.description(),
-                        "Command produced no undo data; not pushing an unundoable entry, clearing redo"
-                    );
-                    undo_stack.clear_redo();
-                } else {
-                    undo_stack.push_with_data(cmd.clone(), final_undo_data);
-                }
-            }
-            // Dirty-bit flip (#191, D-B16): a successful, undo-pushed edit of a
-            // remote project marks it has_unpushed_edits. Set-only; no-op for
-            // local-only (load_speleo_link → None). Lifecycle pass-throughs
-            // (notably autosave/SaveProject) must NOT mark dirty. Batch pushes its
-            // own undo inside execute_batch and flips there.
-            if !Self::is_lifecycle_passthrough(&cmd) {
-                self.mark_remote_forward_edit();
-            }
-        }
-
-        if result.success {
-            result = self.settle_reversed_lines(&cmd, result);
-        }
-
-        result
-    }
-
-    /// Finish a successful operation that REVERSED some lines' station numbering
-    /// (a forward `ReverseLine`, a batch of them, or an undo/redo of either - all
-    /// re-reverse the numbering).
-    ///
-    /// The warning re-pin is driven off the PARITY-REDUCED list
-    /// `Command::reversed_line_ids` returns, and each named line is fixed up exactly
-    /// once; it rebuilds its map from the CURRENT project, so what makes undo/redo safe is the
-    /// intervening re-reverse, not any self-inverse property of the call.
-    ///
-    /// `resolved_warnings` rows still keyed by position are out of reach of
-    /// `reverse_line`'s own cross-reference rewrite (which walks `for_each_station_ref`:
-    /// merges, closures, zero datums, station offsets, station comments), because the reverse
-    /// detached their `shot_id` from its record.
-    ///
-    /// The sibling `.plnx` needs nothing here (#24). Its plans identify a station by the shots
-    /// it sits BETWEEN, and a reverse does not change what a station sits between - so there is
-    /// no re-pointing to do, and no window in which the two files could disagree.
-    ///
-    /// It also reports the lines on the result, each with the shot count now in
-    /// force. A reverse keeps every station's world position, so there is nothing
-    /// in the geometry for a consumer to diff: without this signal the frontend had
-    /// to INFER a reverse from station positions, which cannot tell a reversed
-    /// line from one that was reversed and moved in the same action.
-    ///
-    /// A named line that is gone or has no shots is DROPPED from the report:
-    /// `Project::reverse_line` returns early on a shot-less line, so nothing
-    /// was renumbered and there is no divisor for the frontend's mirror.
-    pub(super) fn settle_reversed_lines(
-        &self,
-        cmd: &Command,
-        result: CommandResult,
-    ) -> CommandResult {
-        let reversed = cmd.reversed_line_ids();
-        if reversed.is_empty() {
-            return result;
-        }
-        self.pin_position_keyed_warnings_after_reverse(&reversed);
-        // One project lock for the whole list; both fix-ups above take (and
-        // release) it themselves, and the mutex is not reentrant.
-        let entries: Vec<ReversedLine> = {
-            let guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            let Some(project) = guard.as_ref() else {
-                return result;
-            };
-            reversed
-                .iter()
-                .filter_map(|line_id| {
-                    let shot_count = project.get_line(*line_id)?.shots.len() as u32;
-                    (shot_count > 0).then_some(ReversedLine {
-                        line_id: *line_id,
-                        shot_count,
-                    })
-                })
-                .collect()
-        };
-        if entries.is_empty() {
-            return result;
-        }
-        result.with_reversed_lines(entries)
-    }
-
-    // === Shot operations ===
-
-    // === Station operations ===
-
-    /// Check if a command is allowed in a batch (whitelist for IPC safety).
-    ///
-    /// `UpdateShot` is permitted so the data-table grid can commit a multi-cell
-    /// edit (paste/fill) as a single undo unit: it keeps refs + connectivity
-    /// intact, self-validates length/finiteness/frozen-geometry, and a geometry
-    /// edit has the moved stations baked in by the batch epilogue's
-    /// `reconcile_geometry()` - which the epilogue runs only when the batch
-    /// actually touches geometry (see `Command::affects_geometry`), so a metadata-only
-    /// UpdateShot batch (comment/LRUD/reference) commits WITHOUT reconciling.
-    /// `SetStationComment` is still NOT allowed: as a whole it is INERT metadata
-    /// (see `command_integrity_profiles_are_stable`), so it would never carry the
-    /// geometry that justifies a batch; comment edits stay one-command-per-undo.
-    ///
-    /// `DeleteLine` is permitted so an abandoned import can be withdrawn as ONE
-    /// user action (#394): the DMP wizard imports eagerly (the zero-datum anchor on
-    /// mount, then each reachable segment), so "Cancel, remove what was imported"
-    /// names N lines that must come back together on a single undo, and N
-    /// separate commands would leave N undo entries and N chances to stop half way.
-    /// It does NOT weaken the parity reduction in `Command::reversed_line_ids`:
-    /// deleting a whole line cannot change a SURVIVING line's shot count
-    /// (`cleanup_line_references` touches merges/closures/offsets/comments/
-    /// datums, never shots), and a batch that reverses a line it also deleted
-    /// fails on the second command ("Line N not found") and rolls back whole.
     pub(super) fn is_batch_allowed(cmd: &Command) -> bool {
         // The allowlist also prevents a path-bearing lifecycle command from being
         // nested inside an otherwise undoable Batch and uploaded in Full mode.
@@ -1281,478 +271,170 @@ impl AppState {
         )
     }
 
-    /// Execute a batch of commands atomically.
-    /// When `push_undo` is true (called from `execute()`), pushes a ProjectSnapshotPair
-    /// undo entry. When false (called from `execute_without_undo()`), no undo entry is pushed.
-    /// Caller must already hold `command_lock`.
-    pub(super) fn execute_batch(
-        &self,
-        commands: Vec<Command>,
-        label: Option<String>,
-        push_undo: bool,
-    ) -> CommandResult {
-        // No-op for empty batch: skip snapshot/undo overhead
-        if commands.is_empty() {
-            return CommandResult::success();
+    /// The read-only refusal of a file this build cannot rewrite (plan 6.4).
+    pub(super) fn guard_file_writable(&self) -> Result<(), CommandResult> {
+        let read_only = self.with_file(|file| file.extras.read_only.is_some());
+        if read_only {
+            return Err(CommandResult::failure(format!(
+                "{}: this project was made with a newer Stalagmight and is open read-only",
+                super::open_file::READ_ONLY_FILE_CODE
+            )));
         }
+        Ok(())
+    }
 
-        // Whitelist: reject commands not allowed in batch context
-        for cmd in &commands {
-            if !Self::is_batch_allowed(cmd) {
+    /// The pipeline's steps 2-7 (module docs) for one recorded edit. The
+    /// caller holds `command_lock` and has passed the edit-session gate.
+    /// `record` words the entry on the project before the edit; `mutate`
+    /// changes it (any partial change is rolled back on `Err`) and may add
+    /// to the record (preview rows, a refined label) from what it did.
+    pub(crate) fn run_recorded<T>(
+        &self,
+        record: impl FnOnce(&Project) -> Record,
+        mutate: impl FnOnce(&mut Project, &mut Record) -> Result<T, String>,
+    ) -> Result<T, CommandResult> {
+        self.run_recorded_from(record, |project, record, _before| mutate(project, record))
+    }
+
+    /// [`Self::run_recorded`] whose mutation also reads the project as it
+    /// was before the edit (the pipeline's own snapshot), for a recipe that
+    /// words its result from both states and would otherwise clone the
+    /// survey a second time (Combine Lines, C4).
+    pub(crate) fn run_recorded_from<T>(
+        &self,
+        record: impl FnOnce(&Project) -> Record,
+        mutate: impl FnOnce(&mut Project, &mut Record, &Project) -> Result<T, String>,
+    ) -> Result<T, CommandResult> {
+        self.guard_file_writable()?;
+        let mut guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(project) = guard.as_mut() else {
+            return Err(CommandResult::failure("No project open".to_string()));
+        };
+        let mut record = record(project);
+        let before = project.clone();
+        let value = match mutate(project, &mut record, &before) {
+            Ok(value) => value,
+            Err(message) => {
+                *project = before;
+                return Err(CommandResult::failure(message));
+            }
+        };
+        let violations = project.validate();
+        if let Some(first) = violations.first() {
+            tracing::error!(
+                count = violations.len(),
+                first = %first,
+                kind = %record.kind,
+                "an edit would have left the survey invalid; rolled back"
+            );
+            let message = format!("The edit would leave the survey invalid: {first}");
+            *project = before;
+            return Err(CommandResult::failure(message));
+        }
+        let changes = capture(&before, project);
+        if changes.is_empty() {
+            return Ok(value);
+        }
+        project.touch();
+        self.bump_revision();
+        let entry = HistoryEntry {
+            timestamp: chrono::Utc::now(),
+            kind: record.kind,
+            label: record.label,
+            label_parts: record.label_parts,
+            refs: record.refs,
+            preview: record.preview,
+            changes,
+        };
+        self.with_file(|file| file.dirty = true);
+        let pushed = self
+            .undo_stack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .record(entry);
+        if let Err(e) = pushed {
+            // The edit stands; only its history entry could not be encoded
+            // (a model bug: validate refuses non-finite numbers). Undo must
+            // not step over a missing entry, so the stacks are cleared.
+            tracing::error!(error = ?e, "the undo entry of an edit could not be encoded; history cleared");
+            self.undo_stack
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clear();
+        }
+        drop(guard);
+        self.mark_remote_forward_edit();
+        Ok(value)
+    }
+
+    /// Execute a command and return the result.
+    pub fn execute(&self, cmd: Command) -> CommandResult {
+        let Ok(_cmd_guard) = self.command_lock.lock() else {
+            return CommandResult::failure("Failed to acquire command lock".to_string());
+        };
+        match &cmd {
+            Command::CreateProject { name, location } => {
+                return self.create_project(name.clone(), location.clone());
+            }
+            Command::OpenProject { path } => return self.open_project(path.clone()),
+            Command::SaveProject { path } => return self.save_project(path.clone()),
+            Command::CloseProject => return self.close_project(),
+            Command::MergeProjects { .. } => return self.execute_merge_projects(&cmd),
+            Command::RepairIntegrity
+            | Command::UpdateProjectSettings
+            | Command::SetSurfaceElevation => {
                 return CommandResult::failure(format!(
-                    "Command '{}' is not allowed in batch context",
-                    self.command_label(cmd)
+                    "{} has its own entry point",
+                    crate::core::command_kind(&cmd)
                 ));
             }
+            _ => {}
         }
-
-        // Whether the project was ALREADY corrupt before the batch (loaded that
-        // way) - captured against the pre-batch state so the guard below only
-        // rejects corruption the batch itself introduces.
-        let pre_had_critical = self.project_has_critical();
-
-        // The frame-defining datum station before the batch (#469, item 1). Read
-        // here rather than left to the outer `execute()` epilogue for the same
-        // reason the conversion below is: the after-snapshot is taken inside this
-        // function, so a renormalisation applied afterwards would sit OUTSIDE the
-        // pair and undo->redo would land on the pre-renormalisation geometry.
-        //
-        // A batch CAN change the frame, in one shape: `is_batch_allowed` admits
-        // `SetZeroDatum`, and the batch whose first sub-command adds the survey's
-        // first datum goes `None -> Some`. `Project::set_zero_datum` re-frames the
-        // survey inline for that one, so what is left for this bookend is any
-        // FUTURE shape - a promotion by some later member of an allowlist that is
-        // the kind of thing that grows. This is the only placement that stays
-        // correct when it does.
-        let datums_before = self.datum_layout();
-        // What the sweep below needs to name the closures it removes (#738); a
-        // batched merge of two placed pieces can make a closure's ends one
-        // point (#741), e.g. the Merge dialog's snap-to-merge batch.
-        let closures_before = commands
-            .iter()
-            .any(|c| Self::command_integrity(c).can_orphan_closures)
-            .then(|| self.closures_before_sweep_in_open_project())
-            .flatten();
-        let batch_cause = if commands
-            .iter()
-            .any(|c| OnePointCause::of(c) == OnePointCause::Merge)
-        {
-            OnePointCause::Merge
-        } else {
-            OnePointCause::Promotion
-        };
-
-        // Capture pre-batch snapshot for rollback on partial failure and undo
-        let before_snapshot = match self.capture_project_snapshot() {
-            Ok(s) => s,
-            Err(result) => return result,
-        };
-        // The history label, from the names the project holds before the
-        // batch runs (a deleted line is gone after it). One the caller
-        // worded already is kept.
-        let label = if push_undo {
-            label.or_else(|| self.batch_summary(&commands))
-        } else {
-            None
-        };
-
-        let mut all_warnings = Vec::new();
-        let mut line_ids = Vec::new();
-
-        for cmd in &commands {
-            // Use execute_without_undo to avoid pushing individual undo entries;
-            // the outer Batch command handles undo as a single unit via ProjectSnapshotPair.
-            // A rename in a batch (Edit Line's Save) is a forward user edit,
-            // checked like a single one.
-            let result = self
-                .refuse_line_rename(cmd)
-                .unwrap_or_else(|| self.execute_without_undo(cmd.clone()));
-            if !result.success {
-                // Rollback: restore pre-batch state to avoid partial mutations
-                self.rollback_project(&before_snapshot);
-                return result;
-            }
-            all_warnings.extend(result.warnings);
-            // Collect line IDs from CreateLine commands
-            if let Some(id) = result.line_id {
-                line_ids.push(id);
-            }
-            line_ids.extend(result.line_ids);
+        // A background lock re-verify (#202) that found the write lock gone
+        // shuts the gate and refuses this edit with the re-verify code.
+        if let Err(f) = self.speleodb_collect_reverify() {
+            return f;
         }
-
-        // Block corruption at the source - BEFORE pushing the undo entry. The
-        // sub-commands ran via execute_without_undo (no per-command guard), so a
-        // batch can strand a dangling reference; if we pushed the snapshot pair
-        // first (as before) a later undo+redo would reinstate the corrupt state.
-        // #1
-        if let Some(failure) =
-            self.guard_introduced_corruption(pre_had_critical, &before_snapshot, "Batch")
-        {
-            return failure;
+        if let Err(f) = self.guard_mutation_for(&cmd) {
+            return f;
         }
-
-        // Finalize structural side-effects BEFORE snapshotting for redo, mirroring
-        // the per-command epilogue in execute(). A batch that strands a sole-bridge
-        // closure must have the closure→merge conversion baked into the after-
-        // snapshot; otherwise undo→redo restores the pre-conversion topology - redo
-        // only reconciles geometry, it does NOT re-run the conversion - and the
-        // merge is silently lost. The conversion stays unconditional: a batched
-        // CreateLoopClosure can itself create the sole-bridge closure that needs it.
-        //
-        // The reconcile, however, is gated exactly as execute() gates its own (see
-        // Command::affects_geometry): a batch that touches no geometry (a multi-cell
-        // paste/fill of comments / LRUD / reference flags - all metadata-only
-        // UpdateShots) must NOT reconcile, or it would heal an already-drifted
-        // project as a side effect of a metadata edit whose undo only restores the
-        // metadata (the asymmetric-undo hazard that keeps SetStationComment out of
-        // batches entirely). The outer execute() epilogue applies the same gate to
-        // the Batch command, so the two passes agree.
-        all_warnings.extend(
-            self.convert_orphan_closures_in_open_project(closures_before.as_ref(), batch_cause),
-        );
-        if commands.iter().any(Command::affects_geometry) {
-            // Same order as `execute()`'s epilogue: renormalise onto the new frame
-            // first, then reconcile the geometry that lands on it (#469, item 1).
-            self.settle_datum_layout(&datums_before);
-            self.normalize_held_gauges_in_open_project();
-            self.reconcile_geometry();
+        self.speleodb_verify_lock_if_expired();
+        // Reads its source file before it takes the project lock, so it is a
+        // recipe (`project_add.rs`) rather than a family `apply`.
+        if matches!(cmd, Command::AddProjectFile { .. }) {
+            return self.execute_add_project_file(&cmd);
         }
-
-        if push_undo {
-            // Capture after-snapshot for redo support; failure means rollback.
-            // The batch's one station-identity settle runs inside it, skipped
-            // when no member can change station identity (a paste of comments
-            // or LRUD).
-            let settle = commands.iter().any(Command::can_change_station_identity);
-            let after_snapshot = match self.capture_after_snapshot_settled(&before_snapshot, settle)
-            {
-                Ok(s) => s,
-                Err(result) => return result,
-            };
-
-            // Push undo entry directly (bypasses finalize_undo_data which is a no-op for Batch)
-            self.push_snapshot_undo(
-                Command::Batch { commands, label },
-                before_snapshot,
-                after_snapshot,
-            );
-            // Dirty-bit flip (#191, D-B16): a batch is always a set of mutations
-            // (never a lifecycle command), so mark the remote project dirty after
-            // its undo entry is pushed. Set-only; no-op for local-only.
-            self.mark_remote_forward_edit();
+        tracing::info!(
+            command = crate::core::command_kind(&cmd),
+            purpose = "apply user action",
+            "Executing command to update project state"
+        );
+        match self.run_recorded(|p| Record::of(p, &cmd), |p, r| apply_command(p, r, &cmd)) {
+            Ok(applied) => applied.into_result(),
+            Err(failure) => failure,
         }
-
-        let result = if line_ids.is_empty() {
-            CommandResult::success()
-        } else {
-            CommandResult::success().with_line_ids(line_ids)
-        };
-        if all_warnings.is_empty() {
-            result
-        } else {
-            result.with_warnings(all_warnings)
-        }
-    }
-
-    // === Station query operations ===
-
-    // === Project merge operations ===
-
-    // === Query operations ===
-}
-
-#[cfg(test)]
-mod integrity_capability_tests {
-    use super::*;
-    use crate::models::{Coordinates, ShotData, ShotKind, StationRef};
-
-    /// Locks the integrity-capability table (one command per profile). The
-    /// exhaustive match in `command_integrity` makes a new variant a *compile*
-    /// error; this guards against an existing variant being moved to the wrong
-    /// profile - especially the REMOVES group, where dropping `can_dangle_refs`
-    /// would skip the rollback snapshot and let corruption be committed.
-    #[test]
-    fn command_integrity_profiles_are_stable() {
-        let caps = |cmd: &Command| {
-            let i = AppState::command_integrity(cmd);
-            (
-                cmd.affects_geometry(),
-                i.can_dangle_refs,
-                i.can_orphan_closures,
-            )
-        };
-
-        // INERT (no geometry, no refs).
-        assert_eq!(caps(&Command::CloseProject), (false, false, false));
-        assert_eq!(
-            caps(&Command::SaveProject { path: None }),
-            (false, false, false)
-        );
-        // RepairIntegrity never runs through execute(); it is classified INERT.
-        assert_eq!(caps(&Command::RepairIntegrity), (false, false, false));
-        // Comment edits are metadata-only - INERT, so a comment edit can't run the
-        // reconcile epilogue (which would heal a drifted project with no undo).
-        assert_eq!(
-            caps(&Command::SetStationComment {
-                station_ref: StationRef::new(1, 0),
-                comment: None
-            }),
-            (false, false, false)
-        );
-        assert_eq!(
-            caps(&Command::MoveComment {
-                source: CommentHolder::Station {
-                    station_ref: StationRef::new(1, 0)
-                },
-                target: CommentHolder::Station {
-                    station_ref: StationRef::new(1, 1)
-                },
-                swap: false,
-            }),
-            (false, false, false)
-        );
-
-        // REMOVES (can dangle refs AND orphan a closure → needs rollback snapshot
-        // + reconcile + orphan-closure conversion).
-        assert_eq!(
-            caps(&Command::DeleteLine { line_id: 1 }),
-            (true, true, true)
-        );
-        // A batch is the UNION of what it contains, not a blanket REMOVES.
-        // Empty batches never reach execute() (it early-returns), so INERT here
-        // is just the identity of the fold.
-        assert_eq!(
-            caps(&Command::Batch {
-                commands: vec![],
-                label: None,
-            }),
-            (false, false, false)
-        );
-        // Metadata-only bulk edit - the data table's fill-drag / paste over the
-        // Jump-Reference column. Must NOT run the reconcile epilogue.
-        assert_eq!(
-            caps(&Command::Batch {
-                commands: vec![Command::UpdateShot {
-                    line_id: 1,
-                    shot_id: 1,
-                    updates: ShotUpdates {
-                        kind: Some(ShotKind::Jump),
-                        ..Default::default()
-                    },
-                }],
-                label: None,
-            }),
-            (false, false, false)
-        );
-        // One geometry-touching member is enough to grade the whole batch.
-        assert_eq!(
-            caps(&Command::Batch {
-                commands: vec![
-                    Command::UpdateShot {
-                        line_id: 1,
-                        shot_id: 1,
-                        updates: ShotUpdates {
-                            kind: Some(ShotKind::Jump),
-                            ..Default::default()
-                        },
-                    },
-                    Command::UpdateShot {
-                        line_id: 1,
-                        shot_id: 2,
-                        updates: ShotUpdates {
-                            length: Some(5.0),
-                            ..Default::default()
-                        },
-                    },
-                ],
-                label: None,
-            }),
-            (true, false, false)
-        );
-
-        // An UpdateShot is graded by what it actually changes.
-        assert_eq!(
-            caps(&Command::UpdateShot {
-                line_id: 1,
-                shot_id: 1,
-                updates: ShotUpdates {
-                    kind: Some(ShotKind::Reference),
-                    ..Default::default()
-                },
-            }),
-            (false, false, false),
-            "a kind-only edit is metadata, like a comment edit"
-        );
-        assert_eq!(
-            caps(&Command::UpdateShot {
-                line_id: 1,
-                shot_id: 1,
-                updates: ShotUpdates {
-                    length: Some(5.0),
-                    ..Default::default()
-                },
-            }),
-            (true, false, false),
-            "a length edit still moves stations"
-        );
-
-        // CREATE_SHOT (renumbers stations → can dangle, but cannot orphan).
-        assert_eq!(
-            caps(&Command::CreateShot {
-                line_id: 1,
-                shot: ShotData::default(),
-                after_shot_id: None,
-                before_shot_id: None,
-            }),
-            (true, true, false)
-        );
-
-        // UNMERGE (removes connectivity → can orphan, but adds no dangling ref).
-        assert_eq!(
-            caps(&Command::UnmergeStations {
-                station_ref: StationRef::new(1, 0)
-            }),
-            (true, false, true)
-        );
-
-        // GEOMETRY_ONLY (shifts offsets only).
-        assert_eq!(
-            caps(&Command::MoveLine {
-                line_id: 1,
-                offset: Coordinates::new(1.0, 2.0, 0.0),
-            }),
-            (true, false, false)
-        );
-        // UpdateShot shifts geometry (a measurement edit moves stations) but keeps
-        // refs valid and connectivity intact - it must reconcile, not be inert.
-        // The update has to actually carry a measurement: an all-`None`
-        // `ShotUpdates::default()` changes nothing and is graded INERT (above),
-        // so using it here asserted the profile of a no-op, not of an edit.
-        assert_eq!(
-            caps(&Command::UpdateShot {
-                line_id: 1,
-                shot_id: 0,
-                updates: ShotUpdates {
-                    azimuth_in: Some(90.0),
-                    ..Default::default()
-                },
-            }),
-            (true, false, false)
-        );
-    }
-
-    /// The data-table grid commits multi-cell edits (paste/fill) as one batch →
-    /// one undo. `UpdateShot` must be batch-allowed (the batch epilogue reconciles
-    /// only when an edit in the batch actually touches geometry); `SetStationComment`
-    /// must NOT be (INERT metadata - it could never carry the geometry that
-    /// justifies a batch, and batching it once ran the reconcile epilogue and could
-    /// heal drift silently).
-    #[test]
-    fn update_shot_is_batch_allowed_but_station_comment_is_not() {
-        assert!(AppState::is_batch_allowed(&Command::UpdateShot {
-            line_id: 1,
-            shot_id: 0,
-            updates: ShotUpdates::default(),
-        }));
-        assert!(!AppState::is_batch_allowed(&Command::SetStationComment {
-            station_ref: StationRef::new(1, 0),
-            comment: None,
-        }));
     }
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
-mod update_shot_clear_undo_tests {
-    use super::*;
-
-    fn shot_data(left: Option<f64>) -> ShotData {
-        ShotData {
-            azimuth_in: 10.0,
-            azimuth_out: 10.0,
-            length: 5.0,
-            depth_in: 0.0,
-            depth_out: 1.0,
-            left,
-            ..Default::default()
-        }
-    }
-
-    fn state_with_one_shot(left: Option<f64>) -> (AppState, LineId, ShotId) {
-        let state = AppState::new().unwrap();
-        state.execute(Command::CreateProject {
-            name: "Clear".to_string(),
-            location: None,
-        });
-        let line_id = state
-            .execute(Command::CreateLine {
-                name: None,
-                surveyor: None,
-                date: None,
-                color: "#ff0000".to_string(),
-                direction: None,
-                shots: vec![shot_data(left)],
-                cave_section_id: None,
-            })
-            .line_id
-            .unwrap();
-        let shot_id = state.get_project_state().unwrap().lines[0].shots[0].id;
-        (state, line_id, shot_id)
-    }
-
-    /// A grid cell clear arrives as JSON `null` (deserialized to `Some(None)`,
-    /// see `double_option`); the command must apply it and undo must restore
-    /// the cleared value through the serialized `values_json` round-trip.
-    #[test]
-    fn update_shot_null_clears_field_and_undo_restores_it() {
-        let (state, line_id, shot_id) = state_with_one_shot(Some(0.5));
-
-        let updates: ShotUpdates =
-            serde_json::from_value(serde_json::json!({ "left": null })).unwrap();
-        let result = state.execute(Command::UpdateShot {
-            line_id,
-            shot_id,
-            updates,
-        });
-        assert!(result.success, "{:?}", result.error);
-        assert_eq!(
-            state.get_project_state().unwrap().lines[0].shots[0].left,
-            None
-        );
-
-        assert!(state.undo().success);
-        assert_eq!(
-            state.get_project_state().unwrap().lines[0].shots[0].left,
-            Some(0.5),
-            "undo must restore the cleared value"
-        );
-    }
-
-    /// The reverse direction: setting a previously-empty field must undo back
-    /// to empty - the captured previous value `Some(None)` has to survive the
-    /// `values_json` round-trip as `null` rather than fold into "no update".
-    #[test]
-    fn update_shot_set_on_empty_field_undoes_back_to_empty() {
-        let (state, line_id, shot_id) = state_with_one_shot(None);
-
-        let updates: ShotUpdates =
-            serde_json::from_value(serde_json::json!({ "left": 1.2 })).unwrap();
-        let result = state.execute(Command::UpdateShot {
-            line_id,
-            shot_id,
-            updates,
-        });
-        assert!(result.success, "{:?}", result.error);
-        assert_eq!(
-            state.get_project_state().unwrap().lines[0].shots[0].left,
-            Some(1.2)
-        );
-
-        assert!(state.undo().success);
-        assert_eq!(
-            state.get_project_state().unwrap().lines[0].shots[0].left,
-            None,
-            "undo must clear the field back to its previous empty state"
-        );
+impl AppState {
+    /// The model's invariant violations (plan section 2) of the open project,
+    /// as messages: the tests' integrity oracle. A loaded project is valid by
+    /// construction (load refuses an invalid file; salvage opens read-only)
+    /// and every edit and file-decoded history step validates before it
+    /// commits, so this is empty unless a bug let one through. (The app's
+    /// integrity banner and its `check_project_integrity` command read the
+    /// same and could never show anything; both are gone.)
+    pub(crate) fn integrity_violation_messages(&self) -> Vec<String> {
+        let guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.as_ref().map_or_else(Vec::new, |p| {
+            p.validate().iter().map(ToString::to_string).collect()
+        })
     }
 }

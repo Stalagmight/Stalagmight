@@ -1,179 +1,344 @@
+//! The line commands on the station graph: Create Line, Delete Line, Update
+//! Line Metadata and Reverse Line (plan 5.4, 9.1).
+//!
+//! Each runs inside the execute pipeline (`commands.rs`): `apply` mutates
+//! the survey through the model's line operations, which refuse in 0.6.0's
+//! words and settle anchors themselves; the pipeline validates, captures and
+//! records around it. The result fields are 0.6.0's: a created line's id and
+//! its shots' validation warnings, the closures a delete's sweep removed, a
+//! reverse's line and re-emitted warnings.
+
+use std::collections::{BTreeMap, HashSet};
+
+use super::commands::{Applied, Record};
 use super::AppState;
-use crate::core::{CommandResult, Validator};
+use crate::core::{
+    Command, CommandResult, ReversedLine, ValidationWarning, Validator, WarningSeverity,
+};
+use crate::models::station_naming::{dedupe_line_name, seed_line_name_from};
+use crate::models::survey::changeset::EntryLimits;
+use crate::models::survey::{ClosureId, LineMeta, Project, StartAt};
 use crate::models::{
-    LineData, LineId, LineUpdates, FEATURE_ID_STRIDE, MAX_LINES_IN_ID_SPACE, MAX_LINE_ID,
+    LineId, SectionId, ShotData, SurveyDirection, CLOSURE_REMOVED_MERGED_ENDS, LINE_GONE,
 };
 
+/// What a new line is called in its shots' labels when it has no name yet
+/// (0.6.0's `create_line`).
+const NEW_LINE_LABEL: &str = "New line";
+
+/// The refusal for a Section id the project does not hold (0.6.0's words,
+/// shared by the Section commands).
+pub(super) fn missing_section(id: SectionId) -> String {
+    format!("Section {id} not found; it may have been deleted")
+}
+
+/// Add `id` to a record's refs once, within what a persisted entry may hold
+/// (`EntryLimits::max_refs`), so a huge batch can never write an entry the
+/// next open refuses.
+pub(super) fn push_ref<T: PartialEq>(refs: &mut Vec<T>, id: T) {
+    if refs.len() < EntryLimits::default().max_refs && !refs.contains(&id) {
+        refs.push(id);
+    }
+}
+
+/// The name a line created by a command gets: 0.6.0's `ensure_line_names`
+/// applied to it (trimmed; none or blank seeds the smallest free `Line n`; a
+/// name another line holds becomes `name (k)`).
+fn settled_line_name(project: &Project, wanted: Option<&str>) -> String {
+    let taken: HashSet<&str> = project
+        .lines()
+        .iter()
+        .filter_map(|l| l.name.as_deref().map(str::trim))
+        .collect();
+    let is_taken = |n: &str| taken.contains(n);
+    match wanted.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(name) if !is_taken(name) => name.to_string(),
+        Some(name) => dedupe_line_name(name, &is_taken),
+        None => seed_line_name_from(&mut 1, &is_taken),
+    }
+}
+
 impl AppState {
-    pub(super) fn create_line(&self, data: LineData) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+    /// Line names are required and unique in the project, so a line the USER
+    /// creates (the `create_line` IPC commands) must be named, and not after
+    /// another line ("A line named X already exists"). Asked on the UI path
+    /// only: the automatic paths (a batch, imports, split and combine
+    /// defaults) are named and made unique by the command itself. `None`
+    /// when the name is fine or no project is open (the command then fails
+    /// on its own).
+    pub fn new_line_name_refusal(&self, name: Option<&str>) -> Option<CommandResult> {
+        let guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let project = guard.as_ref()?;
+        project
+            .validate_line_name(name.unwrap_or_default(), &[])
+            .err()
+            .map(|e| CommandResult::failure(e.to_string()))
+    }
+}
 
-        let Some(project) = proj_guard.as_mut() else {
-            return CommandResult::failure("No project open".to_string());
-        };
+/// A new line as Create Line describes it.
+pub(super) struct NewLine {
+    pub(super) name: Option<String>,
+    pub(super) surveyor: Option<String>,
+    pub(super) date: Option<chrono::NaiveDate>,
+    pub(super) color: String,
+    pub(super) direction: Option<SurveyDirection>,
+    pub(super) shots: Vec<ShotData>,
+    pub(super) section: Option<SectionId>,
+}
 
-        let max_shots = FEATURE_ID_STRIDE.saturating_sub(1) as usize;
-        if data.shots.len() > max_shots {
-            return CommandResult::failure(format!(
-                "Line exceeds maximum shots per line (limit = {max_shots})"
-            ));
-        }
-
-        // The OTHER half of the same encode (#555): a shot id is
-        // `line_id * FEATURE_ID_STRIDE + position`, so the id about to be
-        // minted must still leave a WHOLE line's worth of ids inside u32 -
-        // the max-shots check above is what entitles it to them. Id 42_949
-        // encodes only its first 67_296 shots before the line's unchecked
-        // `next_shot_id += 1` leaves u32; id 42_950 is worse still, overflowing
-        // `Line::new`'s bare `id * FEATURE_ID_STRIDE` before it holds
-        // anything. Panic in debug, wrap in release, and a wrapped base aliases
-        // distinct shots onto one id.
-        if project.next_line_id > MAX_LINE_ID {
-            return CommandResult::failure(format!(
-                "Project has reached the maximum number of lines \
-                 (limit = {MAX_LINES_IN_ID_SPACE}); shot ids encode as \
-                 line_id * {FEATURE_ID_STRIDE} + position in 32 bits, so \
-                 line ids past {MAX_LINE_ID} cannot hold shots"
-            ));
-        }
-
-        // Reject non-finite geometry before it reaches the coordinate path (NaN/
-        // inf slips past the zero/negative-length checks below). This is the
-        // import/create-and-merge ingest path, alongside create_shot/update_shot.
-        if data.shots.iter().any(|s| !s.all_finite()) {
-            return CommandResult::failure(
-                "Line has a shot with a non-finite (NaN/inf) value".to_string(),
-            );
-        }
-
-        // Name the new line's shots the way the user will read them: its
-        // stations are named by position until the normalization names them
-        // (`Main Line: 4 → 5`), never by the positional id it will get.
-        let line_name = data
-            .name
-            .as_deref()
-            .map(str::trim)
-            .filter(|n| !n.is_empty())
-            .unwrap_or("New line")
-            .to_string();
-        let shot_label = |i: usize| format!("{line_name}: {i} \u{2192} {}", i + 1);
-        let mut warnings = Vec::new();
-        for (i, shot) in data.shots.iter().enumerate() {
-            if shot.length == 0.0 {
-                return CommandResult::failure(format!("Shot {} has zero length", shot_label(i)));
-            }
-            if shot.length < 0.0 {
-                return CommandResult::failure(format!(
-                    "Shot {} has negative length: {:.1}m",
-                    shot_label(i),
-                    shot.length
-                ));
-            }
-            // Per-project thresholds (#57) so create-time warnings match the panel.
-            warnings.extend(Validator::validate_shot(shot, &project.validation, || {
-                shot_label(i)
-            }));
-        }
-
-        let line = project.add_line(data);
-        let line_id = line.id;
-        tracing::debug!(
-            line_id = line_id,
-            purpose = "add line to project",
-            "Line created"
-        );
-
-        let result = CommandResult::success().with_line_id(line_id);
-        if warnings.is_empty() {
-            result
-        } else {
-            result.with_warnings(warnings)
+/// Create a free line (0.6.0's `create_line_command` and `create_line`):
+/// refused when its Section is gone, for too many shots, the line-id budget,
+/// a non-finite value or a zero or negative length; the shots' uuids are the
+/// app's to mint (#423); the legacy surveyor and date become the shots'
+/// credit; the new piece sits with station 0 at the local origin; the line is
+/// named and made unique as 0.6.0's normalization named it. Returns the line
+/// and the shots' validation warnings (per-project thresholds, #57).
+pub(super) fn create_free_line(
+    project: &mut Project,
+    mut line: NewLine,
+) -> Result<(LineId, Vec<ValidationWarning>), String> {
+    if let Some(section) = line.section {
+        if !project.sections.iter().any(|s| s.id == section) {
+            return Err(missing_section(section));
         }
     }
-
-    pub(super) fn delete_line(&self, line_id: LineId) -> CommandResult {
-        self.with_project_mut(|project| {
-            if project.get_line(line_id).is_some() {
-                project.preserve_connections_for_line_deletion(line_id);
-                project.cleanup_line_references(line_id);
-                project.remove_line(line_id);
-                tracing::debug!(
-                    line_id,
-                    purpose = "remove line and cleanup references",
-                    "Line deleted (with cleanup)"
-                );
-                CommandResult::success()
-            } else {
-                CommandResult::failure(crate::models::LINE_GONE.to_string())
-            }
+    for shot in &mut line.shots {
+        shot.uuid = None;
+    }
+    let trimmed = line
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_string);
+    let label_name = trimmed.as_deref().unwrap_or(NEW_LINE_LABEL).to_string();
+    let warnings: Vec<ValidationWarning> = line
+        .shots
+        .iter()
+        .enumerate()
+        .flat_map(|(i, shot)| {
+            Validator::validate_shot(shot, &project.settings.validation, || {
+                format!("{label_name}: {i} \u{2192} {}", i + 1)
+            })
         })
+        .collect();
+    let final_name = settled_line_name(project, trimmed.as_deref());
+    let meta = LineMeta {
+        name: trimmed,
+        color: line.color,
+        direction: line.direction.unwrap_or_default(),
+        quality: 1.0,
+        azimuth_reference: None,
+        section_id: line.section,
+        legacy_surveyor: line.surveyor,
+        legacy_date: line.date,
+    };
+    let id = project
+        .create_line(meta, StartAt::New, line.shots, None)
+        .map_err(|e| e.to_string())?
+        .value;
+    // Named after the refusals, which word the shots with the name the user
+    // gave (or "New line"), as 0.6.0's normalization ran after the command.
+    if let Some(l) = project.line_mut(id) {
+        l.name = Some(final_name);
     }
+    tracing::debug!(
+        line_id = id,
+        purpose = "add line to project",
+        "Line created"
+    );
+    Ok((id, warnings))
+}
 
-    /// Reverse a line end-to-end (issue #24).  The far end becomes station 0
-    /// and every station keeps its world coordinate; see
-    /// [`crate::models::Project::reverse_line`] for the transform.
-    ///
-    /// Frozen shots are deliberately NOT consulted here.  `update_shot` rejects
-    /// azimuth/depth/pitch edits on a frozen shot because those move the station
-    /// it is pinned to, but reverse re-associates each reading with the other end
-    /// of the same physical line and leaves the line itself untouched, so the
-    /// frozen invariant still holds.  Applying the frozen check would block
-    /// reverse on any datum-anchored line for no benefit.
-    pub(super) fn reverse_line(&self, line_id: LineId, swap_lr: bool) -> CommandResult {
-        self.with_project_mut(|project| {
-            if !project.reverse_line(line_id, swap_lr) {
-                return CommandResult::failure(crate::models::LINE_GONE.to_string());
+/// Every shot of `line` checked against the project's thresholds, labelled
+/// as the user reads it after the edit: `Line: from -> to`, each station by
+/// the name that line shows it by (I-3), a dotted slot or a loop end
+/// qualified ([`Project::shot_text`], RS-FX5), the shot as its part
+/// ([`Project::shot_marked`], RS-PROSE).
+fn line_warnings(project: &Project, line: LineId) -> Vec<ValidationWarning> {
+    let Some(l) = project.line(line) else {
+        return Vec::new();
+    };
+    l.shots
+        .iter()
+        .enumerate()
+        .flat_map(|(i, shot)| {
+            Validator::validate_shot(&shot.to_shot_data(), &project.settings.validation, || {
+                project.shot_marked(line, i)
+            })
+        })
+        .collect()
+}
+
+/// The closures on the project, each named by its ends as the user reads
+/// them now (`Line / station`), for warnings about closures an edit removes;
+/// marked ([`Project::station_marked`], RS-PROSE), so a warning built from
+/// them splits into its message and its parts.
+fn closure_labels(project: &Project) -> BTreeMap<ClosureId, (String, String)> {
+    project
+        .closures
+        .iter()
+        .map(|c| {
+            (
+                c.id,
+                (
+                    project.station_marked(c.a, c.a_via),
+                    project.station_marked(c.b, c.b_via),
+                ),
+            )
+        })
+        .collect()
+}
+
+/// The warnings for closures a delete's sweep removed because another
+/// closure's promotion made their two ends one station (#738), named by the
+/// stations they had before the delete (0.6.0's `merged_ends_warnings`). A
+/// closure never has two equal ends before an edit (invariant 7), so the
+/// cause is always a promotion.
+fn swept_closure_warnings(
+    labels: &BTreeMap<ClosureId, (String, String)>,
+    removed: &[crate::models::survey::LoopClosure],
+) -> Vec<ValidationWarning> {
+    removed
+        .iter()
+        .map(|closure| {
+            let (a, b) = labels
+                .get(&closure.id)
+                .cloned()
+                .unwrap_or_else(|| ("a station".to_string(), "a station".to_string()));
+            ValidationWarning::marked_before_edit(
+                CLOSURE_REMOVED_MERGED_ENDS,
+                &format!(
+                    "Removed loop closure {a} to {b}: another loop closure became a merge, \
+                     which made its two stations one point."
+                ),
+                WarningSeverity::Warning,
+            )
+        })
+        .collect()
+}
+
+/// The execute pipeline's mutation for the line family (`commands.rs`
+/// dispatches here; plan 9.1). Runs inside `run_recorded`, which snapshots,
+/// validates, captures and records around it; `record` is the entry being
+/// recorded (worded before the edit), for refs only the result can say.
+pub(super) fn apply(
+    project: &mut Project,
+    record: &mut Record,
+    cmd: &Command,
+) -> Result<Applied, String> {
+    match cmd {
+        Command::CreateLine {
+            name,
+            surveyor,
+            date,
+            color,
+            direction,
+            shots,
+            cave_section_id,
+        } => {
+            let (line_id, warnings) = create_free_line(
+                project,
+                NewLine {
+                    name: name.clone(),
+                    surveyor: surveyor.clone(),
+                    date: *date,
+                    color: color.clone(),
+                    direction: *direction,
+                    shots: shots.clone(),
+                    section: *cave_section_id,
+                },
+            )?;
+            push_ref(&mut record.refs.lines, line_id);
+            if let Some(section) = cave_section_id {
+                push_ref(&mut record.refs.sections, *section);
             }
+            Ok(Applied {
+                warnings,
+                line_id: Some(line_id),
+                ..Applied::default()
+            })
+        }
+        Command::DeleteLine { line_id } => {
+            if project.line(*line_id).is_none() {
+                return Err(LINE_GONE.to_string());
+            }
+            let labels = closure_labels(project);
+            let deleted = project.delete_line(*line_id).map_err(|e| e.to_string())?;
             tracing::debug!(
                 line_id,
-                swap_left_right = swap_lr,
+                stations_deleted = deleted.value.stations_deleted.len(),
+                closures_removed = deleted.value.closures_removed.len(),
+                promoted = deleted.report.sweep.promoted.len(),
+                purpose = "remove line and cleanup references",
+                "Line deleted"
+            );
+            Ok(Applied {
+                warnings: swept_closure_warnings(&labels, &deleted.report.sweep.removed),
+                identities: project.identity_notice(&deleted.report.identities),
+                ..Applied::default()
+            })
+        }
+        Command::UpdateLineMetadata { line_id, updates } => {
+            // The rename refusals (empty, forbidden characters, another line's
+            // name) are the model's, in 0.6.0's words; a forward command only,
+            // since undo and redo never come through here.
+            project
+                .update_line_meta(*line_id, updates)
+                .map_err(|e| e.to_string())?;
+            tracing::debug!(
+                line_id,
+                purpose = "update line metadata or shots",
+                "Line updated"
+            );
+            Ok(Applied::default())
+        }
+        Command::ReverseLine {
+            line_id,
+            swap_left_right,
+        } => {
+            // Frozen shots are deliberately NOT consulted: a reverse
+            // re-associates each reading with the other end of the same
+            // physical shot and moves no station, so the frozen invariant
+            // holds (0.6.0's rule).
+            let shot_count = project
+                .line(*line_id)
+                .map(|l| u32::try_from(l.shots.len()).unwrap_or(u32::MAX))
+                .ok_or_else(|| LINE_GONE.to_string())?;
+            if shot_count == 0 {
+                // A shot-less line reverses to itself: a provable no-op (the
+                // empty capture keeps the redo branch), reported as 0.6.0's
+                // early success with nothing in it.
+                return Ok(Applied::default());
+            }
+            project
+                .reverse_line(*line_id, *swap_left_right)
+                .map_err(|e| e.to_string())?;
+            tracing::debug!(
+                line_id,
+                swap_left_right,
                 purpose = "reverse line end-to-end",
                 "Line reversed"
             );
-
-            // Swapping depths and reciprocating azimuths can newly satisfy or trip
-            // the per-project discrepancy checks, so re-emit shot warnings the way
-            // create_line/update_shot do rather than leaving the panel stale.
-            let warnings: Vec<_> = project
-                .get_line(line_id)
-                .map(|line| {
-                    line.shots
-                        .iter()
-                        .enumerate()
-                        .flat_map(|(i, shot)| {
-                            Validator::validate_shot(
-                                &shot.to_shot_data(),
-                                &project.validation,
-                                || project.shot_label_at(line_id, i).unwrap_or_default(),
-                            )
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let result = CommandResult::success().with_line_id(line_id);
-            if warnings.is_empty() {
-                result
-            } else {
-                result.with_warnings(warnings)
-            }
-        })
-    }
-
-    pub(super) fn update_line(&self, line_id: LineId, updates: LineUpdates) -> CommandResult {
-        self.with_project_mut(|project| {
-            if project.update_line(line_id, &updates).is_some() {
-                tracing::debug!(
-                    line_id,
-                    purpose = "update line metadata or shots",
-                    "Line updated"
-                );
-                CommandResult::success()
-            } else {
-                CommandResult::failure(crate::models::LINE_GONE.to_string())
-            }
-        })
+            // Swapped depths and reciprocated azimuths can newly satisfy or
+            // trip the discrepancy checks, so the warnings are re-emitted.
+            Ok(Applied {
+                warnings: line_warnings(project, *line_id),
+                line_id: Some(*line_id),
+                reversed: vec![ReversedLine {
+                    line_id: *line_id,
+                    shot_count,
+                }],
+                ..Applied::default()
+            })
+        }
+        _ => Err(format!(
+            "{} is not a line command",
+            crate::core::command_kind(cmd)
+        )),
     }
 }

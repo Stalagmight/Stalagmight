@@ -1,16 +1,19 @@
 import type { DeleteShotImpact, DeleteShotRangeImpact } from '../../types/commands';
 import type { StationRef } from '../../types/project';
-import { EntityBlob } from '../common/EntityBlob';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { identityNoticeMessage } from '../../utils/identityNotice';
+import { StationBlob } from '../common/EntityBlob';
+import { Prose } from '../common/Prose';
 
 /**
- * A station as the entity pill (Full level) or plain text: `Main Line / 17`.
+ * A station as the line pill (Full level) or plain text: `Main Line / 17`.
  * Every station named here exists before the delete, so the open project
- * names it.
+ * names it. The pairs are slots of one station on two lines, so each pill is
+ * its slot's (its own line's colour and name, `bySlot`): two pills of the
+ * line the station belongs to would read the same (RS-OWNERSHIP).
  */
 function StationRefBlob({ station }: { station: StationRef }) {
-  const labels = useIdentityLabels();
-  return <EntityBlob entity="station">{labels.station(station, true)}</EntityBlob>;
+  return <StationBlob station={station} withLine bySlot />;
 }
 
 function Pair({ a, b }: { a: StationRef; b: StationRef }) {
@@ -27,18 +30,20 @@ function Pair({ a, b }: { a: StationRef; b: StationRef }) {
  * preview adds the loop closures its gap-close would remove because they would
  * span a single shot (#737); the single-shot delete never shortens a closure to
  * one shot, so it has no such field.
+ *
+ * On the station graph (plan 5.4, W6) a delete never re-wires anything: a
+ * station another line also passes simply stays for that line, so there are
+ * no replacement merges, no re-anchored closures and nothing that "could not
+ * be preserved". The wire still carries those fields (always empty); this
+ * panel no longer reads them.
+ *
+ * What the delete does to station names and comments on its own (RS 4.3,
+ * 12: an archived station it brings back, a letter, a comment a promotion
+ * hides) is said in the notice's words, for the delete and, when Split is
+ * offered too, for Split, each station as a prose pill (RS-PROSE).
  */
-export type ShotImpactRelationships = Pick<
-  DeleteShotImpact,
-  | 'removed_merges'
-  | 'removed_closures'
-  | 'replacement_merges'
-  | 'replacement_closure_updates'
-  | 'closure_to_merge'
-  | 'merge_rewire_skipped'
-  | 'closure_rewire_skipped'
-> &
-  Partial<Pick<DeleteShotRangeImpact, 'closures_removed_across_one_shot'>>;
+export type ShotImpactRelationships = Pick<DeleteShotImpact, 'removed_merges' | 'removed_closures' | 'closure_to_merge'> &
+  Partial<Pick<DeleteShotRangeImpact, 'closures_removed_across_one_shot' | 'identities' | 'split_identities'>>;
 
 export default function DeleteShotImpactDetails({
   impact,
@@ -53,19 +58,20 @@ export default function DeleteShotImpactDetails({
    */
   gapCloseAction?: string;
 }) {
+  const labels = useIdentityLabels();
   if (!impact) return null;
 
   // Named by their stations before the delete, as the user created them.
   const acrossOneShot = impact.closures_removed_across_one_shot ?? [];
+  const names = identityNoticeMessage(impact.identities, labels.lineName);
+  const splitNames = identityNoticeMessage(impact.split_identities, labels.lineName);
   const hasDetails =
     acrossOneShot.length > 0 ||
     impact.removed_merges.length > 0 ||
     impact.removed_closures.length > 0 ||
-    impact.replacement_merges.length > 0 ||
-    impact.replacement_closure_updates.length > 0 ||
     impact.closure_to_merge.length > 0 ||
-    impact.merge_rewire_skipped ||
-    impact.closure_rewire_skipped;
+    names !== null ||
+    splitNames !== null;
 
   if (!hasDetails) return null;
 
@@ -75,7 +81,7 @@ export default function DeleteShotImpactDetails({
       <div className="space-y-2 text-text-secondary">
         {impact.removed_merges.length > 0 && (
           <div>
-            <p className="font-medium">Removed merges</p>
+            <p className="font-medium">No longer shared with another line</p>
             <ul className="list-disc list-inside">
               {impact.removed_merges.map((pair, index) => (
                 <li key={`removed-merge-${index}`}><Pair a={pair.station_a} b={pair.station_b} /></li>
@@ -118,36 +124,9 @@ export default function DeleteShotImpactDetails({
           </div>
         )}
 
-        {impact.replacement_merges.length > 0 && (
-          <div>
-            <p className="font-medium">Replacement merges</p>
-            <ul className="list-disc list-inside">
-              {impact.replacement_merges.map((pair, index) => (
-                <li key={`replacement-merge-${index}`}><Pair a={pair.station_a} b={pair.station_b} /></li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {impact.replacement_closure_updates.length > 0 && (
-          <div>
-            <p className="font-medium">Replacement closures</p>
-            <ul className="list-disc list-inside">
-              {impact.replacement_closure_updates.map((update) => {
-                const closureId = update.closure_id.toString();
-                return (
-                  <li key={`replacement-closure-${closureId}`}>
-                    #{closureId}: <StationRefBlob station={update.old_station} /> {'->'} <StationRefBlob station={update.new_station} />
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        )}
-
         {impact.closure_to_merge.length > 0 && (
           <div>
-            <p className="font-medium">Closures becoming merges</p>
+            <p className="font-medium">Loop closures that join their two stations into one</p>
             <ul className="list-disc list-inside">
               {impact.closure_to_merge.map((pair, index) => (
                 <li key={`closure-to-merge-${index}`}><Pair a={pair.station_a} b={pair.station_b} /></li>
@@ -156,16 +135,24 @@ export default function DeleteShotImpactDetails({
           </div>
         )}
 
-        {(impact.merge_rewire_skipped || impact.closure_rewire_skipped) && (
-          <div className="text-warning">
-            {impact.merge_rewire_skipped && (
-              <p>Some merge connectivity could not be preserved (only same-line candidates).</p>
-            )}
-            {impact.closure_rewire_skipped && (
-              <p>Some closures could not be replaced (no valid replacement or duplicate).</p>
-            )}
+        {names !== null && (
+          <div data-testid="impact-identities">
+            <p className="font-medium">Station names and comments</p>
+            <p>
+              <Prose text={names} />
+            </p>
           </div>
         )}
+
+        {splitNames !== null && (
+          <div data-testid="impact-split-identities">
+            <p className="font-medium">If you choose Split Line instead</p>
+            <p>
+              <Prose text={splitNames} />
+            </p>
+          </div>
+        )}
+
       </div>
     </div>
   );

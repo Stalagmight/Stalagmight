@@ -81,9 +81,9 @@ impl AppState {
             .active_mutex
             .as_ref()
             .map(|mutex| mutex.user.as_str());
-        if !project
+        if project
             .permission
-            .is_some_and(|permission| permission >= Permission::ReadAndWrite)
+            .is_none_or(|permission| permission < Permission::ReadAndWrite)
             || !lock_held_by_me(holder, Some(email.as_str()))
         {
             self.speleodb_shut_edit_gate();

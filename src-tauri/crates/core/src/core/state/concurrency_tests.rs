@@ -1,106 +1,102 @@
-//! CONCURRENCY: several threads driving one `AppState`, and the four things
-//! that must hold no matter how they interleave.
+//! CONCURRENCY: several threads driving one `AppState`, and what must hold no
+//! matter how they interleave.
 //!
-//! # What this is testing, and why nothing was
+//! # What this tests
 //!
-//! `AppState` carries a `command_lock: Mutex<()>` whose entire job is to
-//! serialize `execute`/`undo`/`redo` so they cannot interleave
-//! (`docs/undo-redo.md`, "Two `Vec<UndoEntry>` stacks"), and a documented lock
-//! ORDERING discipline underneath it (`docs/undo-redo.md:273-279`):
+//! `command_lock` serializes `execute`, the recipes, `undo` and `redo`; below
+//! it the state's mutexes are taken in one order, `project -> file ->
+//! undo_stack -> derived` (docs/undo-redo.md, "Lock Ordering"). Several paths
+//! do NOT take `command_lock`: the reads (`get_project_state`, the history
+//! lists, the memoised Computed View), the local-only durable save of a
+//! display toggle (`save_display_setting`), and the full load
+//! (`do_load_project_full`). Every one of them is in the mix here, beside
+//! edits, undo, redo, saves to the open file and to other paths, and opens
+//! through the executor.
 //!
-//! > `command_lock` is always outermost. Below it, the mutation paths avoid
-//! > holding two of `undo_stack` / `project` / `database` at once at all -
-//! > `undo()`/`redo()` pop the entry and drop the `undo_stack` guard before
-//! > touching the project, and `get_undo_stack()`/`get_redo_stack()` release
-//! > the project lock before acquiring `undo_stack`.
+//! # The oracles are interleaving-independent
 //!
-//! A discipline written down in that much detail exists because violating it
-//! has consequences. Nothing exercised it: every other engine in this programme
-//! drives one `AppState` from one thread.
-//!
-//! # The assertions are interleaving-INDEPENDENT, and that is the whole design
-//!
-//! The inputs are seeded per thread, so a failing run is replayable in what each
-//! thread ASKED FOR. The interleaving is not, and cannot be. So nothing here
-//! asserts a particular outcome: not a final state, not a stack depth, not
-//! whether a given command succeeded. Every oracle is a property that has to
-//! hold under every schedule:
+//! Inputs are seeded per thread; the schedule is not and cannot be. So nothing
+//! asserts a particular outcome, only properties of every schedule:
 //!
 //! | oracle | what it catches |
 //! |---|---|
-//! | LIVENESS | a deadlock - the lock ordering discipline's whole reason for existing |
-//! | NO PANIC | an index or an unwrap that only a race can reach |
-//! | NO POISON | a panic that happened inside a guard, even one another thread swallowed |
-//! | POST-RUN | a state that is internally broken once the dust settles |
+//! | LIVENESS | a deadlock (the lock order's reason to exist) |
+//! | NO PANIC | an index or an unwrap only a race can reach |
+//! | NO POISON | a panic inside a guard, even one another thread swallowed |
+//! | COHERENT CACHE | a memoised raw layout or Computed View that is not the survey's (a worker probes it under the project lock, and once more after the run) |
+//! | GUARD ON DISK | the external-modification fingerprint describes the file the app last wrote: a plain save after the run succeeds, and the file reads back as the survey |
+//! | WHOLE HISTORY | after the run, every undo to the bottom and every redo back succeeds, the survey is valid at every depth, and the top is the state the walk started from |
 //!
-//! The post-run oracle is deliberately weaker than the roundtrip fuzzer's, and
-//! the reason is structural rather than lazy: that model records a canonical
-//! snapshot per undo depth, and during a concurrent phase there is no such
-//! thing - two threads pushing entries mean no thread knows what depth it is
-//! at. So the walk afterwards asserts what survives that: every move either
-//! succeeds or fails CLEANLY, the app's own integrity check runs at every
-//! depth, and the adjusted solve completes. A wedge is allowed only in the two
-//! shapes issue #413 already documents (findings 6 and 13); any other refusal
-//! that cannot be walked past is a finding.
+//! The history walk is stronger than the SQLite build's, which allowed two
+//! documented wedges (#413 findings 6 and 13): every entry on the stacks was
+//! recorded under `command_lock` against the survey it is on (a load replaces
+//! the survey and the stacks together), and a changeset step checks its
+//! preconditions, so a refusal anywhere is a finding.
 //!
 //! # Liveness, honestly
 //!
-//! A deadlock cannot be detected by waiting forever, and a test that waits
-//! forever is a CI hang rather than a failure. The workers are joined against a
-//! generous deadline; if it expires the test FAILS with what each thread was
-//! last seen doing (an atomic per thread, written before every call), which is
-//! the most a safe-Rust harness can capture without a native unwinder.
-//!
-//! The bound is generous ON PURPOSE. This runs on CI machines of unknown
-//! contention and on Windows and macOS, whose mutex handoff behaviour differs
-//! from Linux's; a tight bound would turn a slow machine into a bug report. It
-//! is sized so that a real deadlock (which never finishes) is separated from a
-//! slow run (which finishes in well under it) by two orders of magnitude.
+//! A deadlock cannot be detected by waiting forever. The workers are joined
+//! against a generous deadline and a no-progress window; when either expires
+//! the test FAILS with what each thread was last seen doing (an atomic per
+//! thread, written before every call). A wedged worker is left detached
+//! rather than joined, so the failure is reported instead of hanging CI.
 //!
 //! # Data
 //!
 //! Everything is generated in code. No fixture is read, copied or derived from.
 
-#![expect(
-    clippy::indexing_slicing,
-    reason = "test module: see docs/linting.md for the per-test-module expect idiom"
-)]
-#![expect(
-    clippy::print_stdout,
-    reason = "the per-run summary IS this test's output, and `cargo test -- --nocapture` is the               only channel a test has"
-)]
-
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use super::fuzz_undo_tests::{
-    adjusted_geometry_of, build_project, canonical_snapshot, integrity_verdict, random_offset,
-    random_shot, read_targets, Rng, COLORS,
+use super::project_load::IfChanged;
+use super::robustness_kit::{
+    adjusted_geometry_of, build_project, canonical, canonical_snapshot, derived_cache_is_coherent,
+    random_offset, random_shot, read_targets, NullSink, Rng, COLORS,
 };
 use super::AppState;
 use crate::core::Command;
-use crate::models::{LineId, ShotData, ShotId, ShotUpdates, StationRef};
-// CONFIG ISOLATION. Every test in this module opens with
-// `let _config = isolated_config();`: `AppState::new()` LOADS the global config,
-// and every save reaches `note_recent_project` -> `Config::save()`, which WRITES
-// it. Config resolution is per-thread (`crate::test_helpers` documents what that
-// does and does not protect, and why it is not opt-in), so the guard is no longer
-// what keeps these tests off other files; what it buys is ONE dir for the whole
-// test, whose path the test can name and hand to a worker thread
-// (`ConfigHandoff`). It is held for the whole test because the saves are.
+use crate::models::{LineId, ShotData, ShotUpdates, StationId, StationRef, StationRename};
+use crate::persistence::stalx_v2::{self, DecodeOptions, Fingerprint};
 use crate::test_helpers::isolated_config;
+
+/// The Merge dialog's answers for `a` and `b` as its preview gives them now:
+/// one of the keeps it offers, and that keep's suggested renames (RS 4.1).
+/// `(None, None)` when the preview offers no merge.
+fn dialog_answers(
+    state: &AppState,
+    a: StationRef,
+    b: StationRef,
+    rng: &mut Rng,
+) -> (Option<StationId>, Option<Vec<StationRename>>) {
+    let Some(preview) = state
+        .check_merge_connectivity(a, b)
+        .ok()
+        .and_then(|c| c.merge_preview)
+    else {
+        return (None, None);
+    };
+    let Some(choice) = preview.keeps.get(rng.below(preview.keeps.len().max(1))) else {
+        return (Some(preview.default_keep), Some(Vec::new()));
+    };
+    let renames = choice
+        .collisions
+        .iter()
+        .map(|c| StationRename {
+            station_id: c.letter.station.id,
+            name: c.letter.to.clone(),
+        })
+        .collect();
+    (Some(choice.keep), Some(renames))
+}
 
 // ===========================================================================
 // What a thread was doing
 // ===========================================================================
 
 /// The operation a worker is inside, as an index into `OPERATIONS`.
-///
-/// An atomic rather than a lock, because a liveness watchdog that has to take a
-/// lock to find out why nothing is progressing is a watchdog that can deadlock
-/// on the thing it is diagnosing.
 const OPERATIONS: &[&str] = &[
     "idle",
     "execute(CreateShot)",
@@ -116,17 +112,23 @@ const OPERATIONS: &[&str] = &[
     "get_redo_stack",
     "get_adjusted_stations",
     "integrity_check",
-    "save_project",
+    "save_project(path)",
     "get_project_state",
+    "save_project(open file)",
+    "save_display_setting",
+    "do_load_project_full",
+    "execute(OpenProject)",
+    "probe the derived cache",
+    "undo_to",
     "finished",
 ];
 
-/// Shared, lock-free view of what every worker is doing right now.
+const FINISHED: usize = OPERATIONS.len() - 1;
+
+/// Shared, lock-free view of what every worker is doing (a watchdog that had
+/// to take a lock to diagnose a deadlock could deadlock on it).
 struct Progress {
-    /// `where_[t]` is the index into `OPERATIONS` thread `t` is inside.
     where_: Vec<AtomicUsize>,
-    /// `done[t]` counts completed operations, so the watchdog can tell a
-    /// deadlock (no thread moves) from a slow run (they all move).
     done: Vec<AtomicUsize>,
 }
 
@@ -178,13 +180,7 @@ impl Progress {
 // Panic capture, across threads
 // ===========================================================================
 
-/// Every panic any worker hit, with its site.
-///
-/// The adversarial engine's hook records into a THREAD-LOCAL, which is right
-/// there and wrong here: a worker that panics unwinds its own thread and the
-/// main thread never sees that cell. So this hook appends into a shared,
-/// mutex-free-at-read `Mutex<Vec<..>>` keyed by nothing - the point is that a
-/// panic HAPPENED and where, not which thread owned it.
+/// Every panic any thread hit, with its site and thread.
 static PANICS: std::sync::Mutex<Vec<(std::thread::ThreadId, String)>> =
     std::sync::Mutex::new(Vec::new());
 
@@ -217,18 +213,8 @@ fn install_panic_recorder() {
     });
 }
 
-/// Take the panics belonging to `mine`, and leave everyone else's alone.
-///
-/// The filter is not tidiness, it is CORRECTNESS. `set_hook` is
-/// process-global, libtest runs tests in parallel in one process, and this
-/// crate has several tests that poison a mutex ON PURPOSE for lock-failure
-/// coverage (`core/state/tests.rs:59`, `speleodb.rs:2996`, `speleodb.rs:6189`,
-/// `speleodb_lock_release.rs:573`). Without the thread filter this gate
-/// reported twelve of THEIR panics as its own workers racing - which is how it
-/// first went red, and is a far more convincing false positive than a real one.
-///
-/// Entries from other threads are put back, so a concurrently running test that
-/// installs its own reader still sees them.
+/// Take the panics of `mine` and leave everyone else's: the hook is
+/// process-global, and other tests in this binary poison mutexes on purpose.
 fn drain_panics(mine: &[std::thread::ThreadId]) -> Vec<String> {
     let Ok(mut panics) = PANICS.lock() else {
         return Vec::new();
@@ -240,26 +226,20 @@ fn drain_panics(mine: &[std::thread::ThreadId]) -> Vec<String> {
     ours.into_iter().map(|(_, text)| text).collect()
 }
 
-/// The panic sites issue #413 documents, so a run that trips one is naming a
-/// known open finding rather than reporting a race.
-///
-/// Every arm is GONE, per the delete-when-fixed contract. The merge-alignment
-/// arms went when findings 14 (insert), its mirror (remove) and 20 (the
-/// unanchored-group drift) were fixed - the structural edits now measure which
-/// side is anchored over the rigid merge forest
-/// (`Project::anchored_sides_of_edit`), an unanchored merge group is realigned
-/// against the edited line, and the self-heal gate is the assert's own
-/// `Project::MERGE_ALIGNMENT_INVARIANT_M`. The finding-24 overflow arm went
-/// when `shot_display_position` was made saturating. ANY panic, from ANY site,
-/// is a reportable problem again; the function stays so the next open finding
-/// with a live panic site has somewhere to be named.
-fn known_panic(_text: &str) -> Option<&'static str> {
-    None
-}
-
 // ===========================================================================
 // The workers
 // ===========================================================================
+
+/// The files a run's workers save to and open.
+struct Files {
+    dir: PathBuf,
+    /// Two copies of the starting survey: a full load alternates between them
+    /// (it refuses the file that is already open).
+    loads: [PathBuf; 2],
+}
+
+/// Problems a worker saw itself (the derived-cache probe).
+type Seen = std::sync::Mutex<Vec<String>>;
 
 /// One worker's action stream. Seeded, so the INPUTS replay even though the
 /// schedule does not.
@@ -269,89 +249,50 @@ fn worker(
     thread: usize,
     seed: u32,
     operations: usize,
-    temp: &std::path::Path,
+    files: &Files,
     stop: &AtomicBool,
+    seen: &Seen,
 ) {
     let mut rng = Rng::new(seed);
     for step in 0..operations {
         if stop.load(Ordering::Relaxed) {
             break;
         }
-        // A project that has gone away under this worker is a reason to SKIP,
-        // not to die: `read_targets` ends in an `expect` (it is written for the
-        // single-threaded engines, where no project can vanish mid-run), and a
-        // harness panic here would be reported as an app panic. The project can
-        // legitimately be absent for one instant - another worker's known
-        // assert can poison the mutex, and every lock site then reads "no
-        // project open".
-        // `read_targets` ends in an `expect` - it is written for the
-        // single-threaded engines, where no project can vanish mid-run. Here
-        // one CAN: another worker tripping a known assert poisons the project
-        // mutex, and from that instant every lock site reads "no project open".
-        //
-        // Checking first is not enough and the check is kept only as a cheap
-        // fast path: the poison can land between the check and the read. So the
-        // read itself is caught, and the record the hook made for it is dropped
-        // from THIS thread's entries - otherwise a harness `expect` would be
-        // reported as an app panic, which is how this gate failed one run in
-        // fourteen.
-        if state.get_project_state().is_none() {
-            progress.enter(thread, 15);
-            progress.leave(thread);
-            continue;
-        }
-        let Ok(targets) =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read_targets(state)))
-        else {
-            let _ = drain_panics(&[std::thread::current().id()]);
+        let Some(targets) = read_targets(state) else {
             progress.enter(thread, 15);
             progress.leave(thread);
             continue;
         };
         let lines: Vec<LineId> = targets.lines.iter().map(|(id, _)| *id).collect();
-        let pick_shot = |rng: &mut Rng| -> Option<(LineId, ShotId)> {
-            let populated: Vec<&(LineId, Vec<ShotId>)> = targets
-                .lines
-                .iter()
-                .filter(|(_, shots)| !shots.is_empty())
-                .collect();
-            if populated.is_empty() {
-                return None;
-            }
-            let (line_id, shots) = populated[rng.below(populated.len())];
-            Some((*line_id, shots[rng.below(shots.len())]))
-        };
-
-        // Weighted towards the mutation paths, because the lock discipline is
-        // about them - but the READ paths are in the mix on purpose:
-        // `get_undo_stack` is named in the ordering rule, and
-        // `get_adjusted_stations` is the memoized solve, which is exactly where
-        // a cache invalidated by one thread while another reads it goes wrong.
-        let roll = rng.below(100);
-        let operation = match roll {
-            0..=17 => 1,
-            18..=33 => 2,
-            34..=39 => 3,
-            40..=46 => 4,
-            47..=52 => 5,
-            53..=57 => 6,
-            58..=61 => 7,
-            62..=71 => 8,
-            72..=78 => 9,
-            79..=83 => 10,
-            84..=86 => 11,
-            87..=92 => 12,
-            93..=96 => 13,
-            97 => 14,
-            _ => 15,
+        let operation = match rng.below(100) {
+            0..=14 => 1,
+            15..=27 => 2,
+            28..=32 => 3,
+            33..=38 => 4,
+            39..=43 => 5,
+            44..=47 => 6,
+            48..=51 => 7,
+            52..=59 => 8,
+            60..=65 => 9,
+            66..=68 => 10,
+            69..=70 => 11,
+            71..=75 => 12,
+            76..=78 => 13,
+            79..=80 => 14,
+            81..=82 => 15,
+            83..=85 => 16,
+            86..=88 => 17,
+            89..=90 => 18,
+            91 => 19,
+            92..=96 => 20,
+            _ => 21,
         };
         progress.enter(thread, operation);
         match operation {
             1 => {
                 if !lines.is_empty() {
-                    let line_id = lines[rng.below(lines.len())];
                     state.execute(Command::CreateShot {
-                        line_id,
+                        line_id: lines[rng.below(lines.len())],
                         shot: random_shot(&mut rng),
                         after_shot_id: None,
                         before_shot_id: None,
@@ -359,7 +300,7 @@ fn worker(
                 }
             }
             2 => {
-                if let Some((line_id, shot_id)) = pick_shot(&mut rng) {
+                if let Some((line_id, shot_id)) = targets.pick_shot(&mut rng) {
                     state.execute(Command::UpdateShot {
                         line_id,
                         shot_id,
@@ -411,15 +352,28 @@ fn worker(
                         .collect();
                     if !others.is_empty() {
                         let b = others[rng.below(others.len())];
+                        let (station_a, station_b) =
+                            (StationRef::new(a.0, a.1), StationRef::new(b.0, b.1));
+                        // Half the merges answer the Merge dialog (RS 4.1):
+                        // a keep and the renames its preview suggests, read
+                        // before the command runs, so another thread may
+                        // have made them stale (refused, or still valid).
+                        let (keep, renames) = if rng.chance(50) {
+                            dialog_answers(state, station_a, station_b, &mut rng)
+                        } else {
+                            (None, None)
+                        };
                         state.execute(Command::MergeStations {
-                            station_a: StationRef::new(a.0, a.1),
-                            station_b: StationRef::new(b.0, b.1),
+                            station_a,
+                            station_b,
+                            keep,
+                            renames,
                         });
                     }
                 }
             }
             7 => {
-                if let Some((line_id, shot_id)) = pick_shot(&mut rng) {
+                if let Some((line_id, shot_id)) = targets.pick_shot(&mut rng) {
                     state.execute(Command::DeleteShot { line_id, shot_id });
                 }
             }
@@ -436,27 +390,60 @@ fn worker(
                 let _ = state.get_redo_stack();
             }
             12 => {
-                // The memoized solve. Occasionally forced cold, because a cache
-                // that is never invalidated is a cache that is never raced.
+                // The memoised solve, forced cold now and then: a cache that
+                // is never invalidated is never raced.
                 if rng.chance(25) {
-                    state.invalidate_adjusted_cache();
+                    *state
+                        .derived
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
                 }
                 let _ = state.get_adjusted_stations();
+                let _ = state.get_adjustment_report();
             }
             13 => {
-                let _ = state.integrity_check();
+                let _ = state.integrity_violation_messages();
             }
             14 => {
-                let path = temp.join(format!("concurrent-{thread}.stalx"));
+                let path = files.dir.join(format!("concurrent-{thread}.stalx"));
                 let _ = state.save_project(Some(path));
+            }
+            16 => {
+                let _ = state.save_project(None);
+            }
+            17 => {
+                let value = if rng.chance(50) { "true" } else { "false" };
+                let _ = state.save_display_setting("showStations", value);
+            }
+            18 => {
+                let path = files.loads[rng.below(2)].clone();
+                let _ = state.do_load_project_full(path);
+            }
+            19 => {
+                let path = files.loads[rng.below(2)].clone();
+                state.execute(Command::OpenProject { path });
+            }
+            20 => {
+                if let Err(problem) = derived_cache_is_coherent(state) {
+                    if let Ok(mut seen) = seen.lock() {
+                        seen.push(format!("thread {thread} step {step}: {problem}"));
+                    }
+                }
+            }
+            21 => {
+                let depth = state.get_undo_stack().len();
+                if depth > 0 {
+                    let _ = state.undo_to(rng.below(depth.min(4)));
+                }
             }
             _ => {
                 let _ = state.get_project_state();
+                let _ = state.project_state_wire();
             }
         }
         progress.leave(thread);
     }
-    progress.enter(thread, OPERATIONS.len() - 1);
+    progress.enter(thread, FINISHED);
 }
 
 // ===========================================================================
@@ -467,50 +454,70 @@ fn worker(
 struct Outcome {
     operations: usize,
     problems: Vec<String>,
-    hits: std::collections::BTreeMap<&'static str, usize>,
     /// Depths the post-run walk verified.
     walked: usize,
-    /// Workers that ended by unwinding. Every one of them is accounted for by
-    /// the panic recorder, so this is a cross-check rather than a second
-    /// oracle: a thread that died without the hook seeing it would mean the
-    /// hook is not installed.
+    /// Workers that ended by unwinding (a cross-check of the panic recorder).
     died: usize,
+}
+
+/// A fresh state holding the seed's starting survey, saved to both load files
+/// and left open on the first (so every save path has a file to guard).
+fn starting_state(seed: u32, dir: &Path) -> Option<(AppState, Files)> {
+    let state = AppState::new().ok()?;
+    state.set_event_sink(Arc::new(NullSink));
+    let mut rng = Rng::new(seed);
+    build_project(&state, &mut rng, false);
+    let loads = [dir.join("load-a.stalx"), dir.join("load-b.stalx")];
+    for path in &loads {
+        if !state.save_project(Some(path.clone())).success {
+            return None;
+        }
+    }
+    if !state
+        .execute(Command::OpenProject {
+            path: loads[0].clone(),
+        })
+        .success
+    {
+        return None;
+    }
+    Some((
+        state,
+        Files {
+            dir: dir.to_path_buf(),
+            loads,
+        },
+    ))
+}
+
+fn thread_seed(seed: u32, thread: usize) -> u32 {
+    seed.wrapping_mul(2_654_435_761)
+        .wrapping_add((thread as u32).wrapping_mul(97_531))
 }
 
 /// Drive one `AppState` from `threads` workers, then check what survived.
 fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u64) -> Outcome {
     install_panic_recorder();
-    // Anything this thread recorded in an earlier run is not this run's.
     let _ = drain_panics(&[std::thread::current().id()]);
     let mut outcome = Outcome::default();
-
-    let Ok(state) = AppState::new() else {
-        return outcome;
-    };
-    {
-        let mut rng = Rng::new(seed);
-        // No closures in the starting project: that topology was finding 14's,
-        // and a run that trips the app's own assert on move one measures
-        // nothing about concurrency. Finding 14 is FIXED, so turning closures on
-        // here is now an option - but it widens what this gate constructs, and
-        // nobody has measured the wider gate's stability, so it stays off until
-        // someone does.
-        build_project(&state, &mut rng, false);
-    }
     let Ok(temp) = TempDir::new() else {
         return outcome;
     };
-
+    let Some((state, files)) = starting_state(seed, temp.path()) else {
+        outcome.problems.push(format!(
+            "seed {seed}: the starting survey could not be saved"
+        ));
+        return outcome;
+    };
     let state = Arc::new(state);
+    let files = Arc::new(files);
     let progress = Arc::new(Progress::new(threads));
     let stop = Arc::new(AtomicBool::new(false));
-    let temp_path = temp.path().to_path_buf();
+    let seen: Arc<Seen> = Arc::new(std::sync::Mutex::new(Vec::new()));
 
-    // Every worker save reaches `note_recent_project` -> `Config::save()`, and
-    // config resolution is per-thread: without the handoff each worker would
-    // write a config file of its own, and the concurrent writes to ONE file that
-    // this gate has always exercised would quietly stop happening - silently, so
-    // each worker also asserts once that it is on the file the others are.
+    // Every save reaches `note_recent_project` -> `Config::save()`; the
+    // handoff puts every worker on the run's ONE config file, so those writes
+    // are contended as they are in the app.
     let config = crate::test_helpers::ConfigHandoff::capture();
     let shared_config_file = crate::config::Config::config_path().ok();
     let handles: Vec<std::thread::JoinHandle<()>> = (0..threads)
@@ -518,51 +525,31 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
             let state = Arc::clone(&state);
             let progress = Arc::clone(&progress);
             let stop = Arc::clone(&stop);
-            let temp_path = temp_path.clone();
+            let files = Arc::clone(&files);
+            let seen = Arc::clone(&seen);
             let config = config.clone();
             let shared_config_file = shared_config_file.clone();
-            // Per-thread seeds are derived from the run seed so a whole run
-            // replays from one number, and are spread far apart so two threads
-            // never walk the same stream.
-            let thread_seed = seed
-                .wrapping_mul(2_654_435_761)
-                .wrapping_add((thread as u32).wrapping_mul(97_531));
+            let seed = thread_seed(seed, thread);
             std::thread::spawn(move || {
                 let _config = config.adopt();
                 assert_eq!(
                     crate::config::Config::config_path().ok(),
                     shared_config_file,
-                    "a worker must save into the run's ONE config file; a dir of its \
-                     own would make every config write in this gate uncontended"
+                    "a worker must save into the run's ONE config file"
                 );
                 worker(
-                    &state,
-                    &progress,
-                    thread,
-                    thread_seed,
-                    operations,
-                    &temp_path,
-                    &stop,
+                    &state, &progress, thread, seed, operations, &files, &stop, &seen,
                 );
             })
         })
         .collect();
 
-    // LIVENESS. Joining a deadlocked thread blocks forever, so the wait polls
-    // `is_finished` instead and only joins once every worker has left.
-    //
-    // `is_finished`, NOT the progress counter. A worker that PANICS unwinds
-    // without recording its last operation, so a counter-based wait reads a
-    // dead thread as a stuck one and reports a panic as a deadlock - which is
-    // exactly what this did until a run tripped one of the known asserts and
-    // the gate blamed a lock for it. The counter is still used, for the
-    // no-progress window below.
+    // LIVENESS: poll `is_finished` (a panicked worker is finished, not stuck)
+    // against a whole-run deadline and a no-progress window.
     let target = threads * operations;
     let started = std::time::Instant::now();
     let mut last_total = 0;
     let mut last_progress_at = started;
-    // Set when the wait gives up on a thread that never came back. It decides
-    // whether the join below is safe to do at all.
     let mut stalled = false;
     loop {
         if handles.iter().all(std::thread::JoinHandle::is_finished) {
@@ -573,43 +560,26 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
             last_total = total;
             last_progress_at = std::time::Instant::now();
         }
-        // Two separate bounds: a whole-run deadline, and a NO-PROGRESS window.
-        // The second is what actually distinguishes a deadlock from a slow
-        // machine - a slow machine still advances the counter.
         if started.elapsed().as_secs() >= deadline_secs
             || last_progress_at.elapsed().as_secs() >= deadline_secs / 2 + 5
         {
             stop.store(true, Ordering::Relaxed);
             stalled = true;
             outcome.problems.push(format!(
-                "the run did not finish: {total} of {target} operation(s) completed in {:?}, and \
-                 no thread advanced for {:?}, while {} thread(s) were still running. This is what \
-                 a DEADLOCK looks like from outside.\n{}",
+                "seed {seed}: the run did not finish: {total} of {target} operation(s) completed \
+                 in {:?}, and no thread advanced for {:?}, while {} thread(s) were still \
+                 running. This is what a DEADLOCK looks like from outside.\n{}",
                 started.elapsed(),
                 last_progress_at.elapsed(),
-                handles
-                    .iter()
-                    .filter(|handle| !handle.is_finished())
-                    .count(),
+                handles.iter().filter(|h| !h.is_finished()).count(),
                 progress.describe()
             ));
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    // Joined so the test process does not leak threads into the rest of the
-    // suite - but ONLY the threads that actually came back.
-    //
-    // A worker wedged on the project mutex never reaches the top of its loop,
-    // so it never observes `stop` and `join()` on it blocks forever. Doing that
-    // here would hang `cargo test` on precisely the run that just detected a
-    // deadlock, and CI would kill the job at its wall-clock timeout without
-    // ever printing the message composed above - the entire point of the
-    // liveness poll. So a stuck worker is left detached: the process is about
-    // to fail the gate anyway, and reporting beats tidying.
     let worker_threads: Vec<std::thread::ThreadId> =
         handles.iter().map(|handle| handle.thread().id()).collect();
-    let mut died = 0;
     let mut abandoned = 0;
     for handle in handles {
         if stalled && !handle.is_finished() {
@@ -617,66 +587,49 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
             continue;
         }
         if handle.join().is_err() {
-            died += 1;
+            outcome.died += 1;
         }
     }
     if abandoned > 0 {
         outcome.problems.push(format!(
-            "{abandoned} worker thread(s) never returned and were left detached rather than \
-             joined; joining a wedged thread would have hung this test instead of failing it."
+            "seed {seed}: {abandoned} worker thread(s) never returned and were left detached"
         ));
     }
     outcome.operations = progress.total_done();
-    outcome.died = died;
 
-    // NO PANIC, and NO POISON.
+    // NO PANIC, NO POISON.
     for panic in drain_panics(&worker_threads) {
-        match known_panic(&panic) {
-            Some(id) => *outcome.hits.entry(id).or_insert(0) += 1,
-            None => outcome.problems.push(format!("a worker PANICKED: {panic}")),
-        }
+        outcome
+            .problems
+            .push(format!("seed {seed}: a worker PANICKED: {panic}"));
     }
-    // A KNOWN app panic - there is none left to classify, so this arm is dormant
-    // and is kept for the next open finding with a live panic site - unwound
-    // through the project mutex, which POISONS it - and from that instant every
-    // lock site in the app reads "no project open". So the poison check and the
-    // post-run walk below would both be re-reporting one already-classified
-    // defect as three, and the follow-on panics from other workers are its
-    // consequences rather than races. The run is TERMINAL, exactly as the
-    // roundtrip fuzzer's `alignment_panic` is, and for the same reason: nothing
-    // after it measures the app.
-    if !outcome.hits.is_empty() {
-        return outcome;
-    }
-    if outcome.died > 0 && outcome.hits.is_empty() && outcome.problems.is_empty() {
+    if outcome.died > 0 && outcome.problems.is_empty() {
         outcome.problems.push(format!(
-            "{} worker(s) unwound but the panic hook recorded nothing - the recorder is not \
-             installed, so NO PANIC is passing vacuously",
+            "seed {seed}: {} worker(s) unwound but the panic hook recorded nothing",
             outcome.died
         ));
     }
-    if state.project.lock().is_err() {
-        outcome
-            .problems
-            .push("the PROJECT mutex is poisoned after the run".to_string());
+    for (name, poisoned) in [
+        ("project", state.project.is_poisoned()),
+        ("file", state.file.is_poisoned()),
+        ("undo stack", state.undo_stack.is_poisoned()),
+        ("derived", state.derived.is_poisoned()),
+        ("command lock", state.command_lock.is_poisoned()),
+    ] {
+        if poisoned {
+            outcome
+                .problems
+                .push(format!("seed {seed}: the {name} mutex is poisoned"));
+        }
     }
-    if state.undo_stack.lock().is_err() {
+    if let Ok(mut seen) = seen.lock() {
         outcome
             .problems
-            .push("the UNDO STACK mutex is poisoned after the run".to_string());
+            .extend(seen.drain(..).map(|p| format!("seed {seed}: {p}")));
     }
 
-    // POST-RUN CONSISTENCY. Everything below is interleaving-independent: it is
-    // about the state that survived, not about how it got there.
-    //
-    // Inside `catch_unwind`, and NOT because a post-run check is expected to
-    // panic: the walk drives real commands, and a `#[cfg(test)]` assert in any
-    // of them takes the whole process down. On the main thread that is an
-    // immediate test abort with no attribution at all - which is how this gate
-    // failed one run in thirteen before the guard went in, when findings 14 and
-    // 20 still had live merge-alignment assert sites. The guard stays now that
-    // they are fixed: it turns a future assert into this gate's own reported
-    // problem instead of an unattributable abort.
+    // POST-RUN CONSISTENCY, inside `catch_unwind` so a future assert in any
+    // command is this gate's own reported problem.
     if outcome.problems.is_empty() {
         let mut walked = 0;
         let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -684,17 +637,14 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
         }));
         outcome.walked += walked;
         match checked {
-            Ok(problems) => outcome.problems.extend(problems),
+            Ok(problems) => outcome
+                .problems
+                .extend(problems.into_iter().map(|p| format!("seed {seed}: {p}"))),
             Err(_) => {
-                // The hook recorded it under THIS thread, so the same
-                // classification the workers get applies.
                 for panic in drain_panics(&[std::thread::current().id()]) {
-                    match known_panic(&panic) {
-                        Some(id) => *outcome.hits.entry(id).or_insert(0) += 1,
-                        None => outcome
-                            .problems
-                            .push(format!("the post-run walk PANICKED: {panic}")),
-                    }
+                    outcome
+                        .problems
+                        .push(format!("seed {seed}: the post-run walk PANICKED: {panic}"));
                 }
             }
         }
@@ -705,123 +655,176 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
 /// What must be true of the state the threads left behind.
 fn check_final_state(state: &AppState, walked: &mut usize) -> Vec<String> {
     let mut problems = Vec::new();
-    if state.get_project_state().is_none() {
+    let Some(project) = state.get_project_state() else {
         problems.push("no project survived the concurrent phase".to_string());
         return problems;
+    };
+    // COHERENT CACHE, before anything bumps the revision again.
+    if let Err(problem) = derived_cache_is_coherent(state) {
+        problems.push(format!("after the run, {problem}"));
     }
-    // The three derived views must all be computable. A solve that returns
-    // nothing, or a verdict that cannot be produced, is a broken state whatever
-    // the schedule was.
-    if canonical_snapshot(state, false).is_empty() {
-        problems.push("the surviving project could not be serialized".to_string());
+    if canonical(&project).starts_with('<') {
+        problems.push("the surviving survey could not be encoded".to_string());
     }
-    let verdict = integrity_verdict(state);
-    if adjusted_geometry_of(state).is_empty()
-        && state
-            .get_project_state()
-            .is_some_and(|project| project.lines.iter().any(|line| !line.shots.is_empty()))
+    if adjusted_geometry_of(state).is_empty() && project.lines().iter().any(|l| !l.shots.is_empty())
     {
         problems.push(
-            "the adjusted solve returned nothing for a project that still has shots".to_string(),
+            "the Computed View returned nothing for a survey that still has shots".to_string(),
         );
     }
 
-    // Walk the history down and back up. NOT the roundtrip oracle: no
-    // per-depth snapshot model can exist for a concurrently-built history. What
-    // is asserted is that every move either succeeds or fails CLEANLY, that the
-    // app's own integrity check runs at every depth, and that the walk is not
-    // wedged in any shape issue #413 does not already document.
+    // GUARD ON DISK: the fingerprint describes the file, so a plain save
+    // succeeds and the file reads back as the survey.
+    if let Some(path) = project.file_path {
+        let expected = state.with_file(|file| file.fingerprint.clone());
+        if let (Some(expected), Ok((_, on_disk))) = (expected, Fingerprint::read(&path, u64::MAX)) {
+            if !on_disk.same_content(&expected) {
+                problems.push(format!(
+                    "the guard's fingerprint does not describe {} any more, so the next save \
+                     would be refused as changed by another program",
+                    path.display()
+                ));
+            }
+        }
+        let saved = state.save_project(None);
+        if saved.success {
+            match std::fs::read(&path)
+                .ok()
+                .and_then(|bytes| stalx_v2::decode(&bytes, &DecodeOptions::default()).ok())
+            {
+                Some(decoded) if canonical(&decoded.project) == canonical_snapshot(state) => {}
+                Some(_) => problems.push(format!(
+                    "{} does not read back as the survey after the final save",
+                    path.display()
+                )),
+                None => problems.push(format!(
+                    "{} does not decode after the final save",
+                    path.display()
+                )),
+            }
+        } else {
+            problems.push(format!(
+                "a plain save after the run was refused: {:?}",
+                saved.error
+            ));
+        }
+    }
+
+    // WHOLE HISTORY: up to the top first (the workers' undos left redo
+    // entries), then down to the bottom and back, every step succeeding and
+    // the survey valid at every depth.
+    let mut ahead = 0;
+    while state.can_redo() && ahead < 1000 {
+        let result = state.redo();
+        ahead += 1;
+        if !result.success {
+            problems.push(format!(
+                "a redo towards the top was refused at step {ahead}: {:?}",
+                result.error
+            ));
+            return problems;
+        }
+        *walked += 1;
+    }
+    let top = canonical_snapshot(state);
     let mut steps = 0;
-    while !state.get_undo_stack().is_empty() && steps < 400 {
+    while state.can_undo() && steps < 1000 {
         let result = state.undo();
         steps += 1;
         if !result.success {
-            let error = result.error.unwrap_or_default();
-            // Findings 6 and 13: both leave the entry pushed back, which is the
-            // wedge, and both are open and already pinned.
-            let documented = error.contains("part of a loop")
-                || error.contains("zero datum")
-                || error.contains("Cannot delete a frozen shot")
-                || error.contains("no longer exists");
-            if !documented {
-                problems.push(format!(
-                    "the post-run undo walk failed at step {steps} for an undocumented reason: \
-                     {error}"
-                ));
-            }
-            break;
+            problems.push(format!(
+                "the post-run undo walk was refused at step {steps}: {:?}",
+                result.error
+            ));
+            return problems;
         }
-        let _ = integrity_verdict(state);
+        let violations = state.integrity_violation_messages();
+        if !violations.is_empty() {
+            problems.push(format!(
+                "undo step {steps} left an invalid survey: {violations:?}"
+            ));
+            return problems;
+        }
         *walked += 1;
     }
     let mut forward = 0;
-    while !state.get_redo_stack().is_empty() && forward < 400 {
+    while state.can_redo() && forward < 1000 {
         let result = state.redo();
         forward += 1;
         if !result.success {
-            break;
+            problems.push(format!(
+                "the post-run redo walk was refused at step {forward}: {:?}",
+                result.error
+            ));
+            return problems;
         }
-        let _ = integrity_verdict(state);
         *walked += 1;
     }
-    // The verdict is read again at the end rather than compared: a verdict is
-    // not a function of a schedule, so there is nothing to compare it against.
-    // What matters is that it can still be produced.
-    let _ = verdict;
+    if forward != steps {
+        problems.push(format!(
+            "the walk went down {steps} step(s) and back up {forward}"
+        ));
+    }
+    let back = canonical_snapshot(state);
+    if !same_up_to_counters(&top, &back) {
+        problems.push(format!(
+            "redoing to the top did not land on the state the walk started from: {}",
+            super::robustness_kit::first_difference(&top, &back)
+        ));
+    }
     problems
 }
 
-/// SEQUENTIAL EQUIVALENCE, in the only form that is honest here.
-///
-/// Replaying ONE worker's stream single-threaded cannot be asserted to produce
-/// the SAME state - interleaving legitimately changes outcomes, and a command
-/// that failed because another thread had deleted its target succeeds when it
-/// runs alone. What can be asserted is that the stream is not intrinsically
-/// destructive: run alone it must leave a state that serializes, integrity-
-/// checks and solves. A stream that breaks the app single-threaded would make
-/// every concurrent result about that stream rather than about concurrency.
+/// Equal canonical texts, except that the id counters may stand higher (an
+/// undo applies them as `max(live, recorded)`, plan 8.1).
+fn same_up_to_counters(want: &str, got: &str) -> bool {
+    let (w, g): (Vec<&str>, Vec<&str>) = (want.lines().collect(), got.lines().collect());
+    w.len() == g.len()
+        && w.iter().zip(&g).all(|(w, g)| {
+            w == g || (w.starts_with("\"counters\":") && g.starts_with("\"counters\":"))
+        })
+}
+
+/// SEQUENTIAL EQUIVALENCE, in the only honest form: one worker's stream, run
+/// alone, must leave a state that passes the same post-run checks (so a
+/// concurrent failure is about concurrency, not about the stream).
 fn check_sequential_replay(seed: u32, thread: usize, operations: usize) -> Vec<String> {
-    let Ok(state) = AppState::new() else {
-        return Vec::new();
-    };
-    {
-        let mut rng = Rng::new(seed);
-        build_project(&state, &mut rng, false);
-    }
     let Ok(temp) = TempDir::new() else {
         return Vec::new();
     };
+    let Some((state, files)) = starting_state(seed, temp.path()) else {
+        return vec![format!(
+            "seed {seed}: the starting survey could not be saved"
+        )];
+    };
     let progress = Progress::new(1);
     let stop = AtomicBool::new(false);
-    let thread_seed = seed
-        .wrapping_mul(2_654_435_761)
-        .wrapping_add((thread as u32).wrapping_mul(97_531));
+    let seen: Seen = std::sync::Mutex::new(Vec::new());
     worker(
         &state,
         &progress,
         0,
-        thread_seed,
+        thread_seed(seed, thread),
         operations,
-        temp.path(),
+        &files,
         &stop,
+        &seen,
     );
-    // Same guard, same reason: a replayed stream can trip a known assert on the
-    // main thread just as a worker can.
+    let mut problems: Vec<String> = seen.lock().map(|s| s.clone()).unwrap_or_default();
     let mut walked = 0;
-    let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         check_final_state(&state, &mut walked)
-    }));
-    match checked {
-        Ok(problems) => problems
-            .into_iter()
-            .map(|problem| format!("sequential replay of thread {thread}: {problem}"))
-            .collect(),
-        Err(_) => drain_panics(&[std::thread::current().id()])
-            .into_iter()
-            .filter(|panic| known_panic(panic).is_none())
-            .map(|panic| format!("sequential replay of thread {thread} PANICKED: {panic}"))
-            .collect(),
+    })) {
+        Ok(found) => problems.extend(found),
+        Err(payload) => problems.push(format!(
+            "PANICKED: {}",
+            super::robustness_kit::panic_text(payload.as_ref())
+        )),
     }
+    problems
+        .into_iter()
+        .map(|p| format!("seed {seed}, sequential replay of thread {thread}: {p}"))
+        .collect()
 }
 
 // ===========================================================================
@@ -831,18 +834,15 @@ fn check_sequential_replay(seed: u32, thread: usize, operations: usize) -> Vec<S
 const GATE_SEEDS: &[u32] = &[1, 2, 3];
 const GATE_THREADS: usize = 4;
 const GATE_OPERATIONS: usize = 150;
-/// Generous BY DESIGN. A real deadlock never finishes; a slow CI box finishes
-/// this in well under a second. Two orders of magnitude between them is what
-/// keeps a Windows or macOS scheduler from being reported as a bug.
-const GATE_DEADLINE_SECS: u64 = 60;
+/// Generous BY DESIGN: a real deadlock never finishes, a slow CI box finishes
+/// this in seconds.
+const GATE_DEADLINE_SECS: u64 = 120;
 
 /// THE CONCURRENCY GATE. Not `#[ignore]`d.
 #[test]
 fn concurrency_gate() {
     let _config = isolated_config();
     let mut problems = Vec::new();
-    let mut total: std::collections::BTreeMap<&'static str, usize> =
-        std::collections::BTreeMap::new();
     let mut operations = 0;
     let mut walked = 0;
     for &seed in GATE_SEEDS {
@@ -850,29 +850,14 @@ fn concurrency_gate() {
         operations += outcome.operations;
         walked += outcome.walked;
         problems.extend(outcome.problems);
-        for (id, count) in outcome.hits {
-            *total.entry(id).or_insert(0) += count;
-        }
-        // One thread's stream, alone, must not break the app by itself.
         problems.extend(check_sequential_replay(seed, 0, GATE_OPERATIONS / 3));
     }
     println!(
         "concurrency: {} seed(s) x {GATE_THREADS} thread(s) x {GATE_OPERATIONS} operation(s) = \
-         {operations} completed, {walked} post-run depth(s) walked; classified: {total:?}",
+         {operations} completed, {walked} post-run depth(s) walked",
         GATE_SEEDS.len()
     );
-    // A run whose threads all no-op'd proves nothing about a lock.
-    // Not "every operation completed": a worker that trips a KNOWN assert
-    // unwinds and stops early, which would be legitimate and accounted for by
-    // the classifier. NOTHING is classified today - finding 24's overflow site
-    // and the merge-alignment ones are all fixed, and every panic is a reported
-    // problem again - so `total` is empty and the high floor is the one that
-    // applies. What must not happen is the workers not running at all.
-    let floor = if total.is_empty() {
-        GATE_SEEDS.len() * GATE_THREADS * GATE_OPERATIONS
-    } else {
-        GATE_SEEDS.len() * GATE_THREADS
-    };
+    let floor = GATE_SEEDS.len() * GATE_THREADS * GATE_OPERATIONS;
     assert!(
         operations >= floor,
         "only {operations} operation(s) completed (floor {floor}); the workers did not run"
@@ -885,6 +870,313 @@ fn concurrency_gate() {
     );
 }
 
+/// A full load racing edits, with the derived cache probed under the project
+/// lock between them. The load does not take `command_lock`, and it seeds the
+/// memoised raw layout of the survey it opened after the commit; an edit
+/// landing between the two must not leave that layout cached as the edited
+/// survey's.
+#[test]
+fn a_full_load_racing_edits_never_leaves_a_stale_derived_cache() {
+    let _config = isolated_config();
+    install_panic_recorder();
+    let temp = TempDir::new().unwrap();
+    let (state, files) = starting_state(7, temp.path()).unwrap();
+    let state = Arc::new(state);
+    let files = Arc::new(files);
+    let stop = Arc::new(AtomicBool::new(false));
+    let config = crate::test_helpers::ConfigHandoff::capture();
+    let loader = {
+        let (state, files, stop, config) = (
+            Arc::clone(&state),
+            Arc::clone(&files),
+            Arc::clone(&stop),
+            config.clone(),
+        );
+        std::thread::spawn(move || {
+            let _config = config.adopt();
+            let loads: usize = std::env::var("STALAGMIGHT_RUST_CONC_LOADS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(300);
+            for i in 0..loads {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                let _ = state.do_load_project_full(files.loads[i % 2].clone());
+            }
+        })
+    };
+    let editor = {
+        let (state, stop) = (Arc::clone(&state), Arc::clone(&stop));
+        std::thread::spawn(move || {
+            let _config = config.adopt();
+            let mut rng = Rng::new(11);
+            while !stop.load(Ordering::Relaxed) {
+                if let Some((line_id, shot_id)) =
+                    read_targets(&state).and_then(|t| t.pick_shot(&mut rng))
+                {
+                    state.execute(Command::UpdateShot {
+                        line_id,
+                        shot_id,
+                        updates: ShotUpdates {
+                            length: Some(rng.float(1.0, 15.0)),
+                            ..ShotUpdates::default()
+                        },
+                    });
+                }
+            }
+        })
+    };
+    let mut stale = Vec::new();
+    while !loader.is_finished() {
+        if let Err(problem) = derived_cache_is_coherent(&state) {
+            stale.push(problem);
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
+    loader.join().unwrap();
+    editor.join().unwrap();
+    assert!(
+        stale.is_empty(),
+        "{} stale derived cache(s), first: {}",
+        stale.len(),
+        stale[0]
+    );
+}
+
+/// Walk the persisted history of the file at `path` in a fresh state: down to
+/// the bottom and back up, every step succeeding (the entries are decoded,
+/// so each step checks its preconditions against the body the file holds).
+fn walk_the_file_history(path: &Path) -> Result<usize, String> {
+    let state = super::robustness_kit::open_fresh(path)
+        .ok_or_else(|| format!("{} does not open", path.display()))?;
+    let mut steps = 0;
+    while state.can_redo() {
+        let r = state.redo();
+        if !r.success {
+            return Err(format!("redo {steps} refused: {:?}", r.error));
+        }
+        steps += 1;
+    }
+    while state.can_undo() {
+        let r = state.undo();
+        if !r.success {
+            return Err(format!("undo after {steps} step(s) refused: {:?}", r.error));
+        }
+        steps += 1;
+    }
+    Ok(steps)
+}
+
+/// A display toggle's local-only save racing saves, undo and redo: the
+/// history it writes beside the body on disk must be the one that goes with
+/// that body. The toggle does not take `command_lock`; it used to read the
+/// dirty flag and the stacks without the `project` guard, so an undo caught
+/// between popping its entry and marking the project dirty had the file
+/// written with the pre-undo body and the post-undo stacks, and the next open
+/// refused its history ("the project is not in the state this history step
+/// expects"). Found by `concurrency_soak` (seeds 16 and 27 of 30 x 8 x 800).
+#[test]
+fn a_display_toggle_racing_undo_never_writes_a_history_that_does_not_fit_the_body() {
+    let _config = isolated_config();
+    install_panic_recorder();
+    let temp = TempDir::new().unwrap();
+    let (state, files) = starting_state(5, temp.path()).unwrap();
+    let mut rng = Rng::new(5);
+    for _ in 0..6 {
+        if let Some((line_id, _)) = read_targets(&state).and_then(|t| t.lines.first().cloned()) {
+            state.execute(Command::CreateShot {
+                line_id,
+                shot: random_shot(&mut rng),
+                after_shot_id: None,
+                before_shot_id: None,
+            });
+        }
+    }
+    assert!(state.save_project(None).success);
+    let rounds: usize = std::env::var("STALAGMIGHT_RUST_CONC_ROUNDS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(40);
+    let state = Arc::new(state);
+    let stop = Arc::new(AtomicBool::new(false));
+    let config = crate::test_helpers::ConfigHandoff::capture();
+    let toggler = {
+        let (state, stop) = (Arc::clone(&state), Arc::clone(&stop));
+        std::thread::spawn(move || {
+            let _config = config.adopt();
+            let mut on = false;
+            while !stop.load(Ordering::Relaxed) {
+                on = !on;
+                let _ = state.save_display_setting("showGrid", if on { "true" } else { "false" });
+            }
+        })
+    };
+    let mut broken = Vec::new();
+    for round in 0..rounds {
+        // A clean file, then one step: the toggles that follow write the
+        // history the file had, whatever the stacks say now.
+        let saved = state.save_project(None);
+        assert!(saved.success, "round {round}: {:?}", saved.error);
+        let step = if round % 2 == 0 {
+            state.undo()
+        } else {
+            state.redo()
+        };
+        assert!(step.success, "round {round}: {:?}", step.error);
+        if let Err(why) = walk_the_file_history(&files.loads[0]) {
+            broken.push(format!("after round {round}: {why}"));
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
+    toggler.join().unwrap();
+    if let Err(why) = walk_the_file_history(&files.loads[0]) {
+        broken.push(format!("at the end: {why}"));
+    }
+    assert!(
+        broken.is_empty(),
+        "{} file(s) whose history does not fit the body, first: {}",
+        broken.len(),
+        broken[0]
+    );
+}
+
+/// Whether the guard's fingerprint describes the open file's bytes.
+fn guard_describes_the_open_file(state: &AppState) -> Result<(), String> {
+    let path = state
+        .open_file_path()
+        .ok_or_else(|| "no file is open".to_string())?;
+    let expected = state
+        .with_file(|file| file.fingerprint.clone())
+        .ok_or_else(|| "the open file has no fingerprint".to_string())?;
+    let (_, on_disk) = Fingerprint::read(&path, u64::MAX).map_err(|e| e.to_string())?;
+    if on_disk.same_content(&expected) {
+        Ok(())
+    } else {
+        Err(format!(
+            "the guard's fingerprint does not describe {}",
+            path.display()
+        ))
+    }
+}
+
+/// An open reads the file without a lock and commits it later. One of our
+/// own writes of that file in between (here a display toggle's local-only
+/// save of the open file, which takes no `command_lock`) left the commit
+/// installing the fingerprint of bytes no longer on disk, so the next save
+/// was refused as "changed by another program". Found by `concurrency_soak`
+/// (seeds 32000087 and 32000349, 4 threads x 800 ops). The interleaving is
+/// forced here: the read, the toggle, then the commit, which must refuse
+/// the read and change nothing.
+#[test]
+fn a_commit_refuses_a_read_our_own_write_made_stale() {
+    let _config = isolated_config();
+    let temp = TempDir::new().unwrap();
+    let (state, files) = starting_state(3, temp.path()).unwrap();
+    let path = &files.loads[0];
+    let opened = state.read_project_file(path).unwrap();
+    let (_, read) = Fingerprint::read(path, u64::MAX).unwrap();
+    let shown = state.get_display_setting("showGrid").unwrap();
+    let flipped = if shown.as_deref() == Some("true") {
+        "false"
+    } else {
+        "true"
+    };
+    state.save_display_setting("showGrid", flipped).unwrap();
+    let (_, toggled) = Fingerprint::read(path, u64::MAX).unwrap();
+    assert!(
+        !toggled.same_content(&read),
+        "the toggle must rewrite the file for this test to mean anything"
+    );
+    let revision = state.current_revision();
+    assert!(
+        state.commit_opened(opened, IfChanged::ReadAgain).is_err(),
+        "a read the file no longer holds was committed"
+    );
+    assert_eq!(
+        state.current_revision(),
+        revision,
+        "the refusal committed something"
+    );
+    guard_describes_the_open_file(&state).unwrap();
+    let saved = state.save_project(None);
+    assert!(saved.success, "{:?}", saved.error);
+    // The executor's open reads it again and commits what the file holds.
+    let reopened = state.execute(Command::OpenProject { path: path.clone() });
+    assert!(reopened.success, "{:?}", reopened.error);
+    guard_describes_the_open_file(&state).unwrap();
+}
+
+/// The same window through the IPC load, forced by the load's own progress
+/// event: a Save As of the open project onto the file being loaded lands
+/// between the load's read and its commit. The load reads the file again,
+/// opens what it now holds, and guards those bytes. Before the fix it opened
+/// the bytes the Save As replaced, guarded by their fingerprint, and the
+/// next save was refused.
+#[test]
+fn a_save_as_onto_the_file_being_loaded_is_read_again() {
+    struct SaveAsMidLoad {
+        state: std::sync::OnceLock<std::sync::Weak<AppState>>,
+        target: PathBuf,
+        fired: AtomicBool,
+    }
+    impl crate::core::events::EventSink for SaveAsMidLoad {
+        fn emit(&self, _event: &str, payload: serde_json::Value) {
+            let mid_load =
+                serde_json::to_value(crate::core::loading::LoadingPhase::ComputingStations).ok();
+            if payload.get("phase") != mid_load.as_ref() || self.fired.swap(true, Ordering::SeqCst)
+            {
+                return;
+            }
+            if let Some(state) = self.state.get().and_then(std::sync::Weak::upgrade) {
+                let saved = state.save_project(Some(self.target.clone()));
+                assert!(saved.success, "the Save As mid-load: {:?}", saved.error);
+            }
+        }
+
+        fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
+            false
+        }
+    }
+
+    let _config = isolated_config();
+    let temp = TempDir::new().unwrap();
+    let (state, files) = starting_state(4, temp.path()).unwrap();
+    // The open survey differs from the one load-b holds, so the Save As
+    // rewrites load-b.
+    let (line_id, _) = read_targets(&state).unwrap().lines[0].clone();
+    let edited = state.execute(Command::SetStationComment {
+        station_ref: StationRef::new(line_id, 0),
+        comment: Some("written by the Save As".to_string()),
+    });
+    assert!(edited.success, "{:?}", edited.error);
+    let state = Arc::new(state);
+    let sink = Arc::new(SaveAsMidLoad {
+        state: std::sync::OnceLock::new(),
+        target: files.loads[1].clone(),
+        fired: AtomicBool::new(false),
+    });
+    let _ = sink.state.set(Arc::downgrade(&state));
+    state.set_event_sink(Arc::clone(&sink) as Arc<dyn crate::core::events::EventSink>);
+
+    let loaded = state.do_load_project_full(files.loads[1].clone());
+    assert!(loaded.is_ok(), "{:?}", loaded.err());
+    assert!(sink.fired.load(Ordering::SeqCst), "the Save As never ran");
+    guard_describes_the_open_file(&state).unwrap();
+    let on_disk = stalx_v2::decode(
+        &std::fs::read(&files.loads[1]).unwrap(),
+        &DecodeOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        canonical(&on_disk.project),
+        canonical_snapshot(&state),
+        "the load opened bytes the file no longer holds"
+    );
+    let saved = state.save_project(None);
+    assert!(saved.success, "{:?}", saved.error);
+}
+
 /// The SOAK: more threads, more operations, minutes rather than seconds.
 ///
 /// ```text
@@ -894,6 +1186,8 @@ fn concurrency_gate() {
 ///   --manifest-path src-tauri/Cargo.toml -p stalagmight-core \
 ///   --lib concurrency_soak -- --ignored --nocapture
 /// ```
+///
+/// `STALAGMIGHT_RUST_CONC_FIRST_SEED=n` starts the seed window at `n` (default 1).
 #[test]
 #[ignore = "soak: minutes, not seconds - run deliberately with STALAGMIGHT_RUST_CONC_SEEDS/THREADS/OPS"]
 fn concurrency_soak() {
@@ -910,27 +1204,21 @@ fn concurrency_soak() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(800);
-
-    let mut total: std::collections::BTreeMap<&'static str, usize> =
-        std::collections::BTreeMap::new();
     let mut dirty = Vec::new();
     let mut completed = 0;
-    for seed in 1..=seeds {
+    for seed in crate::test_helpers::sweep_seeds("STALAGMIGHT_RUST_CONC_FIRST_SEED", seeds) {
         let outcome = run_concurrent(seed, threads, operations, 300);
         completed += outcome.operations;
-        for (id, count) in outcome.hits {
-            *total.entry(id).or_insert(0) += count;
-        }
         if !outcome.problems.is_empty() {
             dirty.push(seed);
             for problem in &outcome.problems {
-                println!("seed {seed}: {problem}");
+                println!("{problem}");
             }
         }
     }
     println!(
         "concurrency soak: {seeds} seed(s) x {threads} thread(s) x {operations} op(s) = \
-         {completed} completed; classified: {total:?}"
+         {completed} completed"
     );
     println!("seeds with a failure ({}): {dirty:?}", dirty.len());
 }

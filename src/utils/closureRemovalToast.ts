@@ -1,5 +1,6 @@
 import { useUIStore } from '../store/uiStore';
 import type { CommandResult } from '../types/commands';
+import { backendProse } from './prose';
 import { TOAST_KEYS } from './toastKeys';
 
 /**
@@ -33,13 +34,14 @@ const CLOSURE_REMOVED_CODES: ReadonlySet<string> = new Set([
  * the messages are the backend's own words, joined, under one dedup key - one
  * event, one surface (docs/notifications.md). A warning toast, not an error:
  * the edit did what was asked, and one Undo brings the closure back with the
- * rest of it.
+ * rest of it. The stations a message names are prose pills (RS-PROSE: its
+ * `parts` as tokens, which the toast draws; its live region reads the words).
  */
 export function notifyRemovedClosures(result: CommandResult): CommandResult {
   if (!result.success) return result;
   const messages = (result.warnings ?? [])
     .filter((w) => CLOSURE_REMOVED_CODES.has(w.code))
-    .map((w) => w.message);
+    .map((w) => backendProse(w.message, w.parts));
   if (messages.length > 0) {
     useUIStore.getState().showToast(messages.join(' '), TOAST_KEYS.CLOSURE_REMOVED, 'warning');
   }

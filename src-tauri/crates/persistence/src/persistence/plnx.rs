@@ -1,6 +1,6 @@
 //! `.plnx` sibling store (#244): named dive-plan snapshots in a standalone SQLite
-//! file next to the `.stalx`. Deliberately independent of the `.stalx` [`Database`]
-//! (different schema, different lifecycle) - it reuses only the rusqlite plumbing.
+//! file next to the `.stalx`. Deliberately independent of the `.stalx` itself
+//! (different format, different lifecycle) - it reuses only the rusqlite plumbing.
 //!
 //! Atomicity/durability come from SQLite's in-place ACID transactions (rollback
 //! journal + `synchronous=FULL`), which is the right model for an incrementally

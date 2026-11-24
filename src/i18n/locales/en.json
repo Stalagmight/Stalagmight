@@ -46,6 +46,11 @@
       "status": "Status",
       "section": "Line"
     },
+    "list": {
+      "two": "{{first}} and {{last}}",
+      "many": "{{head}} and {{last}}",
+      "more": "{{head}} and {{count}} more"
+    },
     "states": {
       "disabled": "Disabled",
       "enabled": "Enabled",
@@ -1192,7 +1197,80 @@
       "title": "Save Failed",
       "detachTitle": "Detach Failed",
       "pathNotFound": "Stalagmight couldn't save there - the folder no longer exists or the drive is not connected. Choose another location and try again.",
-      "pathTooLong": "Stalagmight couldn't save there - the full path is too long for the system to open. Save to a shorter folder path, or use a shorter file name."
+      "pathTooLong": "Stalagmight couldn't save there - the full path is too long for the system to open. Save to a shorter folder path, or use a shorter file name.",
+      "readOnlyFile": "This project was made with a newer version of Stalagmight, so this version opened it read-only and cannot save it. Update Stalagmight to edit and save it."
+    },
+    "detachLine": {
+      "title": "Detach a Line from This Station",
+      "lead": "{{station}} is where {{count}} lines meet. Choose what comes off:",
+      "leadWaiting": "{{station}} is where {{count}} lines meet.",
+      "comesOff": "{{line}} comes off: it gets back {{name}} (Station ID {{id}}); {{keeper}} keeps station {{station}}.",
+      "explainComesOff": "{{line}} keeps its shots, and a datum or loop closure set on it goes with it. Undo puts it back.",
+      "explain": "The line you detach keeps its shots and gets its own station here. A datum or loop closure set on that line goes with it. The other lines stay joined, and Undo puts it back.",
+      "explainKeeps": "{{others}} keep their shots and come off together on one station of their own here, and a datum or loop closure set on them goes with them. {{line}} keeps this station and its comment. Undo puts it back.",
+      "restores": "{{line}} comes off and gets back the station it had here before the merge.",
+      "keeps_one": "{{line}} keeps this station, and {{others}} comes off.",
+      "keeps_other": "{{line}} keeps this station, and {{others}} come off together: they stay joined.",
+      "copies": "{{line}} comes off with a new station of its own here.",
+      "together": "{{others}}, together ({{line}} keeps this station)",
+      "togetherClicked": "{{others}}, together ({{line}}, the line you clicked, keeps this station)",
+      "results": "After Detach:",
+      "resultOff": "{{line}}: {{name}}, Station ID {{id}} (comes off)",
+      "resultOffNew": "{{line}}: {{name}}, Station ID {{id}} (comes off with a new station)",
+      "resultOffWith": "{{line}}: {{name}}, Station ID {{id}} (comes off with {{joined}})",
+      "resultStays": "{{line}}: {{name}}, Station ID {{id}} (stays)",
+      "thisLine": "{{line}} (the line you clicked)",
+      "notFound": "Station not found.",
+      "close": "Close",
+      "cancel": "Cancel",
+      "confirm": "Detach",
+      "working": "Detaching...",
+      "failed": "Failed to detach the line",
+      "comesBack_one": "It gets back {{name}} (Station ID {{id}}).",
+      "comesBack_other": "They get back {{name}} (Station ID {{id}}).",
+      "comesBackComment": "With its comment: \"{{comment}}\"",
+      "staysInside": "{{station}} (Station ID {{id}}) stays archived inside it: detach {{line}} again to get it back.",
+      "staysInsideWith": "{{station}} (Station ID {{id}}) stays archived inside it, with {{inner}} archived inside {{station}}: detach {{line}} again to get it back.",
+      "insideStation": "{{station}} (Station ID {{id}})",
+      "offTogether_one": "{{lines}} comes off with {{line}}: they were one station before the merge.",
+      "offTogether_other": "{{lines}} come off with {{line}}: they were one station before the merge.",
+      "shownBefore": "{{line}} showed {{station}} here through a loop closure; it will show {{name}}.",
+      "shownElsewhereLead": "Elsewhere, a loop closure or a merge the detach makes changes what these stations show:",
+      "shownElsewhere": "{{line}}: {{after}} where it showed {{before}}",
+      "restLead": "The lines that come off show:",
+      "restFailed": "That choice could not be checked, so the lines that come off show the station chosen for them.",
+      "lettersStay": "A name that took a letter earlier because of this station keeps it."
+    },
+    "saveConflict": {
+      "title": "The project file changed on disk",
+      "thisFile": "the project file",
+      "lead": "Another program changed {{fileName}} after Stalagmight opened it. Saving now would replace that program's changes with yours.",
+      "unsaved": "Your unsaved changes are still here. Choose which version to keep:",
+      "overwrite": "Keep my version",
+      "overwriteDetail": "Save your changes over the file. The other program's changes are lost.",
+      "saveAs": "Save as a new file...",
+      "saveAsDetail": "Keep both: your version goes to a new file and the changed file is left as it is.",
+      "reload": "Use the file's version",
+      "reloadDetail": "Open the file as it is now. Your unsaved changes are lost.",
+      "cancel": "Decide later",
+      "working": "Saving...",
+      "failed": "That did not work: {{error}}",
+      "reloadRefused": "The file can't be opened as it is now, so your unsaved changes were kept: {{error}}",
+      "missing": {
+        "title": "The project file was moved or deleted",
+        "lead": "{{fileName}} was moved or deleted by another program after Stalagmight opened it. Your changes are only in Stalagmight now.",
+        "unsaved": "Your unsaved changes are still here. Choose where to save them:",
+        "overwrite": "Save it where it was",
+        "overwriteDetail": "Save your version where the file was.",
+        "saveAsDetail": "Save your version to a new file."
+      },
+      "exists": {
+        "title": "Another file is in the way",
+        "lead": "A file named {{fileName}} appeared at this location before Stalagmight could save the project there. It is not this project, so nothing was saved over it.",
+        "unsaved": "Your project is still here, with all its changes. Choose where to save it:",
+        "overwriteDetail": "Save your project over that file. The file that appeared there is lost.",
+        "saveAsDetail": "Save your project to a new file and leave that file alone."
+      }
     },
     "importFailure": {
       "commandTitle": "Import Errors",
@@ -1227,15 +1305,40 @@
       "warningToast": "Merge complete - {{message}}"
     },
     "mergeStations": {
-      "datumShift": "{{piece}} is placed by its own GPS. It moves {{distance}} m to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
-      "datumShiftAfterMove": "{{piece}} is placed by its own GPS. The merge moves it to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
-      "pieceMore_one": "{{name}} and 1 more line",
-      "pieceMore_other": "{{name}} and {{count}} more lines"
+      "becomesClosure": "These stations are already connected, so merging them would make a loop. A loop closure is created instead.",
+      "datumShift_one": "{{piece}} is placed by its own GPS. It moves {{distance}} m to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
+      "datumShift_other": "{{piece}} are placed by their own GPS. They move {{distance}} m to meet the other piece, and their zero datum at {{station}} becomes a GPS fix.",
+      "datumShiftAfterMove_one": "{{piece}} is placed by its own GPS. The merge moves it to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
+      "datumShiftAfterMove_other": "{{piece}} are placed by their own GPS. The merge moves them to meet the other piece, and their zero datum at {{station}} becomes a GPS fix.",
+      "moves_one": "{{piece}} moves {{distance}} m onto {{station}}'s position.",
+      "moves_other": "{{piece}} move {{distance}} m onto {{station}}'s position.",
+      "depths": "Depths {{readings}} become {{joined}}: the joined station takes the mean of its depth readings.",
+      "depthReading": "{{depth}} ({{line}})",
+      "depthReadings": "{{depth}} ({{line}}, {{count}} readings)",
+      "alreadyJoined": "{{station}} is already where {{lines}} meet.",
+      "stationA": "Station A:",
+      "stationB": "Station B:",
+      "keepLead": "Keep (the station kept is shown on every line):",
+      "holdsDatum": "(zero datum)",
+      "keepForced": "A loop closure already shows these two stations as one, so its kept station stays.",
+      "renamedLines_one": "{{lines}} will show {{station}}.",
+      "renamedLines_other": "{{lines}} will show {{station}}.",
+      "archived": "{{station}} is archived.",
+      "archivedWithComment": "{{station}} is archived with its comment.",
+      "archivedInside": "{{station}} (Station ID {{id}}), archived inside {{hidden}} by an earlier merge, stays inside it: a second Detach brings it back.",
+      "detachBringsBack": "Detach Line from Station brings {{station}} back.",
+      "repeat": "{{line}} already has a station {{name}} (Station ID {{id}}); it keeps its name, and {{line}} shows {{name}} twice, the junction in {{home}}'s colour.",
+      "repeatLoopEnd": "{{line}} already has a station {{name}} (Station ID {{id}}); it keeps its name, and {{line}} shows {{name}} twice, once at a loop end with the loop mark.",
+      "loopEndShown": "It was the hidden end of a loop closure: the closure stays, and {{station}} is shown at that end too.",
+      "cancel": "Cancel",
+      "confirm": "Merge",
+      "working": "Merging..."
     },
     "importBlocked": {
       "title": "Importing DMP",
       "body": "Switch to Survey mode for import since Plan and Export modes are read-only.",
       "bodyView": "Switch to the Raw Data View for import since the Closures Computed View is read-only.",
+      "bodyFile": "This project was made with a newer version of Stalagmight, so it is open read-only and a DMP cannot be added to it. Update Stalagmight to import into it.",
       "switchToSurvey": "Switch to Survey",
       "switchToMeasured": "Switch to Raw Data View",
       "stayInPlan": "Stay in Plan",
@@ -1652,7 +1755,7 @@
       "skipAll": "Skip All"
     },
     "editStation": {
-      "nameHint": "Unique within its line. Renaming keeps the Station ID.",
+      "nameHint": "Unique on every line that shows this name. Renaming keeps the Station ID.",
       "accuracyLabel": "Accuracy (m)",
       "accuracyHint": "0 puts the computed survey exactly through this GPS. A larger number (a smartwatch is roughly 5 m) trusts the GPS less, and the survey wins most of the gap.",
       "accuracyInvalid": "Enter an accuracy from 0 to {{max}} m.",
@@ -1666,7 +1769,8 @@
       "gap": "GPS is {{distance}} m {{direction}} of the surveyed position.",
       "gapExceeds": "That is more than the {{threshold}} m expected over {{distance}} m of survey from the zero datum that places this survey. Check the GPS reading and the survey; you can still save.",
       "gapExceedsNoDistance": "That is more than the {{threshold}} m expected. Check the GPS reading and the survey; you can still save.",
-      "editingDisabled": "Editing is disabled in the current view"
+      "editingDisabled": "Editing is disabled in the current view",
+      "loopEndDatum": "This station is {{station}}: the datum goes on its own point."
     },
     "zeroDatumSelection": {
       "title": "Select Zero Datum Line",
@@ -1700,10 +1804,12 @@
     },
     "export": {
       "failed": "Export failed - try a different folder or file name",
+      "succeeded": "Exported to {{file}}",
       "notes": {
         "azimuth-rotated-to-true": "Bearings rotated to true north for Ariane",
         "azimuth-mixed-unresolved": "Some lines have no declination - Ariane will re-correct all",
-        "gps-anchors-not-written": "Some zero datums could not be written to the file"
+        "gps-anchors-not-written": "Some zero datums could not be written to the file",
+        "station-comments-not-written": "Comments on entrance stations were left out - Ariane has no place for them"
       }
     },
     "tmlUnanchoredWarning": {
@@ -1712,6 +1818,9 @@
       "bodyAllUnanchored": "No line in this project is connected to a zero datum, so the exported file will not be georeferenced - Ariane will not know where in the world the survey sits. Nothing is discarded: every line and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to anchor the survey, or continue to export without georeferencing.",
       "bodyPartial_one": "{{count}} of {{total}} lines is not connected to a zero datum, so no GPS reading places it: it will export at the spot the map shows. Nothing is discarded: every line and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect it, or continue to export as-is.",
       "bodyPartial_other": "{{count}} of {{total}} lines are not connected to a zero datum, so no GPS reading places them: they will export at the spot the map shows. Nothing is discarded: every line and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect them, or continue to export as-is.",
+      "bodyAllUnanchoredReadOnly": "No line in this project is connected to a zero datum, so the exported file will not be georeferenced - Ariane will not know where in the world the survey sits. Nothing is discarded: every line and shot still exports.",
+      "bodyPartialReadOnly_one": "{{count}} of {{total}} lines is not connected to a zero datum, so no GPS reading places it: it will export at the spot the map shows. Nothing is discarded: every line and shot still exports.",
+      "bodyPartialReadOnly_other": "{{count}} of {{total}} lines are not connected to a zero datum, so no GPS reading places them: they will export at the spot the map shows. Nothing is discarded: every line and shot still exports.",
       "listHeading": "Lines without a zero datum connection"
     },
     "about": {
@@ -1733,7 +1842,7 @@
       }
     },
     "splitSectionHere": {
-      "halvesNotConnected": "The halves are not connected: merge the two cut stations if routes and gas planning should continue across them."
+      "halvesShareStation": "The two halves stay joined: the split station becomes one station on both lines, with its name, comment and datum, so routes and gas planning carry on across it and nothing moves. Editing one half can move the other; to cut them apart, detach a line from the station."
     },
     "combineSections": {
       "branchesNote_one": "{{names}} stays attached at the join, which becomes a station in the middle of the combined line.",
@@ -1760,8 +1869,6 @@
       "offset": "The two join stations were moved by hand by different amounts. The joined station keeps {{fixed}}'s, so {{moving}}'s end moves {{distance}}.",
       "joinedMoves_one": "{{names}} is merged at {{station}} and moves {{distance}} with the joined station, so it stays merged to it.",
       "joinedMoves_other": "{{names}} are merged at {{station}} and move {{distance}} with the joined station, so they stay merged to it.",
-      "repeatedIds_one": "{{count}} of {{other}}'s shots has the same identity as one of {{kept}}'s, and gets a new one.",
-      "repeatedIds_other": "{{count}} of {{other}}'s shots have the same identity as shots of {{kept}}, and get new ones.",
       "passingNote_one": "{{names}} passes through the join and stays merged to the joined station, a crossing.",
       "passingNote_other": "{{names}} pass through the join and stay merged to the joined station, a crossing.",
       "tornTitle_one": "This connection becomes a loop closure:",
@@ -1794,7 +1901,82 @@
       "replacedByFormerSnap": "Loop closure <a/> to <b/>, left from a snap whose stations had moved apart, becomes an ordinary loop closure on the same two stations and takes its place.",
       "replacedByClosure": "Loop closure <a/> to <b/>, already there, ties the same two stations and takes its place.",
       "replacedWhy_one": "Two loop closures on the same two stations would count one loop twice, so the combine keeps the one the Closures Computed View adjusts. Undo brings this one back.",
-      "replacedWhy_other": "Two loop closures on the same two stations would count one loop twice, so the combine keeps the one the Closures Computed View adjusts. Undo brings these back."
+      "replacedWhy_other": "Two loop closures on the same two stations would count one loop twice, so the combine keeps the one the Closures Computed View adjusts. Undo brings these back.",
+      "joinArchived_one": "{{station}} stays the own station of {{lines}}, which shows {{kept}} from now on; {{station}} and its comment come back with Detach Line from Station, so the comment choice does not apply to it.",
+      "joinArchived_other": "{{station}} stays the own station of {{lines}}, which show {{kept}} from now on; {{station}} and its comment come back with Detach Line from Station, so the comment choice does not apply to it."
+    },
+    "keptStations": {
+      "collisionsLead_one": "One name would then repeat on a line. Choose which station takes a new name:",
+      "collisionsLead_other": "{{count}} names would then repeat on a line. Choose which station takes a new name for each:",
+      "collision": "On {{line}}, {{name}} would name two stations",
+      "rename": "Rename {{station}} (Station ID {{id}}) to {{to}}",
+      "renameComesBack": "Rename the station that comes back ({{station}}, Station ID {{id}}) to {{to}}",
+      "renameKept": "Rename the kept station ({{station}}, Station ID {{id}}) to {{to}}",
+      "renameOwn": "Rename the {{name}} that is on {{line}} now (Station ID {{id}}) to {{to}}",
+      "shownAsThroughClosure": "shown as {{station}} through a loop closure",
+      "editingDisabled": "Editing is disabled in the current view.",
+      "commentHidden": "{{station}}'s comment (\"{{comment}}\") is hidden. Undo brings it back."
+    },
+    "closure": {
+      "keepLead": "Both ends show:",
+      "keepBoth": "Keep both names",
+      "ruleKOtherEndArchived": "{{keep}} cannot be kept here: it would hide {{other}}, which another loop closure already shows as {{shown}}.",
+      "ruleKShowsOtherEnd": "{{keep}} cannot be kept here: a loop closure already shows it as {{other}}.",
+      "ruleKNotAllowed": "{{keep}} cannot be kept here because of another loop closure at these ends.",
+      "keepsBoth": "Each end keeps its own name.",
+      "keepsBothShown": "No name changes.",
+      "staysShownAs": "{{station}} stays shown as {{shown}} through another loop closure.",
+      "hidden": "{{station}} is hidden: its point stays on the map, without a label. Remove Closure brings it back.",
+      "hiddenWithComment": "{{station}} and its comment are hidden: its point stays on the map, without a label. Remove Closure brings them back.",
+      "renamedLines_one": "{{lines}} will show the kept station there.",
+      "renamedLines_other": "{{lines}} will show the kept station there."
+    },
+    "removeClosure": {
+      "rowComesBack": "({{name}} comes back)",
+      "comesBack_one": "{{station}} comes back: {{lines}} shows it again instead of {{shown}}.",
+      "comesBack_other": "{{station}} comes back: {{lines}} show it again instead of {{shown}}.",
+      "commentComesBack": "Its comment comes back too: \"{{comment}}\"",
+      "nothingBack": "Both ends already show their own names, so no name changes.",
+      "nothingBackShown": "No name changes.",
+      "comesBackPlain": "{{station}} comes back."
+    },
+    "shownIdentity": {
+      "titleName": "Rename Station",
+      "titleComment": "Station Comment",
+      "titleBatch": "Edit Stations",
+      "batchLead_one": "One station this edit changes is shown on other lines too:",
+      "batchLead_other": "{{count}} stations this edit changes are shown on other lines too:",
+      "batchBelongs": "On {{line}}, {{name}} belongs to {{home}}.",
+      "batchLoopEnd": "On {{line}}, {{name}} is shown as {{station}} through a loop closure.",
+      "batchLines": "The edit changes it on {{lines}}.",
+      "batchHeld": "Nothing is changed until you choose: the edit is applied whole or not at all.",
+      "batchProceed_one": "Apply the edit",
+      "batchProceed_other": "Apply all {{count}} edits",
+      "belongs": "{{name}} belongs to {{line}}.",
+      "loopEnd": "Shown as {{station}} through a loop closure.",
+      "changes": {
+        "name": "A new name changes it on every line it is on.",
+        "comment": "A new comment changes it on every line it is on.",
+        "both": "A new name and comment change it on every line it is on."
+      },
+      "proceedOn": {
+        "name": "Rename {{station}} to {{to}} on {{lines}}",
+        "comment": "Change the comment of {{station}} on {{lines}}",
+        "both": "Rename {{station}} to {{to}} and change its comment on {{lines}}"
+      },
+      "proceedTo": {
+        "name": "Rename {{station}} to {{to}}",
+        "comment": "Change the comment of {{station}}",
+        "both": "Rename {{station}} to {{to}} and change its comment"
+      },
+      "proceedLoop": {
+        "name": "Rename {{station}}",
+        "comment": "Change the comment of {{station}}",
+        "both": "Change {{station}}"
+      },
+      "removeClosure": "Remove the closure",
+      "detach": "Detach {{line}} to get back its own station {{name}}",
+      "cancel": "Cancel"
     }
   },
   "undo": {
@@ -1906,7 +2088,7 @@
     "selectSection": "Select a line to view shots.",
     "selectSectionPill": "Select this line on the map",
     "sectionMenu": "Choose line",
-    "rawTableMenu": "Choose table",
+    "rawTableMenu": "Choose a part of the saved file",
     "multiDeleteUnsupported": "Deleting multiple shots at once isn't supported yet - delete one shot at a time.",
     "removeDraft_one": "Remove draft row",
     "removeDraft_other": "Remove {{count}} draft rows",
@@ -1919,6 +2101,8 @@
     "stationColumns": {
       "index": "Stn",
       "name": "Name",
+      "homeQualifier": "({{line}})",
+      "loopEndQualifier": "(loop end)",
       "stationId": "Station ID",
       "x": "X",
       "y": "Y",
@@ -1940,7 +2124,7 @@
       "comment": "Comment"
     },
     "connMenu": {
-      "merged": "Merged with",
+      "merged": "Also on",
       "closures": "Closures with"
     },
     "stationGps": {
@@ -2092,10 +2276,23 @@
       "gpsFixGapExceeds": "That is more than the {{threshold}} m expected. Check the GPS reading and the survey.",
       "gpsReading": "GPS reading (not the surveyed position)",
       "distanceGradientRoot": "Distance gradient root",
-      "mergedWith": "Merged with",
+      "alsoOn": "Also on",
+      "alsoOnHint": "The other lines through this station. Every line shows it by the same name and Station ID. Detach takes a line off and gives it back its own station.",
+      "detachLine": "Detach {{line}} from this station",
       "connected": "Connected",
       "previousShot": "Previous shot",
-      "nextShot": "Next shot"
+      "nextShot": "Next shot",
+      "otherLineShots": "On {{line}}",
+      "archived": "Archived here",
+      "archivedHint": "Stations a merge archived in this one. Each keeps its own name, comment and Station ID, and is shown nowhere until Detach Line from Station on its line brings it back. A station listed under another was archived inside it and comes back with it, still inside it.",
+      "recordInside": "Archived inside {{name}}",
+      "recordOfLines": "{{name}} (Station ID {{id}}), {{lines}}'s own station",
+      "recordHistory": "{{name}} (Station ID {{id}}), no longer on any line",
+      "recordComment": "Comment: {{comment}}",
+      "loopEnd": "Loop closure end, shown as {{station}}",
+      "loopEndOwn": "Its own station {{name}} (Station ID {{id}}) is hidden. Removing the closure brings it back.",
+      "loopEndPosition": "This end's own position:",
+      "belongsTo": "{{name}} belongs to {{line}}."
     },
     "shot": {
       "title": "Shot",
@@ -2148,8 +2345,9 @@
       "firstSurvey": "First survey",
       "latestSurvey": "Latest survey",
       "connections": "Connections",
-      "stationMerges": "Station merges",
-      "zeroDatums": "Zero datums"
+      "junctions": "Junctions",
+      "zeroDatums": "Zero datums",
+      "stationsHint": "Every surveyed point counts once. The two ends of a loop closure count as two, even when they show one name."
     },
     "projectSettings": {
       "open": "Local settings"
@@ -2161,7 +2359,8 @@
       "viaPrefix": " (via ",
       "viaSuffix": ")",
       "metrics": "Path {{path}} | Error {{error}} | {{percent}}",
-      "unavailable": "Closure metrics unavailable"
+      "unavailable": "Closure metrics unavailable",
+      "archives": "{{hidden}}, the loop end, is shown as {{shown}}. Removing the closure brings it back."
     },
     "multiShot": {
       "title_one": "{{count}} shot selected",
@@ -2290,7 +2489,7 @@
       "columns": {
         "name": "Name",
         "path": "Path",
-        "sections": "Lines",
+        "lines": "Lines",
         "length": "Length",
         "edited": "Edited"
       },
@@ -2323,6 +2522,7 @@
       "open": "Open project",
       "zoom": "Zoom to system",
       "showInFolder": "Show in folder",
+      "restoreBackup": "Restore an earlier copy…",
       "mergeProjects": "Merge {{countFormatted}} projects",
       "remove": "Remove from recent",
       "removeMultiple": "Remove {{countFormatted}} from recent",
@@ -2345,7 +2545,7 @@
       "step": "Step {{current}} of {{total}}: {{label}}",
       "phases": {
         "initializing": "Initializing",
-        "openingDatabase": "Opening database",
+        "openingFile": "Opening the project file",
         "loadingProjectData": "Loading project data",
         "loadingSections": "Loading lines",
         "computingStations": "Computing stations",
@@ -2354,7 +2554,7 @@
         "loadingSettings": "Loading settings",
         "finalizing": "Finalizing",
         "takingLong": "Taking longer than expected",
-        "creatingDatabase": "Creating database",
+        "creatingFile": "Creating the project file",
         "initializingProject": "Initializing project",
         "savingSettings": "Saving settings",
         "importParsing": "Reading survey file",
@@ -2761,8 +2961,30 @@
       "permissionDenied": "Folder access denied - check Privacy & Security settings.",
       "pathNotFound": "Save folder unavailable - it was moved, or its drive is not connected.",
       "pathTooLong": "Save path too long - save to a shorter path.",
+      "externallyModified": "The project file was changed by another program. Choose whether to keep your version or the file's.",
+      "externallyMissing": "The project file was moved or deleted by another program. Save to put your version back, or save it as a new file.",
+      "externallyExists": "A different file appeared where the project is saved. Save it as a new file, or save over that file.",
+      "readOnlyFile": "This project was made with a newer Stalagmight and is open read-only.",
       "genericFailure": "Failed to save project",
       "saveNow": "Save now",
+      "dismiss": "Dismiss"
+    },
+    "readOnlyFile": {
+      "lead": "This project was made with a newer version of Stalagmight.",
+      "detail": "It is open read-only: you can view, measure and export it, but edits and saves are turned off so nothing this version does not understand is lost. Update Stalagmight to edit it.",
+      "reasonLabel": "Why"
+    },
+    "conversion": {
+      "lead": "Converted from the old file format.",
+      "upgradedLead": "Upgraded from an earlier version 2 file.",
+      "bringsBack": "Detach Line from Station or Remove Closure brings each one back.",
+      "notYetSaved": "It is saved in the new format the next time you save; the original file is kept and can be restored from Recent Projects (right-click, Restore an earlier copy).",
+      "saved": "Saved in the new format; the original file is kept and can be restored from Recent Projects (right-click, Restore an earlier copy).",
+      "savedAsNewFile": "Saved in the new format as a new file; the original file is unchanged.",
+      "downloaded": "This computer's copy is already converted; the original revision is unchanged on SpeleoDB, in the project's Revision history.",
+      "readOnly": "It is only shown converted: the file is open read-only, so nothing is saved and the file stays as it is.",
+      "details": "Details",
+      "hideDetails": "Hide details",
       "dismiss": "Dismiss"
     },
     "historyDiscarded": {
@@ -2774,7 +2996,9 @@
     }
   },
   "saveNotices": {
-    "olderVersionsDropGpsFixes": "Older app versions drop this file's GPS fixes and accuracies on save"
+    "olderVersionsDropGpsFixes": "Older app versions drop this file's GPS fixes and accuracies on save",
+    "legacyConverted": "Saved in the new format; the original is kept in Recent Projects",
+    "legacyConvertedNewFile": "Saved in the new format as a new file; the original is unchanged"
   },
   "updateBanner": {
     "available": "Stalagmight {{version}} is available",
@@ -2791,17 +3015,6 @@
       "restartWaitsForTransfer": "Stalagmight did not restart: a SpeleoDB transfer is still running. Restart to update once it has finished."
     }
   },
-  "integrityRepair": {
-    "toasts": {
-      "issue_one": "issue",
-      "issue_other": "issues",
-      "needWord_one": "needs",
-      "needWord_other": "need",
-      "partial": "Fixed {{fixed}} {{issueWord}}; {{remaining}} {{needWord}} manual attention (recompute or remove drifted loop closures, fix non-finite shots). Save to keep the fix.",
-      "full": "Repaired {{fixed}} {{issueWord}}. Save to keep the fix.",
-      "failed": "Repair failed - nothing was changed. Please try again."
-    }
-  },
   "debugDialog": {
     "toasts": {
       "refreshed": "Logs refreshed",
@@ -2811,6 +3024,7 @@
   },
   "editGate": {
     "readOnlyNotice": "This project is open read-only - click Start editing to take the write lock.",
+    "readOnlyFileNotice": "This project was made with a newer version of Stalagmight, so it is open read-only. Update Stalagmight to change it.",
     "commandFailed": "The change could not be applied."
   },
   "importGate": {
@@ -3001,6 +3215,7 @@
       "saveAs": "Save As",
       "saveACopy": "Save a Copy",
       "saveAndClose": "Save and Close",
+      "saveAndCloseReadOnly": "Nothing to save: use Close Project.",
       "closeProject": "Close Project",
       "projectSettings": "Local settings",
       "projectDetails": "Project Details",
@@ -3028,7 +3243,9 @@
       "saving": "Saving...",
       "unsavedChanges": "Unsaved changes",
       "autoSaveCountdown": "Auto-save in {{seconds}}s",
-      "saveError": "Auto-save didn't run - not saved"
+      "saveError": "Auto-save didn't run - not saved",
+      "readOnly": "Read-only",
+      "oldFormat": "Old format: converted when you save"
     }
   },
   "gasPanel": {
@@ -3813,6 +4030,7 @@
       "unreachable": "Could not reach SpeleoDB at {{endpoint}}. Check your network connection and that the server is running.",
       "thisServer": "the configured server"
     },
+    "formatRefused": "This SpeleoDB server does not accept projects saved by this version yet. Nothing was uploaded; your changes are still on this computer and the project stays locked for you.",
     "httpExceptions": "localhost, 127.0.0.1 and 192.168.x.x addresses",
     "endpointRefused": {
       "plainHttp": "Did not connect to {{endpoint}}: HTTPS is required. Plain HTTP is allowed only for $t(speleodb.httpExceptions), because it would send your credentials unencrypted. Use an https:// address.",
@@ -4025,6 +4243,7 @@
       "descriptionLabel": "Description",
       "coordinatesHint": "Enter both latitude and longitude, within their valid ranges.",
       "uploadPending": "The project was created on SpeleoDB. Changes remain on this computer; use Save Changes to finish uploading.",
+      "uploadRefused": "The project was created on SpeleoDB, but this SpeleoDB server does not accept projects saved by this version yet, so nothing was uploaded: the project on the server is empty. Your local copy is unchanged.",
       "withoutHistory": "The project's first revision was uploaded without undo history: it is over the SpeleoDB size limit."
     },
     "readOnlyNotice": {
@@ -4097,6 +4316,7 @@
     "errors": {
       "saveFailed": "Your changes could not be saved on this computer, so nothing was closed.",
       "closeFailed": "The project could not be closed. It is still open.",
+      "projectChanged": "Another project was opened while this was being decided, so nothing was saved or closed.",
       "newerChanges": "You made more changes while uploading. They are still on this computer, so the project stays open."
     },
     "restart": {
@@ -4208,6 +4428,27 @@
     "stationNameTaken": "{{line}} already has a station named \"{{name}}\". Station names must be unique within their line.",
     "stationId": "Station ID",
     "stationName": "Name",
-    "nameInvalidChars": "A name cannot contain control characters or invisible formatting characters."
+    "nameInvalidChars": "A name cannot contain control characters or invisible formatting characters.",
+    "loopEnd": "loop end",
+    "loopEndMarkTitle": "Loop end: a loop closure shows this station here",
+    "loopEndLabel": "{{station}} (loop end on {{line}})",
+    "loopEndPinLabel": "{{own}} (loop end, shown as {{station}})",
+    "loopEndPinLabelLine": "Loop end on {{line}}, shown as {{station}}",
+    "homeMarkTitle": "Belongs to {{line}}",
+    "homeMarkLabel": "({{line}})",
+    "onLineLabel": "(on {{line}})",
+    "foreignLabel": "{{station}} ({{home}})"
+  },
+  "notices": {
+    "identities": {
+      "letter": "{{station}} to {{to}}",
+      "stationId": "Station ID {{id}}",
+      "lettered": "Renamed {{renamed}} so no line shows a name twice.",
+      "restored": "{{station}} (Station ID {{id}}) is shown again.",
+      "commentHidden": "{{station}}'s comment (\"{{comment}}\") is hidden: Undo brings it back.",
+      "unarchived_one": "A loop closure's hidden end shows its own name again.",
+      "unarchived_other": "{{count}} loop closures' hidden ends show their own names again.",
+      "hiddenComment": "{{station}}'s comment (\"{{comment}}\") is hidden: Undo brings it back."
+    }
   }
 }

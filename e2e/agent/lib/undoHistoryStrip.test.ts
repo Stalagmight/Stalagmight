@@ -1,69 +1,46 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { createRequire } from 'node:module';
-import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 
-import {
-  UNDO_HISTORY_TABLES,
-  fixtureSourcePath,
-  isInsideTrackedFixtures,
-  stripUndoHistory,
-} from './fixtures';
-
-// Loaded at runtime, not imported: see the note in fixtures.ts (vite cannot
-// resolve the prefix-only `node:sqlite`).
-const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
-  DatabaseSync: typeof DatabaseSyncType;
-};
+import { fixtureSourcePath, isInsideTrackedFixtures, sniffStalx, stripUndoHistory } from './fixtures';
 
 /**
- * Build a throwaway SQLite file shaped like the undo/redo half of a `.stalx`.
- * Deliberately synthetic: no tracked fixture is read, copied or mutated here.
+ * A throwaway `.stalx` version 2 file in the writer's layout (plan 6.2: one
+ * record per line, `history` right before `"end":true}`). Deliberately
+ * synthetic: no tracked fixture is read, copied or mutated here, and the
+ * survey is three made-up stations.
  */
-function makeStalxLike(
-  dir: string,
-  options: { tables?: readonly string[]; rowsPerTable?: number; extraTable?: boolean } = {},
-): string {
-  const tables = options.tables ?? UNDO_HISTORY_TABLES;
-  const rows = options.rowsPerTable ?? 3;
+function makeV2(dir: string, options: { undo?: number; redo?: number } = {}): string {
+  const entry = (k: number) => `{"v":1,"t":"2026-11-20T00:00:0${k}.000000000Z","k":"update_shot","label":"Edit shot ${k}","ops":{}}`;
+  const stack = (n: number) => Array.from({ length: n }, (_, k) => entry(k)).join(',\n');
+  const undo = options.undo ?? 3;
+  const redo = options.redo ?? 2;
+  const parts = [
+    '{"format":"stalx","version":2,"solver":1,"requires":[],',
+    '"project":{"name":"Synthetic, with a \\n\\"history\\": in its name"},',
+    '"stations":[',
+    '[1,"A"],',
+    '[2,"B"]',
+    '],',
+  ];
+  if (undo > 0 || redo > 0) {
+    const members = [];
+    if (undo > 0) members.push(`"undo":[\n${stack(undo)}\n]`);
+    if (redo > 0) members.push(`"redo":[\n${stack(redo)}\n]`);
+    parts.push(`"history":{${members.join(',')}},`);
+  }
+  parts.push('"end":true}');
   const file = path.join(dir, 'synthetic.stalx');
-  const db = new DatabaseSync(file);
-  for (const table of tables) {
-    db.exec(`CREATE TABLE ${table} (sequence INTEGER PRIMARY KEY, payload TEXT)`);
-    for (let i = 0; i < rows; i++) {
-      db.prepare(`INSERT INTO ${table} (sequence, payload) VALUES (?, ?)`).run(i, `entry-${i}`);
-    }
-  }
-  if (options.extraTable !== false) {
-    // Project data must survive untouched - only the history tables are cleared.
-    db.exec('CREATE TABLE sections (id INTEGER PRIMARY KEY, name TEXT)');
-    db.prepare('INSERT INTO sections (id, name) VALUES (?, ?)').run(1, 'keep-me');
-  }
-  db.close();
+  fs.writeFileSync(file, parts.join('\n') + '\n');
   return file;
 }
 
-function countRows(file: string, table: string): number {
-  const db = new DatabaseSync(file, { readOnly: true });
-  try {
-    const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number };
-    return Number(row.count);
-  } finally {
-    db.close();
-  }
-}
-
-function tableNames(file: string): string[] {
-  const db = new DatabaseSync(file, { readOnly: true });
-  try {
-    return (db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as {
-      name: string;
-    }[]).map((row) => row.name);
-  } finally {
-    db.close();
-  }
+/** A file that starts like a legacy SQLite `.stalx` (the header only). */
+function makeLegacy(dir: string): string {
+  const file = path.join(dir, 'legacy.stalx');
+  fs.writeFileSync(file, Buffer.concat([Buffer.from('SQLite format 3\u0000', 'latin1'), Buffer.alloc(84)]));
+  return file;
 }
 
 function tempDir(): string {
@@ -71,62 +48,74 @@ function tempDir(): string {
 }
 
 describe('stripUndoHistory', () => {
-  it('clears every history table and reports the row counts it removed', () => {
-    const file = makeStalxLike(tempDir());
+  it('removes the history member of a v2 file and reports what it held', () => {
+    const file = makeV2(tempDir());
+    const before = fs.readFileSync(file, 'utf8');
 
     const result = stripUndoHistory(file);
 
-    expect(result.missing).toEqual([]);
-    expect(result.cleared).toEqual({
-      undo_stack: 3,
-      redo_stack: 3,
-      speleo_undo_chain: 3,
-      speleo_undo_watermark: 3,
-    });
-    for (const table of UNDO_HISTORY_TABLES) expect(countRows(file, table)).toBe(0);
+    expect(result).toEqual({ format: 'v2', cleared: { undo: 3, redo: 2 }, missing: [] });
+    const after = fs.readFileSync(file, 'utf8');
+    const parsed = JSON.parse(after) as Record<string, unknown>;
+    expect(parsed.history).toBeUndefined();
+    expect(parsed.end).toBe(true);
+    // Every other byte is kept: the result is the file without that one record.
+    expect(after).toBe(before.replace(/\n"history":[\s\S]*?\},\n(?="end":true\}\n$)/, '\n'));
   });
 
-  it('leaves the project data alone', () => {
-    const file = makeStalxLike(tempDir());
+  it('leaves the survey alone, even text that looks like the history member', () => {
+    const file = makeV2(tempDir());
 
     stripUndoHistory(file);
 
-    // Tables are emptied, never dropped (the app reopens and writes into them).
-    expect(tableNames(file)).toEqual([...UNDO_HISTORY_TABLES, 'sections'].sort());
-    expect(countRows(file, 'sections')).toBe(1);
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      project: { name: string };
+      stations: unknown[];
+    };
+    expect(parsed.project.name).toBe('Synthetic, with a \n"history": in its name');
+    expect(parsed.stations).toEqual([[1, 'A'], [2, 'B']]);
   });
 
-  it('treats a missing table as fine, matching clear_undo_history_at', () => {
-    // The shape both tracked fixtures actually have: no speleo_* tables.
-    const file = makeStalxLike(tempDir(), { tables: ['undo_stack', 'redo_stack'] });
+  it('reports an empty stack as missing', () => {
+    const file = makeV2(tempDir(), { undo: 2, redo: 0 });
 
-    const result = stripUndoHistory(file);
-
-    expect(result.cleared).toEqual({ undo_stack: 3, redo_stack: 3 });
-    expect(result.missing).toEqual(['speleo_undo_chain', 'speleo_undo_watermark']);
+    expect(stripUndoHistory(file)).toEqual({ format: 'v2', cleared: { undo: 2 }, missing: ['redo'] });
   });
 
   it('is idempotent', () => {
-    const file = makeStalxLike(tempDir());
+    const file = makeV2(tempDir());
 
     stripUndoHistory(file);
+    const once = fs.readFileSync(file, 'utf8');
     const second = stripUndoHistory(file);
 
-    expect(second.cleared).toEqual({
-      undo_stack: 0,
-      redo_stack: 0,
-      speleo_undo_chain: 0,
-      speleo_undo_watermark: 0,
-    });
+    expect(second).toEqual({ format: 'v2', cleared: {}, missing: ['undo', 'redo'] });
+    expect(fs.readFileSync(file, 'utf8')).toBe(once);
   });
 
-  it('handles a database with no history tables at all', () => {
-    const file = makeStalxLike(tempDir(), { tables: [] });
+  it('handles a v2 file with no history at all', () => {
+    const file = makeV2(tempDir(), { undo: 0, redo: 0 });
+    const before = fs.readFileSync(file, 'utf8');
 
-    const result = stripUndoHistory(file);
+    expect(stripUndoHistory(file)).toEqual({ format: 'v2', cleared: {}, missing: ['undo', 'redo'] });
+    expect(fs.readFileSync(file, 'utf8')).toBe(before);
+  });
 
-    expect(result.cleared).toEqual({});
-    expect(result.missing).toEqual([...UNDO_HISTORY_TABLES]);
+  it('leaves a legacy file untouched: the app drops its history on open', () => {
+    const file = makeLegacy(tempDir());
+    const before = fs.readFileSync(file);
+
+    expect(stripUndoHistory(file)).toEqual({ format: 'legacy', cleared: {}, missing: ['undo', 'redo'] });
+    expect(fs.readFileSync(file).equals(before)).toBe(true);
+  });
+
+  it('sniffs both formats and refuses anything else', () => {
+    const dir = tempDir();
+    expect(sniffStalx(makeV2(dir))).toBe('v2');
+    expect(sniffStalx(makeLegacy(dir))).toBe('legacy');
+    const other = path.join(dir, 'other.stalx');
+    fs.writeFileSync(other, '{"format":"other"}');
+    expect(() => sniffStalx(other)).toThrow(/not a Stalagmight project file/);
   });
 
   it('refuses to touch a tracked fixture, only a materialized copy', () => {
@@ -161,7 +150,7 @@ describe('stripUndoHistory', () => {
     expect(isInsideTrackedFixtures(path.join(tempDir(), 'naharon.stalx'))).toBe(false);
   });
 
-  it('reports a missing file rather than creating an empty database', () => {
+  it('reports a missing file rather than creating an empty one', () => {
     const missing = path.join(tempDir(), 'nope.stalx');
 
     expect(() => stripUndoHistory(missing)).toThrow(/no such \.stalx/);

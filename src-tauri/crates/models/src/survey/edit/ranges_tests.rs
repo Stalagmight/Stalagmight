@@ -1,0 +1,363 @@
+//! Delete a shot range: gap-close, split, prefix, suffix, and the preview.
+
+use stalagmight_legacy::models as old;
+
+use crate::RangeDeleteKind;
+
+use super::super::test_helpers::gps;
+use super::super::{ClosureStrategy, Project};
+use super::edit_test_helpers::{
+    add_datum, assert_still, assert_valid, empty, line, line_from, names, near, ok, refused, run,
+    shot_id, st, xy,
+};
+use super::RangeDeleteMode;
+
+const TOL: f64 = 1e-9;
+
+/// One line of five 10 m shots east: stations at x = 0, 10, .., 50.
+fn east5() -> (Project, u32) {
+    let mut p = empty();
+    let l = line(&mut p, "Main", run("m", 90.0, 10.0, 5));
+    (p, l)
+}
+
+fn split(a: &str, b: &str) -> RangeDeleteMode {
+    RangeDeleteMode::Split {
+        name_a: a.to_string(),
+        name_b: b.to_string(),
+    }
+}
+
+#[test]
+fn an_interior_gap_close_removes_the_range_and_its_end_station_and_closes_the_gap() {
+    let (mut p, l) = east5();
+    let before = p.raw_positions();
+    let s: Vec<u32> = (0..=5).map(|i| st(&p, l, i)).collect();
+    let (first, last) = (shot_id(&p, l, 2), shot_id(&p, l, 1));
+    let preview = p.preview_delete_shot_range(l, first, last).unwrap();
+    assert_eq!(preview.kind, RangeDeleteKind::Interior);
+    assert_eq!((preview.start, preview.end), (1, 2));
+    let removed: Vec<u32> = preview.removed_slots.iter().map(|(_, s)| *s).collect();
+    assert_eq!(removed, [s[2], s[3]]);
+    assert!(!preview.shift_blocked);
+    assert_eq!(preview.closures_removed_across_one_shot, Some(Vec::new()));
+    let done = ok(p.delete_shot_range(l, first, last, &RangeDeleteMode::Shift));
+    assert_eq!(done.stations_deleted, [s[2], s[3]]);
+    assert_eq!(p.line_stations(l).unwrap(), [s[0], s[1], s[4], s[5]]);
+    let after = p.raw_positions();
+    near(xy(&after, s[1]), xy(&before, s[1]), TOL, "head stays");
+    near(xy(&after, s[4]), [20.0, 0.0], TOL, "tail closes the gap");
+    near(xy(&after, s[5]), [30.0, 0.0], TOL, "tail closes the gap");
+    assert_valid(&p);
+}
+
+#[test]
+fn a_prefix_and_a_suffix_drop_their_stations_and_nothing_moves() {
+    let (mut p, l) = east5();
+    let before = p.raw_positions();
+    let s: Vec<u32> = (0..=5).map(|i| st(&p, l, i)).collect();
+    let done = ok(p.delete_shot_range(
+        l,
+        shot_id(&p, l, 0),
+        shot_id(&p, l, 1),
+        &RangeDeleteMode::Shift,
+    ));
+    assert_eq!(done.kind, RangeDeleteKind::Prefix);
+    assert_eq!(p.line_stations(l).unwrap(), &s[2..]);
+    assert_still(&before, &p.raw_positions(), TOL, &[]);
+    let done = ok(p.delete_shot_range(
+        l,
+        shot_id(&p, l, 2),
+        shot_id(&p, l, 1),
+        &RangeDeleteMode::Shift,
+    ));
+    assert_eq!(done.kind, RangeDeleteKind::Suffix);
+    assert_eq!(p.line_stations(l).unwrap(), &s[2..=3]);
+    assert_still(&before, &p.raw_positions(), TOL, &[]);
+    assert_eq!(names(&p, l), ["2", "3"]);
+    assert_valid(&p);
+}
+
+#[test]
+fn the_whole_line_and_a_split_of_an_end_range_are_refused() {
+    let (mut p, l) = east5();
+    let whole = refused(p.delete_shot_range(
+        l,
+        shot_id(&p, l, 0),
+        shot_id(&p, l, 4),
+        &RangeDeleteMode::Shift,
+    ));
+    assert_eq!(
+        whole,
+        "Cannot shift-delete an entire line; delete the line instead."
+    );
+    let end =
+        refused(p.delete_shot_range(l, shot_id(&p, l, 0), shot_id(&p, l, 1), &split("A", "B")));
+    assert!(
+        end.starts_with("Range is not interior to the line"),
+        "{end}"
+    );
+    let same =
+        refused(p.delete_shot_range(l, shot_id(&p, l, 1), shot_id(&p, l, 2), &split("A", "A")));
+    assert_eq!(same, "A line named \"A\" already exists");
+    assert_eq!(p, east5().0);
+}
+
+#[test]
+fn a_split_keeps_both_boundary_stations_and_the_tail_as_a_new_line() {
+    let (mut p, l) = east5();
+    let before = p.raw_positions();
+    let s: Vec<u32> = (0..=5).map(|i| st(&p, l, i)).collect();
+    p.station_mut(s[3]).unwrap().comment = Some("boundary".to_string());
+    let tail_uuids: Vec<String> = p.line(l).unwrap().shots[3..]
+        .iter()
+        .map(|s| s.uuid.clone())
+        .collect();
+    let done = ok(p.delete_shot_range(
+        l,
+        shot_id(&p, l, 1),
+        shot_id(&p, l, 2),
+        &split("Front", "Back"),
+    ));
+    let b = done.new_line.unwrap();
+    assert_eq!(done.stations_deleted, [s[2]]);
+    assert_eq!(p.line_stations(l).unwrap(), [s[0], s[1]]);
+    assert_eq!(p.line_stations(b).unwrap(), [s[3], s[4], s[5]]);
+    assert_eq!(p.line(l).unwrap().name.as_deref(), Some("Front"));
+    assert_eq!(p.line(b).unwrap().name.as_deref(), Some("Back"));
+    let uuids: Vec<String> = p
+        .line(b)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| s.uuid.clone())
+        .collect();
+    assert_eq!(uuids, tail_uuids);
+    assert_eq!(p.line(b).unwrap().shots[0].id, b * crate::FEATURE_ID_STRIDE);
+    assert_eq!(
+        p.station(s[3]).unwrap().comment.as_deref(),
+        Some("boundary")
+    );
+    // Nothing moves: the tail is a piece of its own, left where it was.
+    assert_still(&before, &p.raw_positions(), TOL, &[]);
+    assert_eq!(p.placements.len(), 2);
+    assert_valid(&p);
+}
+
+#[test]
+fn the_shift_is_refused_for_a_loop_a_datum_or_two_held_sides() {
+    // A branch from station 1 to station 4 (a second route): a loop.
+    let (mut p, l) = east5();
+    let (s1, s4) = (st(&p, l, 1), st(&p, l, 4));
+    let b = line_from(&mut p, "Branch", s1, run("b", 0.0, 5.0, 1));
+    let tip = st(&p, b, 1);
+    let mut q = p.clone();
+    // Re-route: the branch's tip IS station 4 (a junction loop is a cycle,
+    // so make the second route a line ending on 4 instead).
+    let c = line_from(&mut q, "Back", s4, run("c", 0.0, 5.0, 1));
+    let c1 = st(&q, c, 1);
+    q.push_closure(tip, Some(b), c1, Some(c), ClosureStrategy::Batch);
+    assert_valid(&q);
+    // Closures do not block the range shift (only a shot loop does).
+    let preview = q
+        .preview_delete_shot_range(l, shot_id(&q, l, 1), shot_id(&q, l, 2))
+        .unwrap();
+    assert!(
+        !preview.shift_blocked,
+        "{:?}",
+        preview.shift_blocked_reasons
+    );
+
+    // A datum on a station the shift deletes.
+    let s2 = st(&p, l, 2);
+    add_datum(&mut p, s2, gps(10.0, 20.0));
+    let text = refused(p.delete_shot_range(
+        l,
+        shot_id(&p, l, 1),
+        shot_id(&p, l, 2),
+        &RangeDeleteMode::Shift,
+    ));
+    assert_eq!(
+        text,
+        "Deleting this range would remove a zero datum. Use split instead."
+    );
+    let preview = p
+        .preview_delete_shot_range(l, shot_id(&p, l, 1), shot_id(&p, l, 2))
+        .unwrap();
+    assert!(preview.shift_blocked);
+    assert_eq!(preview.removed_datums.len(), 1);
+    assert_eq!(preview.closures_removed_across_one_shot, None);
+}
+
+#[test]
+fn a_gap_close_removes_a_closure_it_leaves_across_one_shot() {
+    let (mut p, l) = east5();
+    let (s2, s5) = (st(&p, l, 2), st(&p, l, 5));
+    let id = p.push_closure(s2, Some(l), s5, Some(l), ClosureStrategy::Batch);
+    assert_valid(&p);
+    let (first, last) = (shot_id(&p, l, 2), shot_id(&p, l, 3));
+    let preview = p.preview_delete_shot_range(l, first, last).unwrap();
+    let predicted: Vec<u64> = preview
+        .closures_removed_across_one_shot
+        .unwrap()
+        .iter()
+        .map(|c| c.id)
+        .collect();
+    assert_eq!(predicted, [id]);
+    let edited = p
+        .delete_shot_range(l, first, last, &RangeDeleteMode::Shift)
+        .unwrap();
+    assert_eq!(edited.report.removed_across_one_shot.len(), 1);
+    assert!(p.closures.is_empty());
+    assert_valid(&p);
+}
+
+#[test]
+fn a_range_through_a_junction_keeps_the_junction_for_the_other_line() {
+    let (mut p, l) = east5();
+    let j = st(&p, l, 2);
+    let b = line_from(&mut p, "B", j, run("b", 0.0, 10.0, 2));
+    let before = p.raw_positions();
+    let preview = p
+        .preview_delete_shot_range(l, shot_id(&p, l, 1), shot_id(&p, l, 2))
+        .unwrap();
+    assert_eq!(preview.junctions_kept, [j]);
+    ok(p.delete_shot_range(
+        l,
+        shot_id(&p, l, 1),
+        shot_id(&p, l, 2),
+        &RangeDeleteMode::Shift,
+    ));
+    assert!(p.station(j).is_some());
+    assert_eq!(p.line_stations(b).unwrap()[0], j);
+    // The branch is its own piece now, left where it was.
+    assert_still(
+        &before,
+        &p.raw_positions(),
+        TOL,
+        &(0..=5)
+            .filter_map(|i| p.line_stations(l).and_then(|c| c.get(i).copied()))
+            .filter(|s| *s != st(&p, l, 0) && *s != st(&p, l, 1))
+            .collect::<Vec<_>>(),
+    );
+    near(
+        xy(&p.raw_positions(), j),
+        xy(&before, j),
+        TOL,
+        "junction stays",
+    );
+    assert_valid(&p);
+}
+
+/// Main `0..5` east with a datum on station 0, a side line from station 5
+/// to `t1`, and two closures `t1 - 3` and `3 - 0`: the tail side of the
+/// interior range `1..=2` (stations 2 and 3 go) reaches the datum only
+/// through station 3, which the gap-close deletes.
+fn tail_reaching_the_datum_through_a_deleted_station() -> (Project, u32) {
+    let (mut p, l) = east5();
+    let (s0, s3, s4) = (st(&p, l, 0), st(&p, l, 3), st(&p, l, 4));
+    add_datum(&mut p, s0, gps(20.5, -87.3));
+    let t = line_from(&mut p, "Side", s4, run("t", 0.0, 10.0, 1));
+    let t1 = st(&p, t, 1);
+    p.push_closure(t1, Some(t), s3, Some(l), ClosureStrategy::Batch);
+    p.push_closure(s3, Some(l), s0, Some(l), ClosureStrategy::Batch);
+    assert_valid(&p);
+    (p, l)
+}
+
+#[test]
+fn a_closure_on_a_station_the_gap_close_deletes_does_not_anchor_a_side() {
+    let (mut p, l) = tail_reaching_the_datum_through_a_deleted_station();
+    let (first, last) = (shot_id(&p, l, 1), shot_id(&p, l, 2));
+    let preview = p.preview_delete_shot_range(l, first, last).unwrap();
+    assert!(
+        !preview.shift_blocked,
+        "{:?}",
+        preview.shift_blocked_reasons
+    );
+    let done = ok(p.delete_shot_range(l, first, last, &RangeDeleteMode::Shift));
+    assert_eq!(done.closures_removed.len(), 2);
+    assert_valid(&p);
+
+    // Today (0.6.0) the same survey: the same verdict.
+    let mut old = stalagmight_legacy::LegacyProject::new("legacy".to_string(), None);
+    let flat = |azimuth: f64| old::ShotData {
+        azimuth_in: azimuth,
+        azimuth_out: azimuth,
+        length: 10.0,
+        ..old::ShotData::default()
+    };
+    let main = old
+        .add_line(old::LineData {
+            shots: vec![flat(90.0); 5],
+            quality: 1.0,
+            ..old::LineData::default()
+        })
+        .id;
+    let side = old
+        .add_line(old::LineData {
+            shots: vec![flat(0.0)],
+            quality: 1.0,
+            ..old::LineData::default()
+        })
+        .id;
+    let at = old::StationRef::new;
+    old.set_zero_datum(
+        at(main, 0),
+        old::GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
+    )
+    .unwrap();
+    old.merge_stations(at(side, 0), at(main, 4)).unwrap();
+    for (a, b) in [(at(side, 1), at(main, 3)), (at(main, 3), at(main, 0))] {
+        old.create_loop_closure(a, b, old::ClosureStrategy::Batch)
+            .unwrap();
+    }
+    let shots: Vec<u32> = old.lines[0].shots.iter().map(|s| s.id).collect();
+    let legacy = old
+        .preview_delete_shot_range(main, shots[1], shots[2])
+        .unwrap();
+    assert!(!legacy.shift_blocked, "{:?}", legacy.shift_blocked_reasons);
+}
+
+#[test]
+fn a_datum_reached_over_a_junction_the_gap_close_keeps_still_anchors_a_side() {
+    // The same shape, but station 3 is a junction (a second line passes
+    // it): it stays, so the tail still reaches the datum through it. Both
+    // sides reach the ONE datum, the tail through two loop closures, so the
+    // reason says so instead of "Both sides are anchored" (demo finding
+    // I-8; 0.6.0 said that); the shift stays blocked.
+    let (mut p, l) = tail_reaching_the_datum_through_a_deleted_station();
+    let s3 = st(&p, l, 3);
+    line_from(&mut p, "Through", s3, run("u", 180.0, 10.0, 1));
+    let preview = p
+        .preview_delete_shot_range(l, shot_id(&p, l, 1), shot_id(&p, l, 2))
+        .unwrap();
+    assert!(preview.shift_blocked);
+    assert_eq!(
+        preview.shift_blocked_reasons,
+        ["Both sides are tied to the same zero datum through a loop closure."]
+    );
+}
+
+/// Demo finding I-8 for a range: "Both sides are anchored to a zero datum"
+/// stays for two sides that reach DIFFERENT datums (here each side of the
+/// cut reaches its own piece's datum, the tail through a loop closure).
+#[test]
+fn a_range_between_two_datums_says_both_sides_are_anchored() {
+    let (mut q, m) = east5();
+    let (q0, q5) = (st(&q, m, 0), st(&q, m, 5));
+    add_datum(&mut q, q0, gps(20.5, -87.3));
+    let far = line(&mut q, "Far", run("f", 0.0, 5.0, 1));
+    let far0 = st(&q, far, 0);
+    add_datum(&mut q, far0, gps(20.5001, -87.2999));
+    q.push_closure(q5, Some(m), far0, Some(far), ClosureStrategy::Batch);
+    assert_valid(&q);
+    let preview = q
+        .preview_delete_shot_range(m, shot_id(&q, m, 1), shot_id(&q, m, 2))
+        .unwrap();
+    assert!(preview.shift_blocked);
+    assert_eq!(
+        preview.shift_blocked_reasons,
+        ["Both sides are anchored to a zero datum."]
+    );
+}

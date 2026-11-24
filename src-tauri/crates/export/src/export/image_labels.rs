@@ -6,7 +6,8 @@
 use std::collections::HashMap;
 
 use super::image::is_xml_illegal_char;
-use crate::models::{LineId, Project, Station};
+use super::image_sketch::SketchLine;
+use crate::models::{LineId, Station};
 
 /// The longest station name the export draws whole; longer names are cut to
 /// one char less and end in an ellipsis. Matches the live map's cap.
@@ -48,19 +49,19 @@ pub(super) fn station_name_label(name: Option<&str>) -> Option<String> {
 /// The station that labels each point, keyed by the point (`point_of(i)`, the
 /// root of station `i`'s colocation group): among the stations `has_label`
 /// accepts, a station that is not its line's first, then one that is not its
-/// line's last, then the line's order in `project.lines`, then the station
+/// line's last, then the line's order in `lines`, then the station
 /// index (docs/SPEC.md 4.2, Labels; the map's `labelMergeGroups.ts` picks the
 /// same). So a branch merged onto the main line is labelled with the main
 /// line's station, not the branch's `0`. A point with no accepted station has
-/// no entry.
+/// no entry. The caller's `has_label` refuses a loop end a closure archives
+/// (RS 6), so such a station never labels a point.
 pub(super) fn point_representatives(
-    project: &Project,
+    lines: &[SketchLine],
     stations: &[Station],
     mut point_of: impl FnMut(usize) -> usize,
     has_label: impl Fn(usize) -> bool,
 ) -> HashMap<usize, usize> {
-    let lines: HashMap<LineId, (usize, u32)> = project
-        .lines
+    let lines: HashMap<LineId, (usize, u32)> = lines
         .iter()
         .enumerate()
         .map(|(order, line)| {

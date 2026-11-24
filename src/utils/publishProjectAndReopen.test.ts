@@ -50,6 +50,20 @@ it('conversion preserves a linked copy after an unconfirmed initial upload witho
   expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
   expect(useSpeleoStore.getState().projectLinkKind).toBe('remote');
 });
+it('a server that refused the file format is reported as such, never downloaded over and never published twice', async () => {
+  // Plan 12.1: the server project is empty and the local copy keeps the work.
+  mock.ipc.mockImplementation(async (cmd) => cmd === 'speleodb_publish'
+    ? { ...published, upload_format_refused: true }
+    : { ...status, has_unpushed_edits: true });
+  expect((await publishProjectAndReopen(params)).outcome).toBe('upload_refused');
+  expect(load).not.toHaveBeenCalled();
+  expect(mock.acquire).not.toHaveBeenCalled();
+  expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
+  expect(useSpeleoStore.getState().projectLinkKind).toBe('remote');
+  // The copy is linked now, so a second Publish is stale before any IPC.
+  expect((await publishProjectAndReopen(params)).outcome).toBe('stale');
+  expect(mock.ipc.mock.calls.filter(([cmd]) => cmd === 'speleodb_publish')).toHaveLength(1);
+});
 it('conversion preserves newer edits made during creation instead of discarding them for a fresh download', async () => {
   mock.ipc.mockImplementation(async (cmd) => {
     if (cmd === 'speleodb_publish') {

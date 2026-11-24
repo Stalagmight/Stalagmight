@@ -105,6 +105,17 @@ a line holds once, so it is the line's **trip** for cutting runs into lines - se
 ### Loop closures
 CLOSURE-type shots in Ariane encode loop closure metadata. During import these are resolved into Stalagmight loop closures linking two stations across lines.
 
+Each closure the import makes archives one end (kept and archived stations,
+RS 9; `import_funnel.rs`), decided in file order once the lines are
+classified: the end whose station is shown on the longest line is kept
+(rule K) when the closure may keep it, else the other end when that one
+may be kept, else the closure archives nothing (both ends keep their
+names). The archived end is shown under the kept end's name, with the
+loop mark, which takes up no name on its line (RS-FX5): a station of that
+name on the line keeps it, and nothing is lettered. The import summary
+notes each archive and warns for each station the project already held
+that a closure now shows as another.
+
 ## Import Workflow
 
 The Ariane import is a single dialog (not the DMP wizard's multi-step flow), but since #425 it reuses the wizard's pieces: the same resizable map column (`WizardMapPanel`, whose width is shared with the DMP wizard and persisted - see [#404 / `panels.wizard_map_panel_width`](configuration.md)), per-line toggles, and a placement step. It always creates a NEW project - importing a `.tml` into an open project is not supported (the unified router offers to close the current project first).
@@ -277,10 +288,10 @@ rather than through those doors:
 
 | Site | Behaviour past 42_949 lines |
 |------|-------------------------------|
-| `models/line.rs` `Line::new` (`next_shot_id`) | unchecked multiply - panics in debug, wraps in release. Unreachable from disk since #557: the `.stalx` open refuses first, and the persisted-undo `restore_line` replay is bounded identically |
+| `legacy/src/models/line.rs` `Line::new` (`next_shot_id`, the frozen 0.6.0 reader) | unchecked multiply - panics in debug, wraps in release. Unreachable from disk since #557: the frozen open refuses first |
 | `core/state/project_io.rs` (uuid index, twice) | unchecked multiply - same |
-| `persistence/sqlite/read.rs` (shot id, `next_shot_id`) | saturating (#427) - no panic, ids alias. The #557 open-refusal vets `sections` rows only, so an orphan `shots` row (a `section_id` with no `sections` row) still reaches this encode and saturates |
-| `persistence/sqlite/read.rs` `unrecognised_shot_kinds` (`shot_id`) | saturating (#557) - it runs its own query, so a shots row can name a `section_id` the open-refusal never vetted |
+| `legacy/src/persistence/sqlite/read.rs` (shot id, `next_shot_id`) | saturating (#427) - no panic, ids alias. The #557 open-refusal vets `sections` rows only, so an orphan `shots` row (a `section_id` with no `sections` row) still reaches this encode and saturates |
+| `legacy/src/persistence/sqlite/read.rs` `unrecognised_shot_kinds` (`shot_id`) | saturating (#557) - it runs its own query, so a shots row can name a `section_id` the open-refusal never vetted |
 | `models/shot.rs` `shot_display_position` | saturating (#413) - display only |
 | `src/utils/ids.ts` `encodeFeatureId` | JS doubles, exact past 2^32 - no wrap. The SoA typed arrays feeding the renderer were widened from `Int32Array` to `Uint32Array` (#555), so the JS side is exact across the full `u32` range, not just the positive half of `i32` |
 

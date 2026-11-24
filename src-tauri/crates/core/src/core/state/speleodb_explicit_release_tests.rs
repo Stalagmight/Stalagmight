@@ -9,10 +9,10 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use super::stalx_fixtures::write_v2;
 use super::tests_support::{lock_server, lock_server_unreadable, release_posts};
 use super::AppState;
-use crate::models::{Project, SpeleoLink};
-use crate::persistence::Database;
+use crate::models::SpeleoLink;
 use crate::speleodb::DoneResult;
 
 const ID: &str = "66666666-6666-6666-6666-666666666666";
@@ -28,21 +28,20 @@ type Log = Arc<Mutex<Vec<String>>>;
 /// `server`, the lock taken by this process (an authored, bound claim).
 fn editing_on(dir: &Path, server: &str) -> AppState {
     let path = dir.join("linked.stalx");
-    let mut db = Database::open(&path).expect("open db");
-    db.save_project(&Project::new("Linked".to_owned(), None))
-        .expect("save project");
-    db.save_speleo_link(Some(&SpeleoLink {
-        endpoint: server.to_owned(),
-        project_id: ID.to_owned(),
-        project_name: "Linked".to_owned(),
-        base_commit_sha: Some("abc123".to_owned()),
-        has_unpushed_edits: false,
-        last_edit_at: None,
-        last_verify_at: None,
-        undo_mode: None,
-    }))
-    .expect("save link");
-    drop(db);
+    write_v2(
+        &path,
+        "Linked",
+        Some(&SpeleoLink {
+            endpoint: server.to_owned(),
+            project_id: ID.to_owned(),
+            project_name: "Linked".to_owned(),
+            base_commit_sha: Some("abc123".to_owned()),
+            has_unpushed_edits: false,
+            last_edit_at: None,
+            last_verify_at: None,
+            undo_mode: None,
+        }),
+    );
     let state = AppState::new().expect("state");
     {
         let mut session = state.speleodb_session_lock().expect("session");
@@ -133,27 +132,32 @@ fn the_stale_context_unwind_never_frees_another_accounts_lock() {
     }
 }
 
+/// What the Switch to Read Only prompt captured for `state` on `server`.
+fn read_only_context(state: &AppState, server: &str) -> crate::speleodb::SpeleoReleaseContext {
+    let (generation, link) = state.speleodb_session_snapshot().expect("snapshot");
+    crate::speleodb::SpeleoReleaseContext {
+        session_generation: generation.to_string(),
+        project_id: link.project_id,
+        endpoint: server.to_owned(),
+        user_email: ADMIN.to_owned(),
+        project_modified_at: state
+            .project
+            .lock()
+            .expect("project")
+            .as_ref()
+            .expect("open")
+            .modified_at
+            .to_rfc3339(),
+    }
+}
+
 #[test]
 fn switching_to_read_only_never_frees_another_accounts_lock() {
     // Already holder-checked before this pass; pinned with the others.
     for (case, (server, seen)) in servers() {
         let temp = tempfile::TempDir::new().expect("temp");
         let state = editing_on(temp.path(), &server);
-        let (generation, link) = state.speleodb_session_snapshot().expect("snapshot");
-        let expected = crate::speleodb::SpeleoReleaseContext {
-            session_generation: generation.to_string(),
-            project_id: link.project_id,
-            endpoint: server.clone(),
-            user_email: ADMIN.to_owned(),
-            project_modified_at: state
-                .project
-                .lock()
-                .expect("project")
-                .as_ref()
-                .expect("open")
-                .modified_at
-                .to_rfc3339(),
-        };
+        let expected = read_only_context(&state, &server);
         let result = state.speleodb_release_current_lock(Some(expected));
         assert_eq!(release_posts(&seen), 0, "{case}: nothing is released");
         if case == "holder unreadable" {
@@ -167,23 +171,67 @@ fn switching_to_read_only_never_frees_another_accounts_lock() {
     }
 }
 
+/// Switch to Read Only refuses a project with work it would strand: a survey
+/// change not saved yet, or edits not uploaded yet. Nothing is released and the
+/// session stays editable.
+#[test]
+fn switching_to_read_only_refuses_unsaved_or_unuploaded_work() {
+    type Dirty = fn(&AppState);
+    let cases: [(&str, Dirty); 2] = [
+        ("an unsaved survey change", |state| {
+            state.with_file(|file| file.dirty = true);
+        }),
+        ("un-uploaded edits", |state| {
+            state
+                .mutate_speleo_link(|link| {
+                    let Some(link) = link.as_mut() else {
+                        return false;
+                    };
+                    link.has_unpushed_edits = true;
+                    true
+                })
+                .expect("stamp the dirty bit");
+        }),
+    ];
+    for (case, dirty) in cases {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let (server, seen) = lock_server(ID, Some(ADMIN.to_owned()));
+        let state = editing_on(temp.path(), &server);
+        dirty(&state);
+        let expected = read_only_context(&state, &server);
+        let error = state
+            .speleodb_release_current_lock(Some(expected))
+            .expect_err(case);
+        assert!(
+            error.message.contains("Save your changes"),
+            "{case}: {error:?}"
+        );
+        assert_eq!(release_posts(&seen), 0, "{case}: nothing is released");
+        assert!(state.edit_enabled(), "{case}: still editing");
+        assert!(state.speleodb_holds_claim(ID), "{case}: the claim is kept");
+    }
+}
+
 #[test]
 fn every_explicit_verb_still_releases_this_accounts_own_lock() {
-    type Verb = fn(&AppState) -> bool;
+    type Verb = fn(&AppState, &str) -> bool;
     let verbs: [(&str, Verb); 3] = [
-        ("done", |state| state.speleodb_done(None).is_ok()),
-        ("release", |state| {
+        ("release", |state, _| {
             state.speleodb_release_lock(ID.to_owned()).is_ok()
         }),
-        ("stale-context unwind", |state| {
+        ("stale-context unwind", |state, _| {
             state.speleodb_release_lock_acquired_here().is_ok()
+        }),
+        ("switch to read-only", |state, server| {
+            let expected = read_only_context(state, server);
+            state.speleodb_release_current_lock(Some(expected)).is_ok()
         }),
     ];
     for (name, verb) in verbs {
         let temp = tempfile::TempDir::new().expect("temp");
         let (server, seen) = lock_server(ID, Some(ADMIN.to_owned()));
         let state = editing_on(temp.path(), &server);
-        assert!(verb(&state), "{name} succeeds");
+        assert!(verb(&state, &server), "{name} succeeds");
         assert_eq!(release_posts(&seen), 1, "{name}: our own lock is released");
         assert!(
             !state.speleodb_holds_claim(ID),
@@ -191,4 +239,18 @@ fn every_explicit_verb_still_releases_this_accounts_own_lock() {
         );
         assert!(!state.edit_enabled(), "{name}: read-only afterwards");
     }
+}
+
+#[test]
+fn done_still_releases_this_accounts_own_lock() {
+    let temp = tempfile::TempDir::new().expect("temp");
+    let (server, seen) = lock_server(ID, Some(ADMIN.to_owned()));
+    let state = editing_on(temp.path(), &server);
+    assert!(state.speleodb_done(None).is_ok(), "done succeeds");
+    assert_eq!(release_posts(&seen), 1, "done: our own lock is released");
+    assert!(
+        !state.speleodb_holds_claim(ID),
+        "done: and the claim is over"
+    );
+    assert!(!state.edit_enabled(), "done: read-only afterwards");
 }

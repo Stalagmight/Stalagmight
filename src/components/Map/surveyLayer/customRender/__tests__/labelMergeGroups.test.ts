@@ -21,7 +21,8 @@ interface LineSpec {
 
 /** Lines laid out in `lines` order (the project order), stations named by
  *  index unless `names` says otherwise, Station IDs `100 + global`. `merges`
- *  are groups of stations; each member's `merged_with` lists the rest. */
+ *  are junctions: their slots share the first slot's Station ID and each
+ *  member's `merged_with` lists the rest. */
 function survey(
   lines: LineSpec[],
   merges: StationRef[][],
@@ -68,9 +69,13 @@ function survey(
   );
   const globalOf = (ref: StationRef) =>
     lineIds.findIndex((line, g) => line === ref.line_id && indices[g] === ref.station_index);
+  // A junction is one station: its slots share the first listed slot's
+  // Station ID (the wire's shared id) and list each other in `merged_with`.
   for (const group of merges) {
+    const shared = d.stationIds[globalOf(group[0]!)]!;
     for (const ref of group) {
       d.stationMergedWith.set(globalOf(ref), group.filter((other) => other !== ref));
+      d.stationIds[globalOf(ref)] = shared;
     }
   }
   return d;
@@ -228,5 +233,20 @@ describe('one station label per merge group', () => {
     d.stationComments = new Map([[2, 'main note'], [5, 'side note']]);
     const comments = buildLabelDescriptors(d, null, 0, 0, CTX).filter((x) => x.kind === LABEL_KIND.STATION_COMMENT);
     expect(comments.map((c) => c.text)).toEqual(['main note', 'side note']);
+  });
+
+  it('groups the slots that share a Station ID, whatever merged_with says', () => {
+    // The station graph's wire: a junction's slots carry ONE Station ID. The
+    // label groups by it, so a slot whose merged_with list is missing (or
+    // stale) still draws no second label at the junction.
+    const d = survey(
+      [{ id: 1, name: 'Main', shots: 4 }, { id: 2, name: 'Side', shots: 2 }],
+      [],
+    );
+    d.stationIds[5] = d.stationIds[2]!;
+    expect(texts(stationLabels(d))).toEqual([
+      '1:0=0', '1:1=1', '1:2=2', '1:3=3', '1:4=4', '2:1=1', '2:2=2',
+    ]);
+    expect(stationLabels(d, 'id').filter((l) => l.text === '102')).toHaveLength(1);
   });
 });

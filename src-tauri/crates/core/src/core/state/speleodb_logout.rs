@@ -84,20 +84,37 @@ impl AppState {
     ///   a copy (and its row) before signing out; anything still dirty here is work
     ///   they chose to come back to.
     ///
+    /// Each file's link is read through the shared probe
+    /// (`speleodb_local_state::probe_link`: a version 2 header, or a legacy file's
+    /// link row); only a file that READ as linked can be forgotten. The OPEN
+    /// project's file is also kept while its in-memory link holds un-uploaded
+    /// edits: a legacy file not upgraded yet keeps a link change in memory until
+    /// its first save, so its file on disk can still say clean.
+    ///
     /// `cache_root` is passed in so tests can use a temporary cache; `None` (the app
     /// dirs are not resolved) recognises no cached copy.
     fn speleodb_forget_recent_projects(
         &self,
         cache_root: Option<&std::path::Path>,
     ) -> Result<(), SpeleoErrorDto> {
+        use super::speleodb_local_state::{probe_link, FileLink, LegacyRead};
+        // Read before `recent_projects` is taken: it nests inside nothing.
+        let open_dirty = self
+            .speleo_link()
+            .filter(|link| link.has_unpushed_edits)
+            .and_then(|_| self.open_project_path());
         let mut recent = self
             .recent_projects
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         recent.retain(|path| {
-            let Ok(Some(link)) = crate::persistence::Database::open_for_metadata(path)
-                .and_then(|db| db.load_speleo_link())
-            else {
+            if open_dirty
+                .as_deref()
+                .is_some_and(|open| super::project_io::same_file(open, path))
+            {
+                return true;
+            }
+            let FileLink::Read(Some(link)) = probe_link(path, LegacyRead::ReadOnly) else {
                 return true;
             };
             link.has_unpushed_edits
@@ -172,47 +189,53 @@ impl AppState {
     reason = "synthetic legacy credential cleanup tests"
 )]
 mod tests {
+    use super::super::stalx_fixtures::{
+        legacy_linked_project, link, write_legacy_link_only, write_v2,
+    };
     use super::*;
+
     #[test]
     fn logout_forgets_only_clean_speleodb_references_and_preserves_files() {
         crate::test_helpers::with_isolated_config(|| {
             let dir = tempfile::tempdir().expect("temp");
             let state = AppState::new().expect("state");
             let local = dir.path().join("local.stalx");
+            write_v2(&local, "local", None);
             let missing = dir.path().join("missing.stalx");
             let unreadable = dir.path().join("unreadable.stalx");
-            std::fs::write(&unreadable, b"synthetic invalid database").expect("write");
-            let mut paths = vec![local.clone(), missing, unreadable];
-            // remote-a still holds un-uploaded edits, remote-b is clean: only the
-            // clean reference may be forgotten.
-            for (name, endpoint, dirty) in [
-                ("local", None, false),
-                ("remote-a", Some("https://a.example/"), true),
-                ("remote-b", Some("https://b.example/"), false),
-            ] {
-                let path = dir.path().join(format!("{name}.stalx"));
-                let mut db = crate::persistence::Database::open(&path).expect("db");
-                db.save_project(&crate::models::Project::new(name.into(), None))
-                    .expect("project");
-                if let Some(endpoint) = endpoint {
-                    db.save_speleo_link(Some(&crate::models::SpeleoLink {
-                        endpoint: endpoint.into(),
-                        project_id: uuid::Uuid::new_v4().to_string(),
-                        project_name: name.into(),
-                        base_commit_sha: None,
-                        has_unpushed_edits: dirty,
-                        last_edit_at: None,
-                        last_verify_at: None,
-                        undo_mode: None,
-                    }))
-                    .expect("link");
-                    paths.push(path);
-                }
-            }
+            std::fs::write(&unreadable, b"synthetic invalid project").expect("write");
+            // A version 2 file whose header stops short: present, unreadable.
+            let truncated = dir.path().join("truncated.stalx");
+            std::fs::write(
+                &truncated,
+                br#"{"format":"stalx","version":2,"solver":1,"req"#,
+            )
+            .expect("write");
+            let mut paths = vec![local.clone(), missing, unreadable, truncated];
+            // The dirty ones still hold un-uploaded edits, the clean ones do not:
+            // only a clean reference may be forgotten, in either format.
+            let remote = |name: &str, dirty: bool| {
+                link(
+                    "https://a.example/",
+                    &uuid::Uuid::new_v4().to_string(),
+                    name,
+                    None,
+                    dirty,
+                )
+            };
+            let v2_dirty = dir.path().join("remote-a.stalx");
+            write_v2(&v2_dirty, "remote-a", Some(&remote("remote-a", true)));
+            let legacy_dirty = dir.path().join("legacy-a.stalx");
+            write_legacy_link_only(&legacy_dirty, &remote("legacy-a", true));
+            let v2_clean = dir.path().join("remote-b.stalx");
+            write_v2(&v2_clean, "remote-b", Some(&remote("remote-b", false)));
+            let legacy_clean = dir.path().join("legacy-b.stalx");
+            write_legacy_link_only(&legacy_clean, &remote("legacy-b", false));
+            paths.extend([v2_dirty, legacy_dirty, v2_clean, legacy_clean]);
             let preserved: Vec<_> = paths.iter().map(|path| std::fs::read(path).ok()).collect();
             *state.recent_projects.lock().expect("recents") = paths.clone();
             state.config.lock().expect("config").general.recent_projects = paths.clone();
-            let kept: Vec<_> = paths[..4].to_vec();
+            let kept: Vec<_> = paths[..6].to_vec();
             assert!(state.open_project(local).success);
             state.speleodb_logout().expect("logout");
             assert_eq!(*state.recent_projects.lock().expect("recents"), kept);
@@ -234,6 +257,44 @@ mod tests {
         });
     }
 
+    /// A legacy file is upgraded only by its first save, so until then a link
+    /// change (the dirty bit an edit sets) lives in memory and the SQLite file
+    /// still says clean. The open project's row must be kept on the strength of
+    /// its live link, or signing out would drop the way back to unsaved work.
+    #[test]
+    fn logout_keeps_the_open_projects_row_while_its_live_link_is_dirty() {
+        crate::test_helpers::with_isolated_config(|| {
+            let dir = tempfile::tempdir().expect("temp");
+            let id = uuid::Uuid::new_v4().to_string();
+            let path = legacy_linked_project(
+                &dir.path().join("legacy.stalx"),
+                Some(&link("https://a.example/", &id, "Legacy", None, false)),
+            );
+            let before = std::fs::read(&path).expect("bytes");
+            let state = AppState::new().expect("state");
+            assert!(
+                state.open_project(path.clone()).success,
+                "open the legacy copy"
+            );
+            state
+                .mutate_speleo_link(|link| {
+                    if let Some(link) = link.as_mut() {
+                        link.has_unpushed_edits = true;
+                    }
+                    true
+                })
+                .expect("the dirty bit is kept in memory");
+            assert_eq!(
+                std::fs::read(&path).expect("bytes"),
+                before,
+                "precondition: nothing reached the legacy file"
+            );
+            *state.recent_projects.lock().expect("recents") = vec![path.clone()];
+            state.speleodb_forget_recent_projects(None).expect("forget");
+            assert_eq!(*state.recent_projects.lock().expect("recents"), vec![path]);
+        });
+    }
+
     /// Signed out, the home screen lists every cached copy on the list AND the map,
     /// and the map is built from recents: a clean cached copy keeps its row. A clean
     /// linked file outside the cache is still forgotten.
@@ -245,22 +306,9 @@ mod tests {
             let id = uuid::Uuid::new_v4().to_string();
             let cached = super::super::speleodb_local_state::cache_path_in(&root, &id);
             let stray = dir.path().join("stray-linked-copy.stalx");
-            std::fs::create_dir_all(cached.parent().expect("parent")).expect("cache dir");
+            let clean = link("https://a.example/", &id, "Synthetic", None, false);
             for path in [&cached, &stray] {
-                let mut db = crate::persistence::Database::open(path).expect("db");
-                db.save_project(&crate::models::Project::new("Synthetic".into(), None))
-                    .expect("project");
-                db.save_speleo_link(Some(&crate::models::SpeleoLink {
-                    endpoint: "https://a.example/".into(),
-                    project_id: id.clone(),
-                    project_name: "Synthetic".into(),
-                    base_commit_sha: None,
-                    has_unpushed_edits: false,
-                    last_edit_at: None,
-                    last_verify_at: None,
-                    undo_mode: None,
-                }))
-                .expect("link");
+                write_v2(path, "Synthetic", Some(&clean));
             }
             let state = AppState::new().expect("state");
             let paths = vec![cached.clone(), stray];

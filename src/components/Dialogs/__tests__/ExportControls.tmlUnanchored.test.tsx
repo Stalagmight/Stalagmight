@@ -52,5 +52,36 @@ describe('ExportControls TML unanchored-lines notice', () => {
     // A line without a name (an older file) reads as "Unnamed line", not `Line 9`.
     expect(screen.getByTestId('tml-unanchored-section-item-9')).not.toHaveTextContent('9');
     expect(screen.queryByTestId('tml-unanchored-section-item-7')).toBeNull();
+    expect(screen.getByTestId('tml-unanchored-warning-body')).toHaveTextContent(
+      /^dialogs\.tmlUnanchoredWarning\.bodyPartial$/,
+    );
+  });
+
+  // Demo finding I-10: in a file a newer Stalagmight made (open read-only),
+  // Set Zero Datum is disabled, so the notice does not tell the user to use
+  // it. Injection: always picking the plain bodies fails this.
+  it('does not suggest Set Zero Datum in a read-only file', async () => {
+    useProjectStore.setState({
+      project: { lines: [{ id: 3, name: 'Main Line', shots: [] }] },
+      getAnchoredLineIds: vi.fn(async () => []),
+      fileReadOnlyReason: 'requires zz-future',
+    } as never);
+    render(
+      <ExportControls
+        variant="panel"
+        exportType="data"
+        onExportTypeChange={() => undefined}
+        dataFormat="tml"
+        onDataFormatChange={() => undefined}
+        imageOptions={DEFAULT_IMAGE_OPTIONS}
+        onImageOptionsChange={() => undefined}
+      />
+    );
+    await userEvent.click(screen.getByTestId('export-button'));
+    await waitFor(() => expect(screen.getByTestId('tml-unanchored-warning-body')).toBeInTheDocument());
+    expect(screen.getByTestId('tml-unanchored-warning-body')).toHaveTextContent(
+      /^dialogs\.tmlUnanchoredWarning\.bodyAllUnanchoredReadOnly$/,
+    );
+    useProjectStore.setState({ fileReadOnlyReason: null } as never);
   });
 });

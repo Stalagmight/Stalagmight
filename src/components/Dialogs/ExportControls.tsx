@@ -20,6 +20,8 @@ import { ChevronRightIcon } from '../common/icons';
 import { setStationLabelOption } from '../../utils/exportOptions';
 import { hasStationNames } from '../../types/survey-data';
 import { lineDisplayName } from '../../utils/stationIdentity';
+import { extractFilename } from '../../utils/path';
+import { selectFileReadOnly } from '../../hooks/useEditingBlocked';
 import { ExportColorScaleControls } from './ExportColorScaleControls';
 
 /** Phase label mapping for export phases (matches backend LoadingPhase) */
@@ -74,6 +76,9 @@ export default function ExportControls({
   const showToast = useUIStore((s) => s.showToast);
   const { t } = useTranslation();
   const hasNames = useProjectStore((s) => hasStationNames(s.surveyData));
+  // A file a newer Stalagmight made is open read-only: Set Zero Datum is off
+  // there, so the TML notice must not send the user to it (demo finding I-10).
+  const fileReadOnly = useProjectStore(selectFileReadOnly);
   const stationNamesUnavailable = !hasNames && !imageOptions.show_station_names;
 
   const [isExporting, setIsExporting] = useState(false);
@@ -114,6 +119,18 @@ export default function ExportControls({
     },
     [onExportingChange],
   );
+
+  // The export finished: say where it went (demo finding I-13). A success
+  // toast per docs/notifications.md - the file is written somewhere the user
+  // is not looking, and the dialog just closes. Only the file name: the folder
+  // was the user's own pick a moment ago.
+  const announceExported = (path: string) => {
+    showToast(
+      t('dialogs.export.succeeded', { file: extractFilename(path) }),
+      TOAST_KEYS.EXPORT_SUCCEEDED,
+      'success',
+    );
+  };
 
   const handleExport = async (options?: { skipTmlAnchorCheck?: boolean }) => {
     // Only a chosen path counts as a completed export; a cancelled OS save
@@ -200,6 +217,7 @@ export default function ExportControls({
             } else {
               await exportTml(finalPath);
             }
+            announceExported(finalPath);
           } finally {
             if (isMountedRef.current) {
               setExporting(false);
@@ -246,6 +264,7 @@ export default function ExportControls({
 
           try {
             await exportImage(finalPath, imageOptions);
+            announceExported(finalPath);
           } finally {
             // Clean up listener and reset state only if still mounted
             unlisten();
@@ -692,14 +711,24 @@ export default function ExportControls({
           {/* `bodyAllUnanchored`/`bodyPartial` (en.json) quote "Set Zero Datum" - the literal
               English label at ContextMenu.tsx:426, which `iconForLabel` switches on by exact
               string. Translating that menu item later will desync these quotes; update both
-              together. */}
-          <p>
+              together. The `ReadOnly` bodies leave that advice out: in a read-only file the
+              menu item is disabled. */}
+          <p data-testid="tml-unanchored-warning-body">
             {tmlAllSectionsUnanchored
-              ? t('dialogs.tmlUnanchoredWarning.bodyAllUnanchored')
-              : t('dialogs.tmlUnanchoredWarning.bodyPartial', {
-                  count: tmlUnanchoredSections.length,
-                  total: tmlTotalSectionCount,
-                })}
+              ? t(
+                  fileReadOnly
+                    ? 'dialogs.tmlUnanchoredWarning.bodyAllUnanchoredReadOnly'
+                    : 'dialogs.tmlUnanchoredWarning.bodyAllUnanchored',
+                )
+              : t(
+                  fileReadOnly
+                    ? 'dialogs.tmlUnanchoredWarning.bodyPartialReadOnly'
+                    : 'dialogs.tmlUnanchoredWarning.bodyPartial',
+                  {
+                    count: tmlUnanchoredSections.length,
+                    total: tmlTotalSectionCount,
+                  },
+                )}
           </p>
           <div className="rounded border border-border bg-panel p-3">
             <p className="text-xs font-medium text-text-secondary mb-2">

@@ -1,7 +1,7 @@
 /**
  * Unit tests for the data-table fullscreen mode in uiStore. The mode is
  * session-only (never persisted) and owns the raw-table selection used by
- * the fullscreen raw sqlite viewer.
+ * the fullscreen raw data viewer (the saved file's members).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 

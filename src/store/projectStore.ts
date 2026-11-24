@@ -13,14 +13,19 @@ import { exportScaleInputsFrom, withColorScales, withHiddenLines } from '../util
 import { useColorScaleStore } from './colorScaleStore';
 import {
   isEditDisabledError,
+  isReadOnlyFileError,
   isReverifyDivergedError,
   READ_ONLY_EDIT_NOTICE,
+  READ_ONLY_FILE_NOTICE,
 } from '../utils/editErrors';
 import { hasAdjustmentInputs } from '../utils/closures';
 import { notifyRemovedClosures } from '../utils/closureRemovalToast';
+import { notifyIdentityChanges } from '../utils/identityNotice';
+import { lineNameOf } from '../utils/stationIdentity';
 import { useAdjustmentReportStore } from './adjustmentReportStore';
 import { afterSurveyEdit, applyEditAftermath, beforeSurveyEdit, type SurveyEdit } from '../utils/reverseAftermath';
 import { useUIStore } from './uiStore';
+import { splitSecondHalfColor } from '../utils/colors';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
 import { useGlobalViewStore } from './globalViewStore';
 import { useSpeleoStore } from './speleoStore';
@@ -52,7 +57,20 @@ import type { NewerSchema } from '../types/ipc/NewerSchema';
 import { newerSchemaMessage } from '../utils/newerSchema';
 import type { Config } from '../types/config';
 import type { AzimuthReference } from '../types/ipc/AzimuthReference';
-import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, TmlRootPlacement, CompassFile, WallsFile, GpxFile, GpxLinePlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportLineConfig, PlacementSuggestion, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
+import type { StationRename } from '../types/ipc/StationRename';
+import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, TmlRootPlacement, CompassFile, WallsFile, GpxFile, GpxLinePlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportLineConfig, PlacementSuggestion } from '../types/commands';
+
+/** A merge's or a closure's answers in its dialog (RS 4.1, 5.2). */
+export interface KeptStationAnswers {
+  keep?: number;
+  renames?: StationRename[];
+}
+
+/** A detach's answers in its dialog (RS 4.2). */
+export interface DetachAnswers {
+  renames?: StationRename[];
+  restKeep?: number;
+}
 
 /** Additive import-receipt provenance (#391) - see `import_lines` (Rust) for the fields' meaning. */
 export interface ImportReceiptProvenance {
@@ -61,7 +79,7 @@ export interface ImportReceiptProvenance {
   linesFound?: number;
 }
 import type { CreateProjectFullResult } from '../types/loading';
-import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
+import { askAboutUnrecognisedShotKinds } from './unrecognisedShotKinds';
 import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations, withGpsFixFlags } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
@@ -69,6 +87,8 @@ import { createProjectShotActions, type ProjectShotActions } from './projectShot
 import { createLineStructureActions, type LineStructureActions } from './lineStructureActions';
 import { createCaveSectionActions, type CaveSectionActions } from './caveSectionActions';
 import { createProjectHistoryBannerActions, HISTORY_BANNER_CLEARED, type ProjectHistoryBannerActions, type ProjectHistoryBannerState } from './projectHistoryBannerActions';
+import { createProjectFileStatusActions, FILE_STATUS_CLEARED, type ProjectFileStatusActions, type ProjectFileStatusState } from './projectFileStatusActions';
+import { createProjectWarningActions, type ProjectWarningActions } from './projectWarningActions';
 import { runProjectSwitch, runConfirmedProjectSwitch, reserveProjectRequest, isProjectRequestCurrent, beginProjectMutation, isProjectMutationCurrent } from '../utils/projectTransition';
 import { releaseFailed, resolveReleaseFailure, settleOpenLockBeforeLeaving } from '../utils/speleoReleaseFailure';
 import { TOAST_KEYS } from '../utils/toastKeys';
@@ -133,11 +153,12 @@ function nextProjectTreeGeneration(): number {
   return projectTreeGenerationCounter;
 }
 
-// Monotonic sequence so overlapping fire-and-forget integrity checks are
-// last-issued-wins: an earlier check that resolves after a newer one was started
-// must not clobber the newer result (e.g. a manual save's check racing a Repair's
-// check on the same project, where the project-identity guard can't tell them apart).
-let integrityCheckSeq = 0;
+let projectOpenGenerationCounter = 0;
+
+function nextProjectOpenGeneration(): number {
+  projectOpenGenerationCounter += 1;
+  return projectOpenGenerationCounter;
+}
 
 /**
  * Parsed error from Tauri backend.
@@ -220,9 +241,11 @@ export interface LoadProjectOutcome {
    * must not roll anything back on it. Never set together with `success: true`.
    */
   superseded?: boolean;
+  /** Why a reload (`reload: true`, the save prompt's "Use the file's version") replaced nothing: the session and its unsaved changes are as they were. */
+  error?: string;
 }
 
-export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectShotActions, LineStructureActions, CaveSectionActions {
+export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectFileStatusActions, ProjectFileStatusState, ProjectWarningActions, ProjectShotActions, LineStructureActions, CaveSectionActions {
   // State
   project: Project | null;
   /**
@@ -232,6 +255,14 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    * not change.
    */
   projectTreeGeneration: number;
+  /**
+   * Monotonic identity of the open PROJECT: moves when a project is loaded,
+   * created or closed, never on an edit, refresh or save. View state that
+   * belongs to one project (the data table's line, row and column, demo
+   * finding I-12) is keyed on it, so the next project starts fresh even when
+   * its line ids are the previous one's.
+   */
+  projectOpenGeneration: number;
   /**
    * Whether the open project is backed by an on-disk database. A new project
    * created with a deferred initial save reserves `project.file_path` but leaves
@@ -275,9 +306,9 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   autosaveFailure: string | null;
   /**
    * What KIND of failure `autosaveFailure` describes (#517). The message is
-   * already user-ready, so this exists only for routing: the banner yields to
-   * the integrity banner for an ordinary failure, and must NOT yield for one
-   * Review & Repair cannot fix. Kept beside the message and cleared with it.
+   * already user-ready, so this exists only for routing: `useAutoSave` pauses on
+   * a failure no retry can fix and resumes when it clears. Kept beside the
+   * message and cleared with it.
    */
   autosaveFailureKind: SaveErrorKind | null;
   clearAutosaveFailure: () => void;
@@ -302,16 +333,14 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   cancelLoading: () => Promise<void>;
 
   /** Load a project using the consolidated load_project_full command */
-  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number; acquireLock?: boolean }) => Promise<LoadProjectOutcome>;
+  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number; acquireLock?: boolean; reload?: boolean }) => Promise<LoadProjectOutcome>;
   /** Create a new project (legacy, still supported) */
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) => Promise<CommandResult>;
   /**
    * Save the project. `isAutosave` marks a QUIET, BACKGROUND save - one the user
-   * did not ask for and is not waiting on - and suppresses two bits of UI churn
-   * for it: the save-permission dialog (which would otherwise reopen on every
-   * retry while folder access is denied) and the post-save integrity re-check
-   * (skipped unless the project entered the save already flagged, since the save
-   * path auto-heals some issues).
+   * did not ask for and is not waiting on - and suppresses the save-permission
+   * dialog for it (which would otherwise reopen on every retry while folder
+   * access is denied).
    *
    * It also crosses IPC, where it does exactly one thing: name the trigger in
    * the backend's log line (#429). The save itself is byte-for-byte identical
@@ -325,6 +354,8 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    * save-after-import) must not.
    */
   saveProject: (path?: string, isAutosave?: boolean) => Promise<CommandResult>;
+  /** The save prompt's Overwrite answer to a save refused because another program changed the file (`EXTERNALLY_MODIFIED`). */
+  saveProjectOverwriting: () => Promise<CommandResult>;
   /**
    * Persist the project after a DMP import completes (#92). Imports bypass the
    * dirty/save machinery, so the change would otherwise be lost. For a NEW
@@ -371,38 +402,6 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   loadAdjustedGeometry: () => Promise<boolean>;
   /** Check if a shot (by line_id + shot index) is frozen */
   isShotFrozen: (lineId: number, shotIndex: number) => boolean;
-  /** Structural-integrity issues found in the open project (empty = sound). */
-  integrityIssues: string[];
-  /** True once the user dismissed the integrity banner for the CURRENT issue set.
-   * Suppresses the banner so a re-check after a save (or a failed autosave) can't
-   * resurrect a banner the user explicitly dismissed; reset automatically when the
-   * issue set changes (genuinely new issues re-show). Ignored while
-   * `integritySaveBlocked` is true (a save-blocking project can't hide Repair). */
-  integrityDismissed: boolean;
-  /** True when the open project has unresolvable cross-references - the exact
-   * condition that refuses both manual and auto-save. While true the integrity
-   * banner stays shown and non-dismissable so the Repair entry point can't be
-   * hidden on a project that can't be saved. */
-  integritySaveBlocked: boolean;
-  /** Whether the "Review & Repair" integrity dialog is open. Lifted here (not
-   * App-local) so a blocked manual save can route the user straight to Repair
-   * instead of showing a generic error window. */
-  integrityDialogOpen: boolean;
-  /** Open the Review & Repair integrity dialog. */
-  openIntegrityDialog: () => void;
-  /** Close the Review & Repair integrity dialog. */
-  closeIntegrityDialog: () => void;
-  /** Re-check the open project's structural integrity, updating integrityIssues. */
-  checkProjectIntegrity: () => Promise<string[]>;
-  /** Repair structural integrity; returns {fixed, remaining} and refreshes
-   * integrityIssues from the true post-repair state (remaining>0 = detect-only
-   * issues that need manual attention). */
-  repairProjectIntegrity: () => Promise<IntegrityRepairResult>;
-  /** Dismiss the integrity warning without repairing. */
-  dismissIntegrityIssues: () => void;
-  refreshWarnings: () => Promise<void>;
-  resolveWarning: (lineId: number, shotId: number, warningCode: string, comment?: string) => Promise<boolean>;
-  unresolveWarning: (lineId: number, shotId: number, warningCode: string) => Promise<void>;
   loadRecentProjects: () => Promise<void>;
   removeFromRecentProjects: (path: string) => Promise<CommandResult>;
   deleteProject: (path: string) => Promise<CommandResult>;
@@ -429,12 +428,18 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   deleteShotRangeShift: (lineId: LineId, startShotId: ShotId, endShotId: ShotId) => Promise<CommandResult>;
   setShotKind: (lineId: LineId, shotId: ShotId, kind: ShotKind) => Promise<CommandResult>;
 
-  mergeStations: (stationA: StationRef, stationB: StationRef) => Promise<CommandResult>;
-  unmergeStations: (stationRef: StationRef) => Promise<CommandResult>;
-  unmergeStationPair: (stationA: StationRef, stationB: StationRef) => Promise<CommandResult>;
+  /** Kept and archived stations (RS 4.1, 4.2, 5.2, 5.3): `keep` is the
+   *  Station ID kept (a merge: absent keeps the stationary station; a
+   *  closure: absent keeps both names), `renames` the dialog's answers to
+   *  the name collisions (absent: no dialog, rule L letters them and the
+   *  result's `identities` says so), `restKeep` the record the remaining
+   *  junction shows after a detach. The kept-station dialogs pass them. */
+  mergeStations: (stationA: StationRef, stationB: StationRef, answers?: KeptStationAnswers) => Promise<CommandResult>;
+  unmergeStations: (stationRef: StationRef, answers?: DetachAnswers) => Promise<CommandResult>;
+  unmergeStationPair: (stationA: StationRef, stationB: StationRef, answers?: DetachAnswers) => Promise<CommandResult>;
   checkMergeConnectivity: (stationA: StationRef, stationB: StationRef) => Promise<ConnectivityResult>;
-  createLoopClosure: (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => Promise<CommandResult>;
-  removeLoopClosure: (closureId: bigint) => Promise<CommandResult>;
+  createLoopClosure: (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy, answers?: KeptStationAnswers) => Promise<CommandResult>;
+  removeLoopClosure: (closureId: bigint, answers?: { renames?: StationRename[] }) => Promise<CommandResult>;
   updateStationComment: (stationRef: StationRef, comment: string | null) => Promise<CommandResult>;
   moveComment: (source: CommentHolder, target: CommentHolder, swap: boolean) => Promise<CommandResult>;
   /** `accuracyM`: the GPS accuracy in metres (#741); 0 is a hard pin, and
@@ -502,6 +507,15 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   exportJson: (path: string) => Promise<void>;
   exportTml: (path: string) => Promise<void>;
   exportImage: (path: string, options: ExportImageOptions) => Promise<void>;
+}
+
+/** The colour a delete-and-split gives its second half, a new line, as Split
+ *  Line Here does (demo finding I-9); `undefined` (the backend keeps the
+ *  line's colour) when the line is not in the project. */
+function splitColorB(project: Project | null, lineId: LineId): string | undefined {
+  const line = project?.lines.find((l) => l.id === lineId);
+  if (!line) return undefined;
+  return splitSecondHalfColor(project?.lines, line.color, useUIStore.getState().resolvedTheme);
 }
 
 /**
@@ -627,6 +641,7 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
   set({
     project: null,
     projectTreeGeneration: nextProjectTreeGeneration(),
+    projectOpenGeneration: nextProjectOpenGeneration(),
     databaseOpen: false,
     stations: [],
     surveyData: null,
@@ -637,11 +652,7 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
     isDirty: false,
     autosaveFailure: null,
     autosaveFailureKind: null,
-    integrityIssues: [],
-    integrityDismissed: false,
-    integritySaveBlocked: false,
-    integrityDialogOpen: false,
-    ...HISTORY_BANNER_CLEARED,
+    ...HISTORY_BANNER_CLEARED, ...FILE_STATUS_CLEARED,
   });
   // Losing a project bypasses the setView() cleanup funnel, so drop the gas
   // sub-mode (#38) here too - a stale overlay/panel must not outlive the project.
@@ -710,6 +721,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           applyEditAftermath(result.reversed_lines, get().project?.lines ?? [], edit);
         }
         set({ isDirty: true });
+        // Names the action changed on its own (rule L letters, restored
+        // archived stations, RS 7): one notice per action.
+        notifyIdentityChanges(result, (lineId) =>
+          lineNameOf({ lines: get().project?.lines, surveyData: get().surveyData }, lineId),
+        );
         noteImportResolvedDeferredSave(command, result, set);
         // #204: mirror the backend's mark_remote_dirty so the SpeleoDB action shell
         // knows there are un-pushed edits (drives the button's push&release-with-
@@ -721,13 +737,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // alone was a no-op here - an unwound copy is already dirty - which left the
         // discard prompts offering to throw away the edit that just landed.
         useSpeleoStore.getState().markForwardEdit();
-        // A command can RESOLVE (or surface) an integrity issue - e.g. removing a
-        // drifted loop closure clears its banner entry - so re-check, mirroring
-        // executeUndoRedo. refreshProjectState doesn't re-check, and the next save
-        // may be an autosave (which skips its own post-save re-check to avoid churn),
-        // so without this the banner/dialog can keep showing an already-fixed issue
-        // until a manual save or reload.
-        await get().checkProjectIntegrity();
       } else {
         // executeCommand used to be SILENT on a rejected CommandResult (no refresh,
         // no feedback). That left optimistic UI desynced from backend truth - the
@@ -747,6 +756,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
           useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(), TOAST_KEYS.EDIT_DISABLED, 'warning');
+        } else if (isReadOnlyFileError(result.error)) {
+          useUIStore.getState().showToast(READ_ONLY_FILE_NOTICE(), TOAST_KEYS.EDIT_DISABLED, 'warning');
         } else {
           // Catch-all (docs/notifications.md): a failure no specific handler
           // claims must not die silently. Dialogs own their inline errors and
@@ -816,7 +827,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // real round trip, and a project can open across it while `args` still name the outgoing
       // one. Returning from inside the `try` still runs the `finally`, which is correct rather
       // than merely tolerable: its remap and its aftermath carry the same guard and skip
-      // themselves, and the refresh + integrity re-check simply re-read whatever is now open -
+      // themselves, and the refresh simply re-reads whatever is now open -
       // exactly what already happens today when the switch is caught one guard later.
       if (lostProject(requestProjectKey)) return emptyCommandResult(false, PROJECT_CHANGED);
       result = await invokeIpc<CommandResult>(command, args, meta);
@@ -846,6 +857,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
           useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(), TOAST_KEYS.EDIT_DISABLED, 'warning');
+        } else if (isReadOnlyFileError(result.error)) {
+          useUIStore.getState().showToast(READ_ONLY_FILE_NOTICE(), TOAST_KEYS.EDIT_DISABLED, 'warning');
         } else {
           useUIStore.getState().showToast(result.error ?? i18n.t('editGate.commandFailed'), toastId, 'error');
         }
@@ -870,11 +883,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (!lostProject(requestProjectKey)) {
         applyEditAftermath(reversedLines, get().project?.lines ?? [], edit);
       }
-      // Undo/redo can change which cross-references resolve - e.g. undoing a
-      // Repair restores the dropped dangling refs, redoing a delete removes a
-      // station an offset anchored on - so re-check integrity, otherwise the
-      // banner and save-block go stale (showing clean while the project isn't).
-      await get().checkProjectIntegrity();
     }
     return result;
   };
@@ -883,6 +891,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // Initial state
   project: null,
   projectTreeGeneration: 0,
+  projectOpenGeneration: 0,
   databaseOpen: false,
   stations: [],
   surveyData: null,
@@ -893,11 +902,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   frozenShots: [],
   warnings: [],
   recentProjects: [],
-  integrityIssues: [],
-  integrityDismissed: false,
-  integritySaveBlocked: false,
-  integrityDialogOpen: false,
-  ...HISTORY_BANNER_CLEARED,
+  ...HISTORY_BANNER_CLEARED, ...FILE_STATUS_CLEARED,
   config: null,
   loading: { ...initialLoadingState },
   autosaveFailure: null,
@@ -910,6 +915,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // Config (loadConfig / updateConfig / updateGasConfig / setConfig live in projectConfigActions.ts)
   ...createProjectConfigActions(set, get),
   ...createProjectHistoryBannerActions(set, get),
+  ...createProjectFileStatusActions(set, get),
+  ...createProjectWarningActions(set, get, nextProjectTreeGeneration),
   // splitShotAtDistance / editShotCredit live in projectShotActions.ts
   ...createProjectShotActions(executeCommand),
   // splitLine / combineLines live in lineStructureActions.ts
@@ -928,7 +935,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         isLoading: true,
         projectName,
         projectPath,
-        phase: 'opening_database',
+        phase: 'opening_file',
         lastEventTime: Date.now(),
       },
       autosaveFailure: null, // A new project's autosave state starts clean
@@ -987,7 +994,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   //
   // Current same-path requests share decoding and geometry work. Ownership is
   // reserved before preflight; operation IDs protect dispatched loads afterward.
-  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number; acquireLock?: boolean }) =>
+  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number; acquireLock?: boolean; reload?: boolean }) =>
     runDeduplicatedProjectLoad(path, opts?.request, (request) => {
     const actionSource = peekProjectActionSource();
     let openedRemote = false;
@@ -1029,10 +1036,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // Binary IPC: msgpack envelope + typed-array byte buffers for shots
         // and stations. The decoder reconstructs the same shape as the legacy
         // `load_project_full` JSON response so the rest of the load pipeline
-        // doesn't need to change. See utils/loadProjectBinary.ts.
-        const { loadProjectFullBinary } = await import('../utils/loadProjectBinary');
+        // doesn't need to change. See utils/loadProjectBinary.ts. A reload
+        // (`reload`, the open file read again in place of the session) is
+        // ONE backend operation: only a read that opened replaced the session.
+        const binary = await import('../utils/loadProjectBinary');
         if (!current()) return superseded;
-        const result = await loadProjectFullBinary(path);
+        const result = await (opts?.reload ? binary.reloadProjectFullBinary() : binary.loadProjectFullBinary(path));
         // The await above includes both the Rust handler runtime AND the
         // JS-side msgpack decode + typed-array materialization.
         const tIpcDone = performance.now();
@@ -1052,7 +1061,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // loads. The source is still armed (setView clears it below). Deduped
         // same-path calls returned before the async body ran, so this fires once
         // per actual load.
-        trackCommand('load_project_full', actionSource);
+        trackCommand(opts?.reload ? 'reload_project_full_binary' : 'load_project_full', actionSource);
 
         // Set backend loadingId from result for event correlation
         get().setLoadingProgress({ loadingId: result.loadingId });
@@ -1068,6 +1077,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         set({
           project: result.project,
           projectTreeGeneration: nextProjectTreeGeneration(),
+          projectOpenGeneration: nextProjectOpenGeneration(),
           stations: result.stations,
           surveyData: result.surveyData,
           // Adjusted geometry is lazily (re)fetched by the map when the adjusted
@@ -1083,16 +1093,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // A loaded project is backed by its on-disk database.
           databaseOpen: true,
           isDirty: false,
-          // Reset integrity state on project switch so a dismissal from the
-          // previous project can never carry over and suppress this one's banner.
-          // The post-load integrity-check effect in App.tsx (keyed on
-          // project.file_path + loading.isLoading) repopulates it for the new
-          // project once this load settles.
-          integrityIssues: [],
-          integrityDismissed: false,
-          integritySaveBlocked: false,
-          integrityDialogOpen: false,
-          ...HISTORY_BANNER_CLEARED,
+          ...HISTORY_BANNER_CLEARED, ...FILE_STATUS_CLEARED,
         });
         const tSetDone = performance.now();
         recordPerfTiming('store set(project+stations)', tSetDone - tSetStart);
@@ -1156,35 +1157,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // every held lock reads as "locked by other").
         void useSpeleoStore.getState().refreshSession();
 
-        // #27: shots whose stored `kind` this build could not read. The backend
-        // already failed them closed to Reference (so nothing routes through a
-        // leg it could not parse) and hands them over exactly once, but that is
-        // a substitution the user never agreed to - ask what they should be.
-        // Staleness-guarded: a user who switched projects before this resolved
-        // must not get a dialog about a file that is no longer open. The list
-        // has already been consumed from the backend, so losing this dialog
-        // loses the prompt for the session, leaving substitutions unreviewed.
-        try {
-          const found = await invokeIpc<UnrecognisedShotKind[]>(
-            'take_unrecognised_shot_kinds',
-            // Scoped to THIS load: a cancelled load runs on to its next
-            // checkpoint, so without the id an abandoned project's shot ids
-            // could be handed to the one actually open.
-            { loadingId: result.loadingId },
-            { purpose: 'resolve unreadable shot kinds' }
-          );
-          const st = get();
-          if (st.project !== null && st.loading.clientOpId === clientOpId && found.length > 0) {
-            useUIStore.getState().openDialog('unrecognised-shot-kind', { shots: found });
-          }
-        } catch {
-          /* best-effort: the shots are already safely Reference either way */
-        }
+        // #27: ask what the shots with an unreadable stored kind should be,
+        // only while this load's project is still the open one.
+        await askAboutUnrecognisedShotKinds(result.loadingId, () => get().project !== null && get().loading.clientOpId === clientOpId);
 
         return current() ? { success: true } : superseded;
       } catch (e) {
         if (!current() || get().loading.clientOpId !== clientOpId) return superseded;
         const error = parseLoadError(e);
+        // A reload that replaced nothing: the save prompt says why, over the session it kept.
+        if (opts?.reload) {
+          get().resetLoading();
+          clearProjectActionSource();
+          return { success: false, error: error.message };
+        }
 
         // Handle ALREADY_OPEN specially - not an error, just switch view
         if (error.code === 'ALREADY_OPEN') {
@@ -1343,6 +1329,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       set({
         project: result.project,
         projectTreeGeneration: nextProjectTreeGeneration(),
+        projectOpenGeneration: nextProjectOpenGeneration(),
         // A deferred new project has no on-disk database until the first save.
         databaseOpen: !deferred,
         stations: [],
@@ -1353,12 +1340,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         frozenShots: [],
         warnings: [],
         isDirty: false,
-        // Reset integrity state on project switch (see loadProject).
-        integrityIssues: [],
-        integrityDismissed: false,
-        integritySaveBlocked: false,
-        integrityDialogOpen: false,
-        ...HISTORY_BANNER_CLEARED,
+        ...HISTORY_BANNER_CLEARED, ...FILE_STATUS_CLEARED,
       });
 
       // #270: a freshly created project is local by construction - it has no
@@ -1391,6 +1373,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }),
 
   saveProject: createSaveProjectAction(set, get),
+  saveProjectOverwriting: () => createSaveProjectAction(set, get, 'save_project_overwriting')(),
 
   markDirty: () => set({ isDirty: true }),
 
@@ -1420,15 +1403,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     try {
       result = await get().saveProject();
     } catch (e) {
-      // A reject (e.g. IPC transport failure) means saveProject never ran its
-      // integrity recheck, so `integritySaveBlocked` may be stale -
-      // skipIntegrityRouting keeps the router from wrongly opening Review &
-      // Repair. The project stays dirty (close-guarded).
+      // A reject (e.g. IPC transport failure): the project stays dirty
+      // (close-guarded) and the error dialog says why.
       console.error('[import] save after import failed:', e);
       set({ isDirty: true });
-      surfaceSaveFailure(e instanceof Error ? e.message : String(e), useUIStore.getState().openDialog, {
-        skipIntegrityRouting: true,
-      });
+      surfaceSaveFailure(e instanceof Error ? e.message : String(e), useUIStore.getState().openDialog);
       return false;
     }
     if (!result.success) {
@@ -1557,50 +1536,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   },
 
-  refreshWarnings: async () => {
-    try {
-      const warnings = await invokeIpc<ProjectWarning[]>('get_project_warnings', undefined, {
-        purpose: 'refresh validation warnings',
-      });
-      set({ warnings });
-    } catch (e) {
-      console.error('Failed to refresh warnings:', e);
-      set({ warnings: [] });
-    }
-  },
-
-  resolveWarning: async (lineId: number, shotId: number, warningCode: string, comment?: string): Promise<boolean> => {
-    try {
-      await invokeIpc(
-        'resolve_warning',
-        { lineId, shotId, warningCode, comment },
-        { purpose: 'acknowledge validation warning', fields: { lineId, shotId, warningCode } }
-      );
-      useSpeleoStore.getState().markForwardEdit();
-      await get().refreshWarnings();
-      return true;
-    } catch (e) {
-      // Surface failure to the caller (e.g. the shot no longer exists) so the
-      // resolve flow doesn't report a suppression that never persisted (#57).
-      console.error('Failed to resolve warning:', e);
-      return false;
-    }
-  },
-
-  unresolveWarning: async (lineId: number, shotId: number, warningCode: string) => {
-    try {
-      await invokeIpc(
-        'unresolve_warning',
-        { lineId, shotId, warningCode },
-        { purpose: 'reopen validation warning', fields: { lineId, shotId, warningCode } }
-      );
-      useSpeleoStore.getState().markForwardEdit();
-      await get().refreshWarnings();
-    } catch (e) {
-      console.error('Failed to unresolve warning:', e);
-    }
-  },
-
   loadRecentProjects: async () => {
     try {
       // [perf] Hot path on every navigation to GlobalView. Surfaced in the
@@ -1617,133 +1552,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       console.error('Failed to load recent projects:', e);
     }
   },
-
-  checkProjectIntegrity: async () => {
-    // The check is fire-and-forget (the post-load App effect, the after-every-
-    // command wrapper, a failed save) and the backend scans whatever project is
-    // currently loaded with no path argument. Correlate the result with the
-    // project that was active when it STARTED: if the user switches or closes
-    // projects while the check is in flight, a late-resolving result must not
-    // overwrite the new project's freshly-reset banner/save-block state.
-    // clientOpId bumps on every load (catches a switch); file_path catches a
-    // close (project → null).
-    const pathAtStart = get().project?.file_path ?? null;
-    const opAtStart = get().loading.clientOpId;
-    const mySeq = ++integrityCheckSeq;
-    try {
-      const result = await invokeIpc<IntegrityCheckResult>('check_project_integrity', undefined, {
-        purpose: 'check project structural integrity after load',
-      });
-      const cur = get();
-      if (
-        mySeq !== integrityCheckSeq ||
-        cur.project === null ||
-        (cur.project.file_path ?? null) !== pathAtStart ||
-        cur.loading.clientOpId !== opAtStart
-      ) {
-        // Drop this result if it has been superseded. Two ways:
-        // 1. A NEWER check was issued after this one started (last-issued-wins) -
-        //    so an earlier check can't clobber a fresher result even on the SAME
-        //    project (e.g. a save's fire-and-forget check racing a Repair's check,
-        //    which the project-identity guard below can't tell apart).
-        // 2. The project switched/closed mid-check. The explicit project===null
-        //    check is needed for the UNSAVED case: file_path stays null and
-        //    closeProject doesn't bump clientOpId, so without it a late result would
-        //    repopulate the banner with no project loaded (leaking onto the global view).
-        return [];
-      }
-      const issues = result.messages;
-      set((state) => {
-        // Keep a dismissal sticky across re-checks (e.g. after every save) as long
-        // as the issue SET is unchanged; reset it when the set genuinely changes so
-        // newly-appeared issues re-show the banner. Compare order-independently:
-        // the backend's message order isn't stable (orphan offset/comment messages
-        // come from HashMap iteration), so a positional compare could spuriously
-        // reset a dismissal - and thus resurface a banner - on a mere reorder.
-        const prev = [...state.integrityIssues].sort();
-        const next = [...issues].sort();
-        const unchanged =
-          prev.length === next.length && prev.every((v, i) => v === next[i]);
-        return {
-          integrityIssues: issues,
-          integritySaveBlocked: result.save_blocked,
-          integrityDismissed: unchanged ? state.integrityDismissed : false,
-          // Keep the Review & Repair dialog flag consistent with what's actually
-          // rendered (the dialog gate is integrityDialogOpen && issues.length > 0).
-          // When the last issue clears - via Repair or a command that resolved it -
-          // close the dialog explicitly, so the flag can't linger true-but-hidden
-          // and pop the dialog back open if a later issue reappears.
-          integrityDialogOpen: issues.length === 0 ? false : state.integrityDialogOpen,
-        };
-      });
-      return issues;
-    } catch (e) {
-      console.error('Failed to check project integrity:', e);
-      return [];
-    }
-  },
-
-  repairProjectIntegrity: async () => {
-    try {
-      const result = await invokeIpc<IntegrityRepairResult>('repair_project_integrity', undefined, {
-        purpose: 'repair project structural integrity',
-      });
-      // Repair mutates the project; refresh derived state so the UI reflects it.
-      await get().refreshProjectState();
-      // Repair records a snapshot-pair undo entry, so refresh undo/redo
-      // availability - the Undo button must enable so the user can revert it.
-      await get().refreshUndoState();
-      // Re-check rather than assuming clean: some issues are detect-only and not
-      // auto-repairable (a drifted aligned loop closure - recompute/remove it;
-      // non-finite shot geometry - fix the data), so reflect the TRUE post-repair
-      // state instead of clearing the banner on issues that still exist.
-      await get().checkProjectIntegrity();
-      // A repair that actually changed the project leaves unsaved edits: mark the
-      // store dirty so auto-save runs and the close prompt fires. Otherwise a
-      // project that was clean (isDirty false) when the user clicked Repair still
-      // looks "saved", and the fix is silently lost on close/reopen.
-      //
-      // Key on `result.changed`, NOT `result.fixed > 0`: the repair always
-      // re-solves offsets, which heals sub-tolerance drift that never counted as a
-      // violation, so a genuine fix can report fixed === 0. `changed` is the
-      // backend's honest "the snapshot was mutated" signal (the same condition
-      // under which it records the undo entry), so it dirties on those silent
-      // fixes too while still leaving a true no-op repair clean.
-      if (result.changed) {
-        set({ isDirty: true });
-        // #204/fix 8: a repair that actually mutated the project makes a remote
-        // SpeleoDB project un-pushed-dirty too - mirror the backend dirty bit (as
-        // executeCommand/executeUndoRedo do) so the SpeleoDB tab offers the upload &
-        // prompts for a commit message rather than reading "editing clean". No-op
-        // for a local project (no link).
-        // [#303] `repair_integrity` pairs it with speleodb_forget_unwind_position under
-        // the same `changed` guard this branch is under (commands.rs:467-473), so mirror
-        // both halves.
-        useSpeleoStore.getState().markForwardEdit();
-      }
-      return result;
-    } catch (e) {
-      // Do NOT fabricate a successful no-op { fixed: 0, remaining: 0 }: a thrown
-      // repair (an IPC rejection during window/app teardown, a serialization
-      // failure, or a backend panic - note the command itself is infallible, so a
-      // normal backend Err is not a trigger) must be distinguishable from a genuine
-      // clean repair. Otherwise the caller shows a fake "Repaired 0 issues" success
-      // toast and swallows the error. Re-throw so the caller surfaces the failure
-      // and keeps the Repair entry point open. (integrityIssues / integritySaveBlocked
-      // are untouched here, so the banner and save-block stay correct.)
-      console.error('Failed to repair project integrity:', e);
-      throw e;
-    }
-  },
-
-  // Hide the banner without clearing integrityIssues, so a re-check after a save
-  // (which re-detects the same set) can't resurrect it; the flag is reset when the
-  // issue set actually changes. Keeping the issues populated also lets the
-  // Review & Repair dialog still open them.
-  dismissIntegrityIssues: () => set({ integrityDismissed: true }),
-
-  openIntegrityDialog: () => set({ integrityDialogOpen: true }),
-  closeIntegrityDialog: () => set({ integrityDialogOpen: false }),
 
   removeFromRecentProjects: async (path: string) => {
     try {
@@ -1778,7 +1586,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         { purpose: 'permanently delete project', fields: { path } }
       );
       // Deleting the file backing the OPEN project closes it - the backend tears
-      // its own session down (project, SQLite handle, undo stack) - so the
+      // its own session down (project, file state, undo stack) - so the
       // frontend has to follow. Without that the UI kept rendering the deleted
       // project as open, and the next autosave tick, which does not care that the
       // file is gone, failed the save with "No project open" and surfaced that as
@@ -1794,11 +1602,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // project is seconds of work to learn one bit.)
       //
       // `result.success` is deliberately NOT a precondition. The backend closes
-      // BEFORE handing the `.stalx` to the OS trash, and it has to: SQLite holds
-      // the file open without `FILE_SHARE_DELETE`, so on Windows the trash fails
-      // with "Access is denied" while that handle lives, and a close-afterwards
-      // would never be reached. A trash that is then denied for some other reason
-      // (no write access to the parent directory) therefore returns FAILURE with
+      // BEFORE handing the `.stalx` to the OS trash. 0.6.0 had to: SQLite held the
+      // file open without `FILE_SHARE_DELETE`, so on Windows the trash failed with
+      // "Access is denied" while that handle lived. A version 2 file is read and
+      // written whole and holds no handle; the order stays. A trash that is then
+      // denied for some other reason (no write access to the parent directory)
+      // therefore returns FAILURE with
       // the session already gone, and a success-only guard left the frontend
       // rendering a phantom project with no backend behind it. The recents refresh
       // below stays success-only for the opposite reason: on that branch the file
@@ -1898,7 +1707,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   deleteShotAndSplit: async (lineId: LineId, shotId: ShotId, nameA: string, nameB: string) => {
     return notifyRemovedClosures(await executeCommand(
       'delete_shot_and_split',
-      { lineId, shotId, nameA, nameB },
+      { lineId, shotId, nameA, nameB, colorB: splitColorB(get().project, lineId) },
       { purpose: 'delete shot and split line', fields: { lineId, shotId } }
     ));
   },
@@ -1920,7 +1729,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   ) => {
     return notifyRemovedClosures(await executeCommand(
       'delete_shot_range_split',
-      { lineId, startShotId, endShotId, nameA, nameB },
+      { lineId, startShotId, endShotId, nameA, nameB, colorB: splitColorB(get().project, lineId) },
       { purpose: 'delete shot range and split line', fields: { lineId, startShotId, endShotId } }
     ));
   },
@@ -1942,26 +1751,26 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   // Station operations
-  mergeStations: async (stationA: StationRef, stationB: StationRef) => {
+  mergeStations: async (stationA: StationRef, stationB: StationRef, answers?: KeptStationAnswers) => {
     return notifyRemovedClosures(await executeCommand(
       'merge_stations',
-      { stationA, stationB },
+      { stationA, stationB, ...answers },
       { purpose: 'connect survey lines', fields: { stationA, stationB } }
     ));
   },
 
-  unmergeStations: async (stationRef: StationRef) => {
+  unmergeStations: async (stationRef: StationRef, answers?: DetachAnswers) => {
     return notifyRemovedClosures(await executeCommand(
       'unmerge_stations',
-      { stationRef },
+      { stationRef, ...answers },
       { purpose: 'disconnect merged stations', fields: { stationRef } }
     ));
   },
 
-  unmergeStationPair: async (stationA: StationRef, stationB: StationRef) => {
+  unmergeStationPair: async (stationA: StationRef, stationB: StationRef, answers?: DetachAnswers) => {
     return notifyRemovedClosures(await executeCommand(
       'unmerge_station_pair',
-      { stationA, stationB },
+      { stationA, stationB, ...answers },
       { purpose: 'disconnect selected merged station pair', fields: { stationA, stationB } }
     ));
   },
@@ -1974,18 +1783,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     );
   },
 
-  createLoopClosure: async (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => {
+  createLoopClosure: async (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy, answers?: KeptStationAnswers) => {
     return executeCommand(
       'create_loop_closure',
-      { stationA, stationB, closureStrategy },
+      { stationA, stationB, closureStrategy, ...answers },
       { purpose: 'add loop closure for accuracy', fields: { stationA, stationB, closureStrategy } }
     );
   },
 
-  removeLoopClosure: async (closureId: bigint) => {
+  removeLoopClosure: async (closureId: bigint, answers?: { renames?: StationRename[] }) => {
     return executeCommand(
       'remove_loop_closure',
-      { closureId: Number(closureId) },
+      { closureId: Number(closureId), ...answers },
       { purpose: 'remove loop closure', fields: { closureId: closureId.toString() } }
     );
   },

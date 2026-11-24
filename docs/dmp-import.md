@@ -403,7 +403,7 @@ divers key their notes to those numbers. The `.dmp` file carries no station
 numbers, and every later edit - the shots the importer skips, an overlap trim,
 a deleted or added row, any edit after import - shifts the positional station
 indexes, so the import records each station's MNemo number as its **name**
-(`Project.station_names`; names are unique within a line, see
+(`Station.name`; names are unique within a line, see
 [SPEC 4.2](SPEC.md#42-station-identification)).
 
 - **Counting.** ASSUMED, not yet confirmed against a device: only the shots the
@@ -425,15 +425,33 @@ indexes, so the import records each station's MNemo number as its **name**
   backend names it by the creation rules (`5`, `5a`, ...; SPEC 4.2); only the
   start of the first DMP row falls back to its number minus 1. A line whose
   first m shots an overlap trim removed therefore starts at m, and the trimmed
-  numbers are gone with their stations - one name per station, no aliases.
+  numbers are gone with their stations - one name per station, none archived.
   Indices are in the emitted, pre-reverse order: the backend mirrors them for a
   reversed import exactly like `station_comments`.
-- **After import.** Names are keyed by `StationKey`, so they follow their
-  station through later inserts, deletes, splits and reverses; a merge keeps
-  both stations' own numbers. On the map, the Display menu's **Station
-  names** labels each station with its name in place of its Station ID (it
-  and **Station IDs** are one choice), and the image export has the same
-  **Station names** option.
+- **At a junction.** A line placed on an existing station starts ON that
+  station, which is **kept** (kept and archived stations, RS 4.1): it keeps
+  its name, comment and Station ID, and the new line shows it there too.
+  The line's own number for it is not lost: when the file gives that
+  station a number (or a comment) the kept station does not have, the
+  file's station is **archived** in the junction (a record under a fresh
+  Station ID naming the new line, with the file's number and comment), so
+  Detach Line from Station gives the line its own station back. Comments
+  are never joined. The new line's own stations keep their numbers. Where
+  the file's station is archived, the new line shows the junction with the
+  kept station's coloured dot, which takes up no name on the line (RS-FX5),
+  so the line's own `12` stays `12` beside the dotted `12`. Only where
+  nothing is archived (the file gives the station no number or comment of
+  its own), the junction shows natively on the new line, and a new station
+  whose number is the junction's name takes a letter (`12a`): the junction
+  is shown on two lines, the new station on one (rule L). The import
+  summary notes each archived station and names each letter, with the line,
+  the junction and the new name.
+- **After import.** A name belongs to its station, so it follows the station
+  through later inserts, deletes, splits and reverses; a merge asks which
+  station is kept and archives the other. On the map, the Display menu's
+  **Station names** labels each station with its name in place of its
+  Station ID (it and **Station IDs** are one choice), and the image export
+  has the same **Station names** option.
 
 ## Key Types
 
@@ -509,4 +527,4 @@ really mutate, so "the second pass leaves one line" is measured rather than
 inferred from call counts. That a batch of `delete_line` is ONE undo entry is
 pinned in Rust: `batched_line_deletes_are_one_undo_entry`.
 
-Backend integration test for overlap interpolation: `src-tauri/crates/core/src/core/state/tests.rs` (`kb5_import_overlap_interpolation_integration`, currently `#[ignore]`).
+Backend integration test for overlap interpolation: `src-tauri/crates/core/src/core/state/line_commands_tests.rs` (`kb5_import_overlap_interpolation_integration`, currently `#[ignore]`).

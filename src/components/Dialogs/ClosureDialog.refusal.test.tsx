@@ -11,8 +11,11 @@ import userEvent from '@testing-library/user-event';
 
 vi.mock('../../utils/ipc', () => ({ invokeIpc: vi.fn(), getErrorMessage: String }));
 
+import '../../i18n';
+
 import ClosureDialog from './ClosureDialog';
 import { useUIStore } from '../../store/uiStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 
 const REFUSAL =
@@ -49,6 +52,8 @@ describe('ClosureDialog - refusal guard (#737)', () => {
   const createLoopClosure = vi.fn();
 
   beforeEach(() => {
+  // A local project: editing is not blocked (useEditingBlocked).
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
     createLoopClosure.mockReset();
     createLoopClosure.mockResolvedValue({ success: true, warnings: [], line_ids: [] });
     useProjectStore.setState({
@@ -86,8 +91,9 @@ describe('ClosureDialog - refusal guard (#737)', () => {
     render(<ClosureDialog />);
 
     const dialog = screen.getByTestId('closure-dialog');
-    expect(dialog).toHaveTextContent('Station A:Main Line / 4');
-    expect(dialog).toHaveTextContent('Station B:Main Line / 5');
+    // Full highlighting: each a line pill, its line as the muted context.
+    expect(dialog).toHaveTextContent('Station A:Main Line: 4');
+    expect(dialog).toHaveTextContent('Station B:Main Line: 5');
     expect(dialog.textContent).not.toMatch(/\d+:\d+|Line 0/);
   });
 
@@ -106,5 +112,26 @@ describe('ClosureDialog - refusal guard (#737)', () => {
       { line_id: 0, station_index: 2 },
       'Batch',
     );
+  });
+
+  // Demo finding I-9: a user who asked to MERGE got "Create Loop Closure /
+  // Creates survey loop" with nothing saying why. Opened by a merge, the
+  // dialog says the stations are already connected. Injection: showing the
+  // backend's `reason` for a merge too fails this.
+  it('says why a merge became a loop closure', () => {
+    open({ reason: 'Creates survey loop', fromMerge: true });
+    render(<ClosureDialog />);
+    expect(screen.getByTestId('closure-reason')).toHaveTextContent(
+      'These stations are already connected, so merging them would make a loop. A loop closure is created instead.',
+    );
+    expect(screen.queryByText('Creates survey loop')).toBeNull();
+    expect(screen.getByTestId('closure-create')).toBeEnabled();
+  });
+
+  it('still lets a refusal replace the merge explanation', () => {
+    open({ reason: 'Creates survey loop', fromMerge: true, closureRefusal: REFUSAL });
+    render(<ClosureDialog />);
+    expect(screen.queryByTestId('closure-reason')).toBeNull();
+    expect(screen.getByTestId('closure-refusal')).toHaveTextContent(REFUSAL);
   });
 });

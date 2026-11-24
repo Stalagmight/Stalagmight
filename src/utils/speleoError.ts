@@ -76,6 +76,15 @@ function endpointRefusalOf(e: unknown): EndpointRefusal | null {
 }
 
 /**
+ * Plan 12.1: the server refused this build's project file format on upload
+ * (`SpeleoErrorDto.format_refused`, set only for that refusal). Read
+ * structurally, like the transport cause, never from the message.
+ */
+export function isFormatRefused(e: unknown): boolean {
+  return !!e && typeof e === 'object' && (e as Partial<SpeleoErrorDto>).format_refused === true;
+}
+
+/**
  * Turn a rejected SpeleoDB IPC error into a single user-facing line.
  *
  * The backend already provides a clean detail (auth failures parse
@@ -96,6 +105,9 @@ export function humanizeSpeleoError(
 ): string {
   const cause = transportCause(e);
   if (cause) return transportMessage(cause, opts.endpoint);
+  // Plan 12.1: one self-framed line wherever a push ran (Save Changes, Done, the
+  // close and quit prompts), not "Could not upload: <the server's text>".
+  if (isFormatRefused(e)) return i18n.t('speleodb.formatRefused');
   const refusal = endpointRefusalOf(e);
   if (refusal) {
     return i18n.t(refusal === 'PlainHttp'

@@ -20,6 +20,7 @@ import { useSpeleoStore } from '../store/speleoStore';
 import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from './speleoExit';
 import { confirmWorkspaceDrafts, hasWorkspaceDrafts } from './workspaceDrafts';
 import { surfaceSaveFailure } from './saveFeedback';
+import { notifyIfFileReadOnly } from '../hooks/useEditingBlocked';
 import i18n from '../i18n';
 import { getErrorMessage, invokeIpc } from './ipc';
 import {
@@ -29,6 +30,7 @@ import {
   PROJECT_EXTENSION,
 } from './fileDialogs';
 import { extractFilename } from './path';
+import { askOpenProjectUnsaved } from './unsavedChanges';
 import type { CommandResult } from '../types/commands';
 
 /**
@@ -48,12 +50,12 @@ import type { CommandResult } from '../types/commands';
  * walk straight past the lock. The prompt reopens the new-project dialog itself
  * once resolved, so the user's New Project is not swallowed by the prompt.
  */
-export function newProjectGuarded(): void {
+export async function newProjectGuarded(): Promise<void> {
   const { openDialog } = useUIStore.getState();
   const ps = useProjectStore.getState();
   if (ps.project && hasWorkspaceDrafts()) {
     // Unsent SpeleoDB input is asked about first; then the guards below run as usual.
-    void confirmWorkspaceDrafts().then((discarded) => { if (discarded) newProjectGuarded(); });
+    void confirmWorkspaceDrafts().then((discarded) => { if (discarded) void newProjectGuarded(); });
     return;
   }
   if (!ps.project) {
@@ -64,10 +66,14 @@ export function newProjectGuarded(): void {
     void askSpeleoExit('switch').then((closed) => {
       if (closed) useUIStore.getState().openDialog('new-project');
     });
-  } else if (ps.isDirty) {
-    openDialog('unsaved-changes', { pendingNewProject: true });
   } else {
-    openDialog('new-project');
+    // The frontend's edits, or changes only the backend tracks (a 0.6.0 file's
+    // SpeleoDB bookkeeping), asked as every exit asks. A project that moved
+    // during the ask is decided again for what is open now.
+    const asked = await askOpenProjectUnsaved();
+    if (!asked.stillOpen) return newProjectGuarded();
+    if (asked.unsaved) openDialog('unsaved-changes', { pendingNewProject: true });
+    else openDialog('new-project');
   }
 }
 
@@ -76,16 +82,22 @@ export function newProjectGuarded(): void {
  * file already exists) or save directly. Carries the caller's "close after a
  * successful save" intent (Save and Close) through the deferred overwrite flow.
  *
- * A failed save is routed through `surfaceSaveFailure` (integrity blocks → Review
- * & Repair; permission denials already surfaced their own guidance dialog). The
- * guard is `!success`, NOT "has an error string": a blocked save can legitimately
- * carry a null error (the block is signaled via `integritySaveBlocked`), and must
- * still surface rather than be mistaken for a clean save.
+ * A failed save is routed through `surfaceSaveFailure` (a file changed on disk
+ * opens the save prompt; permission denials already surfaced their own guidance
+ * dialog). The guard is `!success`, NOT "has an error string", so a failure
+ * that carries no message is never mistaken for a clean save.
+ *
+ * A file made with a newer Stalagmight gets no save dialog: this version
+ * cannot write it anywhere without dropping what it does not understand (the
+ * backend refuses every destination, `READ_ONLY_FILE`), so the worded
+ * read-only notice says so before a path is picked for nothing (demo issue
+ * N-1).
  */
 export async function saveProjectAs(opts?: {
   closeAfterSave?: boolean;
 }): Promise<CommandResult | null> {
   const { openDialog } = useUIStore.getState();
+  if (useProjectStore.getState().project && notifyIfFileReadOnly()) return null;
   try {
     const selected = await saveDialog({ filters: projectSaveFilters() });
     if (!selected) return null;
@@ -119,9 +131,7 @@ export async function saveProjectAs(opts?: {
     // call sites don't catch. Return null (not a failure result) so the
     // delegating handleSaveProject doesn't surface a second dialog and
     // saveAndClose treats it as "not saved" and keeps the project open.
-    surfaceSaveFailure(getErrorMessage(e, 'Failed to save project'), openDialog, {
-      skipIntegrityRouting: true,
-    });
+    surfaceSaveFailure(getErrorMessage(e, 'Failed to save project'), openDialog);
     return null;
   }
 }
@@ -163,9 +173,7 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
     }
     wroteDetachedCopy = Boolean(result.unlinked_copy_path);
   } catch (e) {
-    surfaceSaveFailure(getErrorMessage(e, 'Failed to save a local copy'), openDialog, {
-      skipIntegrityRouting: true,
-    });
+    surfaceSaveFailure(getErrorMessage(e, 'Failed to save a local copy'), openDialog);
     return false;
   }
 
@@ -188,7 +196,7 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
     surfaceSaveFailure(
       getErrorMessage(e, 'The local copy was saved, but detaching from SpeleoDB failed'),
       openDialog,
-      { skipIntegrityRouting: true, title: i18n.t('dialogs.saveFailure.detachTitle') },
+      { title: i18n.t('dialogs.saveFailure.detachTitle') },
     );
     return false;
   }

@@ -2,16 +2,23 @@
 //! what a step is, how a trail spells and parses it, how a chain picks the
 //! next one, and how it runs through the command path. Synthetic surveys
 //! only.
+//!
+//! On the station graph a slot (`line:index`) is a view address of a station;
+//! a junction has several. A datum is addressed through a slot of its station
+//! (E1: Set and Remove act on the station's datum attached `via` the slot's
+//! line, else its first one), so a datum step that cannot address the datum
+//! it names (two datums on one station, both via the same line) is skipped,
+//! not run against another datum.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::fmt;
 
 use super::AppState;
 use crate::core::Command;
+use crate::models::survey::Project;
 use crate::models::{
-    local_to_gps, ClosureStrategy, CombineJoinEnds, CombineLinesOptions, CombinePick,
-    GpsCoordinates, LineEnd, LineId, Project, ShotData, SplitAt, SplitLineOptions, SplitSide,
-    StationRef,
+    local_to_gps, ClosureStrategy, CombineJoinEnds, CombineLinesOptions, CombinePick, Coordinates,
+    GpsCoordinates, LineEnd, LineId, ShotData, SplitAt, SplitLineOptions, StationId, StationRef,
 };
 
 /// Accuracies a datum is given: the default (a hard pin), an explicit hard
@@ -66,7 +73,8 @@ impl Rng {
 #[derive(Debug, Clone)]
 pub(super) enum Op {
     /// Set a datum on `at`, its GPS `(dx, dy)` from where the frame puts the
-    /// station (from the chain's origin when there is no frame).
+    /// station (from the chain's origin when there is no frame). On a station
+    /// that holds a datum it is a GPS edit of that datum (E1).
     Datum {
         at: StationRef,
         dx: f64,
@@ -92,6 +100,7 @@ pub(super) enum Op {
         a: StationRef,
         b: StationRef,
     },
+    /// Detach `b`'s line from the station `a` and `b` share.
     Unmerge {
         a: StationRef,
         b: StationRef,
@@ -100,8 +109,9 @@ pub(super) enum Op {
         a: StationRef,
         b: StationRef,
     },
-    /// Split `line` at station `at`; a datum there goes to half B when
-    /// `side_b`.
+    /// Split `line` at station `at`. `side_b` is kept in the trail for old
+    /// replay strings; the halves share the station now (plan 5.4, S9), so
+    /// there is no datum side to choose.
     Split {
         line: LineId,
         at: u32,
@@ -129,6 +139,13 @@ pub(super) enum Op {
         length: f64,
         depth_in: f64,
         depth_out: f64,
+    },
+    /// Move Line by `(dx, dy)`: a free piece's placement moves (refused on a
+    /// datum-held piece).
+    MoveLine {
+        line: LineId,
+        dx: f64,
+        dy: f64,
     },
     Undo,
     Redo,
@@ -190,6 +207,7 @@ impl fmt::Display for Op {
                 "addshot({line},{},{azimuth:?},{length:?},{depth_in:?},{depth_out:?})",
                 pos.map_or_else(|| "end".to_string(), |p| p.to_string())
             ),
+            Op::MoveLine { line, dx, dy } => write!(f, "moveline({line},{dx:?},{dy:?})"),
             Op::Undo => write!(f, "undo"),
             Op::Redo => write!(f, "redo"),
             Op::Reopen => write!(f, "reopen"),
@@ -283,6 +301,11 @@ pub(super) fn parse_op(text: &str) -> Op {
             depth_in: num(4),
             depth_out: num(5),
         },
+        "moveline" => Op::MoveLine {
+            line: a[0].parse().unwrap(),
+            dx: num(1),
+            dy: num(2),
+        },
         "undo" => Op::Undo,
         "redo" => Op::Redo,
         "reopen" => Op::Reopen,
@@ -290,9 +313,9 @@ pub(super) fn parse_op(text: &str) -> Op {
     }
 }
 
-/// Every station of `p`, line by line.
+/// Every slot of `p`, line by line.
 pub(super) fn every_station(p: &Project) -> Vec<StationRef> {
-    p.lines
+    p.lines()
         .iter()
         .flat_map(|s| (0..=s.shots.len() as u32).map(move |i| StationRef::new(s.id, i)))
         .collect()
@@ -340,8 +363,42 @@ pub(super) fn datum_op(rng: &mut Rng, at: StationRef) -> Op {
     }
 }
 
-/// The station a datum step lands on: station 0, a line that already
-/// holds a datum, the frame's merge component, or anywhere.
+/// The station of a slot.
+pub(super) fn station_at(p: &Project, at: StationRef) -> Option<StationId> {
+    p.topology().station_at(at)
+}
+
+/// The slot datum `k` is addressed through: its own (`via`) slot, else any
+/// slot of its station through which E1 resolves to `k` itself.
+pub(super) fn datum_address(p: &Project, k: usize) -> Option<StationRef> {
+    let datum = p.datums.get(k)?;
+    let topology = p.topology();
+    let own = p.datum_slot(datum);
+    own.into_iter()
+        .chain(topology.slots_of(datum.station).iter().copied())
+        .find(|slot| p.datum_index_for(datum.station, Some(slot.line_id)) == Some(k))
+}
+
+/// The slots of the stations in `station`'s shot component.
+fn component_slots(p: &Project, station: StationId) -> Vec<StationRef> {
+    let topology = p.topology();
+    let Some(component) = topology.component_of(station) else {
+        return Vec::new();
+    };
+    topology
+        .components()
+        .get(component)
+        .map(|c| {
+            c.stations
+                .iter()
+                .flat_map(|s| topology.slots_of(*s).iter().copied())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The station a datum step lands on: station 0, a line through a datum's
+/// station, the frame's component, or anywhere.
 fn datum_station(rng: &mut Rng, p: &Project) -> Option<StationRef> {
     let all = every_station(p);
     let roll = rng.below(100);
@@ -354,7 +411,12 @@ fn datum_station(rng: &mut Rng, p: &Project) -> Option<StationRef> {
         );
     }
     if roll < 40 {
-        let held: HashSet<LineId> = p.all_datum_refs().iter().map(|s| s.line_id).collect();
+        let topology = p.topology();
+        let held: BTreeSet<LineId> = p
+            .datums
+            .iter()
+            .flat_map(|d| topology.lines_of(d.station))
+            .collect();
         let on: Vec<_> = all
             .iter()
             .copied()
@@ -365,17 +427,11 @@ fn datum_station(rng: &mut Rng, p: &Project) -> Option<StationRef> {
         }
     }
     if roll < 60 {
-        if let Some(frame) = p
-            .frame_datum()
-            .and_then(|zd| p.resolve_key(&zd.station_ref))
-        {
-            let group = p.get_merged_line_ids(frame.line_id);
-            let near: Vec<_> = all
-                .iter()
-                .copied()
-                .filter(|s| group.contains(&s.line_id))
-                .collect();
-            return rng.pick(&near);
+        if let Some(frame) = p.frame_datum().and_then(|f| p.datums.get(f)) {
+            let near = component_slots(p, frame.station);
+            if !near.is_empty() {
+                return rng.pick(&near);
+            }
         }
     }
     rng.pick(&all)
@@ -390,32 +446,31 @@ pub(super) fn next_op(
     can_redo: bool,
 ) -> Option<Op> {
     let all = every_station(p);
-    let datums = p.zero_datums.len();
+    let datums = p.datums.len();
     let acc = ACCURACIES[rng.below(ACCURACIES.len())];
     let roll = rng.below(100);
-    // A new GPS on the frame datum re-places every other placed piece
-    // (`frame-gps-edit`, #769): mostly re-set only its accuracy instead, so
-    // chains keep the layout they built.
-    let frame = p
-        .zero_datums
-        .iter()
-        .position(|zd| p.resolve_key(&zd.station_ref).is_some());
-    let frame_at = frame.and_then(|f| p.resolve_key(&p.zero_datums[f].station_ref));
+    // A new GPS on the frame datum moves every other placed piece onto its own
+    // GPS against the new frame (#769): mostly re-set only its accuracy
+    // instead, so chains keep the layout they built.
+    let frame = p.frame_datum();
+    let frame_station = frame.and_then(|f| p.datums.get(f)).map(|d| d.station);
     let spare_frame = |rng: &mut Rng, at: StationRef| -> Option<Op> {
-        (Some(at) == frame_at && !rng.chance(15)).then(|| Op::Accuracy {
-            k: frame.unwrap_or(0),
-            acc,
-        })
+        (station_at(p, at).is_some() && station_at(p, at) == frame_station && !rng.chance(15)).then(
+            || Op::Accuracy {
+                k: frame.unwrap_or(0),
+                acc,
+            },
+        )
     };
     Some(match roll {
-        0..=17 => {
+        0..=16 => {
             let at = datum_station(rng, p)?;
             match spare_frame(rng, at) {
                 Some(op) => op,
                 None => datum_op(rng, at),
             }
         }
-        18..=21 if datums > 0 => {
+        17..=20 if datums > 0 => {
             let at = datum_station(rng, p)?;
             if let Some(op) = spare_frame(rng, at) {
                 op
@@ -423,18 +478,18 @@ pub(super) fn next_op(
                 let k = rng.below(datums);
                 // Half the time the copy keeps the source's accuracy too:
                 // twins nothing stored tells apart (#778).
-                let acc = match p.zero_datums.get(k) {
-                    Some(zd) if rng.chance(50) => zd.accuracy_m,
+                let acc = match p.datums.get(k) {
+                    Some(d) if rng.chance(50) => d.accuracy_m,
                     _ => acc,
                 };
                 Op::Twin { at, k, acc }
             }
         }
-        22..=29 if datums > 0 => Op::Accuracy {
+        21..=28 if datums > 0 => Op::Accuracy {
             k: rng.below(datums),
             acc,
         },
-        30..=37 if datums > 0 => {
+        29..=36 if datums > 0 => {
             // The frame on purpose now and then.
             let k = match frame {
                 Some(f) if rng.chance(40) => f,
@@ -442,42 +497,51 @@ pub(super) fn next_op(
             };
             Op::Remove { k }
         }
-        38..=47 => {
+        37..=46 => {
             // Two separately placed pieces on purpose now and then.
-            let placed = p.placement_datum_refs();
+            let placed: Vec<StationId> = p
+                .placement_datums()
+                .into_iter()
+                .flatten()
+                .filter_map(|d| p.datums.get(d).map(|d| d.station))
+                .collect();
             let (a, b) = if placed.len() >= 2 && rng.chance(40) {
                 let (x, y) = (rng.pick(&placed)?, rng.pick(&placed)?);
-                let ga = p.get_merged_line_ids(x.line_id);
-                let gb = p.get_merged_line_ids(y.line_id);
-                let in_a: Vec<_> = all
-                    .iter()
-                    .copied()
-                    .filter(|s| ga.contains(&s.line_id))
-                    .collect();
-                let in_b: Vec<_> = all
-                    .iter()
-                    .copied()
-                    .filter(|s| gb.contains(&s.line_id))
-                    .collect();
-                (rng.pick(&in_a)?, rng.pick(&in_b)?)
+                (
+                    rng.pick(&component_slots(p, x))?,
+                    rng.pick(&component_slots(p, y))?,
+                )
             } else {
                 (rng.pick(&all)?, rng.pick(&all)?)
             };
             Op::Merge { a, b }
         }
-        48..=53 if !p.station_merges.is_empty() => {
-            let m = &p.station_merges[rng.below(p.station_merges.len())];
+        47..=52 => {
+            let topology = p.topology();
+            let junctions: Vec<&[StationRef]> = p
+                .stations
+                .keys()
+                .map(|s| topology.slots_of(*s))
+                .filter(|slots| slots.len() > 1)
+                .collect();
+            let slots = junctions.get(rng.below(junctions.len()))?;
+            let a = slots[rng.below(slots.len())];
+            let others: Vec<StationRef> = slots
+                .iter()
+                .copied()
+                .filter(|s| s.line_id != a.line_id)
+                .collect();
             Op::Unmerge {
-                a: p.resolve_key(&m.station_a)?,
-                b: p.resolve_key(&m.station_b)?,
+                a,
+                b: rng.pick(&others)?,
             }
         }
-        54..=57 => Op::Closure {
+        53..=56 => Op::Closure {
             a: rng.pick(&all)?,
             b: rng.pick(&all)?,
         },
-        58..=62 => {
-            let long: Vec<_> = p.lines.iter().filter(|s| s.shots.len() >= 2).collect();
+        57..=61 => {
+            let long: Vec<_> = p.lines().iter().filter(|s| s.shots.len() >= 2).collect();
             let s = long.get(rng.below(long.len()))?;
             Op::Split {
                 line: s.id,
@@ -485,9 +549,9 @@ pub(super) fn next_op(
                 side_b: rng.chance(50),
             }
         }
-        63..=67 => {
+        62..=66 => {
             let mut offered = Vec::new();
-            for s in &p.lines {
+            for s in p.lines() {
                 for end in [0, s.shots.len() as u32] {
                     let at = StationRef::new(s.id, end);
                     offered.extend(
@@ -523,19 +587,19 @@ pub(super) fn next_op(
                 }
             }
         }
-        68..=70 if p.lines.len() > 1 => Op::DeleteLine {
-            line: p.lines[rng.below(p.lines.len())].id,
+        67..=69 if p.lines().len() > 1 => Op::DeleteLine {
+            line: p.lines()[rng.below(p.lines().len())].id,
         },
-        71..=75 => {
-            let with: Vec<_> = p.lines.iter().filter(|s| !s.shots.is_empty()).collect();
+        70..=74 => {
+            let with: Vec<_> = p.lines().iter().filter(|s| !s.shots.is_empty()).collect();
             let s = with.get(rng.below(with.len()))?;
             Op::DeleteShot {
                 line: s.id,
                 index: rng.below(s.shots.len()),
             }
         }
-        76..=80 => {
-            let s = &p.lines[rng.below(p.lines.len())];
+        75..=78 => {
+            let s = &p.lines()[rng.below(p.lines().len())];
             let pos = match rng.below(3) {
                 0 => None,
                 1 if !s.shots.is_empty() => Some(-1),
@@ -553,6 +617,11 @@ pub(super) fn next_op(
                 depth_out: shot.depth_out,
             }
         }
+        79..=80 => Op::MoveLine {
+            line: p.lines()[rng.below(p.lines().len())].id,
+            dx: rng.range(-30.0, 30.0),
+            dy: rng.range(-30.0, 30.0),
+        },
         81..=88 if can_undo => Op::Undo,
         89..=94 if can_redo => Op::Redo,
         95..=99 => Op::Reopen,
@@ -564,6 +633,8 @@ pub(super) fn next_op(
 pub(super) enum Applied {
     /// The command refused; the project must be unchanged.
     Refused(String),
+    /// Nothing was run (the step names nothing the survey has).
+    Skipped(String),
     Done,
 }
 
@@ -576,10 +647,10 @@ fn gps_near(
     dx: f64,
     dy: f64,
 ) -> Option<GpsCoordinates> {
-    let (frame, x, y) = match p.frame_datum() {
-        Some(zd) => {
-            let c = p.compute_station_raw_coords(at)?;
-            (zd.gps, c.x, c.y)
+    let (frame, x, y) = match p.frame_datum().and_then(|f| p.datums.get(f)) {
+        Some(d) => {
+            let [x, y, _] = p.raw_positions().slot(p, at)?;
+            (d.gps, x, y)
         }
         None => (*origin, 0.0, 0.0),
     };
@@ -597,56 +668,52 @@ pub(super) fn apply(state: &AppState, origin: &GpsCoordinates, op: &Op, p: &Proj
             entrance: None,
         })
     };
-    let datum_at = |k: usize| {
-        p.zero_datums
-            .get(k)
-            .and_then(|zd| Some((p.resolve_key(&zd.station_ref)?, zd.gps)))
-    };
     let result = match op {
         Op::Datum { at, dx, dy, acc } => match gps_near(origin, p, *at, *dx, *dy) {
             Some(gps) => set(*at, gps, *acc),
-            None => return Applied::Refused("no GPS".to_string()),
+            None => return Applied::Skipped("no GPS".to_string()),
         },
-        Op::Twin { at, k, acc } => match p.zero_datums.get(*k) {
-            Some(zd) => set(*at, zd.gps, *acc),
-            None => return Applied::Refused("no datum".to_string()),
+        Op::Twin { at, k, acc } => match p.datums.get(*k) {
+            Some(d) => set(*at, d.gps, *acc),
+            None => return Applied::Skipped("no datum".to_string()),
         },
-        Op::Accuracy { k, acc } => match datum_at(*k) {
-            Some((at, gps)) => set(at, gps, *acc),
-            None => return Applied::Refused("no datum".to_string()),
+        Op::Accuracy { k, acc } => match (datum_address(p, *k), p.datums.get(*k)) {
+            (Some(at), Some(d)) => set(at, d.gps, *acc),
+            _ => return Applied::Skipped("datum not addressable".to_string()),
         },
-        Op::Remove { k } => match datum_at(*k) {
-            Some((at, _)) => state.execute(Command::RemoveZeroDatum { station_ref: at }),
-            None => return Applied::Refused("no datum".to_string()),
+        Op::Remove { k } => match datum_address(p, *k) {
+            Some(at) => state.execute(Command::RemoveZeroDatum { station_ref: at }),
+            None => return Applied::Skipped("datum not addressable".to_string()),
         },
         Op::Merge { a, b } => state.execute(Command::MergeStations {
             station_a: *a,
             station_b: *b,
+            keep: None,
+            renames: None,
         }),
         Op::Unmerge { a, b } => state.execute(Command::UnmergeStationPair {
             station_a: *a,
             station_b: *b,
+            renames: None,
+            rest_keep: None,
         }),
         Op::Closure { a, b } => state.execute(Command::CreateLoopClosure {
             station_a: *a,
             station_b: *b,
             closure_strategy: ClosureStrategy::Batch,
+            keep: None,
+            renames: None,
         }),
-        Op::Split { line, at, side_b } => {
-            let side = if *side_b { SplitSide::B } else { SplitSide::A };
-            state.execute_split_line(
-                *line,
-                SplitAt::Station { station_index: *at },
-                SplitLineOptions {
-                    name_a: format!("S{line}a"),
-                    name_b: format!("S{line}b"),
-                    color_a: "#123456".to_string(),
-                    color_b: "#654321".to_string(),
-                    comment_side: SplitSide::A,
-                    datum_side: side,
-                },
-            )
-        }
+        Op::Split { line, at, .. } => state.execute_split_line(
+            *line,
+            SplitAt::Station { station_index: *at },
+            SplitLineOptions {
+                name_a: format!("S{line}a"),
+                name_b: format!("S{line}b"),
+                color_a: "#123456".to_string(),
+                color_b: "#654321".to_string(),
+            },
+        ),
         Op::Combine {
             kept,
             kept_end,
@@ -668,15 +735,13 @@ pub(super) fn apply(state: &AppState, origin: &GpsCoordinates, op: &Op, p: &Proj
             },
         ),
         Op::DeleteLine { line } => state.execute(Command::DeleteLine { line_id: *line }),
-        Op::DeleteShot { line, index } => {
-            match p.get_line(*line).and_then(|s| s.shots.get(*index)) {
-                Some(shot) => state.execute(Command::DeleteShot {
-                    line_id: *line,
-                    shot_id: shot.id,
-                }),
-                None => return Applied::Refused("no shot".to_string()),
-            }
-        }
+        Op::DeleteShot { line, index } => match p.line(*line).and_then(|s| s.shots.get(*index)) {
+            Some(shot) => state.execute(Command::DeleteShot {
+                line_id: *line,
+                shot_id: shot.id,
+            }),
+            None => return Applied::Skipped("no shot".to_string()),
+        },
         Op::AddShot {
             line,
             pos,
@@ -686,7 +751,7 @@ pub(super) fn apply(state: &AppState, origin: &GpsCoordinates, op: &Op, p: &Proj
             depth_out,
         } => {
             let ids: Vec<_> = p
-                .get_line(*line)
+                .line(*line)
                 .map(|s| s.shots.iter().map(|x| x.id).collect())
                 .unwrap_or_default();
             let (after, before) = match pos {
@@ -708,8 +773,12 @@ pub(super) fn apply(state: &AppState, origin: &GpsCoordinates, op: &Op, p: &Proj
                 before_shot_id: before,
             })
         }
+        Op::MoveLine { line, dx, dy } => state.execute(Command::MoveLine {
+            line_id: *line,
+            offset: Coordinates::new(*dx, *dy, 0.0),
+        }),
         Op::Undo | Op::Redo | Op::Reopen => {
-            return Applied::Refused("not a forward step".to_string())
+            return Applied::Skipped("not a forward step".to_string())
         }
     };
     if result.success {

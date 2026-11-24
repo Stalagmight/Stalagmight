@@ -21,6 +21,8 @@ import { setSource, trackContextMenuAction, trackDialogComplete } from '../../ut
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MENU_ROW_HEIGHT_PX, MENU_ROW_HINT_HEIGHT_PX, MenuRow, MenuSeparator } from './MenuRow';
 import { ChevronRightIcon } from './icons';
+import { showBlockedNotice } from '../../utils/blockedNotice';
+import { removeClosureAsking } from '../../utils/keptStationActions';
 import { anchorOf, SubmenuFlyout, type SubmenuAnchor } from './ContextSubmenu';
 import { CAVE_SECTION_VIEW_LABEL_KEYS, caveSectionHeaderMenuItems, caveSectionLineMenuItems } from './caveSectionMenuItems';
 
@@ -61,6 +63,10 @@ interface ContextMenuItem {
   disabled?: boolean;
   /** Why the item is disabled, shown as its tooltip. */
   hint?: string | undefined;
+  /** Why a read-only view or file disabled the item: its tooltip only (no
+   *  second line, which every row of the menu would then carry), and a click
+   *  on the row shows it as the blocked-edit notice. */
+  reason?: string | undefined;
   danger?: boolean;
   separator?: boolean;
 }
@@ -174,7 +180,9 @@ export default function ContextMenu() {
   // A remote SpeleoDB project without the lock is read-only (T2a) - treat it like
   // closure-adjusted for the right-click edit items.
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
-  const { project, stations, setShotKind, unmergeStations, unmergeStationPair, removeLoopClosure } = useProjectStore();
+  const { project, stations, setShotKind, fileReadOnlyReason } = useProjectStore();
+  // A file made with a newer Stalagmight refuses every edit (plan 6.4).
+  const fileReadOnly = (fileReadOnlyReason ?? null) !== null;
 
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -273,8 +281,11 @@ export default function ContextMenu() {
     const open = (c: CombineCandidate, keep: LineId) => () => {
       openDialog('combine-lines', { candidate: c, keep, preview: combinePreview(c) });
     };
+    // A shared station reads the same however it was made (a merge, Split
+    // Line Here, a line started there): "Merged here" was wrong on a split
+    // (demo finding I-9).
     const howTheyMeet = (c: CombineCandidate) =>
-      c.join_kind === 'closure' ? 'Across a loop closure' : c.join_kind === 'merged' ? 'Merged here' : 'Side by side here';
+      c.join_kind === 'closure' ? 'Across a loop closure' : c.join_kind === 'merged' ? 'Joined here' : 'Side by side here';
     if (combineKey.startsWith('lines')) {
       const { line_a: a, line_b: b } = combineCandidate;
       const across = combineCandidate.join_kind === 'closure' ? ', across a loop closure' : '';
@@ -520,26 +531,15 @@ export default function ContextMenu() {
         },
       ];
 
+      // A junction (plan 5.2): the station is shared by two or more lines, and
+      // any one of them can leave it. The dialog names the lines and says what
+      // a detach does; where either of two lines gives the same result it
+      // offers no choice and names the line that comes off.
       if (mergedStations.length > 0) {
         items.push({
-          label: 'Unmerge Stations',
+          label: 'Detach Line from Station...',
           action: () => {
-            if (mergedStations.length === 1) {
-              const mergeTarget = mergedStations[0]!;
-              const isDirectMerge = project?.station_merges.some((merge) => {
-                const direct = sameStationRef(merge.station_a, target.ref) && sameStationRef(merge.station_b, mergeTarget);
-                const reverse = sameStationRef(merge.station_a, mergeTarget) && sameStationRef(merge.station_b, target.ref);
-                return direct || reverse;
-              }) ?? false;
-              trackContextMenuAction('unmerge', 'context-menu');
-              trackDialogComplete('context-menu');
-              closeDialog();
-              void (isDirectMerge
-                ? unmergeStationPair(target.ref, mergeTarget)
-                : unmergeStations(target.ref));
-              return;
-            }
-
+            trackContextMenuAction('unmerge', 'context-menu');
             openDialog('unmerge-stations', {
               stationRef: target.ref,
               mergedStations,
@@ -556,7 +556,9 @@ export default function ContextMenu() {
               trackContextMenuAction('remove-closure', 'context-menu');
               trackDialogComplete('context-menu');
               closeDialog();
-              void removeLoopClosure(directClosures[0]!.closureId);
+              // Asks first when its hidden end comes back or a name would
+              // repeat (RS 7); otherwise removes it at once.
+              void removeClosureAsking(directClosures[0]!.closureId, target.ref);
               return;
             }
 
@@ -943,7 +945,8 @@ export default function ContextMenu() {
         return <EntityUnlinkSymbol entity="line" size={18} />;
       case 'Merge With...':
         return <ToolGlyph tool="merge" size={16} />;
-      case 'Unmerge Stations':
+      // The junction detach (plan 5.2) was "Unmerge Stations" before the station graph.
+      case 'Detach Line from Station...':
       case 'Remove Closure':
         return <EntityUnlinkSymbol entity="station" size={18} />;
       case 'Add Shot Before':
@@ -1008,12 +1011,20 @@ export default function ContextMenu() {
   } else {
     // Survey view: closure-adjusted geometry is read-only - disable mutations (all except
     // read-only navigation like "Zoom to Line"). Edits are made on the measured view.
-    const geometryReadOnly = geometryMode === 'closureAdjusted' || speleoReadOnly;
+    const geometryReadOnly = geometryMode === 'closureAdjusted' || speleoReadOnly || fileReadOnly;
+    // What the disabled rows say on hover (demo finding I-10: they read as
+    // enabled, and nothing said why). The file wins: leaving the view or
+    // taking a lock would not make it editable.
+    const readOnlyReason = fileReadOnly
+      ? t('editGate.readOnlyFileNotice')
+      : speleoReadOnly
+        ? t('editGate.readOnlyNotice')
+        : t('map.readOnlyPill.resumeRawTitle');
     const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Line', ...CAVE_SECTION_VIEW_LABEL_KEYS.map((k) => t(k))]);
     const gate = (item: ContextMenuItem): ContextMenuItem => {
       const nested = item.submenu ? { ...item, submenu: item.submenu.map(gate) } : item;
       return geometryReadOnly && !item.separator && !READ_ONLY_SAFE_LABELS.has(item.label)
-        ? { ...nested, disabled: true }
+        ? { ...nested, disabled: true, reason: readOnlyReason }
         : nested;
     };
     items = buildMenuItems().map((item) => {
@@ -1061,8 +1072,13 @@ export default function ContextMenu() {
               key={index}
               data-testid={`context-menu-item-${index}`}
               onClick={(e) => {
+                // A row the read-only gate turned off stays clickable so it can
+                // say why (`reason`, demo finding N-12): the notice, never the action.
+                if (item.disabled) {
+                  if (item.reason !== undefined) showBlockedNotice(item.reason);
+                  return;
+                }
                 if (hasSubmenu) {
-                  if (item.disabled) return;
                   if (expanded) setSubmenuPath([]);
                   else openSubmenuFrom(e.currentTarget);
                   return;
@@ -1082,6 +1098,7 @@ export default function ContextMenu() {
               disabled={item.disabled}
               title={item.hint}
               hint={item.hint}
+              reason={item.disabled ? item.reason : undefined}
               label={item.label}
               icon={item.icon}
               showIcons={showIcons}

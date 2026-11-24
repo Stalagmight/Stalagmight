@@ -7,6 +7,7 @@ import {
   waitForNoDialogs,
   type LineSeed,
 } from './helpers/app';
+import { expectSpoken, prosePillKinds } from './helpers/proseText';
 
 /**
  * E2E tests for bulk (contiguous-range) shot deletion (#95).
@@ -89,7 +90,10 @@ test.describe('Bulk delete dialog', () => {
     await openBulkDelete(page, interiorData(r));
 
     const dialog = page.getByTestId('bulk-delete-dialog');
-    await expect(dialog).toContainText('Delete 2 shots (stations 1 to 3 in Main Line).');
+    // The stations and the line are prose pills; the sentence reads as plain text wrote it.
+    const summary = page.getByTestId('bulk-delete-summary');
+    await expectSpoken(summary, 'Delete 2 shots (stations 1 to 3 in Main Line).', { exact: true });
+    expect(await prosePillKinds(summary)).toEqual(['station', 'station', 'line']);
 
     // Interior → split offered with two prefilled name inputs.
     await expect(page.getByTestId('split-name-a')).toHaveValue('Main Line A');
@@ -145,11 +149,7 @@ test.describe('Bulk delete dialog', () => {
         ],
         removed_merges: [],
         removed_closures: [],
-        replacement_merges: [],
-        replacement_closure_updates: [],
         closure_to_merge: [],
-        merge_rewire_skipped: false,
-        closure_rewire_skipped: false,
         shift_blocked: false,
         shift_blocked_reasons: [],
         removed_datums: [],
@@ -172,8 +172,11 @@ test.describe('Bulk delete dialog', () => {
     await expect(block).toContainText(
       'Close Gap & Delete removes these loop closures (they would span a single shot)'
     );
-    // The stations the closure was created with, by name, not the renumbered ones.
-    await expect(block).toContainText('#7: Main Line / 1 <-> Main Line / 4');
+    // The stations the closure was created with, by name, not the renumbered
+    // ones: each end is a station pill (its line as context, then the name;
+    // its Station ID follows as a superscript, rs/P-pills).
+    const pair = block.getByRole('listitem').filter({ hasText: '#7:' });
+    await expect(pair).toContainText(/#7: Main Line: 1\b.*<-> Main Line: 4\b/);
   });
 
   test('prefix range offers only a single delete action (no split names)', async ({ page }) => {

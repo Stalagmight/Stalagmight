@@ -41,3 +41,6 @@ tempfile = { workspace = true, optional = true }
 [dev-dependencies]
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+# The frozen 0.6.0 model, as the coordinate oracle of the env-gated Ariane
+# coordinate test (`tml::tests::parse_tml_naharon_coordinates`).
+stalagmight-legacy = { path = "../legacy" }

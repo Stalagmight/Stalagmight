@@ -109,16 +109,75 @@ used only by test cleanup.
 
 Offline HTTP tests check request methods, paths, bearer headers, login payloads,
 permission and mutex projection, nullable metadata patches, one multipart
-`project.stalx` artifact, commit messages, upload SHA selection, status errors,
+`project.stalx` artifact (its content type sniffed from the bytes:
+`application/json` for a version 2 file, `application/vnd.sqlite3` for a legacy
+SQLite one), commit messages, upload SHA selection, status errors,
 malformed successful responses, retry boundaries and bounded streamed downloads.
-Core tests keep the existing local-edit fences, atomic cache replacement, SQLite
-schema checks, undo sanitization, revision fencing and lock-ownership races.
+Core tests keep the existing local-edit fences, atomic cache replacement, the
+download checks (a version 2 download decoded under the reader's caps, hostile
+input refused, a newer version refused, a newer feature opened read-only, a
+legacy revision migrated in memory), the push serialization (no `local`, no
+redo, undo only in Full mode, cut at the watermark and to the 5 MiB limit),
+revision fencing and lock-ownership races.
 Credential-file tests cover malformed/unreadable input without resetting general
 preferences, preservation during unrelated saves, rollback after a failed settings
 write, owner-only permissions and token-safe diagnostics. Native installation tests
 refuse a failed link write before replacing the cache.
 
-The live test generates synthetic SQLite databases in temporary directories. For
+### Version 2 uploads and the server prerequisite
+
+The app uploads the project file in format version 2 (canonical JSON,
+[file-format.md](file-format.md)), written in the push mode: no `local`, no
+redo, undo only in Full mode. A SpeleoDB server whose upload processor and
+Python reader take only SQLite refuses it; that is the rollout prerequisite
+outside this repository ([plan 12.1](plans/2026-11-20_station-graph-model.md#121-rollout-prerequisites-outside-this-repository-called-out-in-the-pr):
+the server accepts version 2, its reader reads it, and ideally a
+minimum-client gate for projects whose HEAD is version 2). Until then a push
+fails with one dedicated error: the project stays dirty, BASE is unchanged and
+the editing lock is held, as after any failed push.
+
+SpeleoDB's upload view answers a refused file with a 400 whose `error` is
+"An error occurred processing the file: [...]" around the file processor's
+reason. A server without version 2 refuses the JSON part's type ("Invalid
+file type received: `application/json`, expected one of:
+['application/octet-stream', 'application/vnd.sqlite3']") or, for a body
+sent as another type, its content ("Invalid STALAGMIGHT file: expected a
+valid SQLite database."); a server that reads version 2 refuses a file it
+finds invalid with its own reason ("Invalid STALAGMIGHT version 2 file:
+..."). A status alone cannot tell the two apart, so the push reads the
+status and that reason (`contract::upload_refusal`, review finding O3): a
+400, 406 or 422 to a version 2 body whose reason names the file type, the
+media type or SQLite, any 415, or a 5xx other than 503 and 504 whose reason
+names them and after which the history (read right after it) shows nothing
+landed, is `UploadFormatRefused`. Every push surface shows its one line,
+"This SpeleoDB server does not accept projects saved by this version yet".
+A refusal with any other reason shows the server's reason, framed like any
+failed upload; a 5xx with another reason, a 5xx after a commit landed, a 503
+and a 504 stay the ambiguous "could not be confirmed". An instance running
+with Django's DEBUG on answers refusals with a 500 debug page, which names
+no reason the client can read, so a manual test there sees "could not be
+confirmed". Publish to a server without version 2 creates the project,
+reports `upload_format_refused` (the server project is empty, the local copy
+unchanged) and never creates a second one.
+`core/state/speleodb_push_v2_tests.rs` pins this against a loopback server
+that answers with SpeleoDB's bodies
+(`a_confirmed_push_uploads_v2_json_and_is_durable_at_once`,
+`every_refusal_of_the_content_is_the_one_format_error_on_every_push`,
+`a_server_error_that_landed_nothing_is_the_same_refusal`,
+`a_server_error_after_a_landing_or_a_busy_server_stays_unconfirmed`,
+`a_refusal_with_the_servers_own_reason_shows_that_reason`,
+`a_server_that_refuses_v2_uploads_leaves_the_project_dirty_and_locked`,
+`publish_to_a_server_that_refuses_the_format_says_so_and_never_creates_twice`,
+`clear_on_push_cuts_the_pushed_history_and_the_chain_on_disk`). A manual test
+of the app against a server without version 2 support should expect that
+refusal on every upload of an edited project; a legacy SQLite revision on the
+server still downloads, and is migrated in memory.
+
+### The live test
+
+The live test generates synthetic project files in temporary directories (the
+SDK treats the bytes as opaque; they are written in the legacy SQLite format,
+which every server accepts). For
 each authentication path it creates a unique private `STALAGMIGHT` project, verifies
 metadata and locking, uploads two native revisions, checks the unchanged-file
 response, and compares downloaded bytes at HEAD and at the first revision. It

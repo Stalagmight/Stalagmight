@@ -4637,6 +4637,7 @@ dependencies = [
  "sha2",
  "stalagmight-core",
  "stalagmight-export",
+ "stalagmight-legacy",
  "stalagmight-models",
  "stalagmight-parsers",
  "stalagmight-persistence",
@@ -4673,6 +4674,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "stalagmight-export",
+ "stalagmight-legacy",
  "stalagmight-models",
  "stalagmight-parsers",
  "stalagmight-persistence",
@@ -4710,12 +4712,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "stalagmight-legacy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "flate2",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "stalagmight-legacy",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "stalagmight-models"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "stalagmight-legacy",
  "tracing",
  "ts-rs",
  "uuid",
@@ -4734,6 +4754,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "stalagmight-legacy",
  "stalagmight-models",
  "tempfile",
  "time",
@@ -4750,11 +4771,14 @@ dependencies = [
  "chrono",
  "flate2",
  "rusqlite",
+ "ryu",
  "serde",
  "serde_json",
+ "sha2",
+ "stalagmight-legacy",
  "stalagmight-models",
- "stalagmight-parsers",
  "tempfile",
+ "thiserror 1.0.69",
  "tracing",
  "ts-rs",
  "uuid",
@@ -4773,8 +4797,8 @@ dependencies = [
  "serde",
  "serde_json",
  "speleodb-api",
+ "stalagmight-legacy",
  "stalagmight-models",
- "stalagmight-persistence",
  "stalagmight-telemetry",
  "tempfile",
  "thiserror 1.0.69",
@@ -4808,8 +4832,8 @@ dependencies = [
 name = "stalx-reader"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "rusqlite",
+ "stalagmight-legacy",
  "stalagmight-models",
  "stalagmight-persistence",
  "tempfile",

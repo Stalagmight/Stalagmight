@@ -24,7 +24,7 @@ everything back.
 Or select two lines in the **Sections** panel (Shift-click the second),
 right-click one and pick **Combine 2 Lines...**.
 
-The note under the menu item says how the two ends meet: **Merged here**,
+The note under the menu item says how the two ends meet: **Joined here**,
 **Side by side here** (less than 1 mm apart, not merged; they are combined as
 one point) or **Across a loop closure**. See the
 [station context menu](../screens/station-context-menu.md).

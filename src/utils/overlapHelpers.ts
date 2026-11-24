@@ -13,7 +13,7 @@
 
 import type { ShotKind } from '../types/ipc/ShotKind';
 import { circularMeanDegrees } from './angles';
-import { normalizeAzimuth } from './azimuth';
+import { averageAzimuth, normalizeAzimuth } from './azimuth';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -251,33 +251,51 @@ export function avgNullable(a: number | null, b: number | null): number | null {
   return (a + b) / 2;
 }
 
+/** How far apart two bearings are, in degrees in [0, 180]; NaN when either is not finite. */
+function degreesApart(bearing: number, other: number): number {
+  const apart = normalizeAzimuth(bearing - other);
+  return apart > 180 ? 360 - apart : apart;
+}
+
 /**
  * Reverse a target shot's direction so it matches the opposite traversal direction.
  *
- * Mirrors `reverse_shots` in `src-tauri/src/models/project/reverse.rs` step for
- * step, because the two placements must agree: this runs on the import preview
- * and the backend runs on the committed line.
+ * Mirrors `reversed_azimuths` / `reverse_shots` in
+ * `src-tauri/crates/models/src/shot_reverse.rs` step for step, because the two
+ * placements must agree: this runs on the import preview and the backend runs
+ * on the committed line.
  *
- * Two things the naive `(x + 180) % 360` got wrong:
+ * Three things the naive `(x + 180) % 360` got wrong:
  *
  * - JS `%` is TRUNCATED, so its result is only in `(-360, 360)`. An out-of-range
  *   reading came straight back out of range: `(-200 + 180) % 360 === -20`, a
  *   non-ignorable `INVALID_AZIMUTH` at whole-degree scale. Normalising both
  *   readings up front, as the backend does, closes that for either branch.
- * - Readings exactly 180 apart are DEGENERATE: reciprocate-and-swap maps the
- *   pair to itself, so the shot keeps its old bearing while everything around it
- *   turns around. The backend swaps such a pair instead, which flips the
- *   arbitrary tie-break `average_azimuth` resolves the undefined mean with.
- *   Without that branch this disagreed with the backend by a full 180 degrees:
- *   `{45, 225}` came back `{45, 225}` against the backend's `{225, 45}`.
+ * - Readings 180 apart are DEGENERATE: reciprocate-and-swap maps the pair to
+ *   itself, so the shot keeps its old bearing while everything around it turns
+ *   around. The backend swaps such a pair instead, which flips the arbitrary
+ *   tie-break `averageAzimuth` resolves the undefined mean with. Without that
+ *   branch this disagreed with the backend by a full 180 degrees: `{45, 225}`
+ *   came back `{45, 225}` against the backend's `{225, 45}`.
+ * - "180 apart" is decided by the bearing, not by the difference of the
+ *   readings: a pair is degenerate exactly when swapping it turns its
+ *   `averageAzimuth`. A bit-exact `(out - in) % 360 === 180` missed readings
+ *   typed exactly opposite whose float difference is one ulp off 180
+ *   (`338.1 - 158.1` is `180.00000000000003`), which `averageAzimuth` still
+ *   resolves by its tie-break, so the shot did not turn. And a reciprocated pair
+ *   that rounding left on the tie with its bearing unturned is swapped back.
  */
 export function reverseTargetShot(shot: TargetShotLike): TargetShotLike {
   const azimuthIn = normalizeAzimuth(shot.azimuth_in);
   const azimuthOut = normalizeAzimuth(shot.azimuth_out);
-  const antipodal = normalizeAzimuth(azimuthOut - azimuthIn) === 180;
-  const [reversedIn, reversedOut] = antipodal
+  const bearing = averageAzimuth(azimuthIn, azimuthOut);
+  const antipodal = degreesApart(bearing, averageAzimuth(azimuthOut, azimuthIn)) > 90;
+  let [reversedIn, reversedOut] = antipodal
     ? [azimuthOut, azimuthIn]
     : [normalizeAzimuth(azimuthOut + 180), normalizeAzimuth(azimuthIn + 180)];
+  if (!antipodal && degreesApart(averageAzimuth(reversedIn, reversedOut), bearing) < 90) {
+    [reversedIn, reversedOut] = [reversedOut, reversedIn];
+  }
   return {
     azimuth_in: reversedIn,
     azimuth_out: reversedOut,

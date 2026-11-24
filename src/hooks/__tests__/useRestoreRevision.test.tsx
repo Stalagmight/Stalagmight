@@ -44,7 +44,6 @@ beforeEach(() => {
   useGasPlanStore.getState().reset();
   useProjectStore.setState({
     refreshProjectState: vi.fn(async () => {}),
-    checkProjectIntegrity: vi.fn(async () => []),
     isDirty: true,
   });
   useSpeleoStore.setState({

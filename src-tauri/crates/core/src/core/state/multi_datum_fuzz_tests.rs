@@ -1,63 +1,89 @@
 //! Chains of random commands on surveys with several zero datums (#741),
-//! through the real command path: `AppState::execute`, the split and
-//! combine entry points, undo, redo, and a save-and-reopen round trip.
-//! Synthetic surveys only.
+//! through the real command path on the station graph: `AppState::execute`,
+//! the split and combine recipes, undo, redo, and a save-and-reopen round
+//! trip. Synthetic surveys only.
 //!
 //! A chain starts from a random project built by commands (lines, some
-//! merges, one to three datums), then runs random steps: set a datum
+//! junctions, one to three datums), then runs random steps: set a datum
 //! (placement or fix, its GPS 0-100 m from where the survey puts the
-//! station), set a datum with another datum's GPS bit for bit, change only
-//! an accuracy, remove a datum (the frame on purpose now and then), merge
-//! (two separately placed pieces on purpose now and then), unmerge, add a
-//! loop closure, split, Combine Lines through an offered candidate,
-//! delete a line or a shot, add a shot, undo, redo, reopen. Datums land
-//! on station 0, on lines that already hold one and in the frame's own
-//! merge component more often than chance.
+//! station; on a station that holds one, a GPS edit), set a datum with
+//! another datum's GPS bit for bit, change only an accuracy, remove a datum
+//! (the frame on purpose now and then), merge (two separately placed pieces
+//! on purpose now and then), detach a line from a junction, add a loop
+//! closure, split, Combine Lines through an offered candidate, delete a line
+//! or a shot, add a shot, Move Line, undo, redo, reopen.
 //!
 //! After every state change, each failure message starting with its class:
 //!
 //! - `nonfinite`: a raw or computed coordinate, or a datum's GPS, is not
 //!   finite.
-//! - `integrity`: `AppState::integrity_check` reports anything (the setup is
-//!   clean).
-//! - `roles`: `datum_roles` disagrees with a re-derivation from the merges
-//!   (the first resolvable datum of a merge component places it, every later
-//!   one is a fix).
-//! - `placement-off-gps` / `frame-off-origin`: a placement datum's station
-//!   is not at `gps_to_local(its GPS, the frame's GPS)`. Every placement is
-//!   exact against the frame in effect when it was placed (`set_zero_datum`,
-//!   `settle_datum_layout`); a re-frame translates by the new frame's
-//!   measured position, which the local tangent plane makes differ from the
-//!   new frame's own projection by a small amount that grows with each
-//!   re-frame. The tolerance is `2e-6 * 2^k + eps * (2^k - 1)`: `eps` the
-//!   largest such discrepancy over every GPS the chain has seen, `k` the
-//!   re-frames so far. Most chains sit near the equator, where `eps` stays
-//!   under a micrometre; the others widen with it.
-//! - `promoted-twin-gps`, `datum-key-reused`, `frame-gps-edit`: the same
-//!   failure in a step with a recognised mechanism: a promoted fix with a GPS
-//!   bit-identical to a datum that was a placement before; a datum
-//!   re-anchored onto the key of a datum the step removed; a new GPS on the
-//!   frame datum (all fixed, see [`KNOWN_OPEN`]).
-//! - `datum-twin-station`: two datums resolve to one station (Combine
-//!   Lines joining two datum stations; now refused).
+//! - `integrity`: `validate` or `integrity_check` reports anything.
+//! - `roles`: `datum_roles` disagrees with a re-derivation from the line
+//!   chains (the first datum of each shot component in list order places it,
+//!   every later one is a fix).
+//! - `correction`: a GPS fix carries a correction (demotion clears it), or a
+//!   stored correction is below `CORRECTION_EPSILON_M` or not finite (plan
+//!   4.3: those are stored as none).
+//! - `placement-off-anchor`: a placement datum's station is not exactly at
+//!   `gps_to_local(its GPS, the frame's GPS) + correction` (the frame at its
+//!   correction).
+//! - `placement-off-gps` / `frame-off-origin`: a placement datum's correction
+//!   (how far its piece sits from its own GPS) exceeds what re-framing can
+//!   leave: a re-frame translates by the new frame's measured position, which
+//!   the local tangent plane makes differ from the new frame's own projection
+//!   by a small amount that grows with each re-frame. The tolerance is
+//!   `2e-6 * 2^k + eps * (2^k - 1)`: `eps` the largest such discrepancy over
+//!   every GPS the chain has seen, `k` the re-frames so far.
+//! - `frame-change-moved`: a frame change moved a station other than plan
+//!   4.3 says, or removing a placement datum that held its piece alone moved
+//!   anything (both when the topology stays: a sweep promotion moves a piece
+//!   on purpose). Plan 4.3 translates the survey by `T = -P_before(new frame
+//!   station)` and gives every other placement datum `i` the correction
+//!   `c_i = P_before(i) + T - gps_to_local(G_i, G_new)`, which holds its
+//!   piece in place despite the tangent plane's non-additivity, but stores
+//!   it only from `CORRECTION_EPSILON_M` (1e-9 m) on: a piece whose `c_i` is
+//!   smaller lands on `gps_to_local(G_i, G_new)`, `c_i` away from the rigid
+//!   place. So the move is rigid only up to that: each piece must move by
+//!   `T`, or by `T - c_i` when its datum stores no correction (`c_i`
+//!   re-derived with the float operations of `settle_anchors`, and failing
+//!   when it is `CORRECTION_EPSILON_M` or more), every station within
+//!   `EXACT_M` of that (its piece laid out again from its anchor). Two pieces
+//!   each left under 1e-9 m off, in opposite directions, sit up to 2e-9 m
+//!   apart (seed 21238760: 0.64e-9 and 0.75e-9 m, 1.25e-9 m apart): the
+//!   farm's 1.0e-9 to 1.25e-9 m failures (seeds 21238760, 21260685,
+//!   21358582, 21386535), which the earlier check, every station against the
+//!   first one's own move within `EXACT_M`, took for a non-rigid move (its
+//!   true bound is `2 * CORRECTION_EPSILON_M + EXACT_M`); the exact per-piece
+//!   move keeps `EXACT_M` instead of widening it.
 //! - `hard-fix-off-gps` / `hard-fix-no-unknowns`: in the Closures Computed
 //!   View, a hard fix the solve holds is not on its GPS (rule derived from
-//!   `lsq.rs`; see `held_groups`). `-no-unknowns`: its component has no
-//!   unknown left (fixed: the solve once returned at `n == 0` before it
-//!   rewrote a shot).
-//! - `placement-moved-computed`: a placement datum moved in the computed
-//!   view.
-//! - `depth-moved`: a datum command changed a station's depth (topology
-//!   unchanged), or a fix changed a computed depth (compared with the same
-//!   view with every fix removed).
-//! - `fix-moved-raw`: storing or removing a GPS fix moved raw geometry.
-//! - `undo-inexact` / `redo-inexact`: an undo or redo did not restore the
-//!   state it should (datums with GPS bits, accuracies and roles, merges,
-//!   closures, lines, raw coordinates to 1e-9). Every forward step is
-//!   undone and redone at once; random undo and redo steps go deeper.
-//!   `undo-across-reopen`: the same, for a state from before a reopen.
-//! - `reopen-drift`: save and reopen changed the datums, roles, merges,
-//!   closures or raw coordinates (1e-9), or the computed view (1e-6).
+//!   `adjust.rs`: constraint groups over the closures the solve ties,
+//!   placement datums held first, then each hard fix's group in list order).
+//!   `-no-unknowns`: its component has no unknown left.
+//! - `placement-moved-computed`: a placement datum moved in the computed view.
+//! - `depth-moved`: a datum command changed a depth (topology unchanged), or
+//!   a fix changed a computed depth (compared with the same view with every
+//!   fix removed).
+//! - `fix-moved-raw`: storing or removing a GPS fix, or an accuracy-only
+//!   edit, moved raw geometry.
+//! - `undo-inexact` / `redo-inexact`: an undo or a redo did not land on the
+//!   state it should, to the bit (the canonical v2 text; the id counters may
+//!   stand higher), with every shot's session id back in the session. Every
+//!   forward step is undone and redone at once; random undo and redo steps go
+//!   deeper. `undo-across-reopen`: the same, for a state from before a reopen.
+//!   The session ids of a random step are compared only between states of
+//!   this session, and not on a line that a step outside it (an entry
+//!   decoded from the file, or one across the reopen) gave other ids since
+//!   the reopen: a decoded entry mints fresh ids for the shots it re-creates
+//!   (undo-redo.md), and an entry of the session gives back only the ids it
+//!   captured for the lines it touches, so which ids such a line has at a
+//!   recorded depth depends on the path back to it (seed 21388232: a decoded
+//!   redo of a combine gives two shots of line 3 new ids, and the undo of the
+//!   next forward step rightly restores those, not the ones recorded at that
+//!   depth before). The at-once undo and redo of every forward step compare
+//!   every line's ids, always.
+//! - `reopen-drift`: save and reopen changed the canonical text, the raw
+//!   layout or the computed view (bit for bit).
 //! - `refusal-mutated`: a refused command changed the project.
 //! - `panic`: a command or a check panicked.
 //!
@@ -70,48 +96,39 @@
 //! failing. A failure prints its trail as a replay:
 //! `STALAGMIGHT_DATUM_FUZZ_REPLAY="seed;op;op;..."` runs
 //! `replay_a_datum_chain` (ignored by default), which prints each step.
+//!
+//! Classes the SQLite build had and this one does not: `datum-twin-station`
+//! (two datums on one station: the station graph allows it, plan 5.7, S8,
+//! E1); `promoted-twin-gps`, `datum-key-reused` and `frame-gps-edit` were
+//! mechanism labels of `placement-off-gps` for datums re-keyed by
+//! `StationKey` (gone: a datum is on a station id, D5), all fixed before the
+//! switch.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use super::multi_datum_steps_fuzz::{
-    apply, datum_op, every_station, next_op, parse_op, shots, Applied, Op, Rng,
+    apply, datum_op, every_station, next_op, parse_op, shots, station_at, Applied, Op, Rng,
 };
 use super::AppState;
 use crate::config::ClosureAdjustmentConfig;
 use crate::core::Command;
+use crate::models::survey::{Project, RawPositions, CORRECTION_EPSILON_M};
 use crate::models::{
-    gps_to_local, ClosureStrategy, DatumRole, GpsCoordinates, LineId, Project, StationKey,
-    StationRef, SurveyDirection,
+    gps_to_local, DatumRole, GpsCoordinates, LineId, StationId, StationRef, SurveyDirection,
+    DEFAULT_GPS_ACCURACY_M,
 };
+use crate::persistence::stalx_v2::{self, Extras, Mode};
 
-/// `lsq.rs`'s `HARD_FIX_ACCURACY_M`.
+/// `adjust.rs`'s `HARD_FIX_ACCURACY_M`.
 const HARD_FIX_ACCURACY_M: f64 = 1e-3;
 
-/// Per axis, for a station the solve holds: stations of one line may
-/// disagree on its translation by 1e-6 m before the solve refuses.
-const HELD_TOL_M: f64 = 1e-6 + 1e-8;
-
-/// Raw coordinates an undo, a redo or a reopen must restore.
+/// Raw coordinates a re-anchoring must keep (a placement laid out from
+/// another station of its piece sums the same shots in another order).
 const EXACT_M: f64 = 1e-9;
 
 /// Failure classes that are open bugs, muted unless
-/// `STALAGMIGHT_DATUM_FUZZ_MUTE` is set. The replay after each reaches it
-/// with the generators as they are (a generator change can turn it into a
-/// different chain). None today.
-///
-/// No longer muted, and pinned in `multi_datum_tests.rs`: `promoted-twin-gps`
-/// (a fix with the bit-identical GPS of the removed placement datum) and
-/// `datum-key-reused` (Delete Shot re-anchoring a fix onto the removed
-/// datum's key, or a combine re-keying one of two twins, a placement and a
-/// fix with one GPS, onto the key of the other), both fixed in
-/// `DatumLayout::unplaced`; and
-/// `datum-twin-station` (Combine Lines joining two stations that each
-/// hold a datum), now refused; and `hard-fix-no-unknowns` (a hard fix in a
-/// component with no unknown left), now applied; and `frame-gps-edit` (a new
-/// GPS on the frame datum left every other placed piece off its own GPS,
-/// #769), now moved by the frame correction in
-/// `Project::place_pieces_on_frame`.
+/// `STALAGMIGHT_DATUM_FUZZ_MUTE` is set. None.
 const KNOWN_OPEN: &[&str] = &[];
 
 fn env_u64(name: &str, default: u64) -> u64 {
@@ -136,34 +153,37 @@ fn mute_list() -> Vec<String> {
 // The state a step must keep or restore
 // ---------------------------------------------------------------------------
 
-/// A datum as compared: its station, GPS bits, accuracy bits and role, and
-/// its key (for the promotion rule, never compared).
-#[derive(Debug, Clone)]
+/// A datum as compared, bit for bit.
+#[derive(Debug, Clone, PartialEq)]
 struct DatumRow {
+    station: StationId,
     at: Option<StationRef>,
     gps: [u64; 3],
     accuracy: Option<u64>,
     role: Option<DatumRole>,
-    key: StationKey,
+    correction: Option<[u64; 2]>,
 }
 
-impl PartialEq for DatumRow {
-    fn eq(&self, other: &Self) -> bool {
-        (self.at, self.gps, self.accuracy, self.role)
-            == (other.at, other.gps, other.accuracy, other.role)
-    }
-}
-
-/// Everything a step must keep or restore, in comparable form.
+/// Everything a step must keep or restore.
 #[derive(Debug, Clone)]
 struct Snap {
+    /// The canonical v2 text (`modified_at` and the path masked).
+    text: String,
+    /// Every shot's session id, line by line.
+    ids: Vec<Vec<u32>>,
     lines: Vec<(LineId, usize)>,
     datums: Vec<DatumRow>,
-    /// Resolved merge pairs, each ordered, sorted.
-    merges: Vec<(StationRef, StationRef)>,
-    /// `(id, ends, aligned)`, sorted by id.
-    closures: Vec<(u64, StationRef, StationRef, bool)>,
-    raw: BTreeMap<StationRef, (f64, f64, f64)>,
+    /// Every station's `[x, y, z]` (raw), ascending.
+    xyz: BTreeMap<StationId, [f64; 3]>,
+    /// Closures `(id, a, b)`.
+    closures: Vec<(u64, StationId, StationId)>,
+    /// Junctions: each station's lines, for the stations on two or more.
+    junctions: BTreeMap<StationId, Vec<LineId>>,
+}
+
+/// Equal to the bit, except that `0.0` and `-0.0` are the same place.
+fn same(a: f64, b: f64) -> bool {
+    a.to_bits() == b.to_bits() || (a == 0.0 && b == 0.0)
 }
 
 fn gps_bits(g: &GpsCoordinates) -> [u64; 3] {
@@ -174,101 +194,164 @@ fn gps_bits(g: &GpsCoordinates) -> [u64; 3] {
     ]
 }
 
-fn ordered(a: StationRef, b: StationRef) -> (StationRef, StationRef) {
-    if (a.line_id, a.station_index) <= (b.line_id, b.station_index) {
-        (a, b)
-    } else {
-        (b, a)
-    }
+fn canonical(p: &Project) -> String {
+    let mut p = p.clone();
+    p.modified_at = p.created_at;
+    p.file_path = None;
+    String::from_utf8(stalx_v2::encode(&p, &Extras::default(), Mode::Normal).unwrap()).unwrap()
 }
 
 fn snap(p: &Project) -> Snap {
-    let datums = p
-        .zero_datums
-        .iter()
-        .zip(p.datum_roles())
-        .map(|(zd, role)| DatumRow {
-            at: p.resolve_key(&zd.station_ref),
-            gps: gps_bits(&zd.gps),
-            accuracy: zd.accuracy_m.map(f64::to_bits),
-            role,
-            key: zd.station_ref.clone(),
-        })
-        .collect();
-    let mut merges: Vec<_> = p
-        .station_merges
-        .iter()
-        .filter_map(|m| {
-            Some(ordered(
-                p.resolve_key(&m.station_a)?,
-                p.resolve_key(&m.station_b)?,
-            ))
-        })
-        .collect();
-    merges.sort_by_key(|(a, b)| (a.line_id, a.station_index, b.line_id, b.station_index));
-    let mut closures: Vec<_> = p
-        .loop_closures
-        .iter()
-        .filter_map(|c| {
-            let (a, b) = ordered(p.resolve_key(&c.station_a)?, p.resolve_key(&c.station_b)?);
-            Some((c.id, a, b, c.is_aligned))
-        })
-        .collect();
-    closures.sort_by_key(|c| c.0);
+    let raw = p.raw_positions();
+    let roles = p.datum_roles();
+    let topology = p.topology();
     Snap {
-        lines: p.lines.iter().map(|s| (s.id, s.shots.len())).collect(),
-        datums,
-        merges,
-        closures,
-        raw: p
-            .compute_station_coordinates()
-            .into_iter()
-            .map(|s| {
-                let c = s.coordinates;
-                (s.station_ref, (c.x, c.y, c.z))
+        text: canonical(p),
+        ids: p
+            .lines()
+            .iter()
+            .map(|l| l.shots.iter().map(|s| s.id).collect())
+            .collect(),
+        lines: p.lines().iter().map(|l| (l.id, l.shots.len())).collect(),
+        datums: p
+            .datums
+            .iter()
+            .zip(roles)
+            .map(|(d, role)| DatumRow {
+                station: d.station,
+                at: p.datum_slot(d),
+                gps: gps_bits(&d.gps),
+                accuracy: d.accuracy_m.map(f64::to_bits),
+                role,
+                correction: d.correction.map(|c| [c[0].to_bits(), c[1].to_bits()]),
             })
+            .collect(),
+        xyz: raw.iter().collect(),
+        closures: p.closures.iter().map(|c| (c.id, c.a, c.b)).collect(),
+        junctions: p
+            .stations
+            .keys()
+            .filter(|s| topology.is_junction(**s))
+            .map(|s| (*s, topology.lines_of(*s)))
             .collect(),
     }
 }
 
-/// The first difference between `want` and `got`, if any.
-fn diff(want: &Snap, got: &Snap) -> Option<String> {
-    if want.lines != got.lines {
-        return Some(format!("lines {:?} -> {:?}", want.lines, got.lines));
+/// Whether two canonical texts are equal except that the id counters may
+/// stand higher in `got` (plan 8.1: a step applies them as
+/// `max(live, recorded)`).
+fn same_up_to_counters(want: &str, got: &str) -> Option<String> {
+    let (w, g): (Vec<&str>, Vec<&str>) = (want.lines().collect(), got.lines().collect());
+    if w.len() != g.len() {
+        return Some(format!("{} line(s) -> {}", w.len(), g.len()));
     }
-    if want.datums != got.datums {
-        return Some(format!("datums {:?} -> {:?}", want.datums, got.datums));
-    }
-    if want.merges != got.merges {
-        return Some(format!("merges {:?} -> {:?}", want.merges, got.merges));
-    }
-    if want.closures != got.closures {
-        return Some(format!(
-            "closures {:?} -> {:?}",
-            want.closures, got.closures
-        ));
-    }
-    for (at, &(x, y, z)) in &want.raw {
-        let Some(&(gx, gy, gz)) = got.raw.get(at) else {
-            return Some(format!("{at:?} is gone"));
-        };
-        if (gx - x).abs() > EXACT_M || (gy - y).abs() > EXACT_M || (gz - z).abs() > EXACT_M {
-            return Some(format!("{at:?} ({x}, {y}, {z}) -> ({gx}, {gy}, {gz})"));
+    for (i, (w, g)) in w.iter().zip(&g).enumerate() {
+        if w == g {
+            continue;
         }
+        if w.starts_with("\"counters\":") && g.starts_with("\"counters\":") {
+            let parse = |line: &str| -> BTreeMap<String, u64> {
+                serde_json::from_str(
+                    line.trim_start_matches("\"counters\":")
+                        .trim_end_matches(','),
+                )
+                .unwrap_or_default()
+            };
+            let (wc, gc) = (parse(w), parse(g));
+            if wc.keys().eq(gc.keys()) && wc.iter().all(|(k, v)| gc[k] >= *v) {
+                continue;
+            }
+        }
+        return Some(format!("line {}: {w} -> {g}", i + 1));
     }
     None
+}
+
+/// The first difference between `want` and `got` (to the bit), if any;
+/// `ids` also compares the session shot ids.
+fn diff(want: &Snap, got: &Snap, ids: bool) -> Option<String> {
+    diff_except(want, got, ids.then_some(&BTreeSet::new()))
+}
+
+/// [`diff`], comparing the session shot ids (with `ids`) of every line but
+/// those in it.
+fn diff_except(want: &Snap, got: &Snap, ids: Option<&BTreeSet<LineId>>) -> Option<String> {
+    if let Some(d) = same_up_to_counters(&want.text, &got.text) {
+        if want.datums != got.datums {
+            return Some(format!(
+                "datums {:?} -> {:?} ({d})",
+                want.datums, got.datums
+            ));
+        }
+        return Some(d);
+    }
+    let skip = ids?;
+    let differs = want
+        .lines
+        .iter()
+        .zip(&want.ids)
+        .zip(got.lines.iter().zip(&got.ids))
+        .any(|(((line, _), w), ((_, _), g))| !skip.contains(line) && w != g);
+    if differs || want.ids.len() != got.ids.len() {
+        return Some(format!(
+            "session shot ids {:?} -> {:?} (lines left out: {skip:?})",
+            want.ids, got.ids
+        ));
+    }
+    None
+}
+
+/// The lines whose session shot ids differ between `before` and `after`
+/// (a line on one side only included).
+fn lines_with_other_ids(before: &Snap, after: &Snap) -> BTreeSet<LineId> {
+    let was: BTreeMap<LineId, &Vec<u32>> = before
+        .lines
+        .iter()
+        .map(|(line, _)| *line)
+        .zip(&before.ids)
+        .collect();
+    let is: BTreeMap<LineId, &Vec<u32>> = after
+        .lines
+        .iter()
+        .map(|(line, _)| *line)
+        .zip(&after.ids)
+        .collect();
+    was.keys()
+        .chain(is.keys())
+        .filter(|line| was.get(*line) != is.get(*line))
+        .copied()
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
 // The computed view
 // ---------------------------------------------------------------------------
 
-/// Union-find over stations.
+/// A computed view: positions per station, and the lines of failed
+/// components.
+struct View {
+    at: BTreeMap<StationId, [f64; 3]>,
+    failed: BTreeSet<LineId>,
+}
+
+fn solve(p: &Project) -> View {
+    let solved = p.adjusted_positions(&ClosureAdjustmentConfig::default());
+    View {
+        at: solved.iter().collect(),
+        failed: solved
+            .failures()
+            .iter()
+            .flat_map(|f| f.lines.iter().copied())
+            .collect(),
+    }
+}
+
+/// Union-find over station ids.
 #[derive(Default)]
-struct Groups(HashMap<StationRef, StationRef>);
+struct Groups(BTreeMap<StationId, StationId>);
 
 impl Groups {
-    fn find(&mut self, x: StationRef) -> StationRef {
+    fn find(&mut self, x: StationId) -> StationId {
         let up = *self.0.get(&x).unwrap_or(&x);
         if up == x {
             return x;
@@ -278,7 +361,7 @@ impl Groups {
         root
     }
 
-    fn union(&mut self, a: StationRef, b: StationRef) {
+    fn union(&mut self, a: StationId, b: StationId) {
         let (ra, rb) = (self.find(a), self.find(b));
         if ra != rb {
             self.0.insert(ra, rb);
@@ -286,96 +369,55 @@ impl Groups {
     }
 }
 
-/// The solve's constraint groups (stations tied by a merge or a closure the
-/// solve uses), the roots it holds (placement datums first, then each hard
-/// fix's group in list order unless held already), and the hard fixes that
-/// hold theirs with their GPS in local metres. Derived from
-/// `adjust_least_squares`.
-fn held_groups(p: &Project) -> (Groups, HashSet<StationRef>, Vec<(StationRef, (f64, f64))>) {
-    let skipped: HashSet<u64> = p
-        .closures_across_one_shot()
+/// The solve's constraint groups (stations tied by the closures the solve
+/// ties: eligible ones and aligned snaps, minus the across-one-shot skip
+/// set), the groups it holds (placement datums first, then each hard fix's
+/// group in list order unless held already), and the hard fixes that hold
+/// theirs with their GPS in local metres. Derived from `adjust.rs`.
+fn held_groups(
+    p: &Project,
+    raw: &RawPositions,
+) -> (Groups, BTreeSet<StationId>, Vec<(StationId, [f64; 2])>) {
+    let aligned = p.closure_alignment(raw);
+    let skipped: BTreeSet<u64> = p
+        .closures_across_one_shot_with(&aligned)
         .into_iter()
         .map(|c| c.closure_id)
         .collect();
     let mut groups = Groups::default();
-    for m in &p.station_merges {
-        if let (Some(a), Some(b)) = (p.resolve_key(&m.station_a), p.resolve_key(&m.station_b)) {
-            groups.union(a, b);
-        }
-    }
-    for c in &p.loop_closures {
-        let eligible = matches!(
-            c.strategy,
-            ClosureStrategy::Batch | ClosureStrategy::LeastSquaresWeighted
-        );
-        if !eligible || skipped.contains(&c.id) {
+    for (i, c) in p.closures.iter().enumerate() {
+        if skipped.contains(&c.id)
+            || !Project::closure_ties_in_solve(c, aligned.get(i).copied().unwrap_or(false))
+        {
             continue;
         }
-        if let (Some(a), Some(b)) = (p.resolve_key(&c.station_a), p.resolve_key(&c.station_b)) {
-            groups.union(a, b);
+        groups.union(c.a, c.b);
+    }
+    let roles = p.datum_roles();
+    let mut held: BTreeSet<StationId> = BTreeSet::new();
+    for (d, role) in p.datums.iter().zip(&roles) {
+        if *role == Some(DatumRole::Placement) {
+            held.insert(groups.find(d.station));
         }
     }
-    let mut held: HashSet<StationRef> = p
-        .placement_datum_refs()
-        .into_iter()
-        .map(|sr| groups.find(sr))
-        .collect();
     let mut fixes = Vec::new();
-    let Some(frame) = p.frame_datum().map(|zd| zd.gps) else {
+    let Some(frame) = p.frame_datum().and_then(|f| p.datums.get(f)).map(|d| d.gps) else {
         return (groups, held, fixes);
     };
-    for zd in p.gps_fix_datums() {
-        let Some(at) = p.resolve_key(&zd.station_ref) else {
+    for (d, role) in p.datums.iter().zip(&roles) {
+        if *role != Some(DatumRole::GpsFix) {
             continue;
-        };
-        let accuracy = match zd.effective_accuracy_m() {
+        }
+        let accuracy = match d.accuracy_m.unwrap_or(DEFAULT_GPS_ACCURACY_M) {
             a if a.is_finite() && a >= 0.0 => a,
-            _ => crate::models::DEFAULT_GPS_ACCURACY_M,
+            _ => DEFAULT_GPS_ACCURACY_M,
         };
-        if accuracy < HARD_FIX_ACCURACY_M && held.insert(groups.find(at)) {
-            fixes.push((at, gps_to_local(&zd.gps, &frame)));
+        if accuracy < HARD_FIX_ACCURACY_M && held.insert(groups.find(d.station)) {
+            let (x, y) = gps_to_local(&d.gps, &frame);
+            fixes.push((d.station, [x, y]));
         }
     }
     (groups, held, fixes)
-}
-
-/// Whether every constraint group of `line`'s component is held.
-fn component_all_held(
-    p: &Project,
-    groups: &mut Groups,
-    held: &HashSet<StationRef>,
-    line: LineId,
-) -> bool {
-    let component = p.get_connected_line_ids(line);
-    every_station(p)
-        .into_iter()
-        .filter(|s| component.contains(&s.line_id))
-        .all(|s| held.contains(&groups.find(s)))
-}
-
-/// A computed view: positions, and the lines of failed components.
-struct View {
-    at: HashMap<StationRef, (f64, f64, f64)>,
-    failed: HashSet<LineId>,
-}
-
-fn solve(p: &Project) -> View {
-    let solved = p.compute_adjusted_stations(&ClosureAdjustmentConfig::default());
-    View {
-        at: solved
-            .stations
-            .iter()
-            .map(|s| {
-                let c = s.coordinates;
-                (s.station_ref, (c.x, c.y, c.z))
-            })
-            .collect(),
-        failed: solved
-            .failures
-            .iter()
-            .flat_map(|f| f.line_ids.iter().copied())
-            .collect(),
-    }
 }
 
 /// `p` without its GPS fixes (no other role changes: a fix is never first).
@@ -384,16 +426,98 @@ fn without_fixes(p: &Project) -> Project {
     let roles = p.datum_roles();
     let mut role = roles.iter();
     stripped
-        .zero_datums
+        .datums
         .retain(|_| role.next().copied().flatten() != Some(DatumRole::GpsFix));
     stripped
+}
+
+/// The lines of `station`'s shot component.
+fn component_lines(p: &Project, station: StationId) -> BTreeSet<LineId> {
+    let topology = p.topology();
+    topology
+        .component_of(station)
+        .and_then(|c| topology.components().get(c))
+        .map(|c| c.lines.iter().copied().collect())
+        .unwrap_or_default()
+}
+
+/// Where a frame change that removed the frame datum (alone on its piece)
+/// puts each piece, re-derived as plan 4.3 states it (module docs,
+/// `frame-change-moved`).
+struct FrameShift {
+    /// `T = -P_before(new frame station)`: the move of every piece whose
+    /// placement is a `Placement`, the new frame, or a datum whose
+    /// correction holds it.
+    translation: [f64; 2],
+    /// The move of each piece (by component) whose placement datum the change
+    /// left without a correction: `T - c`, `c` the correction not stored.
+    dropped: BTreeMap<usize, [f64; 2]>,
+    /// A correction left out although it is `CORRECTION_EPSILON_M` or more:
+    /// its station and value.
+    significant: Option<(StationId, [f64; 2])>,
+}
+
+impl FrameShift {
+    /// Compute it from the state before (`p0`, `s0`) and the datums after
+    /// (`s1`): for each placement datum `i` after the change, other than the
+    /// new frame, with no correction, `c = (P_before(i) + T) -
+    /// gps_to_local(G_i, G_new)` in the order and the float operations of
+    /// `Project::settle_anchors` (so the comparison against `EXACT_M` is the
+    /// layout's rounding only).
+    fn of(p0: &Project, s0: &Snap, s1: &Snap) -> Option<Self> {
+        let gps = |row: &DatumRow| {
+            p0.datums
+                .iter()
+                .find(|d| d.station == row.station && gps_bits(&d.gps) == row.gps)
+                .map(|d| d.gps)
+        };
+        let frame_index = s1.datums.iter().position(|d| d.role.is_some())?;
+        let frame = &s1.datums[frame_index];
+        let frame_gps = gps(frame)?;
+        let [fx, fy, _] = s0.xyz.get(&frame.station)?;
+        let translation = [-fx, -fy];
+        let topology = p0.topology();
+        let mut dropped = BTreeMap::new();
+        let mut significant = None;
+        for (i, row) in s1.datums.iter().enumerate() {
+            if i == frame_index
+                || row.role != Some(DatumRole::Placement)
+                || row.correction.is_some()
+            {
+                continue;
+            }
+            let (Some(g), Some([x, y, _]), Some(c)) = (
+                gps(row),
+                s0.xyz.get(&row.station),
+                topology.component_of(row.station),
+            ) else {
+                continue;
+            };
+            let (bx, by) = gps_to_local(&g, &frame_gps);
+            let at = [x + translation[0], y + translation[1]];
+            let left_out = [at[0] - bx, at[1] - by];
+            if (left_out[0] * left_out[0] + left_out[1] * left_out[1]).sqrt()
+                >= CORRECTION_EPSILON_M
+            {
+                significant = Some((row.station, left_out));
+            }
+            dropped.insert(
+                c,
+                [translation[0] - left_out[0], translation[1] - left_out[1]],
+            );
+        }
+        Some(Self {
+            translation,
+            dropped,
+            significant,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
 // A chain
 // ---------------------------------------------------------------------------
 
-/// A failure: its class, then what was seen.
 struct Failure {
     class: &'static str,
     detail: String,
@@ -403,18 +527,22 @@ fn fail(class: &'static str, detail: String) -> Failure {
     Failure { class, detail }
 }
 
-/// What the sweep counts.
 #[derive(Default)]
 struct Stats {
     steps: usize,
-    applied: BTreeMap<&'static str, usize>,
+    applied: BTreeMap<String, usize>,
     refused: usize,
+    skipped: usize,
     frame_changes: usize,
     frame_gps_edits: usize,
+    rigid_reframes: usize,
+    /// Pieces a rigid re-frame left without their sub-nanometre correction.
+    left_out: usize,
     promotions: usize,
     held_fixes: usize,
     placed_merges: usize,
     reopens: usize,
+    corrections: usize,
     max_eps: f64,
     muted: BTreeMap<&'static str, usize>,
 }
@@ -429,28 +557,29 @@ struct Chain {
     cursor: usize,
     /// Timeline entries below this index predate the last reopen.
     reopened_at: usize,
-    /// Timeline entries below this index are out of reach: a save persists only
-    /// the newest `undo_persist_limit` entries of each stack, so after a reopen
-    /// nothing deeper than that comes back. Zero until a reopen trims.
+    /// Lines a step outside the session gave other session shot ids since
+    /// the last reopen: their ids are left out of the in-session comparison
+    /// (module docs, `undo-inexact`).
+    reminted: BTreeSet<LineId>,
+    /// Timeline entries below this index are out of reach: a reopen keeps
+    /// the newest `window` entries of each stack (the persisted window,
+    /// `general.undo_persist_limit`, as 0.6.0 saved it).
     floor: usize,
+    window: usize,
     gps_seen: Vec<GpsCoordinates>,
     eps: f64,
     reframes: u32,
     verbose: bool,
 }
 
-/// The persisted window: `undo_persist_limit`'s default, the entries of each
-/// stack a save keeps (`UndoStack::rows_to_persist`).
-const PERSIST_WINDOW: usize = 20;
-
 fn project(state: &AppState) -> Project {
     state.get_project_state().unwrap()
 }
 
 impl Chain {
-    /// The project of `seed`: lines, some merged, and one to three datums,
-    /// all through commands. Mostly near the equator, where re-framing moves a
-    /// placement by well under a micrometre (see the module doc).
+    /// The project of `seed`: lines, some joined, and one to three datums,
+    /// all through commands. Mostly near the equator, where re-framing moves
+    /// a placement by well under a micrometre.
     fn new(seed: u64, verbose: bool) -> (Self, Vec<Op>) {
         let mut rng = Rng::new(seed);
         let state = AppState::new().unwrap();
@@ -480,6 +609,13 @@ impl Chain {
             });
             assert!(r.success, "{:?}", r.error);
         }
+        // What a save keeps of each stack (`AppState::history_to_persist`):
+        // the newest `undo_persist_limit` entries, within the in-memory limit.
+        let window = state
+            .get_config()
+            .general
+            .undo_persist_limit
+            .min(state.undo_stack.lock().unwrap().history_limit());
         let chain = Self {
             state,
             _dir: dir,
@@ -488,22 +624,23 @@ impl Chain {
             timeline: Vec::new(),
             cursor: 0,
             reopened_at: 0,
+            reminted: BTreeSet::new(),
             floor: 0,
+            window,
             gps_seen: Vec::new(),
             eps: 0.0,
             reframes: 0,
             verbose,
         };
-        // The setup's own steps: merges, then datums.
         let mut setup = Vec::new();
         let p = project(&chain.state);
-        let ids: Vec<LineId> = p.lines.iter().map(|s| s.id).collect();
+        let ids: Vec<LineId> = p.lines().iter().map(|s| s.id).collect();
         for (i, &id) in ids.iter().enumerate().skip(1) {
             if rng.chance(60) {
                 let other = ids[rng.below(i)];
                 setup.push(Op::Merge {
-                    a: chain.station_of(&p, other, &mut rng),
-                    b: chain.station_of(&p, id, &mut rng),
+                    a: Self::station_of(&p, other, &mut rng),
+                    b: Self::station_of(&p, id, &mut rng),
                 });
             }
         }
@@ -514,8 +651,8 @@ impl Chain {
         (chain, setup)
     }
 
-    fn station_of(&self, p: &Project, id: LineId, rng: &mut Rng) -> StationRef {
-        let n = p.get_line(id).map_or(0, |s| s.shots.len());
+    fn station_of(p: &Project, id: LineId, rng: &mut Rng) -> StationRef {
+        let n = p.line(id).map_or(0, |s| s.shots.len());
         let i = if rng.chance(35) { 0 } else { rng.below(n + 1) };
         StationRef::new(id, i as u32)
     }
@@ -526,11 +663,7 @@ impl Chain {
         }
     }
 
-    /// Placement tolerance after `reframes` re-frames: a re-frame onto a
-    /// station off its GPS by `e` leaves every other placement off by up to
-    /// its own error plus `e` plus the projection's `eps`, so the bound
-    /// doubles per re-frame and gains `eps`, from the offset dust (1e-6 m per
-    /// axis) a placement may start with.
+    /// Placement tolerance after `reframes` re-frames (module docs).
     fn placement_tol(&self) -> f64 {
         let k = 2f64.powi(self.reframes.min(40) as i32);
         2e-6 * k + self.eps * (k - 1.0)
@@ -539,8 +672,8 @@ impl Chain {
     /// Record every GPS the project holds, widening `eps` by the largest
     /// re-frame discrepancy over each new triple.
     fn see_gps(&mut self, p: &Project) {
-        for zd in &p.zero_datums {
-            let g = zd.gps;
+        for d in &p.datums {
+            let g = d.gps;
             if !(g.latitude.is_finite() && g.longitude.is_finite())
                 || self.gps_seen.iter().any(|s| gps_bits(s) == gps_bits(&g))
             {
@@ -574,104 +707,21 @@ impl Chain {
 // The checks
 // ---------------------------------------------------------------------------
 
-/// A datum that was not a placement before (a fix, or under a key no datum
-/// had) is one now, and shares its GPS (lat/lon bits) with a datum that was
-/// a placement before under another key, without being that datum re-keyed
-/// (the other one is still there, or this one was a fix): the settle would
-/// have taken this one for the placement it twins and never placed it
-/// (`DatumLayout::unplaced` pairs datums by their list order, #778).
-fn promoted_twin(before: &Snap, p: &Project) -> bool {
-    p.zero_datums
-        .iter()
-        .zip(p.datum_roles())
-        .filter(|(_, role)| *role == Some(DatumRole::Placement))
-        .any(|(zd, _)| {
-            let bits = gps_bits(&zd.gps);
-            let mine = || before.datums.iter().filter(|d| d.key == zd.station_ref);
-            if mine().any(|d| d.role == Some(DatumRole::Placement)) {
-                return false;
-            }
-            let was_fix = mine().any(|d| d.role == Some(DatumRole::GpsFix));
-            before.datums.iter().any(|d| {
-                d.key != zd.station_ref
-                    && d.gps[..2] == bits[..2]
-                    && d.role == Some(DatumRole::Placement)
-                    && (was_fix || p.zero_datums.iter().any(|now| now.station_ref == d.key))
-            })
-        })
-}
-
-/// Why every placement may legitimately-or-knownly be off in a step: the
-/// mechanisms the placement check attributes a failure to, first match wins.
-fn placement_mechanism(op: Option<&Op>, before: &Snap, p: &Project) -> Option<&'static str> {
-    if promoted_twin(before, p) {
-        return Some("promoted-twin-gps");
-    }
-    let datum_op = matches!(
-        op,
-        Some(Op::Datum { .. } | Op::Twin { .. } | Op::Accuracy { .. })
-    );
-    // A command that is not a datum edit left a datum under a key another
-    // datum had before: a delete re-anchored a datum onto the key of one it
-    // removed, and the settle step, which recognises datums by key, sees
-    // nothing change. Told by the GPS or accuracy under that key changing, or
-    // by a datum whose key is gone having exactly this one's GPS and accuracy.
-    let keys_now: Vec<&StationKey> = p.zero_datums.iter().map(|zd| &zd.station_ref).collect();
-    let reused = !datum_op
-        && p.zero_datums.iter().any(|zd| {
-            let (gps, accuracy) = (gps_bits(&zd.gps), zd.accuracy_m.map(f64::to_bits));
-            let same = |d: &DatumRow| d.gps[..2] == gps[..2] && d.accuracy == accuracy;
-            before.datums.iter().any(|d| d.key == zd.station_ref)
-                && (before
-                    .datums
-                    .iter()
-                    .any(|d| d.key == zd.station_ref && !same(d))
-                    || before
-                        .datums
-                        .iter()
-                        .any(|d| !keys_now.contains(&&d.key) && same(d)))
-        });
-    if reused {
-        return Some("datum-key-reused");
-    }
-    // A datum edit gave the frame datum another GPS: the frame stays on the
-    // origin, so every other placed piece is off its own GPS by the edit.
-    let frame_before = before.datums.iter().find(|d| d.at.is_some());
-    let frame_now = p.frame_datum();
-    if let (true, Some(was), Some(now)) = (datum_op, frame_before, frame_now) {
-        if was.key == now.station_ref && was.gps[..2] != gps_bits(&now.gps)[..2] {
-            return Some("frame-gps-edit");
-        }
-    }
-    None
-}
-
-/// The roles re-derived from the merges: union-find over lines.
+/// The roles re-derived from the line chains: union-find over the stations
+/// each shot joins.
 fn expected_roles(p: &Project) -> Vec<Option<DatumRole>> {
-    let mut up: HashMap<LineId, LineId> = HashMap::new();
-    fn find(up: &mut HashMap<LineId, LineId>, x: LineId) -> LineId {
-        let next = *up.get(&x).unwrap_or(&x);
-        if next == x {
-            return x;
-        }
-        let root = find(up, next);
-        up.insert(x, root);
-        root
-    }
-    for m in &p.station_merges {
-        if let (Some(a), Some(b)) = (p.resolve_key(&m.station_a), p.resolve_key(&m.station_b)) {
-            let (ra, rb) = (find(&mut up, a.line_id), find(&mut up, b.line_id));
-            if ra != rb {
-                up.insert(ra, rb);
-            }
+    let mut groups = Groups::default();
+    for line in p.lines() {
+        let chain: Vec<StationId> = line.stations().collect();
+        for pair in chain.windows(2) {
+            groups.union(pair[0], pair[1]);
         }
     }
-    let mut placed = HashSet::new();
-    p.zero_datums
+    let mut placed = BTreeSet::new();
+    p.datums
         .iter()
-        .map(|zd| {
-            let at = p.resolve_key(&zd.station_ref)?;
-            Some(if placed.insert(find(&mut up, at.line_id)) {
+        .map(|d| {
+            Some(if placed.insert(groups.find(d.station)) {
                 DatumRole::Placement
             } else {
                 DatumRole::GpsFix
@@ -681,34 +731,20 @@ fn expected_roles(p: &Project) -> Vec<Option<DatumRole>> {
 }
 
 impl Chain {
-    /// Every per-state property. `step` is the forward step that led here and
-    /// the state it started from, for attributing a misplaced datum.
-    fn check_state(
-        &self,
-        p: &Project,
-        step: Option<(Option<&Op>, &Snap)>,
-        stats: &mut Stats,
-    ) -> Result<(), Failure> {
-        let raw = snap(p).raw;
-        for (at, &(x, y, z)) in &raw {
+    /// Every per-state property.
+    fn check_state(&self, p: &Project, stats: &mut Stats) -> Result<(), Failure> {
+        let raw = p.raw_positions();
+        for (s, [x, y, z]) in raw.iter() {
             if !(x.is_finite() && y.is_finite() && z.is_finite()) {
-                return Err(fail("nonfinite", format!("raw {at:?} at ({x}, {y}, {z})")));
+                return Err(fail(
+                    "nonfinite",
+                    format!("raw station {s} at ({x}, {y}, {z})"),
+                ));
             }
         }
-        let refs: Vec<Option<StationRef>> = p
-            .zero_datums
-            .iter()
-            .map(|zd| p.resolve_key(&zd.station_ref))
-            .collect();
-        for (i, zd) in p.zero_datums.iter().enumerate() {
-            if !(zd.gps.latitude.is_finite() && zd.gps.longitude.is_finite()) {
-                return Err(fail("nonfinite", format!("datum {i} GPS {:?}", zd.gps)));
-            }
-            if refs[i].is_some() && refs[..i].contains(&refs[i]) {
-                return Err(fail(
-                    "datum-twin-station",
-                    format!("datums at {:?}: {:?}", refs[i], p.zero_datums),
-                ));
+        for (i, d) in p.datums.iter().enumerate() {
+            if !(d.gps.latitude.is_finite() && d.gps.longitude.is_finite()) {
+                return Err(fail("nonfinite", format!("datum {i} GPS {:?}", d.gps)));
             }
         }
         let roles = p.datum_roles();
@@ -716,44 +752,84 @@ impl Chain {
         if roles != want {
             return Err(fail(
                 "roles",
-                format!("datum_roles {roles:?}, merges say {want:?}"),
+                format!("datum_roles {roles:?}, the chains say {want:?}"),
             ));
         }
-        let messages = self.state.integrity_check().messages;
-        if !messages.is_empty() {
-            return Err(fail("integrity", format!("{messages:?}")));
+        let violations = p.validate();
+        let messages = self.state.integrity_violation_messages();
+        if !violations.is_empty() || !messages.is_empty() {
+            return Err(fail(
+                "integrity",
+                format!("validate {violations:?}, integrity_violation_messages {messages:?}"),
+            ));
         }
-        self.check_placements(p, step)?;
+        for (i, (d, role)) in p.datums.iter().zip(&roles).enumerate() {
+            match (d.correction, role) {
+                (Some(c), Some(DatumRole::GpsFix)) => {
+                    return Err(fail(
+                        "correction",
+                        format!("GPS fix {i} carries the correction {c:?}"),
+                    ))
+                }
+                (Some(c), _)
+                    if !(c[0].is_finite() && c[1].is_finite())
+                        || c[0].hypot(c[1]) < CORRECTION_EPSILON_M =>
+                {
+                    return Err(fail(
+                        "correction",
+                        format!("datum {i} stores the correction {c:?}"),
+                    ))
+                }
+                _ => {}
+            }
+        }
+        stats.corrections = stats
+            .corrections
+            .max(p.datums.iter().filter(|d| d.correction.is_some()).count());
+        self.check_placements(p, &raw, &roles)?;
         self.check_computed(p, &raw, stats)
     }
 
-    /// Every placement datum on its GPS against the frame (module doc).
+    /// Every placement datum exactly at its anchor, and its correction (its
+    /// piece's distance from its own GPS) within what re-framing leaves.
     fn check_placements(
         &self,
         p: &Project,
-        step: Option<(Option<&Op>, &Snap)>,
+        raw: &RawPositions,
+        roles: &[Option<DatumRole>],
     ) -> Result<(), Failure> {
-        let Some(frame) = p.frame_datum() else {
+        let Some(frame_index) = p.frame_datum() else {
             return Ok(());
         };
+        let frame = p.datums[frame_index].gps;
         let tol = self.placement_tol();
-        for (zd, role) in p.zero_datums.iter().zip(p.datum_roles()) {
-            if role != Some(DatumRole::Placement) {
+        for (i, (d, role)) in p.datums.iter().zip(roles).enumerate() {
+            if *role != Some(DatumRole::Placement) {
                 continue;
             }
-            let Some(c) = p
-                .resolve_key(&zd.station_ref)
-                .and_then(|at| p.compute_station_raw_coords(at))
-            else {
+            let base = if i == frame_index {
+                [0.0, 0.0]
+            } else {
+                let (x, y) = gps_to_local(&d.gps, &frame);
+                [x, y]
+            };
+            let c = d.correction.unwrap_or([0.0, 0.0]);
+            let anchor = [base[0] + c[0], base[1] + c[1]];
+            let Some(at) = raw.xy(d.station) else {
                 continue;
             };
-            let (gx, gy) = gps_to_local(&zd.gps, &frame.gps);
-            let off = (c.x - gx).hypot(c.y - gy);
+            if !same(at[0], anchor[0]) || !same(at[1], anchor[1]) {
+                return Err(fail(
+                    "placement-off-anchor",
+                    format!(
+                        "datum {i} at station {} sits at {at:?}, its anchor is {anchor:?}",
+                        d.station
+                    ),
+                ));
+            }
+            let off = c[0].hypot(c[1]);
             if off > tol {
-                let mechanism = step.and_then(|(op, before)| placement_mechanism(op, before, p));
-                let class = if let Some(mechanism) = mechanism {
-                    mechanism
-                } else if zd.station_ref == frame.station_ref {
+                let class = if i == frame_index {
                     "frame-off-origin"
                 } else {
                     "placement-off-gps"
@@ -761,12 +837,9 @@ impl Chain {
                 return Err(fail(
                     class,
                     format!(
-                        "{:?} at ({}, {}), its GPS at ({gx}, {gy}): {off} m off (tolerance \
+                        "datum {i} at station {}: its piece sits {off} m off its GPS (tolerance \
                          {tol} after {} re-frames)",
-                        p.resolve_key(&zd.station_ref),
-                        c.x,
-                        c.y,
-                        self.reframes
+                        d.station, self.reframes
                     ),
                 ));
             }
@@ -775,66 +848,81 @@ impl Chain {
     }
 
     /// The Closures Computed View: finite; placement datums held; hard fixes
-    /// held on their GPS (`held_groups`); no depth moved by a fix.
+    /// held on their GPS; no depth moved by a fix.
     fn check_computed(
         &self,
         p: &Project,
-        raw: &BTreeMap<StationRef, (f64, f64, f64)>,
+        raw: &RawPositions,
         stats: &mut Stats,
     ) -> Result<(), Failure> {
         let view = solve(p);
-        for (at, &(x, y, z)) in &view.at {
+        let failed_station = |view: &View, s: StationId| {
+            p.topology()
+                .lines_of(s)
+                .iter()
+                .any(|l| view.failed.contains(l))
+        };
+        for (s, [x, y, z]) in &view.at {
             if !(x.is_finite() && y.is_finite() && z.is_finite()) {
                 return Err(fail(
                     "nonfinite",
-                    format!("computed {at:?} at ({x}, {y}, {z})"),
+                    format!("computed station {s} at ({x}, {y}, {z})"),
                 ));
             }
         }
-        if !p.gps_fix_datums().is_empty() {
+        let roles = p.datum_roles();
+        if roles.contains(&Some(DatumRole::GpsFix)) {
             let bare = solve(&without_fixes(p));
-            for (at, &(_, _, z)) in &view.at {
-                if view.failed.contains(&at.line_id) || bare.failed.contains(&at.line_id) {
+            for (s, [_, _, z]) in &view.at {
+                if failed_station(&view, *s) || failed_station(&bare, *s) {
                     continue;
                 }
-                let bz = bare.at[at].2;
-                if (z - bz).abs() > 1e-9 {
+                let bz = bare.at.get(s).map_or(f64::NAN, |v| v[2]);
+                if !same(*z, bz) {
                     return Err(fail(
                         "depth-moved",
-                        format!("computed {at:?} z {z} with the fixes, {bz} without"),
+                        format!("computed station {s} z {z} with the fixes, {bz} without"),
                     ));
                 }
             }
         }
-        for at in p.placement_datum_refs() {
-            if view.failed.contains(&at.line_id) {
+        for (d, role) in p.datums.iter().zip(&roles) {
+            if *role != Some(DatumRole::Placement) || failed_station(&view, d.station) {
                 continue;
             }
-            let (rx, ry, _) = raw[&at];
-            let (x, y, _) = view.at[&at];
-            if (x - rx).abs() > HELD_TOL_M || (y - ry).abs() > HELD_TOL_M {
+            let (Some(r), Some(c)) = (raw.xy(d.station), view.at.get(&d.station)) else {
+                continue;
+            };
+            if !same(r[0], c[0]) || !same(r[1], c[1]) {
                 return Err(fail(
                     "placement-moved-computed",
-                    format!("{at:?} raw ({rx}, {ry}), computed ({x}, {y})"),
+                    format!("station {} raw {r:?}, computed {c:?}", d.station),
                 ));
             }
         }
-        let (mut groups, held, fixes) = held_groups(p);
+        let (mut groups, held, fixes) = held_groups(p, raw);
         stats.held_fixes += fixes.len();
-        for (at, (gx, gy)) in fixes {
-            if view.failed.contains(&at.line_id) {
+        for (s, [gx, gy]) in fixes {
+            if failed_station(&view, s) {
                 continue;
             }
-            let (x, y, _) = view.at[&at];
-            if (x - gx).abs() > HELD_TOL_M || (y - gy).abs() > HELD_TOL_M {
-                let class = if component_all_held(p, &mut groups, &held, at.line_id) {
+            let Some(c) = view.at.get(&s) else {
+                continue;
+            };
+            if !same(c[0], gx) || !same(c[1], gy) {
+                let lines = component_lines(p, s);
+                let all_held = p.stations.keys().all(|t| {
+                    !p.topology().lines_of(*t).iter().any(|l| lines.contains(l))
+                        || held.contains(&groups.find(*t))
+                });
+                let class = if all_held {
                     "hard-fix-no-unknowns"
                 } else {
                     "hard-fix-off-gps"
                 };
                 return Err(fail(
                     class,
-                    format!("{at:?} computed ({x}, {y}), GPS ({gx}, {gy})"),
+                    format!("station {s} computed {c:?}, GPS ({gx}, {gy})"),
                 ));
             }
         }
@@ -842,112 +930,185 @@ impl Chain {
     }
 
     /// What one forward step may change: a datum command never moves a depth
-    /// (topology unchanged), storing or removing a fix never moves raw
-    /// geometry, and re-setting a placement datum moves it by its error at
-    /// most.
-    fn check_step(&self, op: &Op, p0: &Project, s0: &Snap, s1: &Snap) -> Result<(), Failure> {
-        let pairs = |s: &Snap| -> Vec<(StationRef, StationRef)> {
-            s.closures.iter().map(|c| (c.1, c.2)).collect()
-        };
-        let same_topology =
-            s0.lines == s1.lines && s0.merges == s1.merges && pairs(s0) == pairs(s1);
-        let moved_most = || -> f64 {
-            s0.raw
+    /// (topology unchanged); storing or removing a fix, and an accuracy-only
+    /// edit, never move raw geometry; a frame change translates the survey
+    /// rigidly (plan 4.3); removing a datum that held its piece alone moves
+    /// nothing.
+    fn check_step(
+        op: &Op,
+        p0: &Project,
+        s0: &Snap,
+        s1: &Snap,
+        stats: &mut Stats,
+    ) -> Result<(), Failure> {
+        let same_topology = s0.lines == s1.lines
+            && s0.junctions == s1.junctions
+            && s0
+                .closures
                 .iter()
-                .filter_map(|(at, &(x, y, _))| {
-                    let &(nx, ny, _) = s1.raw.get(at)?;
+                .map(|c| (c.1, c.2))
+                .eq(s1.closures.iter().map(|c| (c.1, c.2)));
+        let moved_most = || -> f64 {
+            s0.xyz
+                .iter()
+                .filter_map(|(s, [x, y, _])| {
+                    let [nx, ny, _] = s1.xyz.get(s)?;
                     Some((nx - x).hypot(ny - y))
                 })
                 .fold(0.0, f64::max)
         };
-        // The station the datum step targets, and the role it had before.
         let target = match op {
-            Op::Datum { at, .. } | Op::Twin { at, .. } => Some(*at),
-            Op::Accuracy { k, .. } | Op::Remove { k } => s0.datums.get(*k).and_then(|d| d.at),
+            Op::Datum { at, .. } | Op::Twin { at, .. } => station_at(p0, *at),
+            Op::Accuracy { k, .. } | Op::Remove { k } => s0.datums.get(*k).map(|d| d.station),
             _ => None,
         };
         let Some(target) = target else {
             return Ok(());
         };
         if same_topology {
-            for (at, &(_, _, z)) in &s0.raw {
-                if s1
-                    .raw
-                    .get(at)
-                    .is_some_and(|&(_, _, nz)| nz.to_bits() != z.to_bits())
-                {
+            for (s, [_, _, z]) in &s0.xyz {
+                if s1.xyz.get(s).is_some_and(|[_, _, nz]| !same(*nz, *z)) {
                     return Err(fail(
                         "depth-moved",
-                        format!("{op} moved {at:?} from z {z} to {:?}", s1.raw.get(at)),
+                        format!("{op} moved station {s} from z {z} to {:?}", s1.xyz.get(s)),
                     ));
                 }
             }
         }
-        let role_before = s0
-            .datums
-            .iter()
-            .find(|d| d.at == Some(target))
-            .and_then(|d| d.role);
-        let role_after = s1
-            .datums
-            .iter()
-            .find(|d| d.at == Some(target))
-            .and_then(|d| d.role);
-        let stores_fix = !matches!(op, Op::Remove { .. }) && role_after == Some(DatumRole::GpsFix);
-        let removes_fix = matches!(op, Op::Remove { .. })
-            && role_before == Some(DatumRole::GpsFix)
+        let role_on = |s: &Snap| {
+            s.datums
+                .iter()
+                .find(|d| d.station == target)
+                .map(|d| d.role)
+        };
+        let (role_before, role_after) = (role_on(s0).flatten(), role_on(s1).flatten());
+        let stores_fix = !matches!(op, Op::Remove { .. })
+            && role_after == Some(DatumRole::GpsFix)
+            && role_before != Some(DatumRole::Placement);
+        let removes_fix = matches!(op, Op::Remove { k } if s0.datums.get(*k).and_then(|d| d.role) == Some(DatumRole::GpsFix))
             && same_topology;
-        if stores_fix || removes_fix {
+        let accuracy_only = matches!(op, Op::Accuracy { .. });
+        if stores_fix || removes_fix || accuracy_only {
             let most = moved_most();
-            if most > EXACT_M {
+            if most > 0.0 {
                 return Err(fail(
                     "fix-moved-raw",
-                    format!("{op} on a GPS fix at {target:?} moved raw geometry by {most} m"),
+                    format!("{op} on station {target} moved raw geometry by {most} m"),
                 ));
             }
         }
-        if matches!(op, Op::Accuracy { .. }) && role_before == Some(DatumRole::Placement) {
-            let most = moved_most();
-            if most > self.placement_tol() + EXACT_M {
-                return Err(fail(
-                    "placement-off-gps",
-                    format!(
-                        "{op}: re-setting the placement datum at {target:?} with its own GPS \
-                         moved the survey by {most} m"
-                    ),
-                ));
+        if let Op::Remove { k } = op {
+            let frame_before = s0.datums.iter().position(|d| d.role.is_some());
+            let removed = s0.datums.get(*k);
+            let alone = removed.is_some_and(|r| {
+                let lines = component_lines(p0, r.station);
+                s0.datums.iter().enumerate().all(|(j, d)| {
+                    j == *k
+                        || !p0
+                            .topology()
+                            .lines_of(d.station)
+                            .iter()
+                            .any(|l| lines.contains(l))
+                })
+            });
+            // Only when the topology stays: a closure that was the sole tie
+            // to another placed piece is promoted by the sweep (plan 5.5),
+            // and then the piece legitimately moves onto the other.
+            if same_topology
+                && alone
+                && removed.is_some_and(|r| r.role == Some(DatumRole::Placement))
+            {
+                if frame_before == Some(*k) {
+                    // A frame change: one translation for every station, but
+                    // for the correction plan 4.3 does not store (module docs).
+                    let Some(shift) = FrameShift::of(p0, s0, s1) else {
+                        return Ok(());
+                    };
+                    let t = shift.translation;
+                    stats.left_out += shift.dropped.len();
+                    if let Some((station, d)) = shift.significant {
+                        return Err(fail(
+                            "frame-change-moved",
+                            format!(
+                                "{op}: the frame change left the placement datum at station \
+                                 {station} without its correction {d:?} (at least \
+                                 CORRECTION_EPSILON_M)"
+                            ),
+                        ));
+                    }
+                    let topology = p0.topology();
+                    for (u, [x, y, _]) in &s0.xyz {
+                        let Some([nx, ny, _]) = s1.xyz.get(u) else {
+                            continue;
+                        };
+                        let e = topology
+                            .component_of(*u)
+                            .and_then(|c| shift.dropped.get(&c))
+                            .copied()
+                            .unwrap_or(t);
+                        let off = (nx - x - e[0]).hypot(ny - y - e[1]);
+                        if off > EXACT_M {
+                            return Err(fail(
+                                "frame-change-moved",
+                                format!(
+                                    "{op}: station {u} moved {off} m from where the frame change \
+                                     puts it (translation {t:?}, its piece {e:?})"
+                                ),
+                            ));
+                        }
+                    }
+                    if let Some(new_frame) = s1.datums.iter().find(|d| d.role.is_some()) {
+                        if let Some([x, y, _]) = s1.xyz.get(&new_frame.station) {
+                            if x.hypot(*y) > EXACT_M && new_frame.correction.is_none() {
+                                return Err(fail(
+                                    "frame-change-moved",
+                                    format!(
+                                        "{op}: the new frame station {} is at ({x}, {y}), not \
+                                         the origin",
+                                        new_frame.station
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                    stats.rigid_reframes += 1;
+                } else {
+                    let most = moved_most();
+                    if most > EXACT_M {
+                        return Err(fail(
+                            "frame-change-moved",
+                            format!("{op}: removing a placement datum moved the survey {most} m"),
+                        ));
+                    }
+                }
             }
         }
-        let _ = p0;
         Ok(())
     }
 
-    /// Note a state change: re-frames and the GPS seen.
-    fn note(&mut self, prev: &Snap, now: &Project, stats: &mut Stats) {
-        let was = prev.datums.iter().find(|d| d.at.is_some()).map(|d| d.gps);
-        let is = now.frame_datum().map(|zd| gps_bits(&zd.gps));
-        if was.is_some() && is.is_some() && was != is {
+    /// Note a state change: re-frames, promotions and the GPS seen.
+    fn note(&mut self, prev: &Snap, now: &Snap, now_p: &Project, stats: &mut Stats) {
+        let frame = |s: &Snap| s.datums.iter().find(|d| d.role.is_some()).map(|d| d.gps);
+        if frame(prev).is_some() && frame(now).is_some() && frame(prev) != frame(now) {
             self.reframes += 1;
             stats.frame_changes += 1;
         }
-        let roles = now.datum_roles();
-        for (zd, role) in now.zero_datums.iter().zip(&roles) {
-            let was_fix = prev
-                .datums
-                .iter()
-                .any(|d| d.key == zd.station_ref && d.role == Some(DatumRole::GpsFix));
-            if was_fix && *role == Some(DatumRole::Placement) {
+        for d in &now.datums {
+            let was_fix = prev.datums.iter().any(|e| {
+                e.station == d.station && e.gps == d.gps && e.role == Some(DatumRole::GpsFix)
+            });
+            if was_fix && d.role == Some(DatumRole::Placement) {
                 stats.promotions += 1;
             }
         }
-        self.see_gps(now);
+        self.see_gps(now_p);
         stats.max_eps = stats.max_eps.max(self.eps);
     }
 
-    /// Count a forward step that gave the frame datum another GPS on its own
-    /// station while another placement datum placed a piece of its own (#769).
-    fn note_frame_gps_edit(prev: &Snap, now: &Project, stats: &mut Stats) {
-        let Some(was) = prev.datums.iter().find(|d| d.at.is_some()) else {
+    /// Count a step that gave the frame datum another GPS on its own station
+    /// while another placement datum placed a piece of its own (#769).
+    fn note_frame_gps_edit(prev: &Snap, now: &Snap, stats: &mut Stats) {
+        let Some(was) = prev.datums.iter().find(|d| d.role.is_some()) else {
             return;
         };
         let other_piece = prev
@@ -957,8 +1118,10 @@ impl Chain {
             .count()
             > 1;
         let edited = now
-            .frame_datum()
-            .is_some_and(|zd| zd.station_ref == was.key && gps_bits(&zd.gps)[..2] != was.gps[..2]);
+            .datums
+            .iter()
+            .find(|d| d.role.is_some())
+            .is_some_and(|d| d.station == was.station && d.gps[..2] != was.gps[..2]);
         if other_piece && edited {
             stats.frame_gps_edits += 1;
         }
@@ -968,7 +1131,6 @@ impl Chain {
         self.state.get_undo_stack().len()
     }
 
-    /// One step of the chain, checked.
     fn step(&mut self, op: &Op, stats: &mut Stats) -> Result<(), Failure> {
         stats.steps += 1;
         match op {
@@ -982,55 +1144,63 @@ impl Chain {
         let p0 = project(&self.state);
         let s0 = snap(&p0);
         let depth0 = self.undo_depth();
-        if let Applied::Refused(why) = apply(&self.state, &self.origin, op, &p0) {
-            stats.refused += 1;
-            self.say(&format!("  refused: {why}"));
-            let s1 = snap(&project(&self.state));
-            if let Some(d) = diff(&s0, &s1) {
-                return Err(fail(
-                    "refusal-mutated",
-                    format!("{op} refused ({why}): {d}"),
-                ));
+        match apply(&self.state, &self.origin, op, &p0) {
+            Applied::Skipped(why) => {
+                stats.skipped += 1;
+                self.say(&format!("  skipped: {why}"));
+                return Ok(());
             }
-            return Ok(());
+            Applied::Refused(why) => {
+                stats.refused += 1;
+                self.say(&format!("  refused: {why}"));
+                let s1 = snap(&project(&self.state));
+                if let Some(d) = diff(&s0, &s1, true) {
+                    return Err(fail(
+                        "refusal-mutated",
+                        format!("{op} refused ({why}): {d}"),
+                    ));
+                }
+                if s0.text != s1.text || self.undo_depth() != depth0 {
+                    return Err(fail(
+                        "refusal-mutated",
+                        format!("{op} refused ({why}) but changed the counters or the history"),
+                    ));
+                }
+                return Ok(());
+            }
+            Applied::Done => {}
         }
+        let name = op.to_string();
         *stats
             .applied
-            .entry(op.to_string().split('(').next().map_or("?", |n| match n {
-                "datum" => "datum",
-                "twin" => "twin",
-                "acc" => "acc",
-                "rm" => "rm",
-                "merge" => "merge",
-                "unmerge" => "unmerge",
-                "closure" => "closure",
-                "split" => "split",
-                "combine" => "combine",
-                "delsec" => "delsec",
-                "delshot" => "delshot",
-                _ => "addshot",
-            }))
+            .entry(name.split('(').next().unwrap_or("?").to_string())
             .or_default() += 1;
         if let Op::Merge { a, b } = op {
-            let placed: HashSet<LineId> = p0
-                .placement_datum_refs()
-                .into_iter()
-                .flat_map(|sr| p0.get_merged_line_ids(sr.line_id))
-                .collect();
-            if placed.contains(&a.line_id) && placed.contains(&b.line_id) {
+            let placed_component = |at: &StationRef| {
+                station_at(&p0, *at).is_some_and(|s| {
+                    let lines = component_lines(&p0, s);
+                    p0.datums.iter().any(|d| {
+                        p0.topology()
+                            .lines_of(d.station)
+                            .iter()
+                            .any(|l| lines.contains(l))
+                    })
+                })
+            };
+            if placed_component(a) && placed_component(b) {
                 stats.placed_merges += 1;
             }
         }
         let p1 = project(&self.state);
         let s1 = snap(&p1);
-        Self::note_frame_gps_edit(&s0, &p1, stats);
-        self.note(&s0, &p1, stats);
+        Self::note_frame_gps_edit(&s0, &s1, stats);
+        self.note(&s0, &s1, &p1, stats);
         self.show(&p1);
-        self.check_step(op, &p0, &s0, &s1)?;
-        self.check_state(&p1, Some((Some(op), &s0)), stats)?;
+        Self::check_step(op, &p0, &s0, &s1, stats)?;
+        self.check_state(&p1, stats)?;
         let depth1 = self.undo_depth();
         if depth1 != depth0 + 1 {
-            if let Some(d) = diff(&s0, &s1) {
+            if let Some(d) = diff(&s0, &s1, true) {
                 return Err(fail(
                     "undo-inexact",
                     format!("{op} changed the project but the undo depth went {depth0} -> {depth1}: {d}"),
@@ -1039,7 +1209,7 @@ impl Chain {
             self.timeline.truncate(self.cursor + 1);
             return Ok(());
         }
-        // Undo it at once, then redo it.
+        // Undo it at once, then redo it: both to the bit, session ids too.
         let r = self.state.undo();
         if !r.success {
             return Err(fail(
@@ -1047,7 +1217,7 @@ impl Chain {
                 format!("undo of {op} refused: {:?}", r.error),
             ));
         }
-        if let Some(d) = diff(&s0, &snap(&project(&self.state))) {
+        if let Some(d) = diff(&s0, &snap(&project(&self.state)), true) {
             return Err(fail("undo-inexact", format!("undo of {op}: {d}")));
         }
         let r = self.state.redo();
@@ -1057,7 +1227,7 @@ impl Chain {
                 format!("redo of {op} refused: {:?}", r.error),
             ));
         }
-        if let Some(d) = diff(&s1, &snap(&project(&self.state))) {
+        if let Some(d) = diff(&s1, &snap(&project(&self.state)), true) {
             return Err(fail("redo-inexact", format!("redo of {op}: {d}")));
         }
         self.reopened_at = self.reopened_at.min(self.cursor + 1);
@@ -1069,8 +1239,6 @@ impl Chain {
 
     /// A random undo or redo, against the state recorded at that depth.
     fn history(&mut self, undo: bool, stats: &mut Stats) -> Result<(), Failure> {
-        // Past the persisted window (a replayed script can ask): the app has
-        // nothing to undo there, so the step must be refused and change nothing.
         if undo && self.cursor <= self.floor {
             if self.floor == 0 {
                 return Ok(());
@@ -1086,7 +1254,7 @@ impl Chain {
                     ),
                 ));
             }
-            if let Some(d) = diff(&prev, &snap(&project(&self.state))) {
+            if let Some(d) = diff(&prev, &snap(&project(&self.state)), true) {
                 return Err(fail("refusal-mutated", format!("a refused undo: {d}")));
             }
             return Ok(());
@@ -1096,8 +1264,7 @@ impl Chain {
         } else {
             (self.cursor + 1, "redo-inexact")
         };
-        let class = if target < self.reopened_at && self.reopened_at > 0 && class == "undo-inexact"
-        {
+        let class = if target < self.reopened_at && class == "undo-inexact" {
             "undo-across-reopen"
         } else {
             class
@@ -1113,16 +1280,24 @@ impl Chain {
         }
         let p = project(&self.state);
         let now = snap(&p);
-        if let Some(d) = diff(&self.timeline[target], &now) {
+        // Session ids are exact only for entries recorded in this session,
+        // and then only on lines no step outside it gave other ids (module
+        // docs, `undo-inexact`).
+        let in_session = target >= self.reopened_at && self.cursor >= self.reopened_at;
+        let ids = in_session.then_some(&self.reminted);
+        if let Some(d) = diff_except(&self.timeline[target], &now, ids) {
             return Err(fail(class, d));
         }
+        if !in_session {
+            self.reminted.extend(lines_with_other_ids(&prev, &now));
+        }
         self.cursor = target;
-        self.note(&prev, &p, stats);
+        self.note(&prev, &now, &p, stats);
         self.show(&p);
-        self.check_state(&p, None, stats)
+        self.check_state(&p, stats)
     }
 
-    /// Save, close and reopen: nothing may change.
+    /// Save, close and reopen: nothing may change, to the bit.
     fn reopen(&mut self, stats: &mut Stats) -> Result<(), Failure> {
         let p0 = project(&self.state);
         let s0 = snap(&p0);
@@ -1143,7 +1318,9 @@ impl Chain {
                 format!("close refused: {:?}", closed.error),
             ));
         }
-        let opened = self.state.open_project(self.path.clone());
+        let opened = self.state.execute(Command::OpenProject {
+            path: self.path.clone(),
+        });
         if !opened.success {
             return Err(fail(
                 "reopen-drift",
@@ -1152,57 +1329,52 @@ impl Chain {
         }
         let p1 = project(&self.state);
         let s1 = snap(&p1);
-        if let Some(d) = diff(&s0, &s1) {
-            let class = if s0
-                .datums
-                .iter()
-                .enumerate()
-                .any(|(i, d)| d.at.is_some() && s0.datums[..i].iter().any(|e| e.at == d.at))
-            {
-                "datum-twin-station"
-            } else {
-                "reopen-drift"
-            };
-            return Err(fail(class, d));
+        if s0.text != s1.text {
+            return Err(fail(
+                "reopen-drift",
+                same_up_to_counters(&s0.text, &s1.text).unwrap_or_else(|| "counters".to_string()),
+            ));
+        }
+        if s0.xyz.iter().ne(s1.xyz.iter()) {
+            return Err(fail("reopen-drift", "the raw layout changed".to_string()));
         }
         let v1 = solve(&p1);
-        for (at, &(x, y, z)) in &v0.at {
-            let Some(&(nx, ny, nz)) = v1.at.get(at) else {
-                return Err(fail("reopen-drift", format!("computed {at:?} is gone")));
-            };
-            if (nx - x).abs() > 1e-6 || (ny - y).abs() > 1e-6 || (nz - z).abs() > 1e-6 {
+        for (s, a) in &v0.at {
+            let b = v1.at.get(s);
+            if b.is_none_or(|b| a.iter().zip(b).any(|(x, y)| x.to_bits() != y.to_bits())) {
                 return Err(fail(
                     "reopen-drift",
-                    format!("computed {at:?} ({x}, {y}, {z}) -> ({nx}, {ny}, {nz})"),
+                    format!("computed station {s} {a:?} -> {b:?}"),
                 ));
             }
         }
         self.reopened_at = self.timeline.len();
-        // The save kept the persisted window of each stack and nothing more:
-        // the newest PERSIST_WINDOW entries below the cursor and above it.
-        self.floor = self.floor.max(self.cursor.saturating_sub(PERSIST_WINDOW));
-        let top = (self.cursor + PERSIST_WINDOW).min(self.timeline.len() - 1);
+        // Every line has fresh session ids now, and the session's own entries
+        // start from them.
+        self.reminted.clear();
+        self.floor = self.floor.max(self.cursor.saturating_sub(self.window));
+        let top = (self.cursor + self.window).min(self.timeline.len() - 1);
         self.timeline.truncate(top + 1);
         stats.reopens += 1;
-        self.note(&s0, &p1, stats);
-        self.check_state(&p1, None, stats)
+        self.note(&s0, &s1, &p1, stats);
+        self.check_state(&p1, stats)
     }
 
-    /// In a replay, the datums after a step: role, station, and how far from
-    /// its GPS the raw survey puts it.
+    /// In a replay, the datums after a step: role, station, correction, and
+    /// where the raw survey puts the station.
     fn show(&self, p: &Project) {
         if !self.verbose {
             return;
         }
-        let frame = p.frame_datum().map(|zd| zd.gps);
-        for (zd, role) in p.zero_datums.iter().zip(p.datum_roles()) {
-            let at = p.resolve_key(&zd.station_ref);
-            let raw = at.and_then(|a| p.compute_station_raw_coords(a));
-            let gps = frame.map(|f| gps_to_local(&zd.gps, &f));
+        let raw = p.raw_positions();
+        for (d, role) in p.datums.iter().zip(p.datum_roles()) {
             eprintln!(
-                "    {role:?} at {at:?} accuracy {:?}: raw {:?}, GPS {gps:?}",
-                zd.accuracy_m,
-                raw.map(|c| (c.x, c.y, c.z))
+                "    {role:?} at station {} via {:?} accuracy {:?} correction {:?}: raw {:?}",
+                d.station,
+                d.via,
+                d.accuracy_m,
+                d.correction,
+                raw.xy(d.station)
             );
         }
     }
@@ -1212,8 +1384,6 @@ impl Chain {
 // Running chains
 // ---------------------------------------------------------------------------
 
-/// Run chain `seed`: its setup, then `script` or `steps` random steps.
-/// `trail` holds the steps run so far, for the failure message.
 fn run_chain(
     seed: u64,
     steps: u64,
@@ -1226,16 +1396,20 @@ fn run_chain(
     for op in &setup {
         let p = project(&chain.state);
         chain.say(&format!("setup {op}"));
-        if let Applied::Refused(why) = apply(&chain.state, &chain.origin, op, &p) {
-            chain.say(&format!("  refused: {why}"));
-            continue;
+        match apply(&chain.state, &chain.origin, op, &p) {
+            Applied::Refused(why) | Applied::Skipped(why) => {
+                chain.say(&format!("  refused: {why}"));
+                continue;
+            }
+            Applied::Done => {}
         }
         let p1 = project(&chain.state);
-        Chain::note_frame_gps_edit(&snap(&p), &p1, stats);
-        chain.note(&snap(&p), &p1, stats);
+        let (s0, s1) = (snap(&p), snap(&p1));
+        Chain::note_frame_gps_edit(&s0, &s1, stats);
+        chain.note(&s0, &s1, &p1, stats);
         chain.show(&p1);
-        chain
-            .check_state(&p1, Some((Some(op), &snap(&p))), stats)
+        Chain::check_step(op, &p, &s0, &s1, stats)
+            .and_then(|()| chain.check_state(&p1, stats))
             .map_err(|f| Failure {
                 class: f.class,
                 detail: format!("in the setup, after {op}: {}", f.detail),
@@ -1243,10 +1417,7 @@ fn run_chain(
     }
     chain.timeline = vec![snap(&project(&chain.state))];
     let mut rng = Rng::new(seed ^ 0xD1B5_4A32_D192_ED03);
-    let script: Vec<Op> = match script {
-        Some(ops) => ops.to_vec(),
-        None => Vec::new(),
-    };
+    let script: Vec<Op> = script.map(<[Op]>::to_vec).unwrap_or_default();
     let total = if script.is_empty() {
         steps as usize
     } else {
@@ -1257,9 +1428,6 @@ fn run_chain(
             op.clone()
         } else {
             let p = project(&chain.state);
-            // `floor`, not 0: after a reopen that trimmed, the entries below
-            // the persisted window are gone, and asking for one would report
-            // the app's correct refusal as an undo failure.
             let (can_undo, can_redo) = (
                 chain.cursor > chain.floor,
                 chain.cursor + 1 < chain.timeline.len(),
@@ -1321,10 +1489,11 @@ fn chain_outcome(
     ))
 }
 
-/// Random chains of datum, merge, split, combine, delete, add, undo, redo
-/// and reopen steps keep every invariant in the module doc.
+/// Random chains of datum, merge, detach, split, combine, delete, add, move,
+/// undo, redo and reopen steps keep every invariant in the module doc.
 #[test]
 fn datum_command_chains_keep_every_invariant() {
+    let _config = crate::test_helpers::isolated_config();
     let seeds = env_u64("STALAGMIGHT_DATUM_FUZZ_SEEDS", 40);
     let first = env_u64("STALAGMIGHT_DATUM_FUZZ_FIRST_SEED", 0);
     let steps = env_u64("STALAGMIGHT_DATUM_FUZZ_STEPS", 12);
@@ -1341,19 +1510,24 @@ fn datum_command_chains_keep_every_invariant() {
     }
     eprintln!(
         "datum fuzz seeds {first}..{} x {steps} steps: {} steps, applied {:?}, {} refused, {} \
-         merges of two placed pieces, {} reopens, {} re-frames, {} frame GPS edits with \
-         another placed piece, {} promotions, {} hard fixes held, largest re-frame \
-         discrepancy {:.3e} m, muted {:?} (mute list {mute:?})",
+         skipped, {} merges of two placed pieces, {} reopens, {} re-frames ({} rigid, {} \
+         pieces left without a correction below 1e-9 m), {} frame GPS edits with another \
+         placed piece, {} promotions, {} hard fixes held, at most {} stored corrections, \
+         largest re-frame discrepancy {:.3e} m, muted {:?} (mute list {mute:?})",
         first + seeds,
         stats.steps,
         stats.applied,
         stats.refused,
+        stats.skipped,
         stats.placed_merges,
         stats.reopens,
         stats.frame_changes,
+        stats.rigid_reframes,
+        stats.left_out,
         stats.frame_gps_edits,
         stats.promotions,
         stats.held_fixes,
+        stats.corrections,
         stats.max_eps,
         stats.muted
     );
@@ -1367,6 +1541,11 @@ fn datum_command_chains_keep_every_invariant() {
             stats.frame_gps_edits > 0,
             "no frame GPS edit with another placed piece"
         );
+        assert!(
+            stats.frame_changes > 0 && stats.rigid_reframes > 0,
+            "no frame change, or none of the rigid kind"
+        );
+        assert!(stats.corrections > 0, "no datum ever stored a correction");
     }
     assert!(
         failed.is_empty(),
@@ -1376,8 +1555,10 @@ fn datum_command_chains_keep_every_invariant() {
     );
 }
 
-/// Chains the farm or a local sweep once failed on, replayed on every run so
-/// the fixed mechanism stays fixed (format: `STALAGMIGHT_DATUM_FUZZ_REPLAY`).
+/// Chains the farm or a local sweep once failed on (on the SQLite build),
+/// replayed on every run: they are mechanism-rich trails (re-keyed twins,
+/// frame GPS edits, promotions after combines), and on the station graph
+/// they must keep every invariant too (format: `STALAGMIGHT_DATUM_FUZZ_REPLAY`).
 const PINNED_CHAINS: &[&str] = &[
     // datum-key-reused: Delete Shot re-anchors a fix onto the removed datum's key.
     "54;delshot(1,0)",
@@ -1385,22 +1566,15 @@ const PINNED_CHAINS: &[&str] = &[
     "701;twin(0:3,1,0.0);rm(0)",
     // datum-key-reused with a twin GPS: only the station position tells them apart.
     "1138;merge(0:1,1:4);acc(0,-);unmerge(2:2,3:1);delsec(1);combine(3:start,4:start);delsec(2);acc(0,-);split(3,2,b);datum(3:1,20.953755677079684,-16.914921358435627,5.0);merge(5:0,0:1);datum(5:0,16.04357755301331,-1.7832103357017155,0.5);merge(5:0,0:3);addshot(0,-1,44.39334284186008,6.11431610947411,1.0519934908613826,0.0);merge(0:2,3:1);reopen;twin(5:1,2,1000.0);split(0,1,b);unmerge(5:0,6:1);unmerge(6:1,3:1);rm(0);delshot(5,0)",
-    // promoted-twin-gps after a combine that re-keys and moves both twins: only
-    // the stored accuracy tells them apart.
+    // promoted-twin-gps after a combine that re-keys and moves both twins.
     "1026755;closure(3:2,3:3);acc(0,1000.0);undo;closure(4:1,0:0);split(3,2,a);twin(5:0,1,-);acc(0,0.0);closure(2:2,1:2);addshot(5,0,83.26639828096893,9.85053026440123,28.642278304656077,28.880991248958054);unmerge(0:0,3:0);unmerge(1:0,2:1);addshot(6,-1,255.74044991586703,19.905929536886184,1.2756380852736882,0.0);datum(4:3,24.901653430245844,29.355911207344825,0.0);merge(0:0,2:1);rm(2);datum(1:2,-45.864378812639124,11.359789645079355,50.0);combine(5:start,4:start)",
-    // datum-key-reused: a combine re-keys a placement datum onto the key of
-    // its twin fix (one GPS, another accuracy), which becomes the placement:
-    // only the stored accuracy shows the fix's old key is gone.
+    // datum-key-reused: a combine re-keys a placement datum onto its twin fix.
     "50028990;split(4,2,b);acc(0,0.0);datum(3:4,-10.355085626613327,-38.63552075781107,1000.0);datum(2:2,45.046864107381886,43.49016961757878,50.0);addshot(0,end,241.82506602311437,12.181044570237113,10.15784749770614,6.664029904480876);datum(3:3,-28.281957111543417,-33.37293276249461,0.5);reopen;unmerge(0:0,1:0);undo;split(0,1,b);acc(3,50.0);datum(5:0,0.0,0.0,50.0);reopen;undo;delshot(3,4);acc(2,-);undo;twin(4:0,1,5.0);closure(4:2,6:0);merge(4:2,3:0);reopen;combine(0:start,2:start);twin(5:1,4,0.5);datum(0:3,-18.54270846695945,37.349707765143265,0.5);split(1,1,b);closure(3:0,3:0);undo;undo;rm(0);datum(0:0,-70.10296390335284,-51.46255498275887,5.0);undo;datum(6:0,11.025626281126955,2.450822161617217,50.0);closure(4:1,0:4);datum(4:2,27.224552254542683,-43.394823892024185,5.0);closure(4:0,5:0);addshot(6,0,93.8038739660679,10.717179406412239,28.31985522332138,25.400500444955643);merge(3:3,0:4);twin(3:0,5,1000.0);rm(0);combine(4:start,5:start)",
-    // datum-key-reused: a combine re-keys a fix onto the key of its twin
-    // placement datum (one GPS, another accuracy) and the fix becomes the
-    // placement: only the stored accuracy says the twin is not the fix.
+    // datum-key-reused: a combine re-keys a fix onto its twin placement datum.
     "1294806;unmerge(0:1,2:1);reopen;datum(1:0,25.650794071477637,-73.60666169426631,50.0);merge(1:0,3:1);datum(3:3,0.0,0.0,5.0);datum(2:0,19.994246212841716,-36.50338157646604,-);rm(4);twin(2:0,0,-);merge(1:0,3:5);unmerge(1:0,3:1);addshot(3,1,169.26310033886833,19.806523673505293,9.60276030515832,6.003958612032227);rm(0);twin(3:0,3,0.0);split(3,5,a);combine(4:start,3:end);acc(0,-);split(4,5,b);datum(4:2,33.880412148064,5.378012870132235,0.5);undo;delshot(1,0);undo;datum(4:1,-73.71064559461756,42.86751369073772,5.0);datum(5:1,0.27217256649528937,5.768254987005169,-);split(4,2,b);combine(4:start,2:end)",
-    // datum-key-reused (#778): a combine re-keys two twins with one GPS and
-    // one stored accuracy, and the fix becomes the placement datum: nothing
-    // stored tells them apart, only their order in the list.
+    // datum-key-reused (#778): a combine re-keys two twins with one GPS and accuracy.
     "50081590;unmerge(0:3,1:3);delshot(0,4);datum(1:0,13.24267146086881,-20.05368604646883,-);merge(1:4,1:0);acc(0,0.0);addshot(2,1,17.866115572604944,5.9032088746755855,19.265457069394493,22.74353247521857);split(1,3,b);merge(3:1,1:1);datum(1:2,55.9977495443496,-7.523486185277852,5.0);rm(1);undo;addshot(2,end,311.70366481862885,15.752435002361782,27.23354170456898,31.112966696965994);rm(0);twin(2:4,2,-);undo;datum(3:0,33.266388411108196,84.2336720198981,50.0);datum(2:4,-14.858293515230148,-16.521479181272248,0.5);twin(3:0,5,0.5);datum(2:0,-80.11672339036002,28.213635258484583,5.0);twin(0:0,5,0.5);delsec(2);datum(0:3,-91.83940601821898,-14.350035526455445,0.0);datum(0:0,-16.779784327958737,-51.68504678474291,0.0);undo;closure(3:0,0:4);addshot(3,0,30.355090231295016,13.560162195854868,27.178394127517052,30.28326879909831);reopen;undo;undo;redo;combine(3:start,0:end)",
-    // datum-twin-station: Combine joining two datum stations is refused.
+    // datum-twin-station: Combine joining two datum stations (refused then).
     "350;combine(0:start,3:start)",
     // hard-fix-no-unknowns: every group held, the hard fix still applied.
     "112",
@@ -1408,16 +1582,24 @@ const PINNED_CHAINS: &[&str] = &[
     // datum places a piece of its own (#769).
     "11",
     // frame-gps-edit (#778): the frame takes the GPS and accuracy of a fix on
-    // its spot, on a piece the frame correction moves: the frame datum looks
-    // like that fix re-keyed where it stands, and pairing them dropped every
-    // datum in between, so the frame was placed again and every piece moved
-    // twice.
+    // its spot, on a piece the frame correction moves.
     "1436150;twin(3:0,0,-);datum(2:1,-28.76717640316142,44.73562740619891,5.0);acc(0,0.5);acc(0,5.0);datum(2:0,73.16789539354458,-38.58700483932714,-);twin(4:3,1,-);merge(3:0,2:0);datum(4:4,25.196609454458898,59.09807127063376,5.0);delshot(1,0);unmerge(0:1,4:2);acc(5,0.5);twin(0:1,3,-)",
     "50124619;delsec(4);acc(0,50.0);delshot(3,1);reopen;undo;reopen;datum(1:0,-21.964371565441986,48.867914065325635,0.5);datum(2:3,-19.025474508692568,96.3596903811504,-);delshot(2,1);rm(1);split(1,1,b);datum(3:0,37.86557792113264,57.57345304260396,1000.0);merge(3:2,2:2);combine(4:start,1:end);unmerge(4:0,3:2);rm(0);rm(0);merge(3:0,2:1);combine(3:end,2:end);twin(3:3,0,0.5);acc(0,50.0);merge(3:2,4:2);split(4,1,b);datum(0:1,-0.10493873460938649,-0.2260835289914435,0.0);merge(0:0,3:2);unmerge(3:2,5:1);delshot(0,0);merge(3:1,0:0);closure(3:2,5:0);unmerge(3:1,0:0);combine(5:start,4:end);delsec(5);reopen;merge(0:0,3:3);split(3,2,b);acc(0,1000.0);closure(0:0,4:2);datum(4:0,-79.63158641198679,38.92858175150428,1000.0);merge(3:1,3:2);twin(3:0,2,0.0)",
+    // frame-change-moved on the station graph (farm, oracle): removing the frame
+    // datum leaves two pieces each without a sub-nanometre correction, in
+    // opposite directions (plan 4.3 stores none below 1e-9 m).
+    "21238760;split(3,1,b);acc(2,5.0);moveline(2,1.8246132930839778,-13.38302855755132);unmerge(5:1,1:0);datum(1:2,14.217829524963243,-9.461795310957076,1000.0);rm(0)",
+    "21260685;datum(3:0,-16.355543176609316,78.92206613528182,1000.0);acc(0,5.0);delshot(0,0);split(2,1,b);unmerge(1:0,2:0);moveline(4,26.04585141602501,14.674815921793368);combine(5:start,4:start);split(5,2,a);datum(6:0,0.0,0.0,-);datum(3:0,31.898860599661177,-70.97837958220417,0.0);acc(0,0.0);reopen;unmerge(2:1,6:0);reopen;merge(6:1,1:0);undo;datum(7:1,-65.96044246884357,3.9058934490597577,-);combine(6:start,2:end);datum(0:0,27.334059779507164,-3.8010410996787267,50.0);unmerge(7:0,5:2);rm(1);rm(0)",
+    "21358582;moveline(1,23.989596697205286,26.100220720043716);unmerge(1:0,2:0);datum(0:0,9.714314800746084,38.384866351878635,1000.0);closure(0:2,2:1);merge(0:0,0:2);merge(1:1,0:2);undo;datum(2:1,17.18433301182218,3.726026499187079,5.0);reopen;split(0,1,a);unmerge(0:1,3:0);datum(1:0,-48.59961271192891,-24.291198771012326,50.0);datum(3:0,81.28491702858402,47.94156485999375,1000.0);undo;rm(0)",
+    "21386535;split(2,1,a);rm(0);undo;undo;reopen;datum(2:0,13.31702378387722,-0.5722510361117945,0.5);merge(4:3,3:1);split(0,3,a);datum(1:0,-32.506745580926584,-6.978230786834713,0.0);datum(0:1,30.569865475122697,15.449040364770058,50.0);datum(4:3,9.12996580959162,24.224460584936992,50.0);undo;acc(3,0.0);delshot(0,0);closure(1:4,1:5);unmerge(4:3,3:0);closure(5:1,4:2);split(0,1,a);undo;addshot(1,-1,328.0116178584927,11.925847705520932,5.629544100772953,12.687782760455642);datum(5:0,0.0,0.0,-);rm(5);unmerge(0:1,2:0);rm(0)",
+    // undo-inexact (farm, oracle): a decoded redo of a combine gives two shots
+    // fresh session ids after a reopen; the undo of the next step restores those.
+    "21388232;merge(1:0,2:1);closure(2:2,3:2);merge(1:1,4:2);merge(2:0,2:0);rm(0);addshot(0,-1,311.48096417379907,16.54140333133441,14.315794202913873,13.179313529669974);datum(3:3,28.615889006448004,76.90656890111846,1000.0);acc(1,50.0);datum(2:0,0.0,0.0,50.0);unmerge(1:1,4:2);unmerge(3:0,1:0);combine(3:start,1:start);reopen;datum(4:2,22.920860699933062,-1.7866806091210328,0.0);undo;undo;redo;redo;unmerge(3:2,2:1);undo",
 ];
 
 #[test]
 fn pinned_datum_chains_keep_every_invariant() {
+    let _config = crate::test_helpers::isolated_config();
     for spec in PINNED_CHAINS {
         let mut parts = spec.split(';').filter(|s| !s.trim().is_empty());
         let seed: u64 = parts.next().unwrap().trim().parse().unwrap();
@@ -1429,15 +1611,13 @@ fn pinned_datum_chains_keep_every_invariant() {
     }
 }
 
-/// A reopen keeps only the persisted window of each stack, and the chain's
-/// undo guard has to know it. Twenty-four accuracy edits, a reopen, then
-/// twenty-four undos: the first twenty land on recorded states, and the rest
-/// ask for entries the save did not keep - which the app refuses, correctly.
-/// The guard used to allow an undo whenever the cursor was above 0, so a
-/// replayed (or a long random) chain reported that refusal as
-/// `undo-across-reopen`.
+/// A reopen keeps the persisted window of the history (the newest
+/// `undo_persist_limit` entries, 20 by default, as 0.6.0 saved it): 24
+/// accuracy edits, a reopen, then 24 undos. The first 20 land on their
+/// recorded states; the rest are refused and change nothing.
 #[test]
-fn a_trimmed_reopen_bounds_the_undo_guard() {
+fn a_reopen_keeps_the_history_and_bounds_the_undo_guard() {
+    let _config = crate::test_helpers::isolated_config();
     let mut ops: Vec<Op> = (0..24)
         .map(|i| Op::Accuracy {
             k: 0,
@@ -1451,6 +1631,11 @@ fn a_trimmed_reopen_bounds_the_undo_guard() {
         panic!("{e}");
     }
     assert_eq!(stats.reopens, 1, "the chain reopened once");
+    assert!(
+        stats.applied.get("acc").copied().unwrap_or(0) >= 20,
+        "the accuracy edits ran: {:?}",
+        stats.applied
+    );
 }
 
 /// Replay one chain from its trail, printing each step and the datums after
@@ -1458,6 +1643,7 @@ fn a_trimmed_reopen_bounds_the_undo_guard() {
 #[test]
 #[ignore = "replays one chain: STALAGMIGHT_DATUM_FUZZ_REPLAY=\"seed;op;op;...\""]
 fn replay_a_datum_chain() {
+    let _config = crate::test_helpers::isolated_config();
     let spec = std::env::var("STALAGMIGHT_DATUM_FUZZ_REPLAY").unwrap();
     let mut parts = spec.split(';').filter(|s| !s.trim().is_empty());
     let seed: u64 = parts.next().unwrap().trim().parse().unwrap();

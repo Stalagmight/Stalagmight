@@ -4,15 +4,16 @@ use super::{
     cache, config, export, history, import, line, project, raw_data, shot, station, validation,
 };
 use crate::core::{AppState, Command, CommandResult};
+use crate::models::survey::{self, LineMeta, Project, StartAt, ZeroDatum};
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, LineData, LineUpdates, Project, ShotData,
-    ShotKind, ShotUpdates, StationRef, SurveyDirection,
+    ClosureStrategy, Coordinates, GpsCoordinates, LineId, LineUpdates, ShotData, ShotKind,
+    ShotUpdates, StationRef, SurveyDirection,
 };
-use crate::persistence::Database;
+use crate::persistence::stalx_v2::{self, Extras, Mode};
 use crate::test_helpers::TestDb;
 use chrono::NaiveDate;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{env, fs};
 use tauri::test::{mock_app, MockRuntime};
 use tauri::{Manager, State};
@@ -125,12 +126,9 @@ fn create_project(app: &tauri::App<MockRuntime>) {
 }
 
 /// Test read-back helper; replaces the retired get_line IPC command (#275).
-fn get_line(
-    state: State<'_, AppState>,
-    line_id: crate::models::LineId,
-) -> Option<crate::models::Line> {
+fn get_line(state: State<'_, AppState>, line_id: LineId) -> Option<survey::Line> {
     let project = state.get_project_state()?;
-    project.get_line(line_id).cloned()
+    project.line(line_id).cloned()
 }
 
 /// Test helper; replaces the retired open_project IPC command (#275). Calls
@@ -149,7 +147,7 @@ fn create_line_with_shots(app: &tauri::App<MockRuntime>, shots: Vec<ShotData>) -
     // first line is "Line A", later ones "Line A2", "Line A3", ...
     let taken = state(app)
         .get_project_state()
-        .map_or(0, |project| project.lines.len());
+        .map_or(0, |project| project.lines().len());
     let name = if taken == 0 {
         "Line A".to_string()
     } else {
@@ -169,18 +167,77 @@ fn create_line_with_shots(app: &tauri::App<MockRuntime>, shots: Vec<ShotData>) -
     result.line_id.expect("line id")
 }
 
-fn project_with_line(shots: Vec<ShotData>) -> Project {
-    let mut project = Project::new("Test Cave".to_string(), None);
-    project.add_line(LineData {
-        name: Some("Line A".to_string()),
-        surveyor: None,
-        date: None,
+/// Line metadata for a synthetic line called `name`.
+fn meta(name: &str) -> LineMeta {
+    LineMeta {
+        name: Some(name.to_string()),
         color: "#4ecdc4".to_string(),
-        direction: None,
-        quality: 1.0,
-        shots,
-    });
+        ..LineMeta::default()
+    }
+}
+
+/// Add a free line (a new piece) placed with its start at local `(x, 0)`.
+fn add_free_line(
+    project: &mut Project,
+    line_meta: LineMeta,
+    shots: Vec<ShotData>,
+    x: f64,
+) -> LineId {
+    let id = project
+        .add_line(line_meta, StartAt::New, shots)
+        .expect("add line");
+    let start = project.line(id).expect("line").start;
+    project.set_placement(start, x, 0.0).expect("placement");
+    id
+}
+
+/// The station at `index` along `line`.
+fn station_of(project: &Project, line: LineId, index: u32) -> crate::models::StationId {
     project
+        .station_at(StationRef::new(line, index))
+        .expect("station on the line")
+}
+
+fn project_with_line(shots: Vec<ShotData>) -> Project {
+    let mut project = Project::new("Test Cave", None);
+    add_free_line(&mut project, meta("Line A"), shots, 0.0);
+    assert!(project.validate().is_empty(), "{:?}", project.validate());
+    project
+}
+
+/// Put a datum at `gps` on `line`'s station `index`, attached via that line.
+fn push_datum_at(project: &mut Project, line: LineId, index: u32, gps: GpsCoordinates) {
+    let station = station_of(project, line, index);
+    project.push_datum(ZeroDatum {
+        via: Some(line),
+        ..ZeroDatum::new(station, gps)
+    });
+}
+
+/// The earliest survey date of `line`'s shots (0.6.0's `first_survey_date`).
+fn first_survey_date(line: &survey::Line) -> Option<NaiveDate> {
+    line.shots
+        .iter()
+        .filter_map(|s| s.credit.as_ref().and_then(|c| c.date))
+        .min()
+}
+
+/// Write `project` as a `.stalx` version 2 file at `path` (empty history).
+fn write_v2(project: &Project, path: &Path) {
+    assert!(project.validate().is_empty(), "{:?}", project.validate());
+    let bytes = stalx_v2::encode(project, &Extras::default(), Mode::Normal).expect("encode");
+    fs::write(path, bytes).expect("write .stalx");
+}
+
+/// Decode a `.stalx` version 2 file (survey, history and the other members).
+fn decode_v2(path: &Path) -> stalx_v2::Decoded {
+    let bytes = fs::read(path).expect("read .stalx");
+    stalx_v2::decode(&bytes, &stalx_v2::DecodeOptions::default()).expect("decode")
+}
+
+/// Read a `.stalx` version 2 file back as a survey.
+fn read_v2(path: &Path) -> Project {
+    decode_v2(path).project
 }
 
 fn save_project_to_temp(app: &tauri::App<MockRuntime>, dir: &TempDir) -> PathBuf {
@@ -1271,7 +1328,13 @@ fn test_can_redo_false_initial() {
 
 #[test]
 fn test_undo_fails_when_empty() {
+    // No project open: refused (the station-graph core names the reason; 0.6.0
+    // said "Nothing to undo" here too).
     let app = app_with_state();
+    let result = history::undo(state(&app));
+    assert_failure_contains(&result, "No project open");
+    // A project with an empty stack: nothing to undo.
+    create_project(&app);
     let result = history::undo(state(&app));
     assert_failure_contains(&result, "Nothing to undo");
 }
@@ -1279,6 +1342,9 @@ fn test_undo_fails_when_empty() {
 #[test]
 fn test_redo_fails_when_empty() {
     let app = app_with_state();
+    let result = history::redo(state(&app));
+    assert_failure_contains(&result, "No project open");
+    create_project(&app);
     let result = history::redo(state(&app));
     assert_failure_contains(&result, "Nothing to redo");
 }
@@ -1439,8 +1505,11 @@ fn test_undo_to_fails_when_stack_empty() {
     let app = app_with_state();
     // No project or actions
     let result = history::undo_to(0, state(&app));
-    assert!(!result.success);
-    assert!(result.error.unwrap().contains("Invalid undo index"));
+    assert_failure_contains(&result, "No project open");
+    // A project, but no actions
+    create_project(&app);
+    let result = history::undo_to(0, state(&app));
+    assert_failure_contains(&result, "Invalid undo index");
 }
 
 #[test]
@@ -1448,8 +1517,10 @@ fn test_redo_to_fails_when_stack_empty() {
     let app = app_with_state();
     // No project or actions, so no redo available
     let result = history::redo_to(0, state(&app));
-    assert!(!result.success);
-    assert!(result.error.unwrap().contains("Invalid redo index"));
+    assert_failure_contains(&result, "No project open");
+    create_project(&app);
+    let result = history::redo_to(0, state(&app));
+    assert_failure_contains(&result, "Invalid redo index");
 }
 
 // === Project commands ===
@@ -1553,6 +1624,8 @@ fn test_project_lifecycle_persists_undo_and_state() {
             state(&app),
             StationRef::new(line_a, 0),
             StationRef::new(line_b, 0),
+            None,
+            None,
         );
         assert_success(&merge_result);
 
@@ -1591,7 +1664,12 @@ fn test_project_lifecycle_persists_undo_and_state() {
         assert_eq!(project_state.project.station_merges.len(), 1);
         assert_eq!(project_state.project.zero_datums.len(), 1);
 
-        let line = project_state.project.get_line(line_a).expect("line a");
+        let line = project_state
+            .project
+            .lines
+            .iter()
+            .find(|line| line.id == line_a)
+            .expect("line a");
         assert!((line.shots[0].length - 12.5).abs() < f64::EPSILON);
         assert_eq!(line.shots[0].comment.as_deref(), Some("recalc"));
 
@@ -1614,6 +1692,8 @@ fn test_get_project_state_emits_positional_wire_refs() {
             state(&app),
             StationRef::new(line_a, 1),
             StationRef::new(line_b, 1),
+            None,
+            None,
         ));
 
         let project_state = project::get_project_state(state(&app)).expect("project state");
@@ -1631,13 +1711,21 @@ fn test_get_project_state_emits_positional_wire_refs() {
             "wire merge endpoint must NOT expose the StationKey anchor, got: {merge}"
         );
 
-        // Regression guard: the raw Project serde (the undo snapshot path) must
-        // STILL emit the lossless StationKey form. The two encodings diverge by
-        // design - only the IPC view is positional.
-        let raw = serde_json::to_string(&project_state.project).unwrap();
+        // The two encodings diverge by design: only the IPC view is
+        // positional. The model names a junction by its Station ID (one
+        // station on both lines), never by a slot.
+        let model = state(&app).get_project_state().unwrap();
+        let raw = serde_json::to_string(&model).unwrap();
         assert!(
-            raw.contains("anchor"),
-            "raw Project serde must keep StationKey anchors for undo snapshots"
+            !raw.contains("station_index"),
+            "the survey model must not carry positional slots"
+        );
+        let junction = model.station_at(StationRef::new(line_a, 1)).unwrap();
+        assert_eq!(model.station_at(StationRef::new(line_b, 1)), Some(junction));
+        assert_eq!(
+            merge["station_a"]["station_index"].as_u64(),
+            Some(1),
+            "the wire names the junction by its slot on each line"
         );
     });
 }
@@ -1670,14 +1758,9 @@ fn test_open_project_updates_recent_projects_when_config_save_fails() {
         let project_dir = TempDir::new().unwrap();
         let project_path = project_dir.path().join("config-fail.stalx");
 
-        let mut project = Project::new("Config Fail".to_string(), None);
-        project.add_line(LineData {
-            shots: vec![shot_data(1.0)],
-            ..Default::default()
-        });
-        let mut db = Database::open(&project_path).unwrap();
-        db.save_project(&project).unwrap();
-        drop(db);
+        let mut project = Project::new("Config Fail", None);
+        add_free_line(&mut project, LineMeta::default(), vec![shot_data(1.0)], 0.0);
+        write_v2(&project, &project_path);
 
         let result = open_project(state(&app), project_path.clone());
         assert_success(&result);
@@ -1728,14 +1811,9 @@ fn test_open_project_updates_recent_projects_when_config_save_fails_macos() {
         let project_dir = TempDir::new().unwrap();
         let project_path = project_dir.path().join("config-fail.stalx");
 
-        let mut project = Project::new("Config Fail".to_string(), None);
-        project.add_line(LineData {
-            shots: vec![shot_data(1.0)],
-            ..Default::default()
-        });
-        let mut db = Database::open(&project_path).unwrap();
-        db.save_project(&project).unwrap();
-        drop(db);
+        let mut project = Project::new("Config Fail", None);
+        add_free_line(&mut project, LineMeta::default(), vec![shot_data(1.0)], 0.0);
+        write_v2(&project, &project_path);
 
         let result = open_project(state(&app), project_path.clone());
         assert_success(&result);
@@ -1772,13 +1850,9 @@ fn test_open_project_updates_recent_projects_order_and_truncates() {
             let path_c = dir.path().join("c.stalx");
 
             for (path, name) in [(&path_a, "A"), (&path_b, "B"), (&path_c, "C")] {
-                let mut project = Project::new(name.to_string(), None);
-                project.add_line(LineData {
-                    shots: vec![shot_data(1.0)],
-                    ..Default::default()
-                });
-                let mut db = Database::open(path).unwrap();
-                db.save_project(&project).unwrap();
+                let mut project = Project::new(name, None);
+                add_free_line(&mut project, LineMeta::default(), vec![shot_data(1.0)], 0.0);
+                write_v2(&project, path);
             }
 
             assert_success(&open_project(state(&app), path_a));
@@ -1825,7 +1899,7 @@ fn test_save_project_fails_when_output_is_directory() {
             fs::create_dir_all(&blocked).unwrap();
 
             let result = project::save_project(state(&app), Some(blocked.clone()), None);
-            assert_failure_contains(&result, "Failed to finalize save");
+            assert_failure_contains(&result, "Failed to save");
 
             let temp_path = blocked.with_extension("stalx.tmp");
             assert!(!temp_path.exists());
@@ -1878,6 +1952,7 @@ fn test_import_lines_persists_deferred_new_project() {
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
             station_names: Vec::new(),
+            station_external: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
             explorers: None,
@@ -1925,17 +2000,15 @@ fn test_add_project_file_reports_added_lines_and_persists_deferred_project() {
             .inner()
             .set_initial_save_deferred_for_tests(true);
 
-        let mut source = Project::new("Source".to_string(), None);
-        source.add_line(LineData {
-            name: Some("Added".to_string()),
-            shots: vec![shot_data(5.0), shot_data(6.0)],
-            ..Default::default()
-        });
+        let mut source = Project::new("Source", None);
+        add_free_line(
+            &mut source,
+            meta("Added"),
+            vec![shot_data(5.0), shot_data(6.0)],
+            0.0,
+        );
         let source_path = dir.path().join("source.stalx");
-        Database::open(&source_path)
-            .unwrap()
-            .save_project(&source)
-            .unwrap();
+        write_v2(&source, &source_path);
 
         // Through the async command itself, so the blocking-thread handoff is
         // what is tested; that thread resolves its own temp config dir.
@@ -1975,26 +2048,16 @@ fn test_suggest_orphan_placements_command_offers_the_anchored_host() {
                 })
                 .collect()
         };
-        let mut project = Project::new("Host".to_string(), None);
+        let mut project = Project::new("Host", None);
         let host = project
-            .add_line(LineData {
-                shots: leg(),
-                ..Default::default()
-            })
-            .id;
-        project
-            .store_zero_datum_without_repositioning(
-                StationRef::new(host, 0),
-                GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
-                None,
-            )
+            .add_line(LineMeta::default(), StartAt::New, leg())
             .unwrap();
-        let added = project
-            .add_line(LineData {
-                shots: leg(),
-                ..Default::default()
-            })
-            .id;
+        let host_start = station_of(&project, host, 0);
+        project.push_datum(ZeroDatum {
+            via: Some(host),
+            ..ZeroDatum::new(host_start, GpsCoordinates::new(20.5, -87.3, 0.0).unwrap())
+        });
+        let added = add_free_line(&mut project, LineMeta::default(), leg(), 0.0);
         state(&app).inner().set_project_for_tests(project);
 
         let suggestions = tauri::async_runtime::block_on(import::suggest_orphan_placements(
@@ -2038,6 +2101,7 @@ fn test_import_lines_provenance_params_decorate_receipt() {
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
             station_names: Vec::new(),
+            station_external: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
             explorers: None,
@@ -2099,6 +2163,7 @@ fn test_import_lines_sanitizes_hostile_zero_datum_line_name() {
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
             station_names: Vec::new(),
+            station_external: Vec::new(),
             placement: crate::models::ImportPlacement::ZeroDatum {
                 coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
                 station_index: 0,
@@ -2164,6 +2229,7 @@ fn test_import_lines_without_provenance_params_leaves_receipt_defaults() {
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
             station_names: Vec::new(),
+            station_external: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
             explorers: None,
@@ -2287,7 +2353,7 @@ fn test_import_lines_deferred_save_failure_warns_no_phantom() {
         let dir = TempDir::new().unwrap();
         // Force the deferred save to fail: point it at a path whose PARENT directory
         // doesn't exist, so the atomic save can't create the temp `.stalx.tmp`
-        // (`Database::open` returns "Failed to create save file"). NB a directory
+        // (the save refuses up front: the folder no longer exists). NB a file
         // squatting the *exact* reserved path does NOT fail - the first implicit save
         // auto-renames around a collision (`next_available_project_path`) and
         // succeeds; and a read-only dir wouldn't fail under the root-in-container CI
@@ -2324,6 +2390,7 @@ fn test_import_lines_deferred_save_failure_warns_no_phantom() {
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
             station_names: Vec::new(),
+            station_external: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
             explorers: None,
@@ -2364,7 +2431,7 @@ fn test_import_lines_deferred_save_failure_warns_no_phantom() {
         // CommandResult flag (above) is NOT enough on its own.
         let project_state = state(&app).inner().get_project_state().unwrap();
         assert_eq!(
-            project_state.lines.len(),
+            project_state.lines().len(),
             1,
             "the imported line must survive in memory after a failed deferred save"
         );
@@ -2423,7 +2490,7 @@ fn test_import_lines_deferred_save_permission_denied_humanizes_no_marker_leak() 
         let project_path = locked.join("new-import.stalx");
 
         let mut project = Project::new("New Import".to_string(), None);
-        project.file_path = Some(project_path.clone());
+        project.file_path = Some(project_path);
         state(&app).inner().set_project_for_tests(project);
         state(&app)
             .inner()
@@ -2446,6 +2513,7 @@ fn test_import_lines_deferred_save_permission_denied_humanizes_no_marker_leak() 
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
             station_names: Vec::new(),
+            station_external: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
             explorers: None,
@@ -2479,9 +2547,10 @@ fn test_import_lines_deferred_save_permission_denied_humanizes_no_marker_leak() 
 }
 
 // #429: the scenario the test above used to run on - a DIRECTORY squatting the
-// atomic-save temp path (`<stem>.stalx.tmp`), which makes `Database::open`
-// report SQLite's generic "unable to open database file" while the destination
-// folder exists and is perfectly writable. That is not a denial, and calling it
+// atomic-save temp path (`<stem>.stalx.tmp`), which made the 0.6.0 SQLite save
+// report the generic "unable to open database file" (and which the version 2
+// atomic write cannot clear either) while the destination folder exists and is
+// perfectly writable. That is not a denial, and calling it
 // one is what put Windows users in front of macOS folder-access instructions.
 // The deferred-import warning must therefore carry the plain failure, with no
 // marker of any kind in it.
@@ -2496,7 +2565,7 @@ fn test_import_lines_deferred_save_generic_open_failure_is_not_a_denial() {
         fs::create_dir_all(dir.path().join("new-import.stalx.tmp")).unwrap();
 
         let mut project = Project::new("New Import".to_string(), None);
-        project.file_path = Some(project_path.clone());
+        project.file_path = Some(project_path);
         state(&app).inner().set_project_for_tests(project);
         state(&app)
             .inner()
@@ -2515,6 +2584,7 @@ fn test_import_lines_deferred_save_generic_open_failure_is_not_a_denial() {
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
             station_names: Vec::new(),
+            station_external: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
             explorers: None,
@@ -2573,6 +2643,69 @@ fn test_initial_save_deferred_uses_explicit_flag() {
         .inner()
         .set_initial_save_deferred_for_tests(true);
     assert!(state(&app).initial_save_deferred());
+}
+
+/// The first implicit save of a deferred project whose reserved path was taken
+/// meanwhile moves to the next free name (`_1`), as 0.6.0 did, and leaves the
+/// other file as it was; the session follows the renamed file.
+#[test]
+fn test_first_implicit_save_of_a_deferred_project_avoids_a_taken_path() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        let dir = TempDir::new().unwrap();
+        let reserved = dir.path().join("Cave.stalx");
+        let mut project = project_with_line(vec![shot_data(1.0)]);
+        project.file_path = Some(reserved.clone());
+        set_project_for_tests(&app, project);
+        state(&app)
+            .inner()
+            .set_initial_save_deferred_for_tests(true);
+        fs::write(&reserved, b"someone else's file").unwrap();
+
+        let result = project::save_project(state(&app), None, None);
+        assert_success(&result);
+        let renamed = dir.path().join("Cave_1.stalx");
+        assert_eq!(result.saved_path.as_deref(), renamed.to_str());
+        assert_eq!(fs::read(&reserved).unwrap(), b"someone else's file");
+        assert_eq!(read_v2(&renamed).lines().len(), 1);
+        assert_eq!(
+            state(&app).get_project_state().unwrap().file_path,
+            Some(renamed.clone())
+        );
+        assert!(!state(&app).initial_save_deferred());
+
+        // The next implicit save goes to the renamed file, guarded as usual.
+        create_line_with_shots(&app, vec![shot_data(2.0)]);
+        assert_success(&project::save_project(state(&app), None, None));
+        assert_eq!(read_v2(&renamed).lines().len(), 2);
+        assert!(!dir.path().join("Cave_2.stalx").exists());
+        assert_eq!(fs::read(&reserved).unwrap(), b"someone else's file");
+    });
+}
+
+/// An empty file at a deferred project's reserved path is a placeholder (a
+/// document picker made it before returning the path): the first implicit
+/// save writes over it, as 0.6.0 did, instead of moving or refusing.
+#[test]
+fn test_first_implicit_save_of_a_deferred_project_fills_an_empty_placeholder() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        let dir = TempDir::new().unwrap();
+        let reserved = dir.path().join("Cave.stalx");
+        let mut project = project_with_line(vec![shot_data(1.0)]);
+        project.file_path = Some(reserved.clone());
+        set_project_for_tests(&app, project);
+        state(&app)
+            .inner()
+            .set_initial_save_deferred_for_tests(true);
+        fs::write(&reserved, b"").unwrap();
+
+        let result = project::save_project(state(&app), None, None);
+        assert_success(&result);
+        assert_eq!(result.saved_path.as_deref(), reserved.to_str());
+        assert_eq!(read_v2(&reserved).lines().len(), 1);
+        assert!(!dir.path().join("Cave_1.stalx").exists());
+    });
 }
 
 #[test]
@@ -2829,7 +2962,7 @@ fn test_delete_project_of_open_project_tears_down_the_session() {
                     .project
                     .file_path
                     .as_deref(),
-                Some(saved_path.as_path()),
+                saved_path.to_str(),
                 "precondition: the path being deleted IS the open project"
             );
             assert!(
@@ -2858,8 +2991,8 @@ fn test_delete_project_of_open_project_tears_down_the_session() {
                 "the database handle LEAKED: still open on a file that was just deleted",
             );
             assert!(
-                db_err.contains("No project database"),
-                "expected the no-database error, got: {db_err}"
+                db_err.contains("save the project"),
+                "expected the no-project-file error, got: {db_err}"
             );
             assert!(
                 !history::can_undo(state(&app)),
@@ -3039,7 +3172,7 @@ fn test_delete_project_reports_whether_it_closed_the_session() {
                 "the open project's undo stack must survive an unrelated delete"
             );
 
-            let own = project::delete_project_impl(state(&app).inner(), open_path.clone());
+            let own = project::delete_project_impl(state(&app).inner(), open_path);
             assert_success(&own);
             assert_eq!(
                 own.session_closed,
@@ -3329,7 +3462,7 @@ fn test_delete_project_of_a_symlink_to_the_open_project_spares_the_referent() {
                     .project
                     .file_path
                     .as_deref(),
-                Some(saved_path.as_path()),
+                saved_path.to_str(),
                 "the open project must still be the referent"
             );
             assert!(
@@ -3392,7 +3525,7 @@ fn test_delete_project_of_the_symlink_it_was_opened_through_closes_the_session()
                     .project
                     .file_path
                     .as_deref(),
-                Some(link.as_path()),
+                link.to_str(),
                 "precondition: the session was opened through the link, so its \
                  file_path IS the link"
             );
@@ -3569,7 +3702,7 @@ fn test_save_project_fails_when_directory_missing() {
 fn test_merge_projects_fails_when_source_missing() {
     let app = app_with_state();
     let project = project_with_line(vec![shot_data(1.0)]);
-    let (db_a, _database_a) = TestDb::with_project(&project).unwrap();
+    let db_a = TestDb::with_project(&project).unwrap();
     let missing_path = db_a.path().with_file_name("missing.stalx");
     let output_dir = TempDir::new().unwrap();
     let output_path = output_dir.path().join("merged.stalx");
@@ -3730,43 +3863,44 @@ fn test_move_segment_moves_connected_lines() {
         state(&app),
         StationRef::new(line_a, 1),
         StationRef::new(line_b, 0),
+        None,
+        None,
     ));
 
-    let before = project::get_project_state(state(&app)).expect("project state");
-    let offset_a_before = before
-        .project
-        .line_offsets
-        .get(&line_a)
-        .copied()
-        .unwrap_or((0.0, 0.0));
-    let offset_b_before = before
-        .project
-        .line_offsets
-        .get(&line_b)
-        .copied()
-        .unwrap_or((0.0, 0.0));
+    // Every slot of both lines (one piece through the junction) moves by
+    // the delta; positions are derived, so the wire stations are the oracle.
+    let slot_xy = |app: &tauri::App<MockRuntime>| -> BTreeMap<(LineId, u32), (f64, f64)> {
+        project::get_project_state(state(app))
+            .expect("project state")
+            .stations
+            .iter()
+            .map(|s| {
+                (
+                    (s.station_ref.line_id, s.station_ref.station_index),
+                    (s.coordinates.x, s.coordinates.y),
+                )
+            })
+            .collect()
+    };
+    let before = slot_xy(&app);
 
     let delta = Coordinates::new(3.0, -2.0, 0.0);
     assert_success(&line::move_segment(state(&app), line_a, delta));
 
-    let after = project::get_project_state(state(&app)).expect("project state");
-    let offset_a_after = after
-        .project
-        .line_offsets
-        .get(&line_a)
-        .copied()
-        .unwrap_or((0.0, 0.0));
-    let offset_b_after = after
-        .project
-        .line_offsets
-        .get(&line_b)
-        .copied()
-        .unwrap_or((0.0, 0.0));
-
-    assert!((offset_a_after.0 - (offset_a_before.0 + delta.x)).abs() < 1e-6);
-    assert!((offset_a_after.1 - (offset_a_before.1 + delta.y)).abs() < 1e-6);
-    assert!((offset_b_after.0 - (offset_b_before.0 + delta.x)).abs() < 1e-6);
-    assert!((offset_b_after.1 - (offset_b_before.1 + delta.y)).abs() < 1e-6);
+    let after = slot_xy(&app);
+    assert_eq!(before.len(), 4, "two slots per line");
+    assert_eq!(
+        before.keys().collect::<Vec<_>>(),
+        after.keys().collect::<Vec<_>>()
+    );
+    for (slot, (x0, y0)) in &before {
+        let (x1, y1) = after[slot];
+        assert!(
+            (x1 - (x0 + delta.x)).abs() < 1e-6 && (y1 - (y0 + delta.y)).abs() < 1e-6,
+            "slot {slot:?} must move by the delta: ({x0}, {y0}) -> ({x1}, {y1})"
+        );
+    }
+    assert!(before.keys().any(|(line, _)| *line == line_b));
 }
 
 #[test]
@@ -3897,23 +4031,22 @@ fn test_create_shot_wrapper_strips_a_client_named_uuid() {
     let line = get_line(state(&app), id).unwrap();
     let created = line.shots.last().unwrap();
     assert_ne!(
-        created.uuid.as_deref(),
-        Some(SPOOFED),
+        created.uuid, SPOOFED,
         "the wrapper must clear a client-named identity before execution"
     );
-    assert!(created.uuid.is_some(), "and the shot still gets a mint");
+    assert!(!created.uuid.is_empty(), "and the shot still gets a mint");
 
     let dir = TempDir::new().unwrap();
     let path = save_project_to_temp(&app, &dir);
-    let rows = Database::open_existing(&path)
-        .unwrap()
-        .load_undo_stack()
-        .unwrap();
-    assert!(!rows.is_empty(), "the save must persist the undo history");
+    let decoded = decode_v2(&path);
     assert!(
-        rows.iter()
-            .all(|(_, command_json, _)| !command_json.contains(SPOOFED)),
-        "a client-named uuid must not reach the recorded (persisted) undo command"
+        !decoded.extras.history.undo.is_empty(),
+        "the save must persist the undo history"
+    );
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(
+        !text.contains(SPOOFED),
+        "a client-named uuid must reach neither the survey nor the persisted history"
     );
 }
 
@@ -3921,7 +4054,12 @@ fn test_create_shot_wrapper_strips_a_client_named_uuid() {
 fn test_update_shot_fails_missing() {
     let app = app_with_state();
     create_project(&app);
+    // A line that is not there names the line (0.6.0 named the shot).
     let result = shot::update_shot(state(&app), 0, 999, ShotUpdates::default());
+    assert_failure_contains(&result, "That line no longer exists.");
+    // A shot that is not on an existing line names the shot.
+    let id = create_line_with_shots(&app, vec![shot_data(1.0)]);
+    let result = shot::update_shot(state(&app), id, 999, ShotUpdates::default());
     assert_failure_contains(&result, "That shot no longer exists.");
 }
 
@@ -3974,6 +4112,10 @@ fn test_delete_shot_removes_shot() {
     assert!(line.shots.is_empty());
 }
 
+/// The second half takes the colour the frontend sends (`colorB`, the
+/// colour a new line gets, as Split Line Here's second half; demo finding
+/// I-9: both halves of a Delete & Split kept the line's colour). Injection:
+/// dropping `color_b` from the split leaves line B in line A's colour.
 #[test]
 fn test_delete_shot_and_split_creates_new_line() {
     let app = app_with_state();
@@ -3981,6 +4123,8 @@ fn test_delete_shot_and_split_creates_new_line() {
     let id = create_line_with_shots(&app, vec![shot_data(1.0), shot_data(2.0), shot_data(3.0)]);
     let line_state = get_line(state(&app), id).unwrap();
     let shot_id = line_state.shots[1].id;
+    let color = line_state.color;
+    assert_ne!(color, "#00aa55");
 
     let result = shot::delete_shot_and_split(
         state(&app),
@@ -3988,6 +4132,7 @@ fn test_delete_shot_and_split_creates_new_line() {
         shot_id,
         "Line A".to_string(),
         "Line B".to_string(),
+        Some("#00aa55".to_string()),
     );
     assert_success(&result);
     let new_id = result.line_id.expect("new line id");
@@ -3998,6 +4143,49 @@ fn test_delete_shot_and_split_creates_new_line() {
     assert_eq!(line_b.name, Some("Line B".to_string()));
     assert_eq!(line_a.shots.len(), 1);
     assert_eq!(line_b.shots.len(), 1);
+    assert_eq!(line_a.color, color);
+    assert_eq!(line_b.color, "#00aa55");
+}
+
+/// The range split colours its second half the same way (I-9); without a
+/// colour both halves keep the line's, as 0.6.0's split did.
+#[test]
+fn test_delete_shot_range_split_colours_the_new_line() {
+    let app = app_with_state();
+    create_project(&app);
+    let shots = (1..=5).map(|i| shot_data(f64::from(i))).collect();
+    let id = create_line_with_shots(&app, shots);
+    let line_state = get_line(state(&app), id).unwrap();
+    let (first, last) = (line_state.shots[1].id, line_state.shots[2].id);
+    let color = line_state.color;
+
+    let result = shot::delete_shot_range_split(
+        state(&app),
+        id,
+        first,
+        last,
+        "Line A".to_string(),
+        "Line B".to_string(),
+        Some("#123456".to_string()),
+    );
+    assert_success(&result);
+    let new_id = result.line_id.expect("new line id");
+    assert_eq!(get_line(state(&app), id).unwrap().color, color);
+    assert_eq!(get_line(state(&app), new_id).unwrap().color, "#123456");
+
+    assert!(state(&app).undo().success);
+    let result = shot::delete_shot_range_split(
+        state(&app),
+        id,
+        first,
+        last,
+        "Line A".to_string(),
+        "Line B".to_string(),
+        None,
+    );
+    assert_success(&result);
+    let new_id = result.line_id.expect("new line id");
+    assert_eq!(get_line(state(&app), new_id).unwrap().color, color);
 }
 
 #[test]
@@ -4018,6 +4206,9 @@ fn test_set_shot_kind_fails_missing() {
     let app = app_with_state();
     create_project(&app);
     let result = shot::set_shot_kind(state(&app), 0, 999, ShotKind::Jump);
+    assert_failure_contains(&result, "That line no longer exists.");
+    let id = create_line_with_shots(&app, vec![shot_data(1.0)]);
+    let result = shot::set_shot_kind(state(&app), id, 999, ShotKind::Jump);
     assert_failure_contains(&result, "That shot no longer exists.");
 }
 
@@ -4086,7 +4277,13 @@ fn test_set_shot_kind_undo_restores_previous_kind() {
 #[test]
 fn test_merge_stations_fails_without_project() {
     let app = app_with_state();
-    let result = station::merge_stations(state(&app), StationRef::new(0, 0), StationRef::new(1, 0));
+    let result = station::merge_stations(
+        state(&app),
+        StationRef::new(0, 0),
+        StationRef::new(1, 0),
+        None,
+        None,
+    );
     assert_failure_contains(&result, "No project open");
 }
 
@@ -4095,7 +4292,13 @@ fn test_merge_stations_fails_same_line() {
     let app = app_with_state();
     create_project(&app);
     create_line_with_shots(&app, vec![shot_data(1.0)]);
-    let result = station::merge_stations(state(&app), StationRef::new(0, 0), StationRef::new(0, 1));
+    let result = station::merge_stations(
+        state(&app),
+        StationRef::new(0, 0),
+        StationRef::new(0, 1),
+        None,
+        None,
+    );
     assert_failure_contains(&result, "same line");
 }
 
@@ -4105,8 +4308,22 @@ fn test_merge_stations_success_between_lines() {
     create_project(&app);
     create_line_with_shots(&app, vec![shot_data(1.0)]);
     create_line_with_shots(&app, vec![shot_data(1.0)]);
-    let result = station::merge_stations(state(&app), StationRef::new(0, 1), StationRef::new(1, 0));
+    let result = station::merge_stations(
+        state(&app),
+        StationRef::new(0, 1),
+        StationRef::new(1, 0),
+        None,
+        None,
+    );
     assert_success(&result);
+    // A merge is one shared station: both slots carry its id.
+    let project = state(&app).get_project_state().unwrap();
+    assert_eq!(
+        project.station_at(StationRef::new(0, 1)),
+        project.station_at(StationRef::new(1, 0))
+    );
+    let wire = project::get_project_state(state(&app)).unwrap();
+    assert_eq!(wire.project.station_merges.len(), 1);
 }
 
 #[test]
@@ -4114,7 +4331,7 @@ fn test_unmerge_stations_noop_success() {
     let app = app_with_state();
     create_project(&app);
     create_line_with_shots(&app, vec![shot_data(1.0)]);
-    let result = station::unmerge_stations(state(&app), StationRef::new(0, 0));
+    let result = station::unmerge_stations(state(&app), StationRef::new(0, 0), None, None);
     assert_success(&result);
 }
 
@@ -4124,9 +4341,81 @@ fn test_unmerge_stations_removes_merge() {
     create_project(&app);
     create_line_with_shots(&app, vec![shot_data(1.0)]);
     create_line_with_shots(&app, vec![shot_data(1.0)]);
-    let _ = station::merge_stations(state(&app), StationRef::new(0, 1), StationRef::new(1, 0));
-    let result = station::unmerge_stations(state(&app), StationRef::new(0, 1));
+    assert_success(&station::merge_stations(
+        state(&app),
+        StationRef::new(0, 1),
+        StationRef::new(1, 0),
+        None,
+        None,
+    ));
+    let result = station::unmerge_stations(state(&app), StationRef::new(0, 1), None, None);
     assert_success(&result);
+    // The slot's line is detached: the two slots no longer share a station.
+    let project = state(&app).get_project_state().unwrap();
+    assert_ne!(
+        project.station_at(StationRef::new(0, 1)),
+        project.station_at(StationRef::new(1, 0))
+    );
+    let wire = project::get_project_state(state(&app)).unwrap();
+    assert!(wire.project.station_merges.is_empty());
+}
+
+/// Review finding UX-4 and I-1: the Detach dialog's preview says what the
+/// line gets, and the detach gives exactly that: the merged line its own
+/// station back. Detaching the other line (the junction's own) keeps the
+/// junction on it and gives the merged line its station back all the same.
+#[test]
+fn test_preview_detach_line_names_what_the_detach_gives() {
+    let app = app_with_state();
+    create_project(&app);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
+    let before = state(&app).get_project_state().unwrap();
+    let (a1, b0) = (StationRef::new(0, 1), StationRef::new(1, 0));
+    let own = |p: &Project, slot| {
+        let id = p.station_at(slot).unwrap();
+        (id, p.stations[&id].name.clone())
+    };
+    let (a1_own, b0_own) = (own(&before, a1), own(&before, b0));
+    assert_success(&station::merge_stations(state(&app), a1, b0, None, None));
+    let previews = [
+        station::preview_detach_line(state(&app), a1, 0, None).unwrap(),
+        station::preview_detach_line(state(&app), a1, 1, None).unwrap(),
+    ];
+    let restored: Vec<_> = previews.iter().filter(|p| p.restored && !p.kept).collect();
+    assert_eq!(
+        restored.len(),
+        1,
+        "only the retired station's line gets it back itself: {previews:?}"
+    );
+    let (line, slot, was) = if previews[0].kept {
+        (1, b0, &b0_own)
+    } else {
+        (0, a1, &a1_own)
+    };
+    assert_eq!((restored[0].station_id, &restored[0].name), (was.0, &was.1));
+    let keeping: Vec<_> = previews.iter().filter(|p| p.kept).collect();
+    assert_eq!(
+        keeping.len(),
+        1,
+        "the junction's own line keeps it: {previews:?}"
+    );
+    assert_eq!((keeping[0].station_id, &keeping[0].name), (was.0, &was.1));
+    let other = if line == 0 { b0 } else { a1 };
+    assert_success(&station::unmerge_station_pair(
+        state(&app),
+        other,
+        slot,
+        None,
+        None,
+    ));
+    let after = state(&app).get_project_state().unwrap();
+    assert_eq!(
+        own(&after, slot),
+        was.clone(),
+        "the line has its own station back"
+    );
+    assert!(station::preview_detach_line(state(&app), slot, line, None).is_err());
 }
 
 #[test]
@@ -4819,15 +5108,14 @@ fn test_get_project_warnings_includes_shot_index() {
 #[test]
 fn test_get_project_warnings_multiple_lines_sorted_by_line_id() {
     let app = app_with_state();
-    let mut project = Project::new("Test Cave".to_string(), None);
-    project.add_line(LineData {
-        shots: vec![shot_data(0.0)],
-        ..Default::default()
-    });
-    project.add_line(LineData {
-        shots: vec![shot_data(0.0)],
-        ..Default::default()
-    });
+    let mut project = Project::new("Test Cave", None);
+    add_free_line(&mut project, LineMeta::default(), vec![shot_data(0.0)], 0.0);
+    add_free_line(
+        &mut project,
+        LineMeta::default(),
+        vec![shot_data(0.0)],
+        10.0,
+    );
     set_project_for_tests(&app, project);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(warnings.len() >= 2);
@@ -4968,8 +5256,7 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
     // Issue #57: an ignore is keyed by the shot's stable UUID, so it stays
     // bound to the same shot even after a structural edit renumbers shot_id
     // (e.g. inserting a shot earlier in the line).
-    let mut project = project_with_line(vec![shot_data(0.1)]);
-    project.ensure_shot_uuids();
+    let project = project_with_line(vec![shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
@@ -4984,7 +5271,7 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
         state(&app),
         warning.line_id,
         warning.shot_id,
-        warning.code.clone(),
+        warning.code,
         None,
     )
     .unwrap();
@@ -4994,7 +5281,7 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
 
     // Drift the unstable shot_id (mimicking an insert/reload) but keep the UUID.
     let mut renumbered = state(&app).inner().get_project_state().unwrap();
-    renumbered.lines[0].shots[0].id = original_shot_id + 1000;
+    renumbered.lines_mut()[0].shots[0].id = original_shot_id + 1000;
     state(&app).inner().set_project_for_tests(renumbered);
 
     let after = validation::get_project_warnings(state(&app));
@@ -5016,8 +5303,7 @@ fn test_resolved_warning_legacy_position_fallback_matches_uuid_shot() {
     // keyed by (line_id, shot_id) position. After load the shot has a freshly
     // minted in-memory UUID, but the legacy row must still suppress it - without
     // the position fallback a pre-v6 file's ignores would be silently lost.
-    let mut project = project_with_line(vec![shot_data(0.1)]);
-    project.ensure_shot_uuids();
+    let project = project_with_line(vec![shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
@@ -5037,7 +5323,7 @@ fn test_resolved_warning_legacy_position_fallback_matches_uuid_shot() {
         .save_resolved_warning(&crate::persistence::ResolvedWarning {
             line_id: warning.line_id,
             shot_id: warning.shot_id,
-            warning_code: warning.code.clone(),
+            warning_code: warning.code,
             resolved_at: chrono::Utc::now(),
             resolved_comment: None,
             shot_uuid: None,
@@ -5128,8 +5414,7 @@ fn test_resolved_warning_survives_save() {
     // Issue #57 regression: resolved (ignored) warnings live in their own table,
     // not the Project model, so the save pipeline (temp file + atomic rename)
     // used to drop them. A save must carry them over so an ignore persists.
-    let mut project = project_with_line(vec![shot_data(0.1)]);
-    project.ensure_shot_uuids();
+    let project = project_with_line(vec![shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
@@ -5141,7 +5426,7 @@ fn test_resolved_warning_survives_save() {
         state(&app),
         warning.line_id,
         warning.shot_id,
-        warning.code.clone(),
+        warning.code,
         None,
     )
     .unwrap();
@@ -5167,19 +5452,20 @@ fn test_save_keeps_other_ignores_when_a_line_was_deleted() {
     // orphaned in the DB (delete_line is in-memory and never prunes the
     // table). The save carry-over must skip it instead of letting one FK-violating
     // row abort the whole transaction and silently drop every other ignore.
-    let mut project = Project::new("Test Cave".to_string(), None);
-    for (name, color) in [("A", "#4ecdc4"), ("B", "#ff6b6b")] {
-        project.add_line(LineData {
-            name: Some(name.to_string()),
-            surveyor: None,
-            date: None,
+    let mut project = Project::new("Test Cave", None);
+    for (x, (name, color)) in [("A", "#4ecdc4"), ("B", "#ff6b6b")].into_iter().enumerate() {
+        let line_meta = LineMeta {
             color: color.to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![shot_data(0.1)], // short-shot → SHORT_SHOT warning
-        });
+            ..meta(name)
+        };
+        // short-shot → SHORT_SHOT warning
+        add_free_line(
+            &mut project,
+            line_meta,
+            vec![shot_data(0.1)],
+            x as f64 * 10.0,
+        );
     }
-    project.ensure_shot_uuids();
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
@@ -5228,11 +5514,11 @@ fn test_save_preserves_by_uuid_ignore_when_a_renumber_lands_another_shot_on_its_
 
     // The two loaded shots, each with a stable UUID.
     let loaded = state(&app).inner().get_project_state().unwrap();
-    let shot_a = loaded.lines[0].shots[0].clone();
-    let shot_b = loaded.lines[0].shots[1].clone();
-    let line_id = loaded.lines[0].id;
-    let uuid_a = shot_a.uuid.clone().expect("shot A uuid");
-    let uuid_b = shot_b.uuid.clone().expect("shot B uuid");
+    let shot_a = loaded.lines()[0].shots[0].clone();
+    let shot_b = loaded.lines()[0].shots[1].clone();
+    let line_id = loaded.lines()[0].id;
+    let uuid_a = shot_a.uuid.clone();
+    let uuid_b = shot_b.uuid.clone();
     assert_ne!(shot_a.id, shot_b.id);
 
     // Seed the stale state directly: A's by-UUID ignore lives at A's ORIGINAL
@@ -5254,8 +5540,8 @@ fn test_save_preserves_by_uuid_ignore_when_a_renumber_lands_another_shot_on_its_
     // Renumber: swap the shot order so A now sits at B's old position and B at
     // A's old position. The carry-over derives live positions from sequence
     // order, so A's stored shot_id (== shot_a.id, now occupied by B) is stale.
-    let mut renumbered = loaded.clone();
-    renumbered.lines[0].shots.swap(0, 1);
+    let mut renumbered = loaded;
+    renumbered.lines_mut()[0].shots.swap(0, 1);
     state(&app).inner().set_project_for_tests(renumbered);
 
     // Save: rebuilds the .stalx and re-applies the carried-over ignores.
@@ -5287,8 +5573,11 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
     // shot_id). If the dead row were carried over at its stale id, the two would
     // collide on UNIQUE(line_id, shot_id, warning_code) and INSERT OR REPLACE
     // would - depending on insert order - drop the SURVIVOR's still-valid ignore.
-    // The carry-over must DROP the dead (UUID-not-live) row so the survivor's
-    // ignore always persists and dead rows don't accumulate.
+    // The survivor's ignore always persists, and dead rows don't accumulate. On
+    // the station graph a row is keyed by uuid, and the deleted shot's is not
+    // dead while the saved undo history can bring the shot back
+    // (F-command-parity-2): it is kept, and undoing the delete after a reopen
+    // finds it. A row whose shot nothing can bring back is still pruned.
     let project = project_with_line(vec![shot_data(0.1), shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
@@ -5305,12 +5594,22 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
     }
 
     let loaded = state(&app).inner().get_project_state().unwrap();
-    let line_id = loaded.lines[0].id;
-    let shot_a_id = loaded.lines[0].shots[0].id;
-    let survivor_uuid = loaded.lines[0].shots[1]
-        .uuid
-        .clone()
-        .expect("survivor uuid");
+    let line_id = loaded.lines()[0].id;
+    let shot_a_id = loaded.lines()[0].shots[0].id;
+    let deleted_uuid = loaded.lines()[0].shots[0].uuid.clone();
+    let survivor_uuid = loaded.lines()[0].shots[1].uuid.clone();
+    // A dead row: its shot is in neither the survey nor the history.
+    state(&app)
+        .inner()
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            line_id,
+            shot_id: shot_a_id,
+            warning_code: "SHORT_SHOT".to_string(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: Some("no-such-shot".to_string()),
+        })
+        .unwrap();
 
     // Delete the first shot. The successor shifts into its index/position, so the
     // orphaned by-UUID row for the deleted shot now shares the survivor's new
@@ -5318,7 +5617,7 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
     assert_success(&shot::delete_shot(state(&app), line_id, shot_a_id));
 
     let dir = tempfile::tempdir().unwrap();
-    let _ = save_project_to_temp(&app, &dir);
+    let saved = save_project_to_temp(&app, &dir);
 
     // The survivor's ignore must persist...
     let after = validation::get_project_warnings(state(&app));
@@ -5330,27 +5629,51 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
         survivor.is_resolved,
         "the surviving shot's ignore must not be clobbered by the deleted shot's dead row"
     );
-    // ...and the deleted shot's dead row must have been pruned (one row, keyed to
-    // the survivor), so dead rows don't accumulate across saves.
-    let rows = state(&app).inner().load_resolved_warnings().unwrap();
+    // ...the dead row must have been pruned from the file, so dead rows don't
+    // accumulate across saves, while the deleted shot's row stays: the undo
+    // history the file holds can bring that shot back. The ignores ride the
+    // `.stalx` itself now (plan 6.5).
+    let mut rows: Vec<String> = decode_v2(&saved)
+        .extras
+        .ignored_warnings
+        .into_iter()
+        .map(|w| w.shot)
+        .collect();
+    rows.sort();
+    let mut expected = vec![deleted_uuid, survivor_uuid];
+    expected.sort();
     assert_eq!(
-        rows.len(),
-        1,
-        "the deleted shot's dead resolved row must be pruned"
+        rows, expected,
+        "the survivor's row and the restorable deleted shot's, never the dead one"
     );
+    // A reopen reads them back; the survivor's still matches, and undoing the
+    // delete brings the deleted shot back still ignored.
+    let reopened = app_with_state();
+    assert_success(&open_project(state(&reopened), saved));
+    let after = validation::get_project_warnings(state(&reopened));
+    assert!(after
+        .iter()
+        .any(|w| w.code == "SHORT_SHOT" && w.is_resolved));
     assert_eq!(
-        rows[0].shot_uuid.as_deref(),
-        Some(survivor_uuid.as_str()),
-        "the surviving row must be the survivor's by-UUID ignore"
+        state(&reopened)
+            .inner()
+            .load_resolved_warnings()
+            .unwrap()
+            .len(),
+        2
     );
+    assert_success(&history::undo(state(&reopened)));
+    let after = validation::get_project_warnings(state(&reopened));
+    let short: Vec<_> = after.iter().filter(|w| w.code == "SHORT_SHOT").collect();
+    assert_eq!(short.len(), 2);
+    assert!(short.iter().all(|w| w.is_resolved));
 }
 
 #[test]
 fn test_project_validation_drives_warnings_and_persists() {
     // Per-project validation (#57): warnings use the project's own thresholds,
     // and those thresholds survive a save into the .stalx.
-    let mut project = project_with_line(vec![shot_data(1.0)]);
-    project.ensure_shot_uuids();
+    let project = project_with_line(vec![shot_data(1.0)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
@@ -5378,8 +5701,8 @@ fn test_project_validation_drives_warnings_and_persists() {
     // Save, then reopen the .stalx fresh: the thresholds (and name) persisted.
     let dir = tempfile::tempdir().unwrap();
     let saved = save_project_to_temp(&app, &dir);
-    let reopened = Database::open(&saved).unwrap().load_project().unwrap();
-    assert_eq!(reopened.validation.warn_shot_length_min, 2.0);
+    let reopened = read_v2(&saved);
+    assert_eq!(reopened.settings.validation.warn_shot_length_min, 2.0);
     assert_eq!(reopened.name, "Renamed Cave");
 }
 
@@ -5388,8 +5711,7 @@ fn test_update_project_settings_is_undoable() {
     // The settings change must be its own undo entry (#57 review). Otherwise
     // undoing an unrelated edit made earlier would silently revert the
     // name/validation back to whatever the edit's snapshot captured.
-    let mut project = project_with_line(vec![shot_data(1.0)]);
-    project.ensure_shot_uuids();
+    let project = project_with_line(vec![shot_data(1.0)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
@@ -5408,13 +5730,13 @@ fn test_update_project_settings_is_undoable() {
     );
     let applied = state(&app).get_project_state().unwrap();
     assert_eq!(applied.name, "Renamed Cave");
-    assert_eq!(applied.validation.warn_shot_length_min, 2.0);
+    assert_eq!(applied.settings.validation.warn_shot_length_min, 2.0);
 
     // Undo reverts the settings change instead of leaving it stranded.
     assert_success(&history::undo(state(&app)));
     let reverted = state(&app).get_project_state().unwrap();
     assert_eq!(reverted.name, "Test Cave");
-    assert_eq!(reverted.validation.warn_shot_length_min, 0.3);
+    assert_eq!(reverted.settings.validation.warn_shot_length_min, 0.3);
 }
 
 #[test]
@@ -5444,7 +5766,7 @@ fn test_resolve_warning_refuses_error_severity_codes() {
         state(&app),
         warning.line_id,
         warning.shot_id,
-        warning.code.clone(),
+        warning.code,
         None,
     )
     .unwrap();
@@ -5468,111 +5790,6 @@ fn test_resolve_warning_refuses_error_severity_codes() {
 }
 
 #[test]
-fn test_cross_line_duplicate_uuid_ignore_does_not_cross_suppress() {
-    // A file saved before shot UUIDs were project-wide unique can hold one id in
-    // two lines, and an undo of an integrity Repair can put such a state back
-    // in memory. Ignoring a warning on one shot must NOT suppress the same code
-    // on the other line's shot (issue #57 / Codex) - suppression is keyed by
-    // (line_id, uuid, code), not the UUID alone.
-    let mut project = Project::new("Dup UUID".to_string(), None);
-    let a = project
-        .add_line(LineData {
-            shots: vec![shot_data(0.1)],
-            ..Default::default()
-        })
-        .id;
-    let b = project
-        .add_line(LineData {
-            shots: vec![shot_data(0.1)],
-            ..Default::default()
-        })
-        .id;
-    // Force the same (cross-line) UUID on both shots - a legal duplicate.
-    for line in &mut project.lines {
-        line.shots[0].uuid = Some("shared-uuid".to_string());
-    }
-    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
-    let app = app_with_custom_state(app_state);
-
-    let warnings = validation::get_project_warnings(state(&app));
-    let a_warning = warnings
-        .iter()
-        .find(|w| w.line_id == a && w.code == "SHORT_SHOT")
-        .expect("line A short-shot warning");
-    assert!(warnings
-        .iter()
-        .any(|w| w.line_id == b && w.code == "SHORT_SHOT"));
-
-    validation::resolve_warning(
-        state(&app),
-        a_warning.line_id,
-        a_warning.shot_id,
-        "SHORT_SHOT".to_string(),
-        None,
-    )
-    .unwrap();
-
-    let after = validation::get_project_warnings(state(&app));
-    assert!(
-        after
-            .iter()
-            .find(|w| w.line_id == a && w.code == "SHORT_SHOT")
-            .unwrap()
-            .is_resolved,
-        "line A's ignore is recorded"
-    );
-    assert!(
-        !after
-            .iter()
-            .find(|w| w.line_id == b && w.code == "SHORT_SHOT")
-            .unwrap()
-            .is_resolved,
-        "line B's shot shares the UUID but a different line - it must NOT be suppressed"
-    );
-
-    // Now ignore B too, then un-ignore A: B's suppression must SURVIVE, because the
-    // delete is also keyed by (line_id, uuid) - un-ignoring A's shared-UUID shot
-    // must not clear B's row (issue #57 / Codex round 7).
-    let b_warning = after
-        .iter()
-        .find(|w| w.line_id == b && w.code == "SHORT_SHOT")
-        .unwrap()
-        .clone();
-    validation::resolve_warning(
-        state(&app),
-        b_warning.line_id,
-        b_warning.shot_id,
-        "SHORT_SHOT".to_string(),
-        None,
-    )
-    .unwrap();
-    validation::unresolve_warning(
-        state(&app),
-        a_warning.line_id,
-        a_warning.shot_id,
-        "SHORT_SHOT".to_string(),
-    )
-    .unwrap();
-    let cleared = validation::get_project_warnings(state(&app));
-    assert!(
-        !cleared
-            .iter()
-            .find(|w| w.line_id == a && w.code == "SHORT_SHOT")
-            .unwrap()
-            .is_resolved,
-        "line A was un-ignored"
-    );
-    assert!(
-        cleared
-            .iter()
-            .find(|w| w.line_id == b && w.code == "SHORT_SHOT")
-            .unwrap()
-            .is_resolved,
-        "line B's ignore (same UUID, different line) must survive A's un-ignore"
-    );
-}
-
-#[test]
 fn test_datum_gps_gap_warning_is_ignorable() {
     // #741: a GPS fix whose GPS disagrees with the survey by more than
     // 15 m + 2% raises `datum_gps_gap`, an advisory warning the surveyor may
@@ -5586,24 +5803,18 @@ fn test_datum_gps_gap_warning_is_ignorable() {
         length: 100.0,
         ..Default::default()
     };
-    let mut project = Project::new("TwoEntrances".to_string(), None);
+    let mut project = Project::new("TwoEntrances", None);
     let a = project
-        .add_line(LineData {
-            shots: vec![north.clone(); 5],
-            ..Default::default()
-        })
-        .id;
-    project.ensure_shot_uuids();
-    project
-        .set_zero_datum(StationRef::new(a, 0), origin)
+        .add_line(LineMeta::default(), StartAt::New, vec![north; 5])
         .unwrap();
+    push_datum_at(&mut project, a, 0, origin);
     let (lat, lon) = local_to_gps(40.0, 500.0, &origin).unwrap();
-    project
-        .set_zero_datum(
-            StationRef::new(a, 5),
-            GpsCoordinates::new(lat, lon, 0.0).unwrap(),
-        )
-        .unwrap();
+    push_datum_at(
+        &mut project,
+        a,
+        5,
+        GpsCoordinates::new(lat, lon, 0.0).unwrap(),
+    );
 
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
@@ -5637,49 +5848,58 @@ fn project_with_closure_across_one_shot() -> (Project, u32, u64) {
         length,
         ..Default::default()
     };
-    let mut project = Project::new("AcrossOneShot".to_string(), None);
-    let a = project
-        .add_line(LineData {
-            shots: vec![azimuth(90.0, 10.0), azimuth(90.0, 10.0)],
-            ..Default::default()
-        })
-        .id;
+    let mut project = Project::new("AcrossOneShot", None);
+    let a = add_free_line(
+        &mut project,
+        LineMeta::default(),
+        vec![azimuth(90.0, 10.0), azimuth(90.0, 10.0)],
+        0.0,
+    );
+    // B starts on A's start (what the merge of A:0 and B:0 made).
+    let a0 = station_of(&project, a, 0);
     let b = project
-        .add_line(LineData {
-            shots: vec![
+        .add_line(
+            LineMeta::default(),
+            StartAt::Station(a0),
+            vec![
                 azimuth(0.0, 10.0),
                 azimuth(90.0, 20.5),
                 azimuth(180.0, 10.0),
             ],
-            ..Default::default()
-        })
-        .id;
-    project
-        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
-        .unwrap();
-    project
-        .create_loop_closure(
-            StationRef::new(b, 3),
-            StationRef::new(a, 2),
-            ClosureStrategy::Batch,
         )
         .unwrap();
-    let id = project.next_closure_id;
-    project.next_closure_id += 1;
-    project.loop_closures.push(crate::models::LoopClosure {
-        id,
-        station_a: project.key_for_ref(StationRef::new(a, 1)).unwrap(),
-        station_b: project.key_for_ref(StationRef::new(a, 2)).unwrap(),
-        path_length: 10.0,
-        misclosure_distance: 10.0,
-        error_percentage: 100.0,
-        horizontal_misclosure: 10.0,
-        vertical_misclosure: 0.0,
-        strategy: ClosureStrategy::Batch,
-        is_aligned: false,
-    });
-    project.ensure_shot_uuids();
+    let (a1, a2, b3) = (
+        station_of(&project, a, 1),
+        station_of(&project, a, 2),
+        station_of(&project, b, 3),
+    );
+    project.push_closure(b3, Some(b), a2, Some(a), survey::ClosureStrategy::Batch);
+    let id = project.push_closure(a1, Some(a), a2, Some(a), survey::ClosureStrategy::Batch);
+    assert!(project.validate().is_empty(), "{:?}", project.validate());
     (project, a, id)
+}
+
+/// Two free lines, each held by a datum on its start, and a Batch closure
+/// between the two datum stations: the Computed View cannot solve it
+/// (the closure ties two zero datums). Returns `(x, y)`.
+fn add_two_datum_closure(project: &mut Project) -> (LineId, LineId) {
+    let x = project
+        .add_line(LineMeta::default(), StartAt::New, vec![shot_data(10.0)])
+        .unwrap();
+    let y = project
+        .add_line(LineMeta::default(), StartAt::New, vec![shot_data(10.0)])
+        .unwrap();
+    push_datum_at(project, x, 0, GpsCoordinates::new(0.0, 0.0, 0.0).unwrap());
+    push_datum_at(
+        project,
+        y,
+        0,
+        GpsCoordinates::new(0.0001, 0.0001, 0.0).unwrap(),
+    );
+    let (x0, y0) = (station_of(project, x, 0), station_of(project, y, 0));
+    project.push_closure(x0, Some(x), y0, Some(y), survey::ClosureStrategy::Batch);
+    assert!(project.validate().is_empty(), "{:?}", project.validate());
+    (x, y)
 }
 
 #[test]
@@ -5732,9 +5952,10 @@ fn test_closure_across_one_shot_warning_is_never_suppressible() {
     assert_eq!(wire["closureId"], serde_json::json!(id));
 
     // Removing the closure is the fix.
-    let removed = state(&app)
-        .inner()
-        .execute(Command::RemoveLoopClosure { closure_id: id });
+    let removed = state(&app).inner().execute(Command::RemoveLoopClosure {
+        closure_id: id,
+        renames: None,
+    });
     assert!(removed.success, "{:?}", removed.error);
     assert!(validation::get_project_warnings(state(&app))
         .iter()
@@ -5746,39 +5967,8 @@ fn test_closure_adjustment_failure_warning_is_advisory_and_ignorable() {
     // #737: a failed solve is reported only while the cached solve matches the
     // current version, so it is ADVISORY - it must not gate an upload depending
     // on which view was last open - and an Ignore on its shot is honoured.
-    let mut project = Project::new("FailedSolve".to_string(), None);
-    let x = project
-        .add_line(LineData {
-            shots: vec![shot_data(10.0)],
-            ..Default::default()
-        })
-        .id;
-    let y = project
-        .add_line(LineData {
-            shots: vec![shot_data(10.0)],
-            ..Default::default()
-        })
-        .id;
-    project
-        .set_zero_datum(
-            StationRef::new(x, 0),
-            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
-        )
-        .unwrap();
-    project
-        .set_zero_datum(
-            StationRef::new(y, 0),
-            GpsCoordinates::new(0.0001, 0.0001, 0.0).unwrap(),
-        )
-        .unwrap();
-    project
-        .create_loop_closure(
-            StationRef::new(x, 0),
-            StationRef::new(y, 0),
-            ClosureStrategy::Batch,
-        )
-        .unwrap();
-    project.ensure_shot_uuids();
+    let mut project = Project::new("FailedSolve", None);
+    add_two_datum_closure(&mut project);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
     let failed = |app: &tauri::App<MockRuntime>| {
@@ -5812,41 +6002,10 @@ fn test_closure_adjustment_failure_warning_is_advisory_and_ignorable() {
 
 #[test]
 fn test_get_adjustment_report_command() {
-    // #737: the new IPC reports the skipped closure at once, and a failed
-    // component only after the adjusted view has solved; get_adjusted_stations
-    // itself still answers a bare station list.
+    // #737: the new IPC reports the skipped closure and the failed component;
+    // get_adjusted_stations itself still answers a bare station list.
     let (mut project, a, id) = project_with_closure_across_one_shot();
-    let x = project
-        .add_line(LineData {
-            shots: vec![shot_data(10.0)],
-            ..Default::default()
-        })
-        .id;
-    let y = project
-        .add_line(LineData {
-            shots: vec![shot_data(10.0)],
-            ..Default::default()
-        })
-        .id;
-    project
-        .set_zero_datum(
-            StationRef::new(x, 0),
-            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
-        )
-        .unwrap();
-    project
-        .set_zero_datum(
-            StationRef::new(y, 0),
-            GpsCoordinates::new(0.0001, 0.0001, 0.0).unwrap(),
-        )
-        .unwrap();
-    project
-        .create_loop_closure(
-            StationRef::new(x, 0),
-            StationRef::new(y, 0),
-            ClosureStrategy::Batch,
-        )
-        .unwrap();
+    let (x, _y) = add_two_datum_closure(&mut project);
     let app = app_with_state();
     state(&app).inner().set_project_for_tests(project);
 
@@ -5856,19 +6015,23 @@ fn test_get_adjustment_report_command() {
     assert_eq!(report.skipped_closures[0].closure_id, id);
     assert_eq!(report.skipped_closures[0].shot_line_id, a);
     assert_eq!(report.skipped_closures[0].shot_index, 1);
-    assert!(report.failures.is_empty(), "no solve yet");
-
-    // What the get_adjusted_stations command runs.
-    let stations = state(&app).inner().get_adjusted_stations().unwrap();
-    assert!(!stations.is_empty());
-
-    let report =
-        tauri::async_runtime::block_on(project::get_adjustment_report(app.handle().clone()));
+    // The report reads the Computed View of this revision, solving it when no
+    // solve is memoised (plan Deviation C10); 0.6.0 listed a failure only once
+    // the adjusted view had solved. The frontend asks for the report right
+    // after get_adjusted_stations, so what it shows is the same.
     assert_eq!(report.failures.len(), 1, "{report:?}");
     assert!(report.failures[0].line_ids.contains(&x));
     assert!(report.failures[0]
         .reason
         .starts_with("loop closures tie two zero datums"));
+
+    // What the get_adjusted_stations command runs.
+    let stations = state(&app).inner().get_adjusted_stations().unwrap();
+    assert!(!stations.is_empty());
+
+    let again =
+        tauri::async_runtime::block_on(project::get_adjustment_report(app.handle().clone()));
+    assert_eq!(again, report, "the memoised solve reports the same");
     let wire = serde_json::to_value(&report).unwrap();
     assert_eq!(
         wire["skipped_closures"][0]["closure_id"],
@@ -5935,7 +6098,7 @@ fn test_create_line_with_date_roundtrip() {
     );
     assert_success(&result);
     let line = get_line(state(&app), result.line_id.unwrap()).unwrap();
-    assert_eq!(line.first_survey_date(), Some(date));
+    assert_eq!(first_survey_date(&line), Some(date));
     assert_eq!(line.direction, SurveyDirection::Out);
 }
 
@@ -6011,7 +6174,7 @@ fn test_merge_projects_requires_sources() {
 fn test_merge_projects_requires_two_sources() {
     let app = app_with_state();
     let project = project_with_line(vec![shot_data(1.0)]);
-    let (db, _database) = TestDb::with_project(&project).unwrap();
+    let db = TestDb::with_project(&project).unwrap();
     let output_dir = TempDir::new().unwrap();
     let output_path = output_dir.path().join("merged.stalx");
 
@@ -6030,8 +6193,8 @@ fn test_merge_projects_requires_two_sources() {
 fn test_merge_projects_fails_when_output_exists() {
     let app = app_with_state();
     let project = project_with_line(vec![shot_data(1.0)]);
-    let (db_a, _database_a) = TestDb::with_project(&project).unwrap();
-    let (db_b, _database_b) = TestDb::with_project(&project).unwrap();
+    let db_a = TestDb::with_project(&project).unwrap();
+    let db_b = TestDb::with_project(&project).unwrap();
     let output_dir = TempDir::new().unwrap();
     let output_path = output_dir.path().join("merged.stalx");
     fs::write(&output_path, b"exists").unwrap();
@@ -6052,8 +6215,8 @@ fn test_merge_projects_success_creates_output() {
     let app = app_with_state();
     let project_a = project_with_line(vec![shot_data(1.0)]);
     let project_b = project_with_line(vec![shot_data(2.0)]);
-    let (db_a, _database_a) = TestDb::with_project(&project_a).unwrap();
-    let (db_b, _database_b) = TestDb::with_project(&project_b).unwrap();
+    let db_a = TestDb::with_project(&project_a).unwrap();
+    let db_b = TestDb::with_project(&project_b).unwrap();
     let output_dir = TempDir::new().unwrap();
     let output_path = output_dir.path().join("merged.stalx");
 
@@ -6169,6 +6332,8 @@ fn test_get_segment_geometry_connected_lines() {
         state(&app),
         StationRef::new(id_a, 1),
         StationRef::new(id_b, 0),
+        None,
+        None,
     ));
 
     // Query segment from line A
@@ -6229,6 +6394,8 @@ fn test_get_segment_geometry_queried_from_either_end() {
         state(&app),
         StationRef::new(id_a, 1),
         StationRef::new(id_b, 0),
+        None,
+        None,
     ));
 
     // Query from line B - should still include both lines
@@ -6255,8 +6422,9 @@ fn test_get_raw_table_names_lists_project_tables() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
+    // A version 2 file's members (`docs/file-format.md`), each a table.
     let names = raw_data::get_raw_table_names_impl(state(&app).inner()).unwrap();
-    for expected in ["project", "sections", "shots"] {
+    for expected in ["file", "project", "stations", "lines", "shots"] {
         assert!(
             names.iter().any(|n| n == expected),
             "missing table {expected}"
@@ -6309,7 +6477,7 @@ fn test_get_raw_table_rejects_injection_names() {
         let err = raw_data::get_raw_table_impl(state(&app).inner(), name.to_string(), 100, 0)
             .unwrap_err();
         assert!(
-            err.contains("Unknown table"),
+            err.contains("No such table"),
             "expected rejection for {name:?}, got: {err}"
         );
     }

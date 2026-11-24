@@ -272,8 +272,9 @@ export const newProjectFromDmp: Journey = {
     // project location (an empty save path is what selects deferral, see the
     // new-project comment), so the journey removes its own artifact - stale
     // copies would otherwise accumulate via save auto-renaming and leak into
-    // later runs. Close FIRST: deleting the backing file under a live SQLite
-    // handle is the documented SIGBUS hazard.
+    // later runs. Close FIRST, so the backend no longer holds the file as the
+    // open project (under 0.6.0's live SQLite handle its removal was the
+    // documented SIGBUS hazard).
     if (project.filePath !== null) {
       const closed = (await ctx.callAction('project', 'closeProject', [])) as { ok: boolean };
       if (closed.ok) fs.rmSync(project.filePath, { force: true });

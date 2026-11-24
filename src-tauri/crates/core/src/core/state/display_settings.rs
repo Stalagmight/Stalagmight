@@ -1,74 +1,45 @@
+//! Display settings (per-machine view toggles): the file's `local.display`
+//! member, held in memory (`FileState`) and made durable at once by a
+//! local-only save (plan 6.5 mode 4). Ungated: view state, never pushed.
+
 use anyhow::Result;
 use std::collections::HashMap;
 
 use super::AppState;
 
 impl AppState {
-    /// Load display settings from database or in-memory cache
+    /// The open project's display settings.
     pub fn load_display_settings(&self) -> Result<HashMap<String, String>> {
-        // Try database first
-        let db_guard = self
-            .database
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
-        if let Some(db) = db_guard.as_ref() {
-            return db.load_display_settings();
-        }
-        drop(db_guard);
-
-        // Fall back to in-memory cache for new unsaved projects
-        let cache = self
-            .display_settings_cache
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Failed to lock display settings cache"))?;
-        Ok(cache.clone())
+        Ok(self.with_file(|file| {
+            file.display_settings()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        }))
     }
 
-    /// Save a display setting to database or in-memory cache
+    /// Set one display setting. Durable at once on a version 2 file (a
+    /// local-only save); a legacy or never-saved project keeps it in memory
+    /// for its first save, without making the project unsaved (a 0.6.0 file
+    /// is converted only by a save the user asked for, demo issue I-6).
     pub fn save_display_setting(&self, key: &str, value: &str) -> Result<()> {
-        // Try database first
-        let db_guard = self
-            .database
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
-        if let Some(db) = db_guard.as_ref() {
-            return db.save_display_setting(key, value);
+        let changed = self.with_file(|file| {
+            let display = &mut file.extras.local.display;
+            if display.get(key).map(String::as_str) == Some(value) {
+                return false;
+            }
+            display.insert(key.to_string(), value.to_string());
+            true
+        });
+        if changed {
+            self.persist_display_state()
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
         }
-        drop(db_guard);
-
-        // Fall back to in-memory cache for new unsaved projects
-        let mut cache = self
-            .display_settings_cache
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Failed to lock display settings cache"))?;
-        cache.insert(key.to_string(), value.to_string());
         Ok(())
     }
 
-    /// Get a single display setting from database or in-memory cache
+    /// One display setting.
     pub fn get_display_setting(&self, key: &str) -> Result<Option<String>> {
-        // Try database first
-        let db_guard = self
-            .database
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
-        if let Some(db) = db_guard.as_ref() {
-            return db.get_display_setting(key);
-        }
-        drop(db_guard);
-
-        // Fall back to in-memory cache for new unsaved projects
-        let cache = self
-            .display_settings_cache
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Failed to lock display settings cache"))?;
-        Ok(cache.get(key).cloned())
-    }
-
-    /// Clear the in-memory display settings cache (called after save when settings are persisted to DB)
-    pub(super) fn clear_display_settings_cache(&self) {
-        if let Ok(mut cache) = self.display_settings_cache.lock() {
-            cache.clear();
-        }
+        Ok(self.with_file(|file| file.display_settings().get(key).cloned()))
     }
 }

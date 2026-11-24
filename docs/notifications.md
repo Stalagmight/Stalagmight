@@ -41,7 +41,7 @@ against this page first.
 | Surface | Use for | Persistence | Examples in the codebase |
 |---|---|---|---|
 | Modal dialog | User must acknowledge/decide before continuing; data at risk | Until dismissed; app inert behind it | `ErrorDialog`, `ImportReceiptDialog` (only when the receipt has a warning, is empty, converted units, or created a zero datum, #411), corruption recovery |
-| Banner / indicator | Ongoing conditions | Until the condition clears | integrity banner (`App.tsx`), `SpeleoBanner`, `OfflineIndicator`, read-only badges and the adjustment notice (`MapTopLeftOverlay`; #737: loop closures the Closures Computed View skips because they span a single shot, and parts of the survey it shows measured, with a Show warnings action), `UpdateBanner` (#579, #631: an update is available, downloading, or ready. A background download (from a launch, periodic or track-switch check) shows no banner until it is ready; one started from About or the banner's Download shows progress. A failed check shows nothing and goes quietly to idle, except that About's manual check says so inline in the dialog. A failed Download from the banner, a failed Restart, and a restart the backend refuses because a SpeleoDB transfer started are toasts; a failed background download just drops back to the banner's Download, and a failed install on quit is only logged) |
+| Banner / indicator | Ongoing conditions | Until the condition clears | `SpeleoBanner`, `OfflineIndicator`, read-only badges and the adjustment notice (`MapTopLeftOverlay`; #737: loop closures the Closures Computed View skips because they span a single shot, and parts of the survey it shows measured, with a Show warnings action), `UpdateBanner` (#579, #631: an update is available, downloading, or ready. A background download (from a launch, periodic or track-switch check) shows no banner until it is ready; one started from About or the banner's Download shows progress. A failed check shows nothing and goes quietly to idle, except that About's manual check says so inline in the dialog. A failed Download from the banner, a failed Restart, and a restart the backend refuses because a SpeleoDB transfer started are toasts; a failed background download just drops back to the banner's Download, and a failed install on quit is only logged) |
 | Toast | Transient outcome of an action whose result is off-screen or non-obvious | Auto-dismiss (5-9 s by kind) | save confirmations, blocked-edit notice, export results, warning-free non-converted import receipt (#411) |
 | Log only | Internal, recoverable, debug | n/a | `console.warn`/`console.error` |
 
@@ -79,6 +79,12 @@ regions). Read the comment blocks in those two files plus
   dedup window collapses them. Register a new key there first.
 - **All toast strings go through i18n** (`t()` / `en.json`), like any other UI
   string. Hardcoded English in a `showToast` call is a defect.
+- **A toast names stations, shots and lines as prose pills** (RS-PROSE): word
+  the message with prose tokens (`currentProse()` / `useProse()`, or
+  `backendProse` of a backend text and its parts) and `ToastStack` draws each
+  name as a pill. The live regions and the dismiss button's label read the
+  plain words (`proseToPlain`), so a screen reader hears the sentence plain
+  text writes; never slice or trim a message that holds tokens.
 - **Nothing critical or must-act rides a toast.** Toasts auto-dismiss; a message the
   user cannot afford to miss, or that carries a required action, is a dialog or
   banner (Carbon: actionable notifications must persist). Toasts here have no action
@@ -95,8 +101,8 @@ regions). Read the comment blocks in those two files plus
   (`surfaceSaveFailure`, `surfaceImportFailure`, `finalizeDeferredSaveWarnings`,
   `completeImportToSingleView`) when one owns the event class. A bespoke
   `openDialog('error', ...)` for save or import outcomes is a defect - the router
-  is where policy (integrity-blocked routing, permission-denied suppression,
-  receipt aggregation) lives.
+  is where policy (the save prompt for a file changed on disk, permission-denied
+  suppression, receipt aggregation) lives.
 - **Modal means blocking.** Open a dialog only when the user must read or decide
   before continuing. Reporting a success that needs no decision is a receipt-style
   dialog only when there are multiple facts to review (import receipt); otherwise
@@ -147,6 +153,44 @@ regions). Read the comment blocks in those two files plus
   not be silent either (an unsaved-changes condition is ongoing). Its Dismiss is a
   deliberate override - the banner re-raises on the next failing autosave rather
   than tracking the condition continuously; the close guard remains the backstop.
+- **A file another program changed is a modal decision, but only on a manual
+  save.** A save refused with `EXTERNALLY_MODIFIED` (the `.stalx` guard,
+  [saving.md](saving.md#the-external-modification-guard)) puts data at risk
+  either way, so `surfaceSaveFailure` opens `SaveConflictDialog`: Keep my
+  version, Save as a new file, Use the file's version (not for a SpeleoDB copy,
+  whose reload belongs to the sync, nor for a file that was moved or deleted:
+  the refusal carries `FILE_MISSING`, and the prompt says "moved or deleted";
+  nor for a file that appeared where a first save goes: `FILE_EXISTS`, and the
+  prompt says "A file named ... appeared at this location"), or Decide later.
+  An autosave refused the same way raises no modal (a background save never
+  does): it goes to the autosave banner ("changed by another program", "moved
+  or deleted by another program", or "A different file appeared where the
+  project is saved") and autosave
+  pauses until a save lands; the banner's Save opens the prompt.
+- **A read-only file and a converted file are banners, not dialogs.** A file
+  made with a newer Stalagmight opens read-only with a banner naming the reason
+  (`read-only-file-banner`, no button: there is nothing to do here but update),
+  and the status bar reads "Read-only". Anything it turns away - a typed key,
+  Ctrl+Z, Save, Ctrl+S, Save As, Import, a click on a disabled menu row, a
+  save the backend refused (`surfaceSaveFailure`) - is the `warning` toast
+  `edit-disabled` with the read-only notice, once while it is on screen,
+  never the error dialog: it is a blocked action, not a failure, and the
+  report-a-bug footer would be wrong advice (demo issue N-1). An old
+  file whose conversion moved stations, changed a depth, could not place a
+  station, showed a station under another name or joined comments shows the
+  one-time conversion notice (`conversion-notice-banner`) until dismissed: one
+  lead, the changes the backend words with their counts (a long list of
+  renamed stations behind Details; each station a clause or a Details row
+  names is a prose pill, from `change_parts` / `detail_parts`), and one sentence on saving that is true
+  now ("the next time you save", or "Saved in the new format"; "the original
+  file is kept": Recent Projects, right-click, Restore an earlier copy; for a
+  legacy SpeleoDB revision converted on download, "the original revision is
+  unchanged on SpeleoDB" instead). The converting save moves that sentence on;
+  with no banner showing it is a success toast instead (one event, one
+  surface). Until that save the status bar reads "Old format: converted when
+  you save", not "Saved", banner or not (N-6). The history-discarded banner
+  (`history-discarded-banner`) is unchanged: it also covers an old file's
+  history, which the conversion drops.
 
 ## Command-failure contract
 
@@ -172,9 +216,23 @@ regions). Read the comment blocks in those two files plus
   `CommandResult.warnings`; `notifyRemovedClosures` (`utils/closureRemovalToast.ts`,
   called by the `deleteShot` / `deleteShotRangeShift` store actions) turns them
   into ONE warning toast (key `closure-removed`) in the backend's words, the way
-  the `command-failed` catch-all shows `result.error`. A toast, not a dialog: the
+  the `command-failed` catch-all shows `result.error`; the stations the
+  warning names arrive as its `parts` and are drawn as prose pills. A toast, not a dialog: the
   delete did what was asked, nothing needs deciding, and one Undo restores the
   closure with the shots.
+- **Names an action changed on its own are one notice per action** (kept and
+  archived stations, plan 2026-11-23 RS 7). A merge without a dialog, a delete
+  that brings an archived station back, a closure removal or a promotion may
+  give a station a letter so no line shows a name twice (rule L), restore an
+  archived station (hiding a comment Undo brings back), or make a loop
+  closure's hidden end show its own name again. The backend reports these on
+  `CommandResult.identities`; `notifyIdentityChanges`
+  (`utils/identityNotice.ts`, called by `executeCommand` on every success)
+  names each in ONE warning toast (key `station-identities`), each station a
+  prose pill by its home line. The four dialogs
+  that ask (Merge Stations, Create Loop Closure, Detach Line from Station,
+  Remove Closure) send the user's own answers, which are not reported; imports
+  report theirs only in the receipt.
 - Genuine IPC rejections (transport errors) re-sync state and re-throw; the caller
   that initiated the action owns surfacing them under the rules above.
 

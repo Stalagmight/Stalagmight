@@ -31,7 +31,6 @@ describe('projectStore.createLineAndMerge', () => {
     invokeIpcMock.mockResolvedValue({ success: true, line_id: 9 });
     useProjectStore.setState({
       refreshProjectState: vi.fn().mockResolvedValue(undefined),
-      checkProjectIntegrity: vi.fn().mockResolvedValue(undefined),
     } as Partial<ReturnType<typeof useProjectStore.getState>> as never);
   });
 

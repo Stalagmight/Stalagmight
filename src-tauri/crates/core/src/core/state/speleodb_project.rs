@@ -12,9 +12,13 @@
 //! a second project, so every deterministic failure has to be caught before it.
 //! Lock release and file-access checks live in `speleodb_admin`.
 
+use std::path::Path;
+
+use super::open_file::{read_unchanged, write_error, FileOrigin, FileState};
 use super::speleodb::{local_dto, validate_project_id, MANAGED_PROJECT_TYPE};
 use super::speleodb_push::PushOutcome;
 use super::AppState;
+use crate::persistence::stalx_v2;
 use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::{
@@ -33,6 +37,13 @@ fn publish_undo_history_omitted(upload: &Result<PushOutcome, SpeleoErrorDto>) ->
         })
     )
     .then_some(true)
+}
+
+/// Plan 12.1: what the publish result reports when the server refused the first
+/// upload for its file format: `Some(true)`, so the webview says the server
+/// project is empty instead of "created". Any other outcome reports nothing.
+fn publish_upload_format_refused(upload: &Result<PushOutcome, SpeleoErrorDto>) -> Option<bool> {
+    matches!(upload, Err(e) if e.format_refused == Some(true)).then_some(true)
 }
 
 /// The canonical SpeleoDB wire label for a visibility ([#206]/[#207]). The server's
@@ -86,19 +97,26 @@ fn build_create_body(params: &SpeleoPublishParams) -> serde_json::Value {
 
 impl AppState {
     /// Fold an SDB-authoritative project name into the OPEN local `.stalx` WITHOUT
-    /// setting the dirty bit ([#206]/[#216]): update the in-memory project, persist it
-    /// directly (`db.save_project` bypasses the command/undo/dirty path and never
-    /// touches the `speleo_link` table), and refresh the link's cached `project_name`.
-    /// Best-effort - a failure is logged, never surfaced (the server write already
-    /// landed). Locks project → database in that order (mirrors `speleodb_render_tml`).
+    /// setting the dirty bit ([#206]/[#216]): update the in-memory project and the
+    /// link's cached `project_name`, and make both durable at once - the name by a
+    /// rename of the file's `project` member (`stalx_v2::rename_project`: every
+    /// other member copied verbatim, so unsaved survey edits stay unsaved), the
+    /// link by the local-only save. Neither marks the project changed: the name is
+    /// already the server's. Best-effort - a failure is logged, never surfaced (the
+    /// server write already landed).
+    ///
+    /// Everything happens under ONE `project` acquisition, with the identity check
+    /// first: a late PATCH/GET response must never rename the replacement project.
+    /// A file opened read-only ("made with a newer Stalagmight") keeps its name in
+    /// memory and on disk; only the link's cached name follows. A legacy file not
+    /// upgraded yet, or a project never saved, keeps the fold in memory for its
+    /// first save.
     pub(super) fn speleodb_fold_local_name(
         &self,
         name: &str,
         project_id: &str,
         expected_generation: u64,
     ) {
-        // Keep project -> database locked across the identity check and both writes.
-        // A late PATCH/GET response must never rename the replacement project.
         let Ok(mut project_guard) = self.project.lock() else {
             return;
         };
@@ -108,26 +126,34 @@ impl AppState {
         let Some(open) = project_guard.as_mut() else {
             return;
         };
-        let Ok(mut database_guard) = self.database.lock() else {
-            return;
-        };
-        let Some(db) = database_guard.as_mut() else {
-            return;
-        };
-        let Ok(Some(mut link)) = db.load_speleo_link() else {
-            return;
-        };
-        if link.project_id != project_id {
-            return;
-        }
-        if open.name != name {
-            open.name = name.to_owned();
-            if let Err(error) = db.save_project(open) {
-                tracing::warn!(%error, "could not persist the SpeleoDB project name");
+        let path = open.file_path.clone();
+        let renamed = {
+            let mut file = self
+                .file
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(mut link) = file.speleo_link() else {
+                return;
+            };
+            if link.project_id != project_id {
+                return;
             }
+            name.clone_into(&mut link.project_name);
+            file.set_speleo_link(Some(&link));
+            let rename = open.name != name && file.extras.read_only.is_none();
+            if rename {
+                name.clone_into(&mut open.name);
+                if let Err(error) = rename_on_disk(path.as_deref(), &mut file, name) {
+                    tracing::warn!(%error, "could not persist the SpeleoDB project name");
+                }
+            }
+            rename
+        };
+        if renamed {
+            // A name change is a change of the project slot.
+            self.bump_revision();
         }
-        link.project_name = name.to_owned();
-        if let Err(error) = db.save_speleo_link(Some(&link)) {
+        if let Err(error) = self.persist_local_state_at(path) {
             tracing::warn!(%error, "could not persist the SpeleoDB link name");
         }
     }
@@ -155,8 +181,9 @@ impl AppState {
         //  - already linked: the FE only offers Publish for a LOCAL project, but a stale
         //    menu / race must not POST a duplicate and overwrite the existing hand-off
         //    link (abandoning its lock);
-        //  - unresolvable cross-references: the one DETERMINISTIC `save_project` failure,
-        //    checked here so step 2's relocate cannot strand a freshly-created project.
+        //  - the two DETERMINISTIC failures of step 2's save, checked here so its
+        //    relocate cannot strand a freshly-created project: a survey that breaks an
+        //    invariant (the save refuses to write it) and a file open read-only.
         if params.name.trim().is_empty() {
             return Err(local_dto(SpeleoDbError::Io(
                 "a project name is required to publish".to_owned(),
@@ -177,9 +204,16 @@ impl AppState {
                     "no project is open to publish".to_owned(),
                 ))
             })?;
-            if project.has_unresolvable_cross_references() {
+            if !project.validate().is_empty() {
                 return Err(local_dto(SpeleoDbError::Io(
                     "can't publish: the project has unresolved cross-references (use Repair first)"
+                        .to_owned(),
+                )));
+            }
+            if self.with_file(|file| file.extras.read_only.is_some()) {
+                return Err(local_dto(SpeleoDbError::Io(
+                    "can't publish: this project was made with a newer Stalagmight and is \
+                     open read-only"
                         .to_owned(),
                 )));
             }
@@ -207,7 +241,8 @@ impl AppState {
         //    project's canonical file lives at `speleodb_cache_path` (open/fast-forward
         //    both extract there), and the push machinery reads exactly that path.
         //    `save_project(Some(dest))` writes a fresh `.stalx` there AND switches the
-        //    active database + `project.file_path` to it.
+        //    open project's `file_path` (and the save guard's fingerprint) to it. A
+        //    legacy original is left as it was: only the open file's own save upgrades.
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
@@ -224,6 +259,8 @@ impl AppState {
         // 3. Stamp a fresh hand-off link onto the cached file. BASE = the create
         //    response's latest_commit (None for a brand-new empty repo); dirty = true
         //    (the local content is not on the server yet). New sanctioned stamp site.
+        //    [#303] A new link materializes the application default immediately: the
+        //    project was unlinked, so it carries no undo mode of its own.
         let link = crate::models::SpeleoLink {
             endpoint: endpoint.clone(),
             project_id: project_id.clone(),
@@ -232,38 +269,19 @@ impl AppState {
             has_unpushed_edits: true,
             last_edit_at: Some(chrono::Utc::now().to_rfc3339()),
             last_verify_at: None,
-            // [#303] A new link materializes the application default immediately.
-            // Re-publishing a detached managed copy preserves its explicit project value.
-            undo_mode: Some({
-                let db_guard = self.database.lock().map_err(|_| {
-                    local_dto(SpeleoDbError::Io("database lock poisoned".to_owned()))
-                })?;
-                let db = db_guard.as_ref().ok_or_else(|| {
-                    local_dto(SpeleoDbError::Io(
-                        "no open database after writing the cache file".to_owned(),
-                    ))
-                })?;
-                self.effective_undo_mode(super::speleodb_cache::preserved_undo_mode(db))
-            }),
+            undo_mode: Some(self.effective_undo_mode(None)),
         };
         {
-            let _project = self
+            let project = self
                 .project
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if self.speleodb_session_generation() != generation {
                 return Err(local_dto(SpeleoDbError::SessionMoved));
             }
-            let db_guard = self
-                .database
-                .lock()
-                .map_err(|_| local_dto(SpeleoDbError::Io("database lock poisoned".to_owned())))?;
-            let db = db_guard.as_ref().ok_or_else(|| {
-                local_dto(SpeleoDbError::Io(
-                    "no open database after writing the cache file".to_owned(),
-                ))
-            })?;
-            db.save_speleo_link(Some(&link))
+            let path = project.as_ref().and_then(|p| p.file_path.clone());
+            self.with_file(|file| file.set_speleo_link(Some(&link)));
+            self.persist_local_state_at(path)
                 .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
             // Conversion has crossed into a managed project. Initial upload is
             // internal; subsequent editing must acquire and reconcile the lock, so the
@@ -288,7 +306,12 @@ impl AppState {
         //    acquire/upload failure and STILL return the cache path: the webview reloads a
         //    dirty remote project and the user completes the upload via the normal Start
         //    editing → Done (which surfaces a genuine push error, in context, if any).
+        //    A server that refused the FILE FORMAT (plan 12.1) is the one failure
+        //    the result names (`upload_format_refused`): the server project is empty
+        //    and Save Changes would only be refused again, so the webview says so
+        //    instead of "use Save Changes to finish uploading".
         let mut undo_history_omitted = None;
+        let mut upload_format_refused = None;
         match self.speleodb_handle_auth(
             Endpoint::Acquire,
             client::acquire_lock(&endpoint, &token, insecure_http, &project_id),
@@ -299,7 +322,7 @@ impl AppState {
                     &token,
                     insecure_http,
                     &link,
-                    params.message.clone(),
+                    params.message,
                     // Skip the #216 name fold: the project was just created with this
                     // exact name, so the fold GET would be a guaranteed no-op.
                     false,
@@ -317,6 +340,7 @@ impl AppState {
                     },
                 );
                 undo_history_omitted = publish_undo_history_omitted(&upload);
+                upload_format_refused = publish_upload_format_refused(&upload);
                 if let Err(e) = upload {
                     tracing::warn!(
                         error = ?e,
@@ -353,12 +377,23 @@ impl AppState {
         {
             match self.speleodb_server_head(&endpoint, &token, insecure_http, &project_id) {
                 Ok((tip, _)) if tip.is_some() => {
-                    let _project = self
+                    let project = self
                         .project
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     if self.speleodb_session_generation() == generation {
-                        let _ = self.speleodb_mutate_link(|l| l.base_commit_sha = tip.clone());
+                        let path = project.as_ref().and_then(|p| p.file_path.clone());
+                        let stamped = self.with_file(|file| {
+                            let mut link = file.speleo_link()?;
+                            link.base_commit_sha.clone_from(&tip);
+                            file.set_speleo_link(Some(&link));
+                            Some(())
+                        });
+                        if stamped.is_some() {
+                            if let Err(e) = self.persist_local_state_at(path) {
+                                tracing::warn!(error = %e, "speleodb_publish: the adopted BASE is set in memory only");
+                            }
+                        }
                     }
                 }
                 Ok(_) => {}
@@ -376,14 +411,38 @@ impl AppState {
             endpoint,
             local_path: dest.to_string_lossy().into_owned(),
             undo_history_omitted,
+            upload_format_refused,
         })
     }
+}
+
+/// Rename the `project` member of the open version 2 file at `path` (the
+/// caller holds `project` and `file`), guarded by the fingerprint last read or
+/// written. A legacy file not upgraded yet, or a project never saved, keeps the
+/// name in memory for its first save.
+fn rename_on_disk(path: Option<&Path>, file: &mut FileState, name: &str) -> Result<(), String> {
+    let (Some(path), Some(expected), FileOrigin::V2) =
+        (path, file.fingerprint.clone(), file.origin)
+    else {
+        file.local_pending = true;
+        file.local_pending_asks = true;
+        return Ok(());
+    };
+    let original = read_unchanged(path, &expected).map_err(String::from)?;
+    let bytes = stalx_v2::rename_project(&original, name).map_err(|e| e.to_string())?;
+    let fingerprint = stalx_v2::write_atomic(path, &bytes, stalx_v2::Guard::Expect(&expected))
+        .map_err(|e| String::from(write_error(&e)))?;
+    file.fingerprint = Some(fingerprint);
+    Ok(())
 }
 
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
-    use super::{build_create_body, publish_undo_history_omitted, visibility_label};
+    use super::{
+        build_create_body, publish_undo_history_omitted, publish_upload_format_refused,
+        visibility_label,
+    };
     use crate::core::state::speleodb_push::PushOutcome;
     use crate::speleodb::{SpeleoPublishParams, Visibility};
 
@@ -415,6 +474,38 @@ mod tests {
             &crate::speleodb::SpeleoDbError::UploadTooLarge { size: 2, limit: 1 },
         );
         assert_eq!(publish_undo_history_omitted(&Err(refused)), None);
+    }
+
+    #[test]
+    fn publish_reports_a_format_refusal_and_nothing_else() {
+        use crate::speleodb::contract::{dto_for_error, Endpoint};
+        use crate::speleodb::SpeleoDbError;
+        let refused = dto_for_error(
+            Endpoint::UploadStalx,
+            &SpeleoDbError::UploadFormatRefused {
+                status: 400,
+                detail: "synthetic".to_owned(),
+            },
+        );
+        assert_eq!(publish_upload_format_refused(&Err(refused)), Some(true));
+        let other = dto_for_error(
+            Endpoint::UploadStalx,
+            &SpeleoDbError::Status {
+                status: 403,
+                message: "fence".to_owned(),
+            },
+        );
+        assert_eq!(publish_upload_format_refused(&Err(other)), None);
+        assert_eq!(
+            publish_upload_format_refused(&Ok(PushOutcome::Unconfirmed)),
+            None
+        );
+        assert_eq!(
+            publish_upload_format_refused(&Ok(PushOutcome::Confirmed {
+                undo_history_omitted: false
+            })),
+            None
+        );
     }
 
     #[test]
@@ -494,7 +585,7 @@ mod tests {
             .find("self.save_project_at_generation(Some(")
             .expect("publish relocates via an explicit-destination save");
         let stamp = body
-            .find(".save_speleo_link(Some(")
+            .find("file.set_speleo_link(Some(&link))")
             .expect("publish stamps the fresh link");
         assert!(
             relocate < stamp,

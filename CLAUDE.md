@@ -180,10 +180,12 @@ Update `CHANGELOG.md` every time a new version is tagged.
 | [Testing Recipes](docs/testing-recipes.md) | Commands per tier, Playwright/agent-harness/Rust/vitest patterns, mock conventions, troubleshooting |
 | [Linting & Format Policy](docs/linting.md) | Rust clippy/rustfmt CI gates, the anti-AI-slop policy, the per-test-module `#[expect]` idiom, considered-but-deferred lints |
 | [Toolchain](docs/toolchain.md) | The pnpm/node pins: corepack integrity hash, `allowBuilds` build-script approvals, lockfile version policy |
-| [Architecture](docs/architecture.md) | Workspace crate layout, state flow, command pattern, key files, Rust patterns |
+| [Architecture](docs/architecture.md) | Workspace crate layout, state flow, `AppState` and the open file, the execute pipeline, key files, Rust patterns |
+| [Survey model](docs/survey-model.md) | The station-graph model (`models::survey`): stations, junctions, invariants, solver, operations, changesets, wire API, what the core builds on it |
+| [File format](docs/file-format.md) | The `.stalx` version 2 file (canonical JSON): members, validity, versioning, unknown content, how Stalagmight saves |
 | [Project Structure](docs/project-structure.md) | Directory tree, tech stack |
 | [Configuration](docs/configuration.md) | Config file locations, options, logging |
-| [Saving](docs/saving.md) | Save pipeline, auto-save, undo persistence, atomic writes |
+| [Saving](docs/saving.md) | Open and save of the v2 file, the external-modification guard, local-only saves, the legacy upgrade, auto-save, undo persistence |
 | [Inclination convention](docs/inclination.md) | Pitch is +down everywhere; where each importer normalises, and the v12 migration |
 | [SpeleoDB dev testing](docs/speleodb-dev-testing.md) | Dev box env vars, the superuser test account, env-gated self-seeding live tests, verified v2 API contract |
 | [Roadmap](docs/roadmap.md) | Historical record of the v1.0 phases; live work is in the issue tracker |
@@ -195,8 +197,8 @@ Update `CHANGELOG.md` every time a new version is tagged.
 | [Agent Harness](docs/agent-harness.md) | LLM-agent harness (MCP + webdriverio) to drive the real app: tools, oracles, stress scenarios, replay + repro reports. Runs on the repo-pinned Node. |
 | [UAT ledger](docs/uat/ledger.md) | Acceptance tier: one line per real-app UAT run, the per-RC checklist, and the machine-readable records. |
 | [App modes](docs/app-modes.md) | Survey/Plan/Export modes and the read-only contract every mutation path must check |
-| [Loop closures](docs/closures.md) | Raw Data View vs Closures Computed View, the least-squares solve, co-location with the move tools |
-| [Undo/Redo](docs/undo-redo.md) | Command-pattern undo: two-phase capture, `UndoData` variants, batch commands, persistence, lock ordering |
+| [Loop closures](docs/closures.md) | Derived closure figures, the orphan-closure sweep, Raw Data View vs Closures Computed View, the least-squares solve, co-location with the move tools |
+| [Undo/Redo](docs/undo-redo.md) | The changeset undo engine: the pipeline, batches and recipes, record-time labels, the `history` member, the SpeleoDB hybrid mode, lock ordering |
 | [Move tools](docs/move-tools.md) | Move Station/Shot/Segment: scope, the shared drag-preview engine, Ctrl+drag panning, immovable stations |
 | [Map renderer](docs/map-renderer.md) | The custom WebGL survey layers: tessellation, shaders, labels, incremental updates |
 | [Color palettes](docs/color-palettes.md) | Depth / distance palettes and the Levels range: storage (config only, never .stalx), the byte-exact default, live preview, export |

@@ -261,7 +261,7 @@ impl AppState {
         project_id: &str,
         acquired_here: bool,
     ) -> Result<(), SpeleoDbError> {
-        let _proj_guard = self
+        let proj_guard = self
             .project
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -286,11 +286,59 @@ impl AppState {
         // this session without the gate being open.
         self.speleodb_bind_edit_claim(project_id, &open.endpoint, acquired_here, acquired_here)?;
         if entry_generation.is_some() {
-            let _ = self.speleodb_mutate_link(|l| {
-                l.last_verify_at = Some(chrono::Utc::now().to_rfc3339());
-            });
+            self.speleodb_stamp_verified_held(proj_guard.as_ref(), chrono::Utc::now());
         }
         Ok(())
+    }
+
+    /// Stamp the open link's `last_verify_at`, the pace of the lazy lock
+    /// re-verify, and make it durable. The caller holds the `project` guard
+    /// (`project` is its content). Losing the stamp at a close only makes
+    /// the next edit re-verify sooner, so on a 0.6.0 copy waiting for its
+    /// converting save it does not make the project unsaved (the rule on
+    /// `FileState::local_pending_asks`). Best-effort, as the stamp always was.
+    pub(super) fn speleodb_stamp_verified_held(
+        &self,
+        project: Option<&crate::models::survey::Project>,
+        at: chrono::DateTime<chrono::Utc>,
+    ) {
+        let stamped = self.with_file(|file| {
+            let mut link = file.speleo_link()?;
+            link.last_verify_at = Some(at.to_rfc3339());
+            file.set_speleo_link(Some(&link));
+            Some(())
+        });
+        if stamped.is_none() {
+            return;
+        }
+        if let Err(e) = self.persist_unasked_state_at(project.and_then(|p| p.file_path.clone())) {
+            tracing::debug!(error = %e, "the lock re-verification time is set in memory only");
+        }
+    }
+
+    /// `speleodb_mutate_link` for a caller that holds the `project` guard:
+    /// change the open project's link in memory and make it durable at once
+    /// (the local-only save, `persist_local_state_at`, with the path read
+    /// through `project`, that guard's content). The plain form would take
+    /// `project` again for the save, and the guard is not reentrant: a
+    /// deadlock. [`SpeleoDbError::NoRemoteProject`] when nothing linked is
+    /// open; a failed save is `Io` with the link changed in memory.
+    pub(super) fn speleodb_mutate_link_held(
+        &self,
+        project: Option<&crate::models::survey::Project>,
+        f: impl FnOnce(&mut crate::models::SpeleoLink),
+    ) -> Result<(), SpeleoDbError> {
+        let changed = self.with_file(|file| {
+            let mut link = file.speleo_link()?;
+            f(&mut link);
+            file.set_speleo_link(Some(&link));
+            Some(())
+        });
+        if changed.is_none() {
+            return Err(SpeleoDbError::NoRemoteProject);
+        }
+        self.persist_local_state_at(project.and_then(|p| p.file_path.clone()))
+            .map_err(|e| SpeleoDbError::Io(e.to_string()))
     }
 
     /// The unwind release for Start Editing's abort arms, now that a session
@@ -689,9 +737,9 @@ impl AppState {
 mod tests {
     use std::path::Path;
 
+    use super::super::stalx_fixtures::write_v2;
     use super::AppState;
-    use crate::models::{Project, SpeleoLink};
-    use crate::persistence::Database;
+    use crate::models::SpeleoLink;
     use crate::speleodb::SpeleoDbError;
 
     const ID: &str = "11111111-1111-1111-1111-111111111111";
@@ -703,25 +751,25 @@ mod tests {
     /// A `.stalx` at `path` linked to `project_id` (same idiom as
     /// `speleodb_foreign`'s fixture).
     fn seed_linked(path: &Path, project_id: &str) {
-        let mut db = Database::open(path).expect("open db");
-        db.save_project(&Project::new("Linked".to_owned(), None))
-            .expect("save project");
-        db.save_speleo_link(Some(&SpeleoLink {
-            // The same dead loopback the fixtures sign in against, so a link,
-            // a claim and a captured release all name ONE deployment - which
-            // the reclaim check now compares, and a POST to port 1 still fails
-            // fast rather than waiting on a DNS lookup.
-            endpoint: UNREACHABLE.to_owned(),
-            project_id: project_id.to_owned(),
-            project_name: "Linked".to_owned(),
-            base_commit_sha: Some("abc123".to_owned()),
-            has_unpushed_edits: false,
-            last_edit_at: None,
-            last_verify_at: None,
-            // [#303] NULL exercises the legacy initialization path.
-            undo_mode: None,
-        }))
-        .expect("save link");
+        write_v2(
+            path,
+            "Linked",
+            Some(&SpeleoLink {
+                // The same dead loopback the fixtures sign in against, so a link,
+                // a claim and a captured release all name ONE deployment - which
+                // the reclaim check now compares, and a POST to port 1 still fails
+                // fast rather than waiting on a DNS lookup.
+                endpoint: UNREACHABLE.to_owned(),
+                project_id: project_id.to_owned(),
+                project_name: "Linked".to_owned(),
+                base_commit_sha: Some("abc123".to_owned()),
+                has_unpushed_edits: false,
+                last_edit_at: None,
+                last_verify_at: None,
+                // [#303] NULL exercises the legacy initialization path.
+                undo_mode: None,
+            }),
+        );
     }
 
     /// An open, linked project (read-only remote open: the gate is shut).
@@ -786,15 +834,25 @@ mod tests {
         let g1 = state.speleodb_session_generation();
         assert_ne!(g0, g1, "an open is a session boundary");
 
-        // An undo rollback restores the SAME open project (footgun 5.7).
-        let snapshot = state
-            .capture_project_snapshot()
-            .expect("snapshot the open project");
-        state.rollback_project(&snapshot);
+        // An edit, a refused edit (rolled back to the project it started from),
+        // an undo and a redo all change the SAME open project (footgun 5.7).
+        state.set_edit_enabled(true);
+        assert!(state.set_surface_elevation(Some(12.5)).success, "an edit");
+        assert!(
+            !state
+                .update_project_settings(
+                    "Renamed".to_owned(),
+                    crate::config::ValidationConfig::default()
+                )
+                .success,
+            "a linked project's name is SpeleoDB's: the edit is refused and rolled back"
+        );
+        assert!(state.undo().success, "an undo");
+        assert!(state.redo().success, "a redo");
         assert_eq!(
             state.speleodb_session_generation(),
             g1,
-            "an undo rollback is NOT a session boundary"
+            "edits, rollbacks, undo and redo are NOT session boundaries"
         );
 
         // Neither is a save - implicit or Save a Copy (the slot never moves).
@@ -1598,7 +1656,8 @@ mod tests {
             // AppState setters write the slot freely and legitimately, and its
             // `any(test, feature = "test-support")` gate (for the root crate's
             // tests) means the truncation below no longer hides them.
-            if !name.ends_with(".rs")
+            let is_rust = entry.path().extension().is_some_and(|ext| ext == "rs");
+            if !is_rust
                 || name == "tests.rs"
                 || name == "speleodb_session.rs"
                 || name == "tests_support.rs"
@@ -1609,15 +1668,17 @@ mod tests {
             // Production code only: this tree keeps test modules at the bottom of
             // the file, so truncating at the first test gate is enough for a
             // tripwire (fixtures write the slot freely and legitimately).
-            let src = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+            let end = src.find("#[cfg(test)]").unwrap_or(src.len());
+            let src = &src[..end];
             if src.contains("self.bump_speleodb_session()") {
                 bumping.push(name.clone());
             }
             // The slot-commit spellings in this tree: a load/create commit
-            // (`= Some(project`), the rollback restore (`= Some(restored`), and
+            // (`= Some(project)`; with the paren, so `project_name = Some(project.name`
+            // is not one), the rollback restore (`= Some(restored`), and
             // the close clear (`*project = None`). Space-prefixed so a
             // `== Some(project_id)` comparison does not read as an assignment.
-            if src.contains(" = Some(project")
+            if src.contains(" = Some(project)")
                 || src.contains(" = Some(restored")
                 || src.contains("*project = None")
             {
@@ -1715,60 +1776,73 @@ mod tests {
         // Round 4: the delete's check-and-teardown holds the `project` mutex
         // and reasons "strictly before the load, or strictly after it". That
         // argument is only sound while every installer of a file-backed
-        // project commits the slot AND its companion state (database handle,
-        // undo stack, recents) inside one unbroken acquisition - a slot commit
-        // in its own span reopens the torn-middle interleaving where the
-        // delete tears down a half-built session and the loader finishes
-        // building into an empty world. `create_project` is exempt: it
-        // commits a project with no `file_path`, which the delete's identity
-        // check can never match.
-        for (file, func, database_commit, undo_commit) in [
-            (
-                "project_load.rs",
-                "fn open_project_prepared_inner",
-                " = Some(db);",
-                "load_from_persisted_with_timestamps(",
-            ),
-            (
-                "project_load.rs",
-                "pub fn do_load_project_full",
-                " = Some(db);",
-                "load_from_persisted_with_timestamps(",
-            ),
-            (
-                "project_create.rs",
-                "fn do_create_project_full",
-                " = db;",
-                ".clear();",
-            ),
-        ] {
-            let src = state_source(file);
+        // project commits the slot AND its companion state (file state, undo
+        // stack) inside one unbroken acquisition - a slot commit in its own
+        // span reopens the torn-middle interleaving where the delete tears down
+        // a half-built session and the loader finishes building into an empty
+        // world. Every open (the IPC load, the executor's open, the SpeleoDB
+        // installs) commits through `commit_opened_locked` under its caller's
+        // guard, every create through `commit_new_project`.
+        let src = state_source("project_load.rs");
+        assert_eq!(
+            src.matches(" = Some(project);").count(),
+            1,
+            "project_load.rs: the slot is committed in commit_opened_locked and nowhere else"
+        );
+        let fn_body = |func: &str| -> String {
             let start = src
                 .find(func)
-                .unwrap_or_else(|| panic!("{func} is present in {file}"));
+                .unwrap_or_else(|| panic!("{func} is present in project_load.rs"));
             let body = &src[start..];
-            let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-
-            let guard = body
-                .find("let mut proj_guard")
-                .unwrap_or_else(|| panic!("{func} takes the project guard by name"));
-            let slot = body
-                .find(" = Some(project")
-                .unwrap_or_else(|| panic!("{func} commits the project slot"));
-            let db_commit = body
-                .find(database_commit)
-                .unwrap_or_else(|| panic!("{func} commits the database handle"));
-            let undo = body
-                .find(undo_commit)
-                .unwrap_or_else(|| panic!("{func} commits the undo stack"));
-            let released = body
-                .find("drop(proj_guard)")
-                .unwrap_or_else(|| panic!("{func} releases the guard explicitly"));
+            body[..body.find("\n    }\n").expect("fn body terminates")].to_owned()
+        };
+        // The commit itself runs on the caller's guard (a `&mut` to the slot
+        // the guard derefs to, so it cannot let go of it), in this order.
+        let body = fn_body("fn commit_opened_locked(");
+        let at = |needle: &str, what: &str| {
+            body.find(needle)
+                .unwrap_or_else(|| panic!("commit_opened_locked {what} (`{needle}`)"))
+        };
+        let guard = at(
+            "proj_guard: &mut Option<Project>",
+            "runs on the caller's guard",
+        );
+        let slot = at(" = Some(project);", "commits the project slot");
+        let file_state = at(" = file;", "commits the file state");
+        let undo = at("load_persisted(", "commits the undo stack");
+        assert!(
+            guard < slot && slot < file_state && file_state < undo,
+            "commit_opened_locked must commit slot, file state and undo history in \
+             that order (guard {guard}, slot {slot}, file state {file_state}, undo {undo})"
+        );
+        assert!(
+            !body.contains("drop(proj_guard)"),
+            "the caller releases the guard, never the commit"
+        );
+        // Every caller takes the guard, commits, and releases it once, after.
+        let callers = ["fn commit_opened(", "fn open_project_download("];
+        assert_eq!(
+            src.matches("self.commit_opened_locked(&mut proj_guard")
+                .count(),
+            callers.len(),
+            "a new caller of commit_opened_locked: add it here once it holds one guard span"
+        );
+        for func in callers {
+            let body = fn_body(func);
+            let at = |needle: &str, what: &str| {
+                body.find(needle)
+                    .unwrap_or_else(|| panic!("{func} {what} (`{needle}`)"))
+            };
+            let guard = at("let mut proj_guard", "takes the project guard by name");
+            let commit = at(
+                "self.commit_opened_locked(&mut proj_guard",
+                "commits under that guard",
+            );
+            let released = at("drop(proj_guard)", "releases the guard explicitly");
             assert!(
-                guard < slot && slot < db_commit && db_commit < undo && undo < released,
-                "{func} must commit slot, database and undo history inside one \
-                 project-guard span (guard at {guard}, slot {slot}, database \
-                 {db_commit}, undo {undo}, drop {released})"
+                guard < commit && commit < released,
+                "{func} must take the guard, commit, then release it (guard at {guard}, \
+                 commit {commit}, drop {released})"
             );
             assert_eq!(
                 body.matches("drop(proj_guard)").count(),
@@ -1776,6 +1850,38 @@ mod tests {
                 "{func}: one release, at the end of the finalization"
             );
         }
+        // The create commits in one function that takes and releases the guard.
+        let src = state_source("project_create.rs");
+        assert_eq!(
+            src.matches("*proj = Some(project);").count(),
+            1,
+            "project_create.rs: the slot is committed in commit_new_project and nowhere else"
+        );
+        let start = src
+            .find("fn commit_new_project(")
+            .expect("commit_new_project is present in project_create.rs");
+        let body = &src[start..];
+        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+        let at = |needle: &str, what: &str| {
+            body.find(needle)
+                .unwrap_or_else(|| panic!("commit_new_project {what} (`{needle}`)"))
+        };
+        let guard = at("let mut proj", "takes the project guard by name");
+        let slot = at("*proj = Some(project);", "commits the project slot");
+        let file_state = at("*file = FileState::default();", "commits the file state");
+        let undo = at("undo_stack.clear();", "commits the undo stack");
+        let released = at("drop(proj)", "releases the guard explicitly");
+        assert!(
+            guard < slot && slot < file_state && file_state < undo && undo < released,
+            "commit_new_project must commit slot, file state and undo history inside one \
+             project-guard span (guard at {guard}, slot {slot}, file state {file_state}, \
+             undo {undo}, drop {released})"
+        );
+        assert_eq!(
+            body.matches("drop(proj)").count(),
+            1,
+            "commit_new_project: one release, at the end of the finalization"
+        );
     }
 
     #[test]

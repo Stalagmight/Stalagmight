@@ -1,7 +1,7 @@
+use super::open_file::FileState;
 use super::AppState;
 use crate::core::CommandResult;
-use crate::models::Project;
-use crate::persistence::Database;
+use crate::models::survey::Project;
 use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -131,199 +131,126 @@ impl AppState {
         }
     }
 
+    /// The display settings a new project starts with (written into the
+    /// file's `local` member).
+    fn default_display_settings() -> Vec<(&'static str, String)> {
+        let d = crate::core::loading::DisplaySettings::default();
+        vec![
+            ("showStations", d.show_stations.to_string()),
+            ("showSectionNames", d.show_line_names.to_string()),
+            ("showStationLabels", d.show_station_labels.to_string()),
+            ("showShotData", d.show_shot_data.to_string()),
+            ("showReferenceShots", d.show_reference_shots.to_string()),
+            ("showJumps", d.show_jumps.to_string()),
+            ("showZeroDatum", d.show_zero_datum.to_string()),
+            ("showGrid", d.show_grid.to_string()),
+            ("showSatellite", d.show_satellite.to_string()),
+            ("showDepthGradient", d.show_depth_gradient.to_string()),
+            ("gridSpacing", d.grid_spacing.to_string()),
+        ]
+    }
+
+    /// Commit a new, empty project into the slot (no file yet).
+    fn commit_new_project(&self, project: Project, display: Vec<(&'static str, String)>) {
+        let mut proj = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *proj = Some(project);
+        self.bump_speleodb_session();
+        self.bump_revision();
+        {
+            let mut file = self
+                .file
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *file = FileState::default();
+            for (key, value) in display {
+                file.extras.local.display.insert(key.to_string(), value);
+            }
+        }
+        {
+            let mut undo_stack = self
+                .undo_stack
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            undo_stack.clear();
+            undo_stack.set_inherited_through(None);
+            undo_stack.use_count_limit();
+        }
+        *self
+            .derived
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        self.speleodb_set_open_gate(None);
+        self.set_history_discarded(false);
+        drop(proj);
+    }
+
+    /// `Command::CreateProject`: a new project in memory, no file.
     pub(super) fn create_project(&self, name: String, location: Option<String>) -> CommandResult {
         let mut project = Project::new(name, location);
-        // Seed per-project validation thresholds from the global config - the
-        // "defaults for new projects" (#57). Authoritative in the .stalx after.
-        project.validation = self.get_config().validation;
-
+        project.settings.validation = self.get_config().validation;
         tracing::info!(
             project_name = %project.name,
             purpose = "start new project",
             "Project created in memory"
         );
-
-        if let Ok(mut proj) = self.project.lock() {
-            *proj = Some(project);
-            // A session boundary (a project committed into the slot), bumped under
-            // the guard per the `speleodb_session` rule.
-            self.bump_speleodb_session();
-            // An add's pending ignores (#674) belong to the project that just left.
-            self.clear_pending_ignores();
-            // So does the record of renamed shot ids.
-            self.load_renamed_shots
-                .store(false, std::sync::atomic::Ordering::Relaxed);
-        }
-
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            undo_stack.clear();
-            // [#303] A brand-new project is local: the configured entry window.
-            undo_stack.use_count_limit();
-        }
-
-        // Clear display settings cache for new project
-        self.clear_display_settings_cache();
-        self.invalidate_adjusted_cache();
-        // [Track B] (#191) A freshly-created local project is always editable;
-        // the gate goes back to unmanaged (see `speleodb_edit_gate`).
-        self.speleodb_set_open_gate(None);
-        self.set_history_discarded(false);
-
+        self.commit_new_project(project, Self::default_display_settings());
         CommandResult::success()
     }
 
-    /// Update per-project settings (#57): the project name and validation
-    /// thresholds. Persisted into the .stalx on the next save; warnings recompute
-    /// from the new thresholds on the next get_project_warnings.
-    ///
-    /// Undoable via a snapshot pair (mirrors repair_open_project_integrity) so an
-    /// unrelated undo can't silently revert a settings change: without its own
-    /// undo entry, undoing an edit made BEFORE the settings change would restore a
-    /// snapshot carrying the old name/validation.
+    /// Rename the project and set its validation thresholds (one undo step).
     pub fn update_project_settings(
         &self,
         name: String,
         validation: crate::config::ValidationConfig,
     ) -> CommandResult {
-        // Serialize against execute()/undo()/redo() so the before/after pair is
-        // consistent (same rationale as repair_open_project_integrity).
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
-        // Read-only edit gate (#191, D-B5): a settings change mutates the project,
-        // so it is gated on a read-only remote project (returns the EDIT_DISABLED
-        // coded failure).
         if let Err(f) = self.guard_mutation("Update project settings") {
             return f;
         }
-        if self.speleodb_open_link().is_ok()
-            && self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .as_ref()
-                .is_some_and(|project| project.name != name)
-        {
-            return CommandResult::failure("Linked project names are managed by SpeleoDB".into());
-        }
-        let before_snapshot = self.capture_project_snapshot().ok();
-        {
-            let mut guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
-            };
-            let Some(project) = guard.as_mut() else {
-                return CommandResult::failure("No project open".to_string());
-            };
-            // No-op when nothing actually changed: touch() would still bump
-            // modified_at, marking the project dirty and pushing a misleading
-            // "Update project settings" undo entry for a save that changed nothing
-            // (Codex). Compare before mutating.
-            if project.name == name && project.validation == validation {
-                return CommandResult::success();
-            }
-            project.name = name;
-            project.validation = validation;
-            project.touch();
-        }
-        // Record an undo entry (before -> after) so the change is on the stack.
-        if let Some(before_json) = before_snapshot {
-            if let Ok(after_json) = self.capture_project_snapshot() {
-                if before_json != after_json {
-                    self.push_snapshot_undo(
-                        crate::core::Command::UpdateProjectSettings,
-                        before_json,
-                        after_json,
-                    );
-                    // Dirty-bit flip (#191, D-B16): settings mutated a remote
-                    // project. Set-only; no-op for local-only.
-                    self.mark_remote_forward_edit();
+        let linked = self.speleo_link().is_some();
+        let result = self.run_recorded(
+            |p| super::commands::Record::of(p, &crate::core::Command::UpdateProjectSettings),
+            |project, _| {
+                if linked && project.name != name {
+                    return Err("Linked project names are managed by SpeleoDB".to_string());
                 }
-            }
-        }
-        CommandResult::success()
+                project.name = name;
+                project.settings.validation = validation;
+                Ok(())
+            },
+        );
+        result.map_or_else(|f| f, |()| CommandResult::success())
     }
 
-    /// Set (or clear) the project's entrance elevation in meters (#465).
-    /// Persisted into the .stalx on the next save. `None` clears a previously
-    /// recorded value back to "not recorded" - the only recovery path for the
-    /// TML import's no-clobber rule (#431) locking in a wrong first value.
-    ///
-    /// Undoable via a snapshot pair, mirroring `update_project_settings`: its
-    /// own undo entry keeps an unrelated undo from silently reverting this edit.
+    /// Set the entrance elevation (one undo step).
     pub fn set_surface_elevation(&self, elevation: Option<f64>) -> CommandResult {
-        // Reject non-finite input at the boundary (NaN/Infinity have no useful
-        // meaning as an elevation and would corrupt export/display downstream).
-        if let Some(value) = elevation {
-            if !value.is_finite() {
-                return CommandResult::failure("Elevation must be a finite number".to_string());
-            }
+        if elevation.is_some_and(|v| !v.is_finite()) {
+            return CommandResult::failure("Elevation must be a finite number".to_string());
         }
-        // Serialize against execute()/undo()/redo(), same rationale as
-        // update_project_settings.
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
         if let Err(f) = self.guard_mutation("Set entrance elevation") {
             return f;
         }
-        let before_snapshot = self.capture_project_snapshot().ok();
-        {
-            let mut guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
-            };
-            let Some(project) = guard.as_mut() else {
-                return CommandResult::failure("No project open".to_string());
-            };
-            // No-op guard: this compares raw METERS, so it only catches a caller
-            // that resent the exact stored value. The UI's own draft-string
-            // comparison (ProjectSettingsDialog) is what actually keeps an
-            // untouched, unit-converted/display-rounded field from reaching here
-            // as a "changed" call in the first place - any future caller that
-            // skips that comparison inherits the same spurious-dirty risk this
-            // guard alone cannot close.
-            if project.surface_elevation == elevation {
-                return CommandResult::success();
-            }
-            project.surface_elevation = elevation;
-            project.touch();
-        }
-        if let Some(before_json) = before_snapshot {
-            if let Ok(after_json) = self.capture_project_snapshot() {
-                if before_json != after_json {
-                    self.push_snapshot_undo(
-                        crate::core::Command::SetSurfaceElevation,
-                        before_json,
-                        after_json,
-                    );
-                    self.mark_remote_forward_edit();
-                }
-            }
-        }
-        CommandResult::success()
+        let result = self.run_recorded(
+            |p| super::commands::Record::of(p, &crate::core::Command::SetSurfaceElevation),
+            |project, _| {
+                project.settings.surface_elevation = elevation;
+                Ok(())
+            },
+        );
+        result.map_or_else(|f| f, |()| CommandResult::success())
     }
 
-    /// Create a new project with full progress reporting.
-    /// This is the main implementation used by create_project_full command.
-    ///
-    /// Phases:
-    /// 1. CreatingDatabase (40%) - Resolve/create SQLite file path
-    /// 2. InitializingProject (40%) - Create project record
-    /// 3. SavingSettings (20%) - Save default display settings
-    ///
-    /// All phases are indeterminate since creation is typically fast.
-    ///
-    /// # Arguments
-    /// * `name` - Project name (used for filename and project metadata)
-    /// * `project_location` - Optional cave location metadata (free text)
-    /// * `save_directory` - Optional directory to save the project in.
-    ///   If omitted (and `save_path` is omitted), uses user's documents
-    ///   `stalagmight` subdirectory.
-    /// * `save_path` - Optional full file path for the new project. If provided,
-    ///   this takes precedence over `save_directory`.
-    /// * `defer_initial_save` - When true, reserve `project.file_path` but do not
-    ///   create/write the project file yet. First save/autosave will create it.
+    /// Create a project with progress reporting (the `create_project_full`
+    /// IPC): a new project at a free path, written as version 2 at once
+    /// unless `defer_initial_save` (#92: the first import writes it).
     pub fn do_create_project_full(
         &self,
         name: String,
@@ -336,37 +263,17 @@ impl AppState {
         use crate::core::loading::{
             CreateProjectFullResult, DisplaySettings, LoadError, LoadingPhase, ProgressEmitter,
         };
-
         let sink = self
             .get_event_sink()
             .ok_or_else(|| LoadError::internal("EventSink not initialized"))?;
-
-        // Start new load - cancels any existing load
         let cancel_token = self.start_new_load();
         let mut progress = ProgressEmitter::new_for_create(sink, Arc::clone(&cancel_token));
-
-        // Helper macro for early return with identity-safe token clearing
-        macro_rules! check_cancelled {
-            () => {
-                if progress.is_cancelled() {
-                    self.clear_active_load(&cancel_token);
-                    return Err(LoadError::cancelled());
-                }
-            };
-        }
-
-        macro_rules! early_return_err {
-            ($err:expr) => {{
-                self.clear_active_load(&cancel_token);
-                return Err($err);
-            }};
-        }
-
-        // === PHASE 0: Creating database (40%) ===
-        progress.start_phase(LoadingPhase::CreatingDatabase);
-
-        // Resolve database path from explicit save path or from project name + optional save directory.
-        let mut db_path = if let Some(path) = save_path {
+        let fail = |e: LoadError| {
+            self.clear_active_load(&cancel_token);
+            Err(e)
+        };
+        progress.start_phase(LoadingPhase::CreatingFile);
+        let mut path = if let Some(path) = save_path {
             if path.extension().is_none_or(|ext| ext != "stalx") {
                 path.with_extension("stalx")
             } else {
@@ -375,228 +282,70 @@ impl AppState {
         } else {
             match self.resolve_project_path(&name, save_directory.as_ref()) {
                 Ok(path) => path,
-                Err(e) => {
-                    early_return_err!(LoadError::new("IO", e));
-                }
+                Err(e) => return fail(LoadError::new("IO", e)),
             }
         };
-
-        // Avoid collisions by selecting the next available path instead of overwriting.
-        let available_db_path = Self::next_available_project_path(&db_path);
-        if available_db_path != db_path {
+        let available = Self::next_available_project_path(&path);
+        if available != path {
             tracing::warn!(
-                requested_path = ?db_path,
-                selected_path = ?available_db_path,
+                requested_path = ?path,
+                selected_path = ?available,
                 purpose = "avoid overwriting existing project on create",
                 "Project path already exists; using auto-renamed path"
             );
-            db_path = available_db_path;
+            path = available;
         }
-
-        // Create parent directories if they don't exist
-        if let Some(parent) = db_path.parent() {
+        if let Some(parent) = path.parent() {
             if !parent.exists() {
                 if let Err(e) = std::fs::create_dir_all(parent) {
-                    early_return_err!(LoadError::new(
+                    return fail(LoadError::new(
                         "IO",
-                        format!("Failed to create directory: {e}")
+                        format!("Failed to create directory: {e}"),
                     ));
                 }
             }
         }
-
-        // Create the database only when immediate persistence is requested.
-        let mut db = if defer_initial_save {
-            None
-        } else {
-            match Database::open(&db_path) {
-                Ok(db) => Some(db),
-                Err(e) => {
-                    early_return_err!(LoadError::new(
-                        "DATABASE",
-                        format!("Failed to create database: {e}")
-                    ));
-                }
-            }
-        };
-        check_cancelled!();
-        progress.complete_phase(LoadingPhase::CreatingDatabase);
-
-        // === PHASE 1: Initializing project (40%) ===
+        if progress.is_cancelled() {
+            return fail(LoadError::cancelled());
+        }
+        progress.complete_phase(LoadingPhase::CreatingFile);
         progress.start_phase(LoadingPhase::InitializingProject);
         let mut project = Project::new(name.clone(), project_location);
-        // Seed per-project validation from the global config (the "defaults for
-        // new projects", #57). This is the path the New Project UI actually uses.
-        project.validation = self.get_config().validation;
-        project.file_path = Some(db_path.clone());
-
-        if let Some(ref mut database) = db {
-            if let Err(e) = database.save_project(&project) {
-                early_return_err!(LoadError::new(
-                    "DATABASE",
-                    format!("Failed to save project: {e}")
+        project.settings.validation = self.get_config().validation;
+        project.file_path = Some(path.clone());
+        let wire = project.project_wire();
+        progress.complete_phase(LoadingPhase::InitializingProject);
+        progress.start_phase(LoadingPhase::SavingSettings);
+        if progress.is_cancelled() {
+            return fail(LoadError::cancelled());
+        }
+        self.commit_new_project(project, Self::default_display_settings());
+        self.initial_save_deferred
+            .store(defer_initial_save, std::sync::atomic::Ordering::Relaxed);
+        if !defer_initial_save {
+            let saved = self.save_project(None);
+            if !saved.success {
+                return fail(LoadError::new(
+                    "IO",
+                    saved
+                        .error
+                        .unwrap_or_else(|| "Failed to write the new project".to_string()),
                 ));
             }
         }
-        check_cancelled!();
-        progress.complete_phase(LoadingPhase::InitializingProject);
-
-        // === PHASE 2: Saving settings (20%) ===
-        progress.start_phase(LoadingPhase::SavingSettings);
-        let display_settings = DisplaySettings::default();
-
-        // Save default display settings to database
-        // Convert display_settings to HashMap for storage
-        let settings_map = vec![
-            ("showStations", display_settings.show_stations.to_string()),
-            (
-                "showSectionNames",
-                display_settings.show_line_names.to_string(),
-            ),
-            (
-                "showStationLabels",
-                display_settings.show_station_labels.to_string(),
-            ),
-            ("showShotData", display_settings.show_shot_data.to_string()),
-            (
-                "showReferenceShots",
-                display_settings.show_reference_shots.to_string(),
-            ),
-            ("showJumps", display_settings.show_jumps.to_string()),
-            (
-                "showZeroDatum",
-                display_settings.show_zero_datum.to_string(),
-            ),
-            ("showGrid", display_settings.show_grid.to_string()),
-            ("showSatellite", display_settings.show_satellite.to_string()),
-            (
-                "showDepthGradient",
-                display_settings.show_depth_gradient.to_string(),
-            ),
-            ("gridSpacing", display_settings.grid_spacing.to_string()),
-        ];
-
-        if let Some(ref mut database) = db {
-            for (key, value) in &settings_map {
-                if let Err(e) = database.save_display_setting(key, value) {
-                    // Fail the command if display settings can't be saved - this indicates a real DB error
-                    early_return_err!(LoadError::new(
-                        "DATABASE",
-                        format!("Failed to save display setting {key}: {e}")
-                    ));
-                }
-            }
-        }
-        check_cancelled!();
         progress.complete_phase(LoadingPhase::SavingSettings);
-
-        // === FINALIZE: Store in AppState (NON-CANCELLABLE STATE COMMIT) ===
-        // Allow cancellation only before any state mutation occurs.
-        check_cancelled!();
-        // All finalization commits use unwrap_or_else(PoisonError::into_inner) to ensure
-        // data is written even if a previous panic poisoned a mutex.
-
-        // ALL commits under ONE `project` acquisition, exactly as
-        // `do_load_project_full`'s finalization and for the same reason (round
-        // 4): this project carries a `file_path`, so `delete_project`'s
-        // check-and-teardown can match it - and a delete landing between the
-        // slot commit and the handle commits tore down a half-built session
-        // that this function then finished building into an empty world.
-        // (`create_project`, the in-memory sibling, commits a project with no
-        // `file_path`, which the delete's identity check can never match.)
-        let mut proj_guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        // Commit 1: Project state mutation
-        *proj_guard = Some(project.clone());
-        // A session boundary (a project committed into the slot), bumped under
-        // the guard per the `speleodb_session` rule.
-        self.bump_speleodb_session();
-        // An add's pending ignores (#674) belong to the project that just left.
-        self.clear_pending_ignores();
-
-        // Commit 2: Database handle mutation
-        *self
-            .database
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = db;
-
-        // Commit 3: Clear undo stack (new project)
-        self.undo_stack
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
-
-        // [Track B] (#191) A freshly-created local project is always editable;
-        // the gate goes back to unmanaged (see `speleodb_edit_gate`).
-        self.speleodb_set_open_gate(None);
-        self.set_history_discarded(false);
-
-        // Track whether the initial save is still pending: a deferred new project
-        // has no file on disk yet, so its first import must durably persist it.
-        self.initial_save_deferred
-            .store(defer_initial_save, std::sync::atomic::Ordering::Relaxed);
-        // A new project has renamed nothing.
-        self.load_renamed_shots
-            .store(false, std::sync::atomic::Ordering::Relaxed);
-
-        // Commit 4: Display settings cache
-        if defer_initial_save {
-            let mut cache = self
-                .display_settings_cache
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            cache.clear();
-            for (key, value) in &settings_map {
-                cache.insert((*key).to_string(), value.clone());
-            }
-        } else {
-            self.clear_display_settings_cache();
-            self.invalidate_adjusted_cache();
-        }
-
-        // Commit 5: Add to recent projects only after a real file exists.
-        if !defer_initial_save {
-            let mut recent = self
-                .recent_projects
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            recent.retain(|p| p != &db_path);
-            recent.insert(0, db_path.clone());
-            if let Ok(mut config) = self.config.lock() {
-                recent.truncate(config.general.recent_projects_max);
-                config.general.recent_projects.clone_from(&recent);
-                if let Err(e) = config.save() {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "persist recent projects list",
-                        "Failed to save config with recent projects"
-                    );
-                }
-            }
-        }
-
-        drop(proj_guard);
-
-        // Get loading_id before clearing token
         let loading_id = progress.loading_id();
-
-        // Clear active load AFTER all mutations complete
         self.clear_active_load(&cancel_token);
-
         tracing::info!(
-            path = ?db_path,
+            path = ?path,
             name = %name,
-            purpose = if defer_initial_save { "create new project in memory with reserved save path" } else { "create new project on disk" },
+            deferred = defer_initial_save,
             "Project created via create_project_full"
         );
-
         Ok(CreateProjectFullResult {
             loading_id,
-            project,
-            display_settings,
+            project: wire,
+            display_settings: DisplaySettings::default(),
         })
     }
 }
@@ -729,6 +478,7 @@ mod tests {
                 .unwrap()
                 .as_ref()
                 .unwrap()
+                .settings
                 .surface_elevation,
             None
         );
@@ -743,6 +493,7 @@ mod tests {
                 .unwrap()
                 .as_ref()
                 .unwrap()
+                .settings
                 .surface_elevation,
             Some(42.5)
         );
@@ -757,6 +508,7 @@ mod tests {
                 .unwrap()
                 .as_ref()
                 .unwrap()
+                .settings
                 .surface_elevation,
             None
         );
@@ -772,6 +524,7 @@ mod tests {
                     .unwrap()
                     .as_ref()
                     .unwrap()
+                    .settings
                     .surface_elevation,
                 None,
                 "a rejected value must not be stored"
@@ -797,6 +550,7 @@ mod tests {
                 .unwrap()
                 .as_ref()
                 .unwrap()
+                .settings
                 .surface_elevation,
             Some(20.0)
         );
@@ -810,6 +564,7 @@ mod tests {
                 .unwrap()
                 .as_ref()
                 .unwrap()
+                .settings
                 .surface_elevation,
             Some(10.0),
             "undo must restore the prior elevation"
@@ -824,6 +579,7 @@ mod tests {
                 .unwrap()
                 .as_ref()
                 .unwrap()
+                .settings
                 .surface_elevation,
             Some(20.0),
             "redo must reapply the edit"

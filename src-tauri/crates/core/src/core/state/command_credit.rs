@@ -1,27 +1,37 @@
 //! `Command::EditShotCredit`: who surveyed and explored a set of shots, and
-//! when - plus the per-shot undo record it and the legacy line-level
-//! surveyor/date edit share (`UndoData::ShotCredits`).
+//! when, as one undo step however many shots it touches.
+//!
+//! A credit edit is metadata only: no geometry, no references, nothing to
+//! settle. The undo record is the pipeline's generic changeset, which interns
+//! each distinct credit once and keys every shot by its uuid.
 
-use super::AppState;
-use crate::core::{join_credit_runs, Command, CommandResult, ShotCreditRun, UndoData};
-use crate::models::{CreditEdit, CreditTargets, LineId, LineUpdates, Project, ShotId};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use super::commands::{Applied, Record};
+use crate::core::Command;
+use crate::models::survey::Project;
+use crate::models::{
+    CreditEdit, CreditTargets, LineId, ShotId, SurveyCredit, LINE_GONE, SHOT_GONE,
+};
 
 /// The most shots one explicit-target edit may name. A whole line is
 /// bounded by the per-line shot cap instead.
 const MAX_EXPLICIT_TARGETS: usize = 100_000;
 
-/// The `(line, shot)` pairs `targets` names, in order, deduplicated - or why
-/// they cannot be resolved. All-or-nothing: one unknown shot fails the edit.
+/// The `(line, shot index)` pairs `targets` names, in order, deduplicated -
+/// or why they cannot be resolved. All-or-nothing: one unknown shot fails the
+/// edit (0.6.0's words).
 fn resolve_targets(
     project: &Project,
     targets: &CreditTargets,
-) -> Result<Vec<(LineId, ShotId)>, String> {
+) -> Result<Vec<(LineId, usize)>, String> {
     match targets {
         CreditTargets::Line { line_id } => {
             let line = project
-                .get_line(*line_id)
-                .ok_or_else(|| crate::models::LINE_GONE.to_string())?;
-            Ok(line.shots.iter().map(|s| (*line_id, s.id)).collect())
+                .line(*line_id)
+                .ok_or_else(|| LINE_GONE.to_string())?;
+            Ok((0..line.shots.len()).map(|i| (*line_id, i)).collect())
         }
         CreditTargets::Shots { shots } => {
             if shots.len() > MAX_EXPLICIT_TARGETS {
@@ -29,129 +39,14 @@ fn resolve_targets(
                     "A credit edit can name at most {MAX_EXPLICIT_TARGETS} shots"
                 ));
             }
+            // Each line's positions by shot id, built once per line named: a
+            // selection of a thousand shots must not search its line per shot.
+            let mut positions: HashMap<LineId, HashMap<ShotId, usize>> = HashMap::new();
             let mut seen = std::collections::HashSet::with_capacity(shots.len());
             let mut out = Vec::with_capacity(shots.len());
             for &(line_id, shot_id) in shots {
-                let line = project
-                    .get_line(line_id)
-                    .ok_or_else(|| crate::models::LINE_GONE.to_string())?;
-                if line.get_shot(shot_id).is_none() {
-                    return Err(crate::models::SHOT_GONE.to_string());
-                }
-                if seen.insert((line_id, shot_id)) {
-                    out.push((line_id, shot_id));
-                }
-            }
-            Ok(out)
-        }
-    }
-}
-
-impl AppState {
-    pub(super) fn edit_shot_credit(
-        &self,
-        targets: &CreditTargets,
-        edit: &CreditEdit,
-    ) -> CommandResult {
-        self.with_project_mut(|project| {
-            let resolved = match resolve_targets(project, targets) {
-                Ok(r) => r,
-                Err(e) => return CommandResult::failure(e),
-            };
-            let mut lines: Vec<LineId> = Vec::new();
-            for &(line_id, _) in &resolved {
-                if !lines.contains(&line_id) {
-                    lines.push(line_id);
-                }
-            }
-            // Every touched shot gets an identity first, so the undo record can
-            // address it by the uuid that survives a reload.
-            for &line_id in &lines {
-                project.ensure_line_shot_uuids(line_id);
-                project.reindex_line_shot_uuids(line_id);
-            }
-            let mut changed = 0usize;
-            for &(line_id, shot_id) in &resolved {
-                let Some(shot) = project
-                    .get_line_mut(line_id)
-                    .and_then(|s| s.get_shot_mut(shot_id))
-                else {
-                    continue;
-                };
-                let after = edit.apply(shot.credit());
-                if &after != shot.credit() {
-                    shot.set_credit(after);
-                    changed += 1;
-                }
-            }
-            if changed > 0 {
-                project.touch();
-            }
-            tracing::debug!(
-                shots = resolved.len(),
-                changed,
-                purpose = "edit survey credit",
-                "Shot credit edited"
-            );
-            CommandResult::success().with_line_ids(lines)
-        })
-    }
-
-    /// The `generate_undo_data` half: every shot the command can change, with
-    /// its credit BEFORE, as a one-shot run at its position (a credit edit
-    /// moves no shot, so the position still names it after the edit). `None`
-    /// when the command cannot run (an unknown target), so nothing is pushed.
-    pub(super) fn credit_undo_stub(project: &Project, cmd: &Command) -> UndoData {
-        let (resolved, line_values) = match cmd {
-            Command::EditShotCredit { targets, .. } => match resolve_targets(project, targets) {
-                Ok(r) => (r, None),
-                Err(_) => return UndoData::None,
-            },
-            Command::UpdateLineMetadata { line_id, updates } => {
-                let Some(line) = project.get_line(*line_id) else {
-                    return UndoData::None;
-                };
-                // The other fields, previous values only for what the update
-                // sets - the `PreviousValues` capture, minus surveyor/date. A
-                // shot-less line keeps the legacy pair itself, so there its
-                // previous surveyor/date are line values too.
-                let shotless = line.shots.is_empty();
-                let prev = LineUpdates {
-                    name: updates.name.as_ref().map(|_| line.name.clone()),
-                    surveyor: updates
-                        .surveyor
-                        .as_ref()
-                        .filter(|_| shotless)
-                        .map(|_| line.legacy_surveyor.clone()),
-                    date: updates
-                        .date
-                        .as_ref()
-                        .filter(|_| shotless)
-                        .map(|_| line.legacy_date),
-                    color: updates.color.as_ref().map(|_| line.color.clone()),
-                    direction: updates.direction.map(|_| line.direction),
-                    quality: updates.quality.map(|_| line.quality),
-                };
-                let values = serde_json::to_string(&prev)
-                    .ok()
-                    .filter(|json| json != "{}")
-                    .map(|json| (*line_id, json));
-                let shots = line.shots.iter().map(|s| (*line_id, s.id)).collect();
-                (shots, values)
-            }
-            _ => return UndoData::None,
-        };
-        // Each line's positions by shot id, built once per line touched: a
-        // selection of a thousand shots must not search its line per shot.
-        let mut positions: std::collections::HashMap<
-            LineId,
-            std::collections::HashMap<ShotId, usize>,
-        > = std::collections::HashMap::new();
-        let changes = resolved
-            .into_iter()
-            .filter_map(|(line_id, shot_id)| {
-                let line = project.get_line(line_id)?;
-                let position = *positions
+                let line = project.line(line_id).ok_or_else(|| LINE_GONE.to_string())?;
+                let index = *positions
                     .entry(line_id)
                     .or_insert_with(|| {
                         line.shots
@@ -160,150 +55,108 @@ impl AppState {
                             .map(|(i, s)| (s.id, i))
                             .collect()
                     })
-                    .get(&shot_id)?;
-                let shot = line.shots.get(position)?;
-                Some(ShotCreditRun::shot(
-                    line_id,
-                    position,
-                    shot.uuid.clone().unwrap_or_default(),
-                    shot.credit().clone(),
-                ))
-            })
-            .collect();
-        UndoData::ShotCredits {
-            changes,
-            line_values,
+                    .get(&shot_id)
+                    .ok_or_else(|| SHOT_GONE.to_string())?;
+                if seen.insert((line_id, index)) {
+                    out.push((line_id, index));
+                }
+            }
+            Ok(out)
         }
     }
+}
 
-    /// The `finalize_undo_data` half: read each stub shot back after the edit -
-    /// its uuid (the executor minted any missing one) and its credit AFTER -
-    /// keep only the shots that changed, and join them into runs. `None` when
-    /// nothing changed at all.
-    pub(super) fn finalize_credit_undo(project: &Project, undo_data: UndoData) -> UndoData {
-        let UndoData::ShotCredits {
-            changes,
-            line_values,
-        } = undo_data
+/// What [`edit_credits`] does to a shot holding one particular credit.
+enum Outcome {
+    /// The edit leaves it as it is.
+    Unchanged,
+    /// The edit stores this (an empty credit is stored as `None`).
+    Store(Option<Arc<SurveyCredit>>),
+}
+
+/// Apply `edit` to the credit of every shot in `targets` (0.6.0's
+/// `edit_shot_credit`: `CreditEdit::apply` per shot, stored in its storable
+/// form). Shots that held equal credits before share one allocation after,
+/// as an import's do. Returns the lines touched, in order, and how many shots
+/// changed.
+fn edit_credits(
+    project: &mut Project,
+    targets: &[(LineId, usize)],
+    edit: &CreditEdit,
+) -> (Vec<LineId>, usize) {
+    let mut lines: Vec<LineId> = Vec::new();
+    if targets.is_empty() {
+        return (lines, 0);
+    }
+    for &(line_id, _) in targets {
+        if !lines.contains(&line_id) {
+            lines.push(line_id);
+        }
+    }
+    // List positions read once, before the lines are borrowed mutably (which
+    // drops the topology that makes a lookup by id cheap).
+    let positions: HashMap<LineId, usize> = lines
+        .iter()
+        .filter_map(|&id| project.line_position(id).map(|at| (id, at)))
+        .collect();
+    let empty = SurveyCredit::default();
+    let mut memo: Option<(SurveyCredit, Outcome)> = None;
+    let mut changed = 0usize;
+    let all = project.lines_mut();
+    for &(line_id, index) in targets {
+        let Some(shot) = positions
+            .get(&line_id)
+            .and_then(|&at| all.get_mut(at))
+            .and_then(|l| l.shots.get_mut(index))
         else {
-            return undo_data;
+            continue;
         };
-        // Both executors (`edit_shot_credit`, and `Project::update_line` for
-        // the legacy surveyor/date) mint a uuid for every shot they touch, so a
-        // changed shot without one is a bug - and dropping it here would make its
-        // undo silently incomplete. Say so rather than hide it.
-        let mut unaddressable = 0usize;
-        let changes: Vec<ShotCreditRun> = changes
-            .into_iter()
-            .filter_map(|mut change| {
-                let shot = project.get_line(change.line_id)?.shots.get(change.start?)?;
-                change.after = shot.credit().clone();
-                if change.after == change.before {
-                    return None;
-                }
-                let Some(uuid) = shot.uuid.clone().filter(|u| !u.is_empty()) else {
-                    unaddressable += 1;
-                    return None;
-                };
-                change.anchor = uuid;
-                Some(change)
-            })
-            .collect();
-        let changes = join_credit_runs(changes);
-        if unaddressable > 0 {
-            tracing::warn!(
-                unaddressable,
-                purpose = "record a survey-credit undo",
-                "Changed shots without a uuid cannot be addressed by the undo; their credit \
-                 change will not be undone"
+        let before = shot.credit.as_deref().unwrap_or(&empty);
+        let reuse = memo.as_ref().is_some_and(|(seen, _)| seen == before);
+        if !reuse {
+            let after = edit.apply(before);
+            let outcome = if after == *before {
+                Outcome::Unchanged
+            } else {
+                Outcome::Store(after.into_storable().stored().map(Arc::new))
+            };
+            memo = Some((before.clone(), outcome));
+        }
+        if let Some((_, Outcome::Store(stored))) = &memo {
+            shot.credit.clone_from(stored);
+            changed += 1;
+        }
+    }
+    (lines, changed)
+}
+
+/// The execute pipeline's mutation for the credit family (`commands.rs`
+/// dispatches here; plan 9.1). Runs inside `run_recorded`, which snapshots,
+/// validates, captures and records around it; `record` is the entry being
+/// recorded (worded before the edit).
+pub(super) fn apply(
+    project: &mut Project,
+    _record: &mut Record,
+    cmd: &Command,
+) -> Result<Applied, String> {
+    match cmd {
+        Command::EditShotCredit { targets, edit } => {
+            let resolved = resolve_targets(project, targets)?;
+            let (lines, changed) = edit_credits(project, &resolved, edit);
+            tracing::debug!(
+                shots = resolved.len(),
+                changed,
+                purpose = "edit survey credit",
+                "Shot credit edited"
             );
+            Ok(Applied {
+                line_ids: lines,
+                ..Applied::default()
+            })
         }
-        if changes.is_empty() && line_values.is_none() {
-            return UndoData::None;
-        }
-        UndoData::ShotCredits {
-            changes,
-            line_values,
-        }
-    }
-
-    /// Write `before` (undo) or `after` (redo) of every recorded run back
-    /// onto its shots: from the run's position, when the shot there still
-    /// holds the run's anchor uuid (a run read from an older row has no
-    /// position and finds its one shot by the uuid). A run that does not
-    /// resolve is skipped with a warning: a credit is metadata, and failing
-    /// the step would wedge every entry beneath it. A run's shots share one
-    /// allocation of the credit, as an import's do.
-    pub(super) fn write_recorded_credits(
-        &self,
-        changes: &[ShotCreditRun],
-        use_after: bool,
-    ) -> CommandResult {
-        self.with_project_mut(|project| {
-            let mut missing = 0usize;
-            for run in changes {
-                let start = match run.start {
-                    Some(start) => project
-                        .get_line(run.line_id)
-                        .and_then(|line| line.shots.get(start))
-                        .is_some_and(|shot| shot.uuid.as_deref() == Some(run.anchor.as_str()))
-                        .then_some(start),
-                    None => project
-                        .shot_id_by_uuid(run.line_id, &run.anchor)
-                        .and_then(|id| {
-                            project
-                                .get_line(run.line_id)?
-                                .shots
-                                .iter()
-                                .position(|s| s.id == id)
-                        }),
-                };
-                let Some(line) = start.and(project.get_line_mut(run.line_id)) else {
-                    missing = missing.saturating_add(run.len);
-                    continue;
-                };
-                let start = start.unwrap_or_default();
-                let end = start.saturating_add(run.len).min(line.shots.len());
-                missing = missing.saturating_add(run.len - (end - start));
-                let credit = crate::models::SharedCredit::new(if use_after {
-                    run.after.clone()
-                } else {
-                    run.before.clone()
-                });
-                for shot in &mut line.shots[start..end] {
-                    shot.set_shared_credit(&credit);
-                }
-            }
-            if missing > 0 {
-                tracing::warn!(
-                    missing,
-                    runs = changes.len(),
-                    purpose = "restore survey credit",
-                    "Some shots a credit edit recorded no longer exist; restored the rest"
-                );
-            }
-            project.touch();
-            CommandResult::success()
-        })
-    }
-
-    /// Undo of [`UndoData::ShotCredits`]: the credits, then (for a line
-    /// metadata edit) the line's other previous values.
-    pub(super) fn undo_shot_credits(
-        &self,
-        changes: &[ShotCreditRun],
-        line_values: Option<&(LineId, String)>,
-    ) -> CommandResult {
-        let result = self.write_recorded_credits(changes, false);
-        if !result.success {
-            return result;
-        }
-        match line_values {
-            None => result,
-            Some((line_id, json)) => match serde_json::from_str::<LineUpdates>(json) {
-                Ok(prev) => self.update_line(*line_id, prev),
-                Err(_) => CommandResult::failure("Failed to parse undo data".to_string()),
-            },
-        }
+        _ => Err(format!(
+            "{} is not a credit command",
+            crate::core::command_kind(cmd)
+        )),
     }
 }

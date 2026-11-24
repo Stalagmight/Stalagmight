@@ -1,9 +1,8 @@
 //! Model-layer behaviour of the line north reference (#438).
 //!
 //! [`crate::azimuth_reference`] unit-tests the type in isolation. These are the
-//! half of the contract that lives in this crate: the coordinate walk, the
-//! line-vs-project resolution, the reverse's offset compensation and the
-//! undo identity. The half that spans crates - a station move, a split, save /
+//! half of the contract that lives in this crate, on the station-graph model:
+//! the coordinate walk, the line-vs-project resolution and the reverse. The half that spans crates - a station move, a split, save /
 //! load, and the Ariane export flag - is in
 //! `stalagmight-core::core::state::azimuth_reference_tests`, the lowest crate
 //! that can see all of them.
@@ -20,10 +19,8 @@
     reason = "test module: a failed unwrap is the failure report"
 )]
 
-use crate::{
-    AzimuthReference, CorrectionSource, Line, LineData, LineId, NorthReference, Project, ShotData,
-    StationRef,
-};
+use crate::survey::{LineMeta, Project, StartAt};
+use crate::{AzimuthReference, CorrectionSource, LineId, NorthReference, ShotData};
 
 /// 10 degrees east: big enough that a dropped correction cannot pass as noise.
 const TEST_CORRECTION: f64 = 10.0;
@@ -40,28 +37,31 @@ fn shot(azimuth: f64, length: f64) -> ShotData {
 }
 
 fn project_with(shots: Vec<ShotData>, reference: Option<AzimuthReference>) -> (Project, LineId) {
-    let mut project = Project::new("declination".to_string(), None);
-    let id = project
-        .add_line(LineData {
-            name: Some("S".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#ffffff".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots,
+    let mut project = Project::new("declination", None);
+    let shots = shots
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut data)| {
+            data.uuid = Some(format!("shot-{i}"));
+            data
         })
-        .id;
-    project.get_line_mut(id).unwrap().azimuth_reference = reference;
-    project.ensure_shot_uuids();
+        .collect();
+    let meta = LineMeta {
+        name: Some("S".to_string()),
+        color: "#ffffff".to_string(),
+        ..LineMeta::default()
+    };
+    let id = project.add_line(meta, StartAt::New, shots).unwrap();
+    project.line_mut(id).unwrap().azimuth_reference = reference;
+    let start = project.line_stations(id).unwrap()[0];
+    project.set_placement(start, 0.0, 0.0).unwrap();
     (project, id)
 }
 
-fn station_xy(project: &Project, line_id: LineId, index: u32) -> (f64, f64) {
-    let coords = project
-        .compute_station_raw_coords(StationRef::new(line_id, index))
-        .expect("station coords");
-    (coords.x, coords.y)
+fn station_xy(project: &Project, line_id: LineId, index: usize) -> (f64, f64) {
+    let station = project.line_stations(line_id).expect("line")[index];
+    let [x, y] = project.raw_positions().xy(station).expect("station coords");
+    (x, y)
 }
 
 /// The whole point of the feature: the shot keeps the measured number and the
@@ -72,7 +72,7 @@ fn the_correction_rotates_the_geometry_and_never_the_reading() {
     let reference = AzimuthReference::magnetic(TEST_CORRECTION, CorrectionSource::FileDeclared);
     let (project, id) = project_with(vec![shot(0.0, 10.0)], Some(reference));
 
-    let stored = &project.get_line(id).unwrap().shots[0];
+    let stored = &project.line(id).unwrap().shots[0];
     assert_eq!(stored.azimuth_in, 0.0, "the measured reading must not move");
     assert_eq!(stored.azimuth_out, 0.0);
 
@@ -118,17 +118,17 @@ fn the_line_reference_wins_over_the_project_default() {
             CorrectionSource::Manual,
         )),
     );
-    project.default_azimuth_reference =
+    project.settings.default_azimuth_reference =
         Some(AzimuthReference::magnetic(-45.0, CorrectionSource::Manual));
 
-    let line = project.get_line(id).unwrap();
+    let line = project.line(id).unwrap();
     assert_eq!(
         project.azimuth_reference_for(line).applied_correction(),
         TEST_CORRECTION
     );
 
-    project.get_line_mut(id).unwrap().azimuth_reference = None;
-    let line = project.get_line(id).unwrap();
+    project.line_mut(id).unwrap().azimuth_reference = None;
+    let line = project.line(id).unwrap();
     assert_eq!(
         project.azimuth_reference_for(line).applied_correction(),
         -45.0,
@@ -136,12 +136,10 @@ fn the_line_reference_wins_over_the_project_default() {
     );
 }
 
-/// Reversing a line must not move the cave: station 0 becomes the far end
-/// and the line offset gains the span it used to cover. That span is measured
-/// by `shot_run_displacement`, which has to work in the SAME rotated frame as
-/// the walk - otherwise a line carrying a declination slides by the
-/// difference between the two frames, which for a 100 m passage at 10 degrees is
-/// most of 17 m.
+/// Reversing a line must not move the cave: station 0 becomes the far end,
+/// and each reciprocated shot must still walk in the SAME rotated frame -
+/// otherwise a line carrying a declination slides by the difference between
+/// the two frames, which for a 100 m passage at 10 degrees is most of 17 m.
 #[test]
 fn reversing_a_corrected_line_keeps_every_station_where_it_was() {
     let reference = AzimuthReference::magnetic(TEST_CORRECTION, CorrectionSource::FileDeclared);
@@ -151,7 +149,9 @@ fn reversing_a_corrected_line_keeps_every_station_where_it_was() {
     );
     let before: Vec<(f64, f64)> = (0..4).map(|i| station_xy(&project, id, i)).collect();
 
-    assert!(project.reverse_line(id, false), "reverse should succeed");
+    project
+        .reverse_line(id, false)
+        .expect("reverse should succeed");
 
     let after: Vec<(f64, f64)> = (0..4).map(|i| station_xy(&project, id, i)).collect();
     for (index, expected) in before.iter().enumerate() {
@@ -162,30 +162,6 @@ fn reversing_a_corrected_line_keeps_every_station_where_it_was() {
             "station {index} moved across the reverse: {expected:?} -> {got:?}"
         );
     }
-}
-
-/// `LineData` cannot carry the reference, so an undo that re-creates a
-/// line restores it from [`crate::LineIdentity`]. Losing it
-/// rotates that line by the declination on the next redraw.
-#[test]
-fn restoring_a_line_from_its_identity_keeps_the_reference() {
-    let reference = AzimuthReference::grid(-3.25, CorrectionSource::IgrfAuto { epoch_year: 2019 });
-    let (project, id) = project_with(vec![shot(0.0, 10.0)], Some(reference));
-    let line = project.get_line(id).unwrap();
-
-    let identity = crate::LineIdentity::of(line);
-    let restored = Line::restore_with_identity(id, line.to_line_data(), &identity);
-
-    assert_eq!(
-        restored.azimuth_reference,
-        Some(reference),
-        "the restored line lost its north reference"
-    );
-    // A legacy entry (no recorded reference) must still restore, inheriting the
-    // project default - the pre-#438 behaviour, not a panic or a zero override.
-    let legacy = crate::LineIdentity::default();
-    let restored = Line::restore_with_identity(id, line.to_line_data(), &legacy);
-    assert_eq!(restored.azimuth_reference, None);
 }
 
 /// Guards the enum's meaning rather than its spelling: `north` describes the

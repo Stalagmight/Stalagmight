@@ -34,6 +34,9 @@ go. See the [station context menu](../screens/station-context-menu.md).
 ![Merge Stations dialog](../images/merge-dialog.png)
 
 - **Station A** (2) is the first station clicked, **Station B** (3) the second.
+  The dialog now offers them as **Keep** choices: the kept station is shown on
+  every line, the other is archived (see the
+  [Merge Stations dialog](../screens/merge-stations-dialog.md)).
 - **Merge** (5). The first station's line moves onto the second, unless a
   zero datum holds it in place.
 
@@ -55,12 +58,38 @@ go. See the [station context menu](../screens/station-context-menu.md).
 
 ## Unmerging stations
 
-Right-click a merged station and pick **Unmerge Stations**. The unmerge icon
-next to **Merged with** in **Details** does the same.
+Right-click a merged station and pick **Detach Line from Station...**. The
+detach button on a line's row under **Also on** in **Details** does the same
+for that line.
 
-![Unmerge Stations in the station context menu](../images/unmerge-menu.png)
+![Detaching a line in the station context menu](../images/unmerge-menu.png)
 
 1. A merged station, right-clicked.
-2. **Unmerge Stations**
+2. **Detach Line from Station...** (the screenshot shows its earlier name,
+   **Unmerge Stations**)
 
-A station merged with more than one other asks which merge to undo.
+The line you detach gets its own station at the same place: a line that was
+merged there gets back the Station ID, name and comment it had before. If
+another station on that line has taken the name since, the dialog asks which
+of the two takes a letter, naming each by its Station ID ("Rename the station
+that comes back (Side / 0, Station ID 15) to 0a", "Rename the 0 that is on
+Side now (Station ID 29) to 0a"), and the name it says the line gets back follows your
+choice. A letter an earlier merge gave stays, and the dialog says so when
+there is one. When the station was
+itself a junction of several lines before that merge, those lines come off
+together and get it back as one station, with any station archived in it
+still inside it; the dialog names the lines that come off with yours and the
+stations that stay inside. Detach a line of that junction again to take it
+off on its own. On a station
+where three or more lines meet, the dialog asks what comes off: one line, or,
+on the row of the line that keeps the station, the other lines together (for
+example "Far Room and Upstream, together (Main Line keeps this station)").
+Under the choice it lists what every line has there afterwards, with its name
+and Station ID. Lines that come off together stay joined on one station, which
+has one Station ID: a line among them that had its own keeps it archived
+there, and the list says so; detach that line afterwards to give it its own
+back. Where two lines meet and either choice gives the same result, it asks
+nothing and says which line comes off, for example "North Passage comes off:
+it gets back 0 (Station ID 9); Main Line keeps station 3." Undo puts the line
+back. The undo history names the line that came off and the station on a line
+that kept it: `Detach line "North Passage" from Main Line / 3`.

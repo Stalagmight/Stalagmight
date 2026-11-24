@@ -9,8 +9,7 @@ use crate::core::loading::{LoadingPhase, ProgressEmitter};
 use crate::core::state::{AppState, VirtualShotMode};
 use crate::core::{Command, CommandResult};
 use crate::models::placement_suggest::{
-    suggest_all_placements, suggest_placements, CrossLineSuggestion, ExistingLine,
-    ImportLineForSuggestion, OrphanPlacementSuggestion, PlacementSuggestion,
+    CrossLineSuggestion, ImportLineForSuggestion, OrphanPlacementSuggestion, PlacementSuggestion,
 };
 use crate::models::{AzimuthReference, ShotData};
 use crate::parsers::compass::{CompassFile, CompassImportOptions};
@@ -675,31 +674,7 @@ pub fn suggest_import_placement(
     // declared nothing.
     azimuth_reference: Option<AzimuthReference>,
 ) -> Result<Vec<PlacementSuggestion>, String> {
-    let project = state.get_project_state().ok_or("No project open")?;
-
-    let existing_lines: Vec<ExistingLine> = project
-        .lines
-        .iter()
-        .map(|s| ExistingLine {
-            id: s.id,
-            name: s.name.clone().unwrap_or_else(|| format!("Line {}", s.id)),
-            shots: s.shots.clone(),
-            azimuth_reference: project.azimuth_reference_for(s),
-        })
-        .collect();
-
-    let config = state.get_config();
-    Ok(suggest_placements(
-        &shots,
-        // The line does not exist yet, so its reference is whatever the
-        // importer declared for it; the project default is the fallback (#438).
-        azimuth_reference
-            .map(AzimuthReference::sanitised)
-            .or(project.default_azimuth_reference)
-            .unwrap_or_default(),
-        &existing_lines,
-        &config.placement_suggestion,
-    ))
+    state.suggest_import_placement(&shots, azimuth_reference)
 }
 
 /// Suggest placements for ALL import lines against BOTH existing project
@@ -709,49 +684,14 @@ pub fn suggest_all_import_placements(
     state: State<'_, AppState>,
     import_lines: Vec<ImportLineForSuggestion>,
 ) -> Result<Vec<CrossLineSuggestion>, String> {
-    let existing_lines: Vec<ExistingLine> = match state.get_project_state() {
-        Some(project) => project
-            .lines
-            .iter()
-            .map(|s| ExistingLine {
-                id: s.id,
-                name: s.name.clone().unwrap_or_else(|| format!("Line {}", s.id)),
-                shots: s.shots.clone(),
-                azimuth_reference: project.azimuth_reference_for(s),
-            })
-            .collect(),
-        None => Vec::new(),
-    };
-    // Only the FALLBACK: each line carries its own reference and is scored
-    // in it (#438).
-    let fallback_reference = state
-        .get_project_state()
-        .and_then(|p| p.default_azimuth_reference)
-        .unwrap_or_default();
-    let import_lines: Vec<ImportLineForSuggestion> = import_lines
-        .into_iter()
-        .map(|mut line| {
-            // Deserialized straight off the wire: re-impose the type's
-            // invariants before anything computes with it.
-            line.azimuth_reference = line.azimuth_reference.map(AzimuthReference::sanitised);
-            line
-        })
-        .collect();
-
-    let config = state.get_config();
-    Ok(suggest_all_placements(
-        &import_lines,
-        fallback_reference,
-        &existing_lines,
-        &config.placement_suggestion,
-    ))
+    Ok(state.suggest_all_import_placements(import_lines))
 }
 
 /// Suggest placements for orphaned lines' leaf ends against datum-anchored
 /// lines. Orphaned lines are those in connected components (via merges)
 /// with no zero datum; an orphan the import touched may go onto any anchored
 /// line, a pre-existing one only onto a newly imported anchored line
-/// (see `Project::suggest_orphan_placements`).
+/// (see `core::state::import_suggest`).
 ///
 /// Async, with the matching on a blocking thread as `add_project_file` does:
 /// an orphan from the import is matched against every anchored line of the
@@ -763,10 +703,7 @@ pub async fn suggest_orphan_placements<R: tauri::Runtime>(
 ) -> Result<Vec<OrphanPlacementSuggestion>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
-        let project = state.get_project_state().ok_or("No project open")?;
-        let config = state.get_config();
-        Ok(project
-            .suggest_orphan_placements(&newly_imported_line_ids, &config.placement_suggestion))
+        state.suggest_orphan_placements(&newly_imported_line_ids)
     })
     .await
     .unwrap_or_else(|join_error| {
@@ -785,8 +722,7 @@ pub fn count_unanchored_lines(
     state: State<'_, AppState>,
     newly_imported_line_ids: Vec<u32>,
 ) -> Result<u32, String> {
-    let project = state.get_project_state().ok_or("No project open")?;
-    Ok(project.count_unanchored_lines(&newly_imported_line_ids))
+    state.count_unanchored_lines(&newly_imported_line_ids)
 }
 
 /// Parse a Walls `.WPJ`/`.SRV` file and return preview data for the import dialog.
@@ -1035,6 +971,7 @@ mod receipt_tests {
             code: "DATABASE_NOT_REOPENED".to_string(),
             message: "File saved, but database could not be reopened.".to_string(),
             severity: WarningSeverity::Warning,
+            parts: None,
         }])
     }
 
@@ -1047,6 +984,7 @@ mod receipt_tests {
             code: "LONG_SHOT".to_string(),
             message: "shot 3 is unusually long".to_string(),
             severity: WarningSeverity::Warning,
+            parts: None,
         }]);
 
         let merged = merge_deferred_save_outcome(import_result, degraded_save());
@@ -1140,6 +1078,63 @@ mod receipt_tests {
             vec!["should be dropped".to_string()],
         );
         assert!(result.import_receipt.is_none());
+    }
+
+    /// #92: a project created with its first save deferred is written by its
+    /// first import (the `finalize_deferred_import` every import IPC runs),
+    /// with the import's own entry in the file's history.
+    #[test]
+    fn the_first_import_of_a_deferred_project_writes_it() {
+        use crate::models::{ImportLineConfig, ImportPlacement};
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("deferred.stalx");
+        let state = AppState::new().expect("state");
+        let mut project = crate::models::survey::Project::new("Deferred", None);
+        project.file_path = Some(path.clone());
+        state.set_project_for_tests(project);
+        state.set_initial_save_deferred_for_tests(true);
+
+        let line = ImportLineConfig {
+            line_index: 0,
+            name: Some("Main".to_string()),
+            surveyor: None,
+            date: None,
+            surveyors: None,
+            explorers: None,
+            override_date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![ShotData {
+                length: 5.0,
+                ..ShotData::default()
+            }],
+            placement: ImportPlacement::Origin,
+            station_comments: Vec::new(),
+            station_names: Vec::new(),
+            station_external: Vec::new(),
+            reverse: false,
+            azimuth_reference: None,
+            cave_section: None,
+        };
+        let imported = state.execute_import_lines(
+            vec![line],
+            Vec::new(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+        );
+        let result = finalize_deferred_import(&state, imported);
+        assert!(result.success, "{:?}", result.error);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        assert!(path.exists(), "the deferred save wrote the project");
+        assert!(!state.initial_save_deferred());
+
+        let reopened = AppState::new().expect("state");
+        assert!(reopened.execute(Command::OpenProject { path }).success);
+        assert_eq!(reopened.get_undo_stack().len(), 1, "the import's entry");
     }
 
     #[test]

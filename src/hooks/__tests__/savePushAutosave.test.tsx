@@ -12,7 +12,7 @@ it.each([false, true])('keeps pending local autosave running while the message d
   const save = vi.fn(async () => { useProjectStore.setState({ isDirty: false }); return { success: true }; });
   useProjectStore.setState({ project: { file_path: '/synthetic.stalx' } as never,
     config: { general: { auto_save: true, auto_save_interval_seconds: 1 } } as never,
-    isDirty: false, integritySaveBlocked: false, saveProject: save as never,
+    isDirty: false, saveProject: save as never,
   });
   useSpeleoStore.setState({ link: { editState: 'editing', permission: 'READ_AND_WRITE', noAccess: false } as never,
     session: { loggedIn: true, endpoint: 'https://synthetic.example', userEmail: 'user@example.com' } });

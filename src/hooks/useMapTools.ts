@@ -10,6 +10,7 @@ import { useGasPlanStore } from '../store/gasPlanStore';
 import { useShallow } from 'zustand/react/shallow';
 import { isNonInteractiveTool } from '../utils/toolUtils';
 import { useActiveStations } from './useActiveStations';
+import { currentIdentityLabels } from './useIdentityLabels';
 import { getErrorMessage, invokeIpc } from '../utils/ipc';
 import type { LineId, ShotId, StationRef, Coordinates, RulerEndpoint, AlongLineResult } from '../types/project';
 import type { GpsOrigin } from '../types/config';
@@ -20,6 +21,7 @@ import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 import { projectParamOnSegment } from '../components/Map/surveyLayer/hitTest';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import { projectIdentityKey } from '../utils/projectIdentity';
+import { editNeedsOwnerPrompt } from '../components/Dialogs/ShownIdentityPrompt';
 
 /**
  * #395: what a plain Plan-mode select-click does to the gas plan pins.
@@ -400,6 +402,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             stationA,
             stationB,
             datumShift: result.datum_shift,
+            mergePreview: result.merge_preview,
           });
         } else if (result.connected) {
           // Connected - merging would make a loop, so redirect to closure dialog
@@ -410,6 +413,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             preview: result.preview,
             reason: result.reason,
             closureRefusal: result.closure_refusal,
+            fromMerge: true,
           });
         } else {
           // Not connected and merge blocked. The backend blocks only a loop
@@ -425,6 +429,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         if (requestId === connectivityRequestIdRef.current) {
           connectivityInFlightRef.current = false;
           setIsCheckingConnectivity(false);
+          // The check is over: its "Checking..." toast must not linger behind
+          // the dialog it opened (demo finding I-9).
+          useUIStore.getState().dismissToastsByKey(TOAST_KEYS.MERGE_CHECK);
         }
       }
     },
@@ -477,10 +484,15 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           if (!mergeStationA) {
             setMergeStationA(ref);
           } else {
-            // Check if clicking the same station
+            // Check if clicking the same station: the same slot, or another
+            // slot of the same station (a junction is ONE station on the
+            // station graph, so its slots share one Station ID, plan 9.3).
+            const labels = currentIdentityLabels();
+            const idA = labels.stationId(mergeStationA);
             if (
-              mergeStationA.line_id === ref.line_id &&
-              mergeStationA.station_index === ref.station_index
+              (mergeStationA.line_id === ref.line_id &&
+                mergeStationA.station_index === ref.station_index) ||
+              (idA !== null && idA === labels.stationId(ref))
             ) {
               // Clear selection
               clearMergeStations();
@@ -551,36 +563,49 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
 
         case 'move_comment': {
-          const { moveCommentSource, setMoveCommentSource, clearMoveCommentSource } = useUIStore.getState();
+          const { moveCommentSource, setMoveCommentSource } = useUIStore.getState();
           const mcStation = stations.find(
             (s) => s.station_ref.line_id === ref.line_id && s.station_ref.station_index === ref.station_index
           );
+          // A foreign slot or a loop end shows another station's comment (it
+          // is on other lines too): say whose it is before picking it up or
+          // dropping one onto it (RS 5.4, ui-3); going on does the click.
+          const askFirst = (then: () => Promise<void> | void) => {
+            if (!editNeedsOwnerPrompt(currentIdentityLabels().shown(ref))) return then();
+            useUIStore.getState().openDialog('shown-identity-edit', { stationRef: ref, kind: 'comment', onProceed: then });
+          };
+          const screenPos = { x: mouseEvent.clientX, y: mouseEvent.clientY };
           if (!moveCommentSource) {
             // First click: pick up source - just record it, don't mutate backend
-            if (!mcStation?.comment) {
+            const comment = mcStation?.comment;
+            if (!comment) {
               showToast(t('map.toasts.noCommentToMove'), TOAST_KEYS.MOVE_COMMENT_EMPTY, 'warning');
               break;
             }
-            setSelection({ type: 'station', stationRef: ref });
-            setMoveCommentSource({ type: 'station', stationRef: ref, comment: mcStation.comment, screenPos: { x: mouseEvent.clientX, y: mouseEvent.clientY } });
+            await askFirst(() => {
+              setSelection({ type: 'station', stationRef: ref });
+              setMoveCommentSource({ type: 'station', stationRef: ref, comment, screenPos });
+            });
           } else {
             // Second click: target - use atomic move_comment IPC
             const targetComment = mcStation?.comment ?? '';
-            if (targetComment) {
-              // Target has comment - open swap dialog
-              openDialog('swap-comments', {
-                source: moveCommentSource,
-                target: { type: 'station', stationRef: ref, comment: targetComment },
-              });
-            } else {
-              // Target empty - atomic move
-              const source = moveCommentSource.type === 'station' && moveCommentSource.stationRef
-                ? { type: 'station' as const, station_ref: moveCommentSource.stationRef }
-                : { type: 'shot' as const, line_id: moveCommentSource.lineId!, shot_id: moveCommentSource.shotId! };
-              const target = { type: 'station' as const, station_ref: ref };
-              await useProjectStore.getState().moveComment(source, target, false);
-              clearMoveCommentSource();
-            }
+            await askFirst(async () => {
+              if (targetComment) {
+                // Target has comment - open swap dialog
+                useUIStore.getState().openDialog('swap-comments', {
+                  source: moveCommentSource,
+                  target: { type: 'station', stationRef: ref, comment: targetComment },
+                });
+              } else {
+                // Target empty - atomic move
+                const source = moveCommentSource.type === 'station' && moveCommentSource.stationRef
+                  ? { type: 'station' as const, station_ref: moveCommentSource.stationRef }
+                  : { type: 'shot' as const, line_id: moveCommentSource.lineId!, shot_id: moveCommentSource.shotId! };
+                const target = { type: 'station' as const, station_ref: ref };
+                await useProjectStore.getState().moveComment(source, target, false);
+                useUIStore.getState().clearMoveCommentSource();
+              }
+            });
           }
           break;
         }

@@ -57,7 +57,9 @@ export interface GridColumn<Row> {
   /** Coercion hint used by the default parser and for type-to-edit gating. */
   kind?: 'text' | 'number' | 'number-nullable';
   /** Open a larger multi-line editor (comments etc.) instead of the
-   *  cell-sized one. */
+   *  cell-sized one. The one-line cell shows the value's lines joined by
+   *  " / " (`oneLineCellText`); the tooltip, the editor and the clipboard
+   *  keep its line breaks. */
   multiline?: boolean;
   /** Suppress the inline cell editor - no double-click, F2 or type-to-edit -
    *  while leaving the column WRITABLE by paste, fill and clear.
@@ -113,6 +115,14 @@ export interface GridSelection {
   focus: CellCoord;
   active: CellCoord;
 }
+
+/**
+ * What a host's `onEdit` returns when it holds a typed edit for an answer
+ * (the stations grid asks whose station a dotted cell shows first): the grid
+ * then keeps the active cell on the edited one instead of moving on with
+ * Enter, so the cursor is where the prompt is about (RS-FX8, N6).
+ */
+export const EDIT_HELD = 'held' as const;
 
 /** A single resolved edit emitted to the host. `value` is already coerced. */
 export interface CellEdit {

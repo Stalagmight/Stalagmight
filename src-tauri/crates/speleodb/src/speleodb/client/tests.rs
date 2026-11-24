@@ -266,6 +266,25 @@ fn revisions_and_native_file_routes_are_exact() {
     assert!(r[0].contains("filename=\"project.stalx\""));
     assert!(r[0].contains("My commit"));
     assert!(r[0].contains("SQLite format 3\0synthetic bytes"));
+    assert!(r[0].contains("application/vnd.sqlite3"));
+}
+
+#[test]
+fn a_version_2_upload_is_sent_as_json() {
+    let f = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        f.path(),
+        b"{\"format\":\"stalx\",\"version\":2,\"end\":true}\n",
+    )
+    .unwrap();
+    let s = Server::json(
+        json!({"project":project_json(),"hexsha":SHA,"files":["project.stalx"],"message":"Saved","browser_url":null}),
+    );
+    upload_stalx(&s.base, "t", false, ID, f.path(), "My commit").unwrap();
+    let r = s.finish();
+    assert!(r[0].contains("filename=\"project.stalx\""));
+    assert!(r[0].contains("Content-Type: application/json"), "{}", r[0]);
+    assert!(!r[0].contains("vnd.sqlite3"));
 }
 
 #[test]
@@ -649,15 +668,18 @@ fn live_used_api_calls_with_email_and_token() {
                     acquire_lock(&base, &token, false, id)?;
                     let dir = tempfile::tempdir().unwrap();
                     let path = dir.path().join("project.stalx");
-                    {
-                        let mut db =
-                            stalagmight_persistence::persistence::Database::open(&path).unwrap();
-                        db.save_project(&crate::models::Project::new(
-                            "Synthetic first revision".into(),
-                            None,
-                        ))
-                        .unwrap();
-                    }
+                    std::fs::write(
+                        &path,
+                        stalagmight_legacy::write_v18(
+                            &stalagmight_legacy::LegacyProject::new(
+                                "Synthetic first revision".into(),
+                                None,
+                            ),
+                            &stalagmight_legacy::LegacyExtras::default(),
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
                     let first_bytes = std::fs::read(&path).unwrap();
                     eprintln!("{label}: uploading first native file");
                     let first =
@@ -673,15 +695,18 @@ fn live_used_api_calls_with_email_and_token() {
                         upload_stalx(&base, &token, false, id, &path, "No changes"),
                         Err(SpeleoDbError::Status { status: 304, .. })
                     ));
-                    {
-                        let mut db =
-                            stalagmight_persistence::persistence::Database::open(&path).unwrap();
-                        db.save_project(&crate::models::Project::new(
-                            "Synthetic second revision".into(),
-                            None,
-                        ))
-                        .unwrap();
-                    }
+                    std::fs::write(
+                        &path,
+                        stalagmight_legacy::write_v18(
+                            &stalagmight_legacy::LegacyProject::new(
+                                "Synthetic second revision".into(),
+                                None,
+                            ),
+                            &stalagmight_legacy::LegacyExtras::default(),
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
                     eprintln!("{label}: uploading second native file");
                     let second =
                         upload_stalx(&base, &token, false, id, &path, "Second synthetic revision")?

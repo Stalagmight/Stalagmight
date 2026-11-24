@@ -136,9 +136,9 @@ export const fractalStress: Scenario = {
 
     // The retired WDIO tier also SAVED the generated survey - serialization of
     // a large merge graph is its own failure surface. Write to a temp path,
-    // require the file, and clean up (close first: deleting a live SQLite
-    // database under the backend's open handle is the documented SIGBUS
-    // hazard).
+    // require the file, and clean up (close first, so the backend no longer
+    // holds it as the open project; under 0.6.0's live SQLite handle its
+    // removal was the documented SIGBUS hazard).
     const saveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fractal-stress-'));
     const savePath = path.join(saveDir, `fractal-iter${iterations}.stalx`);
     try {

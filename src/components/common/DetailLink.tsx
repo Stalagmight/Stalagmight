@@ -14,10 +14,12 @@
  *   when user moves mouse away but keeps element focused).
  */
 
-import { useCallback, useRef, type CSSProperties } from 'react';
+import { useCallback, useRef } from 'react';
+import i18n from '../../i18n';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useUIStore } from '../../store/uiStore';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
-import { EntitySymbol } from './toolIcons';
+import { endTitleOf, markOf, PillParts, pillStyle, shotToneOf, useMissingPillStyle, useResolvePill } from './LinePill';
 
 export type DetailLinkType = 'station' | 'shot' | 'line';
 
@@ -57,7 +59,9 @@ export interface DetailLinkProps {
   type: DetailLinkType;
   /** Target identifier (lineId required, position required for stations/shots) */
   target: DetailLinkTarget;
-  /** Text to display in the link */
+  /** Text to display in the link below Full: a slot's plain-text label
+   *  (`labels.station`, `labels.shotAt`), which qualifies a dotted slot
+   *  (`12 (Main)`). */
   displayText: string;
   /**
    * The target named with its line context, for the aria-label and the
@@ -80,16 +84,42 @@ export interface DetailLinkProps {
   /** Callback when hover/focus ends (for map highlighting). */
   onHoverEnd?: () => void;
   /**
-   * Short primary label for the Full-mode entity pill: the station name
-   * (`17`), the shot (`4 → 5`) or the line name. Defaults to `displayText`.
+   * The main part of the Full-level pill, at the surrounding text size: the
+   * station's bare name (`17`, `labels.stationPill`: the pill's colour says
+   * whose station a dotted slot shows, its tooltip and words say it and a
+   * loop end), the shot (`4 → 5`) or the line name. Defaults to
+   * `displayText`. A shot pill with an end of another line's station or a
+   * loop end draws each end's bare name, with its tooltip and words, instead.
    */
   pillLabel?: string;
   /**
-   * Dim context after a divider in the Full-mode pill: the line name of a
-   * station or shot link (`17 | Main Line`). Omitted for lines. Never an id -
-   * positional handles are not shown (SPEC 4.1).
+   * The muted, smaller context before the main part in the Full-level pill:
+   * the line name of a station or shot link, shown with a colon
+   * (`Main Line: 17`). Omitted for lines. Never an id - positional handles
+   * are not shown (SPEC 4.1). A station pill that takes another line's
+   * colour names that line instead (RS-OWNERSHIP).
    */
   pillContext?: string;
+  /**
+   * The line a station pill's station belongs to, when the pill shows it on
+   * another line: the whole pill takes that line's colour and names it as
+   * its context, its tooltip says "Belongs to Main" (RS-OWNERSHIP) and a
+   * home dot in that colour follows its name (RS-LEADDOT).
+   * Station links only. Absent: the slot's own (`labels.ownerLine`: a foreign
+   * slot's shown station's home line, a loop end's kept end's); null: the
+   * slot's line (the "Also on" rows, which name the line).
+   */
+  homeLineId?: number | null | undefined;
+  /**
+   * Whether a station pill ends with its Station ID (default). False where the
+   * pill is labelled by something else: the Station details' "Also on" rows
+   * name the other LINE (UX-7), and the Station ID row above already says it.
+   */
+  stationIdShown?: boolean | undefined;
+  /** A shot pill's ends' home lines (their tooltips and words) and half colours, per end (see
+   *  `homeLineId`). Shot links only. Absent: each end's own (a foreign end's
+   *  home line). */
+  shotHomeLineIds?: { from?: number | null | undefined; to?: number | null | undefined } | undefined;
 }
 
 /**
@@ -114,17 +144,23 @@ export function generateTestId(type: DetailLinkType, target: DetailLinkTarget): 
 }
 
 /**
+ * The link's target as spoken: the text, then the Station ID when the pill
+ * shows one. Example: "station Main Line / 17, Station ID 42".
+ */
+export function spokenTarget(type: DetailLinkType, displayText: string, stationId?: number | null): string {
+  const trimmed = displayText.trim();
+  const id = stationId === null || stationId === undefined ? '' : `, ${i18n.t('identity.stationId')} ${stationId}`;
+  return trimmed === '' ? `${type}${id}` : `${type} ${trimmed}${id}`;
+}
+
+/**
  * Generate an accessible aria-label for the link.
  *
- * Format: "Select [type] [displayText]"
- * Example: "Select station Main Line / 17"
+ * Format: "Select [type] [displayText][, Station ID n]"
+ * Example: "Select station Main Line / 17, Station ID 42"
  */
-export function generateAriaLabel(type: DetailLinkType, displayText: string): string {
-  const trimmed = displayText.trim();
-  if (trimmed === '') {
-    return `Select ${type}`;
-  }
-  return `Select ${type} ${trimmed}`;
+export function generateAriaLabel(type: DetailLinkType, displayText: string, stationId?: number | null): string {
+  return `Select ${spokenTarget(type, displayText, stationId)}`;
 }
 
 /**
@@ -144,18 +180,43 @@ export function DetailLink({
   onHoverEnd,
   pillLabel,
   pillContext,
+  homeLineId,
+  stationIdShown = true,
+  shotHomeLineIds,
 }: DetailLinkProps) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const mouseDownRef = useRef(false);
   const computedTestId = testId ?? generateTestId(type, target);
-  const spokenText = fullText ?? displayText;
-  const ariaLabel = generateAriaLabel(type, spokenText);
 
-  // Full highlighting: a leading entity symbol signals what the link points to
-  // (station ring, shot line, line zigzag), colored by entity. Hidden for
-  // missing targets (the warning glyph already conveys state).
+  // Full highlighting: the link is a pill in its line's colour; below Full it
+  // stays the plain underline link.
   const syntacticLevel = useUIStore((s) => s.syntacticLevel);
-  const showSymbol = syntacticLevelAtLeast(syntacticLevel, 'full') && !isMissing;
+  const showPill = syntacticLevelAtLeast(syntacticLevel, 'full');
+  const labels = useIdentityLabels();
+  const resolve = useResolvePill();
+  const missingStyle = useMissingPillStyle();
+  const position = hasPosition(target) ? target.position : null;
+  // A station pill ends with the station's Station ID (the one the Station
+  // IDs label mode shows); the spoken name carries it too.
+  // The Station ID the slot shows (RS 6), and whether it is a loop end (its tooltip and words).
+  const stationRef = type === 'station' && position !== null ? { line_id: target.lineId, station_index: position } : null;
+  const stationId =
+    showPill && stationIdShown && !isMissing && stationRef !== null ? labels.shownStationId(stationRef) : null;
+  // The line the station belongs to, when it is not the slot's (RS-OWNERSHIP):
+  // the whole pill takes its colour and its name as the context.
+  const owner =
+    isMissing || stationRef === null
+      ? null
+      : homeLineId !== undefined
+        ? homeLineId
+        : labels.ownerLine(stationRef);
+  const ownerName = owner !== null ? labels.lineName(owner) : null;
+  const pill = resolve(owner ?? target.lineId);
+  // A station shown on a line it does not belong to: its home dot (RS-LEADDOT).
+  const foreignStation = showPill && owner !== null && owner !== target.lineId;
+  const loopEnd = stationRef !== null && !isMissing && labels.shown(stationRef)?.loop_end === true;
+  const spokenText = spokenTarget(type, fullText ?? displayText, stationId);
+  const ariaLabel = generateAriaLabel(type, fullText ?? displayText, stationId);
 
   const handleClick = useCallback(() => {
     if (isMissing) {
@@ -169,9 +230,9 @@ export function DetailLink({
     }
     onSelect();
     if (onAnnounce) {
-      onAnnounce(`Selected ${type} ${spokenText}`);
+      onAnnounce(`Selected ${spokenText}`);
     }
-  }, [type, spokenText, onSelect, onAnnounce, isMissing, onHoverEnd]);
+  }, [spokenText, onSelect, onAnnounce, isMissing, onHoverEnd]);
 
   const handleMouseEnter = useCallback(() => {
     if (isMissing || !onHoverStart) return;
@@ -209,22 +270,49 @@ export function DetailLink({
   const focusClasses = 'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset';
   const cursorClass = isMissing ? 'cursor-not-allowed' : 'cursor-pointer';
 
-  // In Full highlighting, render the link as an entity pill: the duotone symbol
-  // plus the id inside a rounded chip with a tinted background and an
-  // entity-colored border (the legend-chip look). Otherwise keep the plain
+  // Full: the line pill (`.sh-lpill`, colours from theme/pillColors.ts), a
+  // missing target as its neutral dashed variant. Otherwise the plain
   // underline link.
-  const computedClass = showSymbol
-    ? `sh-pill inline-flex items-center gap-1 align-middle rounded-full px-2 py-0.5 text-xs leading-none text-text-primary ${focusClasses} ${cursorClass} ${className}`
+  const computedClass = showPill
+    ? `sh-lpill${isMissing ? ' sh-lpill--missing' : ''} ${focusClasses} ${cursorClass} ${className}`
     : `underline ${isMissing ? 'text-warning' : 'text-accent'} ${focusClasses} ${cursorClass} ${className}`;
-  const pillStyle: CSSProperties | undefined = showSymbol
-    ? ({ '--o': `var(--sh-${type})` } as CSSProperties)
-    : undefined;
+  const style = showPill ? (isMissing ? missingStyle : pillStyle(pill.colors)) : undefined;
 
-  // Pill content: a short primary label + its line context after a divider,
-  // both at the same text size (station "17 | Main Line", shot "4 → 5 | Main
-  // Line", line "Main Line").
-  const pillPrimary = showSymbol ? (pillLabel ?? displayText) : displayText;
-  const pillId = showSymbol && pillContext ? pillContext : null;
+  // A shot with an end of another line's station or a loop end shows its
+  // two ends separately, so each end's tooltip and words sit on its bare
+  // name (they say what the plain text's qualifier says); with an end of
+  // another line it is two-tone, that end's half in that line's colour
+  // (RS-OWNERSHIP).
+  const shotIndex = type === 'shot' && position !== null ? position - 1 : null;
+  const marked = showPill && shotIndex !== null && !isMissing;
+  const endRef = (index: number) => ({ line_id: target.lineId, station_index: index });
+  const endHome = (end: number | null | undefined, index: number): number | null | undefined =>
+    end !== undefined ? end : labels.homeMark(endRef(index));
+  const fromOwner = marked ? (shotHomeLineIds?.from !== undefined ? shotHomeLineIds.from : labels.ownerLine(endRef(shotIndex))) : null;
+  const toOwner = marked ? (shotHomeLineIds?.to !== undefined ? shotHomeLineIds.to : labels.ownerLine(endRef(shotIndex + 1))) : null;
+  // The dot and the context (the shot's line) keep the shot's colour as a
+  // head when the from end's half is another line's (RS-LEADDOT).
+  const tone = marked ? shotToneOf(resolve, target.lineId, fromOwner, toOwner, 'link') : null;
+  // Whose station a foreign end is: said in its tooltip and words; its home dot is the tone's (RS-LEADDOT).
+  const fromMark = marked ? markOf(pill, endHome(shotHomeLineIds?.from, shotIndex)) : null;
+  const toMark = marked ? markOf(pill, endHome(shotHomeLineIds?.to, shotIndex + 1)) : null;
+  const fromLoopEnd = marked && labels.shown(endRef(shotIndex))?.loop_end === true;
+  const toLoopEnd = marked && labels.shown(endRef(shotIndex + 1))?.loop_end === true;
+  const shotEnds =
+    shotIndex !== null && (fromMark || toMark || fromLoopEnd || toLoopEnd || tone)
+      ? {
+          from: labels.stationPill(endRef(shotIndex)),
+          to: labels.stationPill(endRef(shotIndex + 1)),
+          fromMark,
+          toMark,
+          fromLoopEnd,
+          toLoopEnd,
+        }
+      : null;
+  const pillClass = tone ? `${computedClass} sh-lpill--split` : computedClass;
+  const pillStyleAttr = tone ? undefined : style;
+  // The station pill's context names the line the station belongs to.
+  const context = type === 'line' ? null : pillContext && ownerName !== null && type === 'station' ? ownerName : pillContext;
 
   return (
     <button
@@ -236,25 +324,33 @@ export function DetailLink({
       onMouseLeave={handleMouseLeave}
       onFocus={handleFocus}
       onBlur={handleBlur}
-      className={computedClass}
-      style={pillStyle}
+      className={pillClass}
+      style={pillStyleAttr}
       aria-label={ariaLabel}
       aria-disabled={isMissing}
       data-testid={computedTestId}
-      title={isMissing ? `${type} not found` : undefined}
+      data-owner-line={owner ?? undefined}
+      title={
+        isMissing
+          ? `${type} not found`
+          : showPill
+            ? endTitleOf(ownerName !== null ? { line: ownerName } : null, loopEnd)
+            : undefined
+      }
     >
-      {showSymbol ? (
-        <>
-          <EntitySymbol entity={type} size={14} testId={`${computedTestId}-symbol`} />
-          <span>{pillPrimary}</span>
-          {pillId !== null && (
-            <span className="sh-pill-id" data-testid={`${computedTestId}-id`}>
-              <span className="sh-pill-nudge">
-                {pillId}
-              </span>
-            </span>
-          )}
-        </>
+      {showPill ? (
+        <PillParts
+          testId={computedTestId}
+          context={context}
+          main={pillLabel ?? displayText}
+          shotEnds={shotEnds}
+          tone={tone}
+          loopEnd={loopEnd}
+          loopEndLabel={i18n.t('identity.loopEnd')}
+          stationId={stationId}
+          homeDot={foreignStation}
+          missing={isMissing}
+        />
       ) : (
         <>
           {displayText}

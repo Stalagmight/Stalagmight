@@ -2,14 +2,16 @@
 //! SpeleoDB project editable without a claim of the signed-in account bound to
 //! the current session, and that every way out of an edit session leaves the gate
 //! shut once no such claim remains. Synthetic throughout: a dead loopback
-//! endpoint (or a recording one) and databases built here.
+//! endpoint (or a recording one) and version 2 files written here.
 
 use std::path::{Path, PathBuf};
 
+use super::speleodb_cache::{InheritedUndo, OpenProjectToken};
+use super::speleodb_cache_install::PreparedDownload;
 use super::speleodb_edit_gate::OpenProjectGate;
+use super::stalx_fixtures::write_v2;
 use super::AppState;
-use crate::models::{Project, SpeleoLink};
-use crate::persistence::Database;
+use crate::models::SpeleoLink;
 
 const ID: &str = "33333333-3333-3333-3333-333333333333";
 const ME: &str = "diver@example.com";
@@ -18,20 +20,20 @@ const ME: &str = "diver@example.com";
 const UNREACHABLE: &str = "http://127.0.0.1:1/";
 
 fn seed_linked(path: &Path, endpoint: &str, name: &str) {
-    let mut db = Database::open(path).expect("open db");
-    db.save_project(&Project::new(name.to_owned(), None))
-        .expect("save project");
-    db.save_speleo_link(Some(&SpeleoLink {
-        endpoint: endpoint.to_owned(),
-        project_id: ID.to_owned(),
-        project_name: name.to_owned(),
-        base_commit_sha: Some("abc123".to_owned()),
-        has_unpushed_edits: false,
-        last_edit_at: None,
-        last_verify_at: None,
-        undo_mode: None,
-    }))
-    .expect("save link");
+    write_v2(
+        path,
+        name,
+        Some(&SpeleoLink {
+            endpoint: endpoint.to_owned(),
+            project_id: ID.to_owned(),
+            project_name: name.to_owned(),
+            base_commit_sha: Some("abc123".to_owned()),
+            has_unpushed_edits: false,
+            last_edit_at: None,
+            last_verify_at: None,
+            undo_mode: None,
+        }),
+    );
 }
 
 fn sign_in(state: &AppState, endpoint: &str) {
@@ -91,15 +93,28 @@ fn assert_gate_needs_a_bound_claim(state: &AppState, label: &str) {
 }
 
 /// The open project's bytes and generation, for a prepared in-place reload.
-fn reload_of(state: &AppState, dir: &Path, name: &str) -> (PathBuf, PathBuf, (u64, Vec<u8>)) {
+fn reload_of(
+    state: &AppState,
+    dir: &Path,
+    name: &str,
+) -> (PreparedDownload, PathBuf, OpenProjectToken) {
     let dest = state.open_project_path().expect("open path");
     let source = dir.join(format!("{name}.download"));
     seed_linked(&source, UNREACHABLE, name);
-    let expected = (
-        state.speleodb_session_generation(),
-        serde_json::to_vec(&*state.project.lock().expect("project")).expect("snapshot"),
-    );
-    (source, dest, expected)
+    let link = state.speleodb_open_link().expect("linked");
+    let prepared = state
+        .prepare_download(
+            &source,
+            link,
+            InheritedUndo::Drop,
+            &super::speleodb_pull::download_decode_options(),
+        )
+        .expect("prepare");
+    let expected = {
+        let _guard = state.project.lock().expect("project");
+        state.open_project_token_locked()
+    };
+    (prepared, dest, expected)
 }
 
 #[test]
@@ -214,15 +229,12 @@ fn a_reload_carries_an_edit_session_only_while_its_claim_is_bound() {
             end_the_claim(&state);
         }
         let (source, dest, expected) = reload_of(&state, temp.path(), "Server version");
-        let before = expected.0;
+        let before = expected.generation;
         // `true`: the caller asks to keep editing, as Take remote's reload did.
-        assert!(
-            state
-                .open_project_download(source, dest, expected, true)
-                .expect("install")
-                .success,
-            "{label}: the reload itself succeeds"
-        );
+        state
+            .open_project_download(source, dest, expected, true)
+            .map_err(|e| format!("{label}: {e:?}"))
+            .expect("the reload itself succeeds");
         assert_ne!(state.speleodb_session_generation(), before, "a boundary");
         assert_eq!(
             state.get_project_state().expect("open").name,
@@ -240,12 +252,9 @@ fn a_view_reload_never_keeps_the_gate_open() {
     let temp = tempfile::TempDir::new().expect("temp");
     let (state, _path) = open_editing(temp.path(), UNREACHABLE);
     let (source, dest, expected) = reload_of(&state, temp.path(), "Revision");
-    assert!(
-        state
-            .open_project_download(source, dest, expected, false)
-            .expect("install")
-            .success
-    );
+    state
+        .open_project_download(source, dest, expected, false)
+        .expect("install");
     assert!(!state.edit_enabled());
     assert!(
         state.speleodb_holds_claim(ID),
@@ -274,10 +283,7 @@ fn a_restored_claim_after_a_failed_release_opens_nothing() {
 fn a_local_project_is_always_editable_whatever_the_claims() {
     let temp = tempfile::TempDir::new().expect("temp");
     let path = temp.path().join("local.stalx");
-    Database::open(&path)
-        .expect("open")
-        .save_project(&Project::new("Local".to_owned(), None))
-        .expect("save");
+    write_v2(&path, "Local", None);
     let state = AppState::new().expect("state");
     sign_in(&state, UNREACHABLE);
     assert!(state.open_project(path).success);
@@ -319,7 +325,8 @@ fn the_gate_is_opened_only_through_the_claim_binding() {
         }
         let src = std::fs::read_to_string(entry.path()).expect("source");
         // Production region only: the top-level test gate starts the fixtures.
-        let prod = src.split("\n#[cfg(test)]").next().unwrap_or(&src);
+        let end = src.find("\n#[cfg(test)]").unwrap_or(src.len());
+        let prod = &src[..end];
         assert!(
             !prod.contains("set_edit_enabled"),
             "{name}: there is no production gate setter"

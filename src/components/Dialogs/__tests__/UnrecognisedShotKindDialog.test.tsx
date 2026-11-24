@@ -137,8 +137,8 @@ describe('UnrecognisedShotKindDialog', () => {
 
   it('sends every change as ONE batch, not a call per shot', async () => {
     // A newer file can use an unknown discriminant on every shot in the survey.
-    // Per-shot commands would each refetch the whole project state, undo state,
-    // warnings and the integrity check.
+    // Per-shot commands would each refetch the whole project state, undo state
+    // and warnings.
     render(<UnrecognisedShotKindDialog />);
     for (const id of [1, 2]) {
       pickOption(`unrecognised-kind-select-${id}`, 'Jump');

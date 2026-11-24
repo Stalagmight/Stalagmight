@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
-import { getErrorMessage } from '../../utils/ipc';
+import { getErrorMessage, invokeIpc } from '../../utils/ipc';
+import type { DeleteShotImpact } from '../../types/commands';
+import SplitWeldNotice from './SplitWeldNotice';
 import {
   defaultSplitNames,
   lineNameProblemMessage,
@@ -27,6 +29,24 @@ export default function SplitLineDialog() {
   const [nameB, setNameB] = useState(defaults.b);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // What the split welds (UX-5), from the backend's dry run. A failed preview
+  // only hides the notice: the split itself still reports its own refusal.
+  const [impact, setImpact] = useState<DeleteShotImpact | null>(null);
+
+  useEffect(() => {
+    if (lineId === undefined || shotId === undefined) return;
+    let live = true;
+    invokeIpc<DeleteShotImpact>('preview_delete_shot', { lineId, shotId }, { purpose: 'preview delete shot and split' })
+      .then((result) => {
+        if (live) setImpact(result);
+      })
+      .catch(() => {
+        if (live) setImpact(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [lineId, shotId]);
 
   // Re-initialize names when lineName changes
   useEffect(() => {
@@ -106,6 +126,8 @@ export default function SplitLineDialog() {
         <p className="text-text-secondary">
           Deleting this shot will split the line into two. Name the resulting lines:
         </p>
+
+        <SplitWeldNotice impact={impact} />
 
         {error && (
           <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm" data-testid="split-line-error">

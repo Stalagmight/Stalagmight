@@ -58,6 +58,9 @@ const FIRST_PARTY_CRATES = new Set([
   'stalagmight-export',
   'stalagmight-speleodb',
   'stalagmight-core',
+  // The frozen 0.6.0 reader (migration of old files); the app reaches it
+  // through stalagmight-persistence.
+  'stalagmight-legacy',
 ]);
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');

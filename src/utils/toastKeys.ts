@@ -8,8 +8,7 @@
  * it from `TOAST_KEYS`.
  */
 export const TOAST_KEYS = {
-  // Integrity / undo-redo
-  INTEGRITY_REPAIR: 'integrity-repair',
+  // Edits / undo-redo
   EDIT_DISABLED: 'edit-disabled',
   /** Catch-all for a command failure no specific handler claims (docs/notifications.md). */
   COMMAND_FAILED: 'command-failed',
@@ -30,6 +29,12 @@ export const TOAST_KEYS = {
    * (#737). One toast lists every closure the delete removed.
    */
   CLOSURE_REMOVED: 'closure-removed',
+  /**
+   * What an action did to station names on its own (RS 7): the letters rule L
+   * gave, archived stations it brought back, loop closure ends that show their
+   * own name again. One toast per action.
+   */
+  STATION_IDENTITIES: 'station-identities',
   GEOMETRY_COMPUTE_FAILED: 'geometry-compute-failed',
   ANCHORED_IDS_ERROR: 'anchored-ids-error',
   MOVE_COMMENT_EMPTY: 'move-comment-empty',
@@ -79,6 +84,8 @@ export const TOAST_KEYS = {
    * file-level compromise. Same code across two exports still collapses.
    */
   EXPORT_NOTE: 'export-note',
+  /** An export wrote its file: the success toast names it (demo finding I-13). */
+  EXPORT_SUCCEEDED: 'export-succeeded',
   WARNING_RESOLVE: 'warning-resolve',
   ZERO_DATUM_INCOMPLETE: 'zero-datum-incomplete',
   /**
@@ -86,6 +93,11 @@ export const TOAST_KEYS = {
    * app drops when it saves the file (#741). Shown once per project per session.
    */
   OLDER_VERSIONS_DROP_GPS_FIXES: 'older-versions-drop-gps-fixes',
+  /**
+   * A save converted a project opened from a 0.6.0 file to the new format,
+   * with no conversion banner showing to say so (demo issue I-5).
+   */
+  LEGACY_CONVERTED: 'legacy-converted',
 
   // SpeleoDB
   SPELEODB_UNLINKED_COPY: 'speleodb-unlinked-copy',

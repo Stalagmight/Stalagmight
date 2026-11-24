@@ -1,7 +1,7 @@
 use chrono::Utc;
 use tauri::State;
 
-use crate::core::{AppState, IntegrityCheckResult, IntegrityRepairResult};
+use crate::core::AppState;
 use crate::models::{warning_is_ignorable, LineId, ShotId};
 use crate::persistence::ResolvedWarning;
 
@@ -14,30 +14,10 @@ pub fn get_project_warnings(state: State<AppState>) -> Vec<ProjectWarning> {
     get_project_warnings_impl(state.inner())
 }
 
-/// Structural-integrity violation messages for the open project (critical
-/// first). Empty when the project is sound. The frontend uses a non-empty
-/// result after load to warn the user and offer a repair.
-#[tauri::command]
-pub fn check_project_integrity(state: State<AppState>) -> IntegrityCheckResult {
-    state.integrity_check()
-}
-
-/// Repair the open project's structural integrity, returning `{ fixed,
-/// remaining }`. The project is left dirty so the user can save the repair.
-/// `remaining > 0` means some issues are detect-only (drifted aligned loop
-/// closures, non-finite geometry) and need manual attention.
-#[tauri::command]
-pub fn repair_project_integrity(state: State<AppState>) -> IntegrityRepairResult {
-    state.repair_open_project_integrity()
-}
-
 pub(crate) fn get_project_warnings_impl(state: &AppState) -> Vec<ProjectWarning> {
-    let Some(project) = state.get_project_state() else {
-        return Vec::new();
-    };
-
-    // Delegate to AppState method (uses self.database since project is already loaded)
-    let warnings = state.compute_project_warnings(&project, None);
+    // Computed under the project lock from the memoised layout: no copy of
+    // the project. Empty when none is open.
+    let warnings = state.open_project_warnings();
     tracing::debug!(
         count = warnings.len(),
         purpose = "surface validation issues",
@@ -80,11 +60,9 @@ pub(crate) fn resolve_warning_impl(
         return Ok(());
     }
 
-    // Policy (issue #57): UUID-keyed suppression is the only supported model for
-    // new ignores. shot_uuid_for returns None only when no project is open, the
-    // lock is poisoned, or the (line_id, shot_id) shot does not exist - in
-    // every case we cannot bind a stable identity, so refuse rather than write a
-    // position-keyed row that could later suppress an unrelated shot reusing the id.
+    // Policy (issue #57): an ignore is keyed by the shot's uuid. shot_uuid_for
+    // returns None only when no project is open, the lock is poisoned, or the
+    // (line_id, shot_id) shot does not exist: there is no shot to bind, so refuse.
     let Some(shot_uuid) = state.shot_uuid_for(line_id, shot_id) else {
         tracing::warn!(
             line_id,
@@ -102,29 +80,15 @@ pub(crate) fn resolve_warning_impl(
         purpose = "acknowledge validation warning",
         "Resolving warning"
     );
-    // Key by UUID only when that UUID is already persisted on disk. A pre-v6
-    // shot's UUID is minted in memory and not written until the project is saved;
-    // keying the ignore by it would orphan the row on the next open (different
-    // UUIDs are minted), losing the ignore for a legacy file closed without saving.
-    // Fall back to a legacy position-keyed ignore for such a shot - it survives via
-    // the position fallback and the load-time backfill upgrades it once the UUID is
-    // persisted (issue #57 / Codex).
-    // Line-scoped: a FILE saved before shot UUIDs were project-wide unique can hold one
-    // id in two lines (the load renames one copy), so an unscoped check would call a UUID
-    // persisted only in ANOTHER line durable and key the ignore by it anyway. A renamed
-    // shot's derived id counts as persisted: every open derives it again.
-    let shot_uuid = if state.shot_uuid_is_persisted(line_id, &shot_uuid) {
-        Some(shot_uuid)
-    } else {
-        None
-    };
+    // Every shot's uuid is written with the survey, and the ignore rides the
+    // same save, so the ignore is always keyed by it.
     let warning = ResolvedWarning {
         line_id,
         shot_id,
         warning_code,
         resolved_at: Utc::now(),
         resolved_comment: comment,
-        shot_uuid,
+        shot_uuid: Some(shot_uuid),
     };
     state.save_resolved_warning_gated(&warning).map_err(|e| {
         // A read-only rejection (EDIT_DISABLED) is expected control flow on a remote
@@ -161,6 +125,11 @@ pub(crate) fn unresolve_warning_impl(
     warning_code: String,
 ) -> Result<(), String> {
     let shot_uuid = state.shot_uuid_for(line_id, shot_id);
+    // No project open: nothing to un-ignore (0.6.0 refused here too, for want
+    // of a database); the project is cloned only on this rare miss.
+    if shot_uuid.is_none() && state.get_project_state().is_none() {
+        return Err("No project open".to_string());
+    }
     tracing::info!(
         line_id = line_id,
         shot_id = shot_id,

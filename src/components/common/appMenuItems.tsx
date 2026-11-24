@@ -43,7 +43,9 @@ const ICON_SIZE = 18;
  *
  * No `editingBlocked` disable: the router owns that decision and rejects the
  * DMP-into-read-only-project case with a tailored, fix-it message (an
- * import-blocked prompt for the causes one click can fix).
+ * import-blocked prompt for the causes one click can fix). The in-project menu
+ * turns the row off only for a file made with a newer Stalagmight, which no
+ * click fixes (`useProjectMenuItems`, demo issue N-1).
  */
 export function importMenuItem(t: TFunction): AppMenuItem {
   return {

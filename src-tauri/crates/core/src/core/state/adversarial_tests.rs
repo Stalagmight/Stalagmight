@@ -1,89 +1,70 @@
 //! ADVERSARIAL arguments: what the command layer does with input it should
-//! refuse.
+//! refuse, on the station-graph pipeline.
 //!
 //! # The hole this fills
 //!
-//! Every generator in this programme is valid-by-construction. The roundtrip
-//! fuzzer picks a shot that exists, in a line that exists, and gives it a
-//! length in `[0.5, 20.0]`; the metamorphic engine and the format properties
-//! inherit that. So the whole of `AppState`'s VALIDATION - which is most of
-//! what the command layer is - has never been fuzzed by any of them. The
-//! `execute_*` entry points are the sharpest edge: they are hand-written, they
-//! do their own argument checking, and several of them do it after taking the
-//! project lock and capturing a snapshot.
+//! Every other generator is valid by construction: it picks a shot that
+//! exists, in a line that exists, and gives it a length in a sane range. So the
+//! command layer's VALIDATION, which is most of what it is, is fuzzed only
+//! here. The `execute_*` recipes are the sharpest edge: they do their own
+//! argument checking, and several take the command lock and resolve slots
+//! before they reach the pipeline.
 //!
-//! # Two invariants, and the second is the point
+//! # Three invariants
 //!
-//! **A rejected command is a PERFECT no-op.** The roundtrip fuzzer already
-//! asserts a rejected command leaves the stacks alone; that is the weaker half.
-//! Here every oracle is compared: the canonical project, the app's own
-//! integrity verdict, the adjusted geometry, the id allocators and both stacks.
-//! A command that mutates and THEN fails is the worst shape a validation bug
-//! can take, because the failure tells the user nothing happened.
+//! **A rejected command is a PERFECT no-op.** Every oracle is compared: the
+//! canonical v2 text of the survey (bit for bit), the integrity verdict, the
+//! Closures Computed View (bit for bit: the solve is deterministic), the id
+//! allocators (stored counters, the derived next line id, every line's session
+//! shot allocator), both history stacks, and the unsaved-changes flag. A
+//! command that mutates and THEN fails is the worst shape a validation bug
+//! can take, because the failure tells the user nothing happened. A Batch
+//! whose later sub-command is hostile is in the mix on purpose: its earlier,
+//! valid sub-commands must roll back too.
 //!
-//! **NO COMMAND EVER PANICS.** Every adversarial move runs inside
-//! `catch_unwind`. An index out of range, an arithmetic overflow, an
-//! `unwrap` on a `None`, a `debug_assert` - any of them takes the whole app
-//! down in a build where they are enabled, and a fuzzer that only checks
-//! results would report the run as "the command failed" and move on.
+//! **An accepted command leaves a valid survey.** The pipeline validates after
+//! every mutation and rolls back on a violation; an accepted command whose
+//! result breaks an invariant (plan section 2) means some path bypassed it.
 //!
-//! No panic site is exempt. Three were classified rather than re-reported while
-//! their findings were open - `Project::debug_assert_merge_alignment` firing
-//! after an insert or a removal (issue #413's finding 14 and its mirror), the
-//! same assert from any other site (finding 20), and an arithmetic overflow in
-//! `models/shot.rs` (finding 24). All three are fixed and the classifier is
-//! deleted, so ANY panic, from ANY site, is a reportable problem again.
+//! **NO COMMAND EVER PANICS.** Every move runs inside `catch_unwind`, and the
+//! panic site is recorded by a hook. No site is exempt: the old suite's
+//! classifier went with the findings it classified (all fixed before the
+//! switch), and none is carried over.
 //!
 //! # What "adversarial" means here
 //!
-//! This tier constructs `Command` values directly, so it tests what the TYPE
-//! admits rather than what the IPC deserializer would accept - which is the
-//! right boundary for it, and a wider one: `f64` fields admit NaN and infinity
-//! that a JSON payload could also carry, `u32` station indices admit values far
-//! past any line's length, and `String` fields admit 64 kB of NULs. The IPC
-//! layer's own validation is the harness's job.
+//! `Command` values are built directly, so this tests what the TYPE admits
+//! rather than what the IPC deserializer would accept: `f64` fields admit NaN
+//! and infinity, `u32` slot indices admit values far past any line's length,
+//! strings admit 64 kB and NULs (which the v2 encoder must escape, not choke
+//! on). The IPC layer's own validation is the harness's job.
 //!
 //! # Data
 //!
 //! Everything is generated in code. No fixture is read, copied or derived from.
 
-#![expect(
-    clippy::indexing_slicing,
-    reason = "test module: see docs/linting.md for the per-test-module expect idiom"
-)]
-#![expect(
-    clippy::print_stdout,
-    reason = "a fuzzer's per-seed summary IS its output, and `cargo test -- --nocapture` is the               only channel a test has"
-)]
-
 use std::collections::BTreeMap;
 
-use super::fuzz_undo_tests::{
-    adjusted_diffs, adjusted_geometry_of, build_project, canonical_snapshot, describe_diffs,
-    diff_snapshots, integrity_verdict, random_shot, read_targets, Rng, COLORS, GEOMETRY_EXTREME,
+use super::robustness_kit::Targets;
+use super::robustness_kit::{
+    build_project, differences, observe, panic_text, random_shot, read_targets, Observed, Rng,
+    COLORS, GEOMETRY_EXTREME,
 };
 use super::AppState;
 use crate::core::{Command, CommandResult};
+use crate::models::survey::Project;
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, LineId, LineUpdates, ShotData, ShotId, ShotKind,
-    ShotUpdates, StationRef,
+    ClosureStrategy, CombineLinesOptions, CombinePick, Coordinates, GpsCoordinates, LineId,
+    LineUpdates, ShotData, ShotId, ShotKind, ShotUpdates, SplitAt, SplitLineOptions, StationId,
+    StationRef, StationRename, FEATURE_ID_STRIDE,
 };
-// CONFIG ISOLATION. Every test in this module opens with
-// `let _config = isolated_config();`: `AppState::new()` LOADS the global config,
-// and every save reaches `note_recent_project` -> `Config::save()`, which WRITES
-// it. Config resolution is per-thread (`crate::test_helpers` documents what that
-// does and does not protect, and why it is not opt-in), so the guard is no longer
-// what keeps these tests off other files; what it buys is ONE dir for the whole
-// test, whose path the test can name and hand to a worker thread
-// (`ConfigHandoff`). It is held for the whole test because the saves are.
 use crate::test_helpers::isolated_config;
 
 // ===========================================================================
 // Hostile values
 // ===========================================================================
 
-/// A line id that is not a line: past the allocator, negative-shaped,
-/// and the two extremes the type admits.
+/// A line id that is not a line: past the allocator, the extremes, zero.
 fn hostile_line_id(rng: &mut Rng, live: &[LineId]) -> LineId {
     match rng.below(6) {
         0 => LineId::MAX,
@@ -95,7 +76,9 @@ fn hostile_line_id(rng: &mut Rng, live: &[LineId]) -> LineId {
     }
 }
 
-/// A shot id that is not a shot in the line it is handed to.
+/// A shot id that is not a shot in the line it is handed to. One stride away
+/// is "the same position in the next line": the session ids are
+/// `line * FEATURE_ID_STRIDE + seq`, so it looks plausible.
 fn hostile_shot_id(rng: &mut Rng, live: &[ShotId]) -> ShotId {
     match rng.below(6) {
         0 => ShotId::MAX,
@@ -103,18 +86,14 @@ fn hostile_shot_id(rng: &mut Rng, live: &[ShotId]) -> ShotId {
         2 => 0,
         3 => live.last().map_or(0, |id| id.wrapping_add(1)),
         4 => live.first().map_or(0, |id| id.wrapping_sub(1)),
-        // The stride is what makes a shot id look plausible: the loader
-        // renumbers to `line_id * FEATURE_ID_STRIDE + position`, so an id one
-        // stride away addresses "the same position in the next line" and is
-        // the shape findings 8/12/13 are about.
         _ => live
             .first()
-            .map_or(0, |id| id.wrapping_add(crate::models::FEATURE_ID_STRIDE)),
+            .map_or(0, |id| id.wrapping_add(FEATURE_ID_STRIDE)),
     }
 }
 
-/// A station index at or past a boundary. `u32`, so no negative case exists -
-/// which is itself worth knowing, since a caller computing `index - 1` wraps.
+/// A slot index at or past a boundary (`u32`: a caller computing
+/// `index - 1` wraps).
 fn hostile_station_index(rng: &mut Rng, length: u32) -> u32 {
     match rng.below(6) {
         0 => 0,
@@ -144,27 +123,103 @@ fn hostile_float(rng: &mut Rng) -> f64 {
     ])
 }
 
-/// A string the type admits: empty, enormous, control characters, and a NUL -
-/// which is the one that reaches SQLite's C string boundary.
+/// A string the type admits: empty, enormous, control characters, a NUL, bidi
+/// and zero-width characters, and SQL (harmless now: nothing parses it).
 fn hostile_string(rng: &mut Rng) -> String {
     match rng.below(7) {
         0 => String::new(),
         1 => "\0".to_string(),
         2 => format!("before\0after-{}", rng.range(0, 99)),
-        3 => "\u{1}\u{2}\u{7f}\r\n\t".to_string(),
-        // 64 kB: past any column width anyone sized by eye.
+        3 => "\u{1}\u{2}\u{7f}\r\n\t\"\\".to_string(),
         4 => "A".repeat(65_536),
         5 => "\u{fffd}\u{202e}\u{200b}".repeat(64),
         _ => "'; DROP TABLE shots; --".to_string(),
     }
 }
 
-/// A shot whose every field is drawn from the hostile pool.
+/// A keep the type admits and no dialog offers (RS 4.1, 4.2, 5.2): the
+/// extremes, the station counter, an archived record's Station ID, a live
+/// station that is (most likely) neither end.
+fn hostile_keep(rng: &mut Rng, project: &Project) -> StationId {
+    let live = project.topology().stations().to_vec();
+    let record = project
+        .stations
+        .values()
+        .flat_map(|s| s.archived.iter().map(|r| r.id))
+        .next();
+    match rng.below(6) {
+        0 => StationId::MAX,
+        1 => 0,
+        2 => project.counters.next_station_id,
+        3 => record.unwrap_or(StationId::MAX - 1),
+        4 => live.last().copied().unwrap_or(1),
+        _ => live.get(live.len() / 2).copied().unwrap_or(2),
+    }
+}
+
+/// Renames the type admits and no dialog sends (RS 4.1 step 6): unknown and
+/// archived Station IDs, hostile names, a name another station already
+/// shows, the same Station ID twice.
+fn hostile_renames(rng: &mut Rng, project: &Project) -> Option<Vec<StationRename>> {
+    if rng.chance(10) {
+        return None;
+    }
+    let live = project.topology().stations().to_vec();
+    let record = project
+        .stations
+        .values()
+        .flat_map(|s| s.archived.iter().map(|r| r.id))
+        .next();
+    let mut out: Vec<StationRename> = Vec::new();
+    for _ in 0..=rng.below(3) {
+        let station_id = match rng.below(5) {
+            0 => StationId::MAX,
+            1 => record.unwrap_or(StationId::MAX - 1),
+            2 => project.counters.next_station_id,
+            _ => live.get(rng.below(live.len().max(1))).copied().unwrap_or(0),
+        };
+        let name = match rng.below(4) {
+            0 => hostile_string(rng),
+            1 => live
+                .get(rng.below(live.len().max(1)))
+                .and_then(|s| project.shown_name(*s))
+                .unwrap_or_default()
+                .to_string(),
+            2 => String::new(),
+            _ => format!("ren-{}", rng.range(0, 99)),
+        };
+        out.push(StationRename { station_id, name });
+    }
+    if rng.chance(25) {
+        let twice = StationRename {
+            station_id: out[0].station_id,
+            name: format!("twice-{}", rng.range(0, 99)),
+        };
+        out.push(twice);
+    }
+    Some(out)
+}
+
+/// Two live slots, on different lines when there are two lines.
+fn live_pair(rng: &mut Rng, targets: &Targets) -> Option<(StationRef, StationRef)> {
+    let slots = &targets.stations;
+    if slots.is_empty() {
+        return None;
+    }
+    let (la, ia) = slots[rng.below(slots.len())];
+    let others: Vec<&(LineId, u32)> = slots.iter().filter(|(l, _)| *l != la).collect();
+    let (lb, ib) = if others.is_empty() {
+        slots[rng.below(slots.len())]
+    } else {
+        *others[rng.below(others.len())]
+    };
+    Some((StationRef::new(la, ia), StationRef::new(lb, ib)))
+}
+
+/// A shot whose every field is drawn from the hostile pool. The uuid is left
+/// out: the command doors mint their own identity (#423).
 fn hostile_shot(rng: &mut Rng) -> ShotData {
     ShotData {
-        // Deliberately absent, not hostile: the command doors strip a
-        // client-named identity anyway (#423), so a hostile uuid exercises
-        // nothing this suite's oracles can see.
         uuid: None,
         azimuth_in: hostile_float(rng),
         azimuth_out: hostile_float(rng),
@@ -179,82 +234,43 @@ fn hostile_shot(rng: &mut Rng) -> ShotData {
         down: rng.chance(50).then(|| hostile_float(rng)),
         comment: rng.chance(50).then(|| hostile_string(rng)),
         kind: *rng.pick(&[ShotKind::Normal, ShotKind::Jump, ShotKind::Reference]),
-        marker_index: rng.chance(50).then(|| rng.range(0, 9) as u32),
+        marker_index: rng
+            .chance(50)
+            .then(|| u32::try_from(rng.range(0, 9)).unwrap_or(0)),
         temperature: rng.chance(50).then(|| hostile_float(rng)),
         credit: None,
     }
+}
+
+fn hostile_offset(rng: &mut Rng) -> Coordinates {
+    Coordinates::new(hostile_float(rng), hostile_float(rng), hostile_float(rng))
 }
 
 // ===========================================================================
 // The oracles
 // ===========================================================================
 
-/// Everything a rejected command has to leave exactly as it found it.
-struct Observed {
-    stored: String,
-    verdict: String,
-    adjusted: String,
-    allocators: BTreeMap<String, u32>,
-    undo_len: usize,
-    redo_len: usize,
+/// [`Observed`] plus the unsaved-changes flag: a refused edit must not mark
+/// the project dirty either.
+struct Seen {
+    observed: Observed,
+    dirty: bool,
 }
 
-fn observe(state: &AppState) -> Observed {
-    let mut allocators = BTreeMap::new();
-    if let Some(project) = state.get_project_state() {
-        allocators.insert("next_line_id".to_string(), project.next_line_id);
-        allocators.insert(
-            "next_closure_id".to_string(),
-            u32::try_from(project.next_closure_id).unwrap_or(u32::MAX),
-        );
-        for line in &project.lines {
-            allocators.insert(format!("line {}.next_shot_id", line.id), line.next_shot_id);
-        }
-    }
-    Observed {
-        stored: canonical_snapshot(state, false),
-        verdict: integrity_verdict(state).describe(),
-        adjusted: adjusted_geometry_of(state),
-        allocators,
-        undo_len: state.get_undo_stack().len(),
-        redo_len: state.get_redo_stack().len(),
+fn see(state: &AppState) -> Seen {
+    Seen {
+        observed: observe(state),
+        dirty: state.has_unsaved_changes(),
     }
 }
 
 /// Every way a REJECTED command failed to be a no-op.
-fn not_a_no_op(before: &Observed, after: &Observed) -> Vec<String> {
-    let mut out = Vec::new();
-    let diffs = diff_snapshots(&before.stored, &after.stored);
-    if !diffs.is_empty() {
+fn not_a_no_op(before: &Seen, after: &Seen) -> Vec<String> {
+    let mut out = differences(&before.observed, &after.observed);
+    if before.dirty != after.dirty {
         out.push(format!(
-            "it changed the project in {} path(s):\n{}",
-            diffs.len(),
-            describe_diffs(&diffs)
-        ));
-    }
-    if before.verdict != after.verdict {
-        out.push(format!(
-            "it changed the integrity verdict:\n    before: {}\n    after:  {}",
-            before.verdict, after.verdict
-        ));
-    }
-    let geometry = adjusted_diffs(&before.adjusted, &after.adjusted);
-    if !geometry.is_empty() {
-        out.push(format!(
-            "it moved the ADJUSTED geometry:\n    {}",
-            geometry.join("\n    ")
-        ));
-    }
-    if before.allocators != after.allocators {
-        out.push(format!(
-            "it advanced an id ALLOCATOR, so an id is now burned:\n    before: {:?}\n    after:  {:?}",
-            before.allocators, after.allocators
-        ));
-    }
-    if (before.undo_len, before.redo_len) != (after.undo_len, after.redo_len) {
-        out.push(format!(
-            "it changed the history stacks: undo {} -> {}, redo {} -> {}",
-            before.undo_len, after.undo_len, before.redo_len, after.redo_len
+            "it changed the unsaved-changes flag: {} -> {}",
+            before.dirty, after.dirty
         ));
     }
     out
@@ -264,20 +280,29 @@ fn not_a_no_op(before: &Observed, after: &Observed) -> Vec<String> {
 // The moves
 // ===========================================================================
 
-/// One adversarial call, with the label a failure payload needs to replay it.
+/// One adversarial call, with the label a failure payload needs.
 struct Move {
     label: String,
     result: CommandResult,
 }
 
-/// Draw and run one hostile call against `state`.
-///
-/// Weighted towards the hand-written `execute_*` entry points, which do their
-/// own argument checking, several of them after taking the project lock and
-/// capturing a snapshot - so a validation gap there is a mutation that has
-/// already happened by the time the caller is told no.
+fn split_options(rng: &mut Rng) -> SplitLineOptions {
+    SplitLineOptions {
+        name_a: hostile_string(rng),
+        name_b: hostile_string(rng),
+        color_a: if rng.chance(50) {
+            hostile_string(rng)
+        } else {
+            (*rng.pick(COLORS)).to_string()
+        },
+        color_b: (*rng.pick(COLORS)).to_string(),
+    }
+}
+
+/// Draw and run one hostile call against `state`. Weighted towards the
+/// hand-written recipes, which do their own argument checking.
 fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
-    let targets = read_targets(state);
+    let targets = read_targets(state)?;
     let lines: Vec<LineId> = targets.lines.iter().map(|(id, _)| *id).collect();
     if lines.is_empty() {
         return None;
@@ -289,8 +314,7 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
         .find(|(id, _)| *id == live_line)
         .map(|(_, shots)| shots.clone())
         .unwrap_or_default();
-    // Half the draws aim a hostile id at a real line, half aim any id at a
-    // hostile line: the two reach different guards.
+    // Half aim a hostile id at a real line, half any id at a hostile line.
     let line_id = if rng.chance(50) {
         live_line
     } else {
@@ -301,10 +325,11 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
     } else {
         hostile_shot_id(rng, &live_shots)
     };
-    let index = hostile_station_index(rng, live_shots.len() as u32);
+    let length = u32::try_from(live_shots.len()).unwrap_or(u32::MAX);
+    let index = hostile_station_index(rng, length);
 
-    let call = match rng.below(16) {
-        // ---- the hand-written entry points, which is where the risk is ----
+    let call = match rng.below(30) {
+        // ---- the hand-written recipes ----
         0 => Move {
             label: format!("execute_delete_shot_range_shift(s={line_id}, {shot_id}..{shot_id})"),
             result: state.execute_delete_shot_range_shift(line_id, shot_id, shot_id),
@@ -351,8 +376,42 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
                 result: state.execute_split_shot_at_distance(line_id, shot_id, distance),
             }
         }
+        6 => {
+            let at = if rng.chance(50) {
+                SplitAt::Station {
+                    station_index: index,
+                }
+            } else {
+                SplitAt::Shot {
+                    shot_id,
+                    distance: hostile_float(rng),
+                }
+            };
+            Move {
+                label: format!("execute_split_line(s={line_id}, {at:?}, hostile names)"),
+                result: state.execute_split_line(line_id, at, split_options(rng)),
+            }
+        }
+        7 => {
+            let other = hostile_line_id(rng, &lines);
+            Move {
+                label: format!("execute_combine_lines(kept={line_id}, other={other})"),
+                result: state.execute_combine_lines(
+                    line_id,
+                    other,
+                    CombineLinesOptions {
+                        name: hostile_string(rng),
+                        color: hostile_string(rng),
+                        swap_lr: rng.chance(50),
+                        comment_pick: CombinePick::Kept,
+                        name_pick: CombinePick::Kept,
+                        join: None,
+                    },
+                ),
+            }
+        }
         // ---- the ordinary command surface ----
-        6 => Move {
+        8 => Move {
             label: format!("CreateShot(s={line_id}, hostile shot)"),
             result: state.execute(Command::CreateShot {
                 line_id,
@@ -361,7 +420,7 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
                 before_shot_id: rng.chance(25).then_some(shot_id),
             }),
         },
-        7 => Move {
+        9 => Move {
             label: format!("UpdateShot(s={line_id}, shot={shot_id}, hostile updates)"),
             result: state.execute(Command::UpdateShot {
                 line_id,
@@ -383,14 +442,11 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
                 },
             }),
         },
-        8 => Move {
-            label: format!("CreateLine(hostile metadata, {} hostile shot(s))", 1),
+        10 => Move {
+            label: "CreateLine(hostile metadata, hostile shots)".to_string(),
             result: state.execute(Command::CreateLine {
                 name: rng.chance(60).then(|| hostile_string(rng)),
                 surveyor: rng.chance(50).then(|| hostile_string(rng)),
-                // `date` is a `NaiveDate`, not a string - so the hostile
-                // values here are the calendar's own edges rather than the
-                // string pool's.
                 date: rng.chance(50).then(|| {
                     *rng.pick(&[
                         chrono::NaiveDate::MIN,
@@ -405,10 +461,10 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
                 },
                 direction: None,
                 shots: (0..rng.below(3)).map(|_| hostile_shot(rng)).collect(),
-                cave_section_id: None,
+                cave_section_id: rng.chance(20).then(|| *rng.pick(&[0, u32::MAX, 999_999])),
             }),
         },
-        9 => Move {
+        11 => Move {
             label: format!("UpdateLineMetadata(s={line_id}, hostile)"),
             result: state.execute(Command::UpdateLineMetadata {
                 line_id,
@@ -425,39 +481,60 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
                 },
             }),
         },
-        10 => Move {
+        12 => Move {
             label: format!("MoveLine(s={line_id}, hostile offset)"),
             result: state.execute(Command::MoveLine {
                 line_id,
-                offset: Coordinates::new(
-                    hostile_float(rng),
-                    hostile_float(rng),
-                    hostile_float(rng),
-                ),
+                offset: hostile_offset(rng),
             }),
         },
-        11 => Move {
+        13 => Move {
+            label: format!("MoveSegment(s={line_id}, hostile offset)"),
+            result: state.execute(Command::MoveSegment {
+                line_id,
+                offset: hostile_offset(rng),
+            }),
+        },
+        14 => Move {
             label: format!("MoveStation({line_id}/{index}, hostile offset)"),
             result: state.execute(Command::MoveStation {
                 station_ref: StationRef::new(line_id, index),
-                offset: Coordinates::new(
-                    hostile_float(rng),
-                    hostile_float(rng),
-                    hostile_float(rng),
-                ),
+                offset: hostile_offset(rng),
             }),
         },
-        12 => {
+        15 => {
             let other = hostile_line_id(rng, &lines);
             Move {
                 label: format!("MergeStations({line_id}/{index}, {other}/{index})"),
                 result: state.execute(Command::MergeStations {
                     station_a: StationRef::new(line_id, index),
                     station_b: StationRef::new(other, index),
+                    keep: None,
+                    renames: None,
                 }),
             }
         }
-        13 => {
+        16 => {
+            let other = hostile_line_id(rng, &lines);
+            Move {
+                label: format!("UnmergeStationPair({line_id}/{index}, {other}/0)"),
+                result: state.execute(Command::UnmergeStationPair {
+                    station_a: StationRef::new(line_id, index),
+                    station_b: StationRef::new(other, 0),
+                    renames: None,
+                    rest_keep: None,
+                }),
+            }
+        }
+        17 => Move {
+            label: format!("UnmergeStations({line_id}/{index})"),
+            result: state.execute(Command::UnmergeStations {
+                station_ref: StationRef::new(line_id, index),
+                renames: None,
+                rest_keep: None,
+            }),
+        },
+        18 => {
             let other = hostile_line_id(rng, &lines);
             Move {
                 label: format!("CreateLoopClosure({line_id}/{index}, {other}/{index})"),
@@ -469,22 +546,31 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
                         ClosureStrategy::LeastSquaresWeighted,
                         ClosureStrategy::ProportionalByLength,
                     ]),
+                    keep: None,
+                    renames: None,
                 }),
             }
         }
-        14 => {
-            // `GpsCoordinates::new` validates, so an out-of-range pair yields no
-            // command at all - which is the right answer and worth confirming
-            // rather than working around.
-            let gps =
-                GpsCoordinates::new(hostile_float(rng), hostile_float(rng), hostile_float(rng));
-            match gps {
+        19 => {
+            let id = *rng.pick(&[0, u64::MAX, 1 << 53, targets.closures.len() as u64 + 99]);
+            Move {
+                label: format!("RemoveLoopClosure({id})"),
+                result: state.execute(Command::RemoveLoopClosure {
+                    closure_id: id,
+                    renames: None,
+                }),
+            }
+        }
+        20 => {
+            // `GpsCoordinates::new` validates, so an out-of-range pair yields
+            // no command at all: confirmed rather than worked around.
+            match GpsCoordinates::new(hostile_float(rng), hostile_float(rng), hostile_float(rng)) {
                 Ok(coordinates) => Move {
                     label: format!("SetZeroDatum({line_id}/{index}, hostile gps)"),
                     result: state.execute(Command::SetZeroDatum {
                         station_ref: StationRef::new(line_id, index),
                         coordinates,
-                        accuracy_m: None,
+                        accuracy_m: rng.chance(50).then(|| hostile_float(rng)),
                         entrance: None,
                     }),
                 },
@@ -495,6 +581,137 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
                         comment: rng.chance(70).then(|| hostile_string(rng)),
                     }),
                 },
+            }
+        }
+        21 => Move {
+            label: format!("RemoveZeroDatum({line_id}/{index})"),
+            result: state.execute(Command::RemoveZeroDatum {
+                station_ref: StationRef::new(line_id, index),
+            }),
+        },
+        22 => Move {
+            label: format!("SetStationName({line_id}/{index}, hostile)"),
+            result: state.execute(Command::SetStationName {
+                station_ref: StationRef::new(line_id, index),
+                name: hostile_string(rng),
+            }),
+        },
+        23 => Move {
+            label: format!("ReverseLine(s={line_id})"),
+            result: state.execute(Command::ReverseLine {
+                line_id,
+                swap_left_right: rng.chance(50),
+            }),
+        },
+        24 => {
+            // A valid edit first, then a hostile one: the batch must roll the
+            // valid half back too.
+            let valid = Command::CreateShot {
+                line_id: live_line,
+                shot: random_shot(rng),
+                after_shot_id: None,
+                before_shot_id: None,
+            };
+            let hostile = Command::UpdateShot {
+                line_id,
+                shot_id: hostile_shot_id(rng, &live_shots),
+                updates: ShotUpdates {
+                    length: Some(hostile_float(rng)),
+                    ..ShotUpdates::default()
+                },
+            };
+            Move {
+                label: format!(
+                    "Batch[CreateShot(s={live_line}), UpdateShot(s={line_id}, hostile)]"
+                ),
+                result: state.execute(Command::Batch {
+                    commands: vec![valid, hostile],
+                    label: rng.chance(50).then(|| hostile_string(rng)),
+                }),
+            }
+        }
+        // ---- RS: the dialogs' answers, hostile, on live slots ----
+        26 => {
+            let project = state.get_project_state()?;
+            let (a, b) = live_pair(rng, &targets)?;
+            let keep = rng.chance(70).then(|| hostile_keep(rng, &project));
+            let renames = hostile_renames(rng, &project);
+            Move {
+                label: format!("MergeStations({a}, {b}, keep={keep:?}, hostile renames)"),
+                result: state.execute(Command::MergeStations {
+                    station_a: a,
+                    station_b: b,
+                    keep,
+                    renames,
+                }),
+            }
+        }
+        27 => {
+            let project = state.get_project_state()?;
+            let topology = project.topology();
+            let junctions: Vec<_> = topology
+                .stations()
+                .iter()
+                .copied()
+                .filter(|&s| topology.is_junction(s))
+                .collect();
+            let junction = *junctions.get(rng.below(junctions.len().max(1)))?;
+            let slots = topology.slots_of(junction).to_vec();
+            let slot = slots[rng.below(slots.len())];
+            let rest_keep = rng.chance(70).then(|| hostile_keep(rng, &project));
+            let renames = hostile_renames(rng, &project);
+            if rng.chance(50) {
+                Move {
+                    label: format!("UnmergeStations({slot}, rest_keep={rest_keep:?}, hostile)"),
+                    result: state.execute(Command::UnmergeStations {
+                        station_ref: slot,
+                        renames,
+                        rest_keep,
+                    }),
+                }
+            } else {
+                let other = slots[rng.below(slots.len())];
+                Move {
+                    label: format!(
+                        "UnmergeStationPair({other}, {slot}, rest_keep={rest_keep:?}, hostile)"
+                    ),
+                    result: state.execute(Command::UnmergeStationPair {
+                        station_a: other,
+                        station_b: slot,
+                        renames,
+                        rest_keep,
+                    }),
+                }
+            }
+        }
+        28 => {
+            let project = state.get_project_state()?;
+            let (a, b) = live_pair(rng, &targets)?;
+            let keep = rng.chance(70).then(|| hostile_keep(rng, &project));
+            let renames = hostile_renames(rng, &project);
+            Move {
+                label: format!("CreateLoopClosure({a}, {b}, keep={keep:?}, hostile renames)"),
+                result: state.execute(Command::CreateLoopClosure {
+                    station_a: a,
+                    station_b: b,
+                    closure_strategy: ClosureStrategy::Batch,
+                    keep,
+                    renames,
+                }),
+            }
+        }
+        29 => {
+            let project = state.get_project_state()?;
+            let id = *targets
+                .closures
+                .get(rng.below(targets.closures.len().max(1)))?;
+            let renames = hostile_renames(rng, &project);
+            Move {
+                label: format!("RemoveLoopClosure({id}, hostile renames)"),
+                result: state.execute(Command::RemoveLoopClosure {
+                    closure_id: id,
+                    renames,
+                }),
             }
         }
         _ => Move {
@@ -519,51 +736,18 @@ struct Outcome {
     rejected: usize,
     accepted: usize,
     problems: Vec<String>,
-    hits: BTreeMap<&'static str, usize>,
 }
 
-// There WAS a `known_panic` classifier here, and it carried three ids. All three
-// are FIXED, so per the delete-when-fixed contract it is gone and EVERY panic
-// this engine sees is a reportable problem again:
-//
-// * finding 24 (`shot_display_position` overflowing before validation), matched
-//   by panic LOCATION - the function saturates now, so an overflow panic in
-//   models/shot.rs or anywhere else is a new finding;
-// * finding 14 (`insert_shot_after`) and its `remove_shot_with_rewire` mirror,
-//   matched by the merge-alignment assert's context string. Both sites now
-//   decide which side of a structural edit is anchored over the rigid merge
-//   forest (`Project::anchored_sides_of_edit`, models/project/shots.rs);
-// * finding 20, matched by that same assert from any of the other six sites -
-//   the drift an unanchored shot edit left behind, tripped later by an
-//   unrelated command. The edit realigns its own group now, and the self-heal
-//   gate is the assert's own threshold, so there is no drift left to arm it.
-//
-// `Project::debug_assert_merge_alignment` has a `#[cfg(test)]` arm, so it exists
-// in this tier and no other - which is exactly why this engine must not swallow
-// it. `Outcome::hits` stays, empty, as the channel a future classified finding
-// would use; the replay comparison over it is then trivially true, which is the
-// correct statement when nothing is classified.
-
-// Where the last panic came from, captured by a hook.
-//
-// A `catch_unwind` payload carries the MESSAGE and not the site, and the site is
-// what makes a classifier narrow enough to be honest - so it is recorded here on
-// the way past. Thread-local, because libtest runs tests in parallel and a
-// shared cell would attribute one test's panic to another's.
+// Where the last panic came from, captured by a hook: a `catch_unwind`
+// payload carries the message and not the site. Thread-local, because libtest
+// runs tests in parallel.
 thread_local! {
     static LAST_PANIC_SITE: std::cell::RefCell<Option<String>> =
         const { std::cell::RefCell::new(None) };
 }
 
-/// Install a panic hook that records the site, ONCE, and DELEGATES.
-///
-/// Both halves matter. `set_hook` is process-global, so a hook installed per
-/// run would be re-wrapped hundreds of times; `Once` installs exactly one.
-/// And it calls the previous hook rather than swallowing the panic, because
-/// silencing it is global too - every other test in the binary would lose its
-/// panic message, which is a high price for tidier output in this one. libtest
-/// captures per-test output anyway, so the noise only reaches a reader when a
-/// test actually fails.
+/// Install a panic hook that records the site, ONCE, and delegates to the
+/// previous hook (silencing it would silence every other test's panics too).
 fn install_location_hook() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
@@ -590,13 +774,12 @@ fn run_adversarial(seed: u32, moves: usize, closures: bool) -> Outcome {
     };
     let mut rng = Rng::new(seed);
     build_project(&state, &mut rng, closures);
-    // A little valid history first, so a rejected command has something real to
-    // fail to disturb - and so the stacks are not trivially empty.
+    // A little valid history first, so a rejected command has something real
+    // to fail to disturb.
     for _ in 0..4 {
-        let targets = read_targets(&state);
-        if let Some((line_id, _)) = targets.lines.first() {
+        if let Some((line_id, _)) = read_targets(&state).and_then(|t| t.lines.first().cloned()) {
             state.execute(Command::CreateShot {
-                line_id: *line_id,
+                line_id,
                 shot: random_shot(&mut rng),
                 after_shot_id: None,
                 before_shot_id: None,
@@ -605,32 +788,19 @@ fn run_adversarial(seed: u32, moves: usize, closures: bool) -> Outcome {
     }
 
     for step in 0..moves {
-        let before = observe(&state);
+        let before = see(&state);
         let drawn =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| draw(&state, &mut rng)));
         let drawn = match drawn {
             Ok(value) => value,
             Err(payload) => {
-                let message = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| {
-                        payload
-                            .downcast_ref::<&str>()
-                            .map(|text| (*text).to_string())
-                    })
-                    .unwrap_or_else(|| "<non-string panic>".to_string());
-                let site = last_panic_site();
-                // No panic is tolerated here any more - see the note where
-                // `known_panic` used to be.
                 outcome.problems.push(format!(
                     "seed {seed} step {step}: a command PANICKED at {}\n  {}",
-                    site.unwrap_or_else(|| "<unknown site>".to_string()),
-                    message.lines().take(3).collect::<Vec<_>>().join("\n  ")
+                    last_panic_site().unwrap_or_else(|| "<unknown site>".to_string()),
+                    panic_text(payload.as_ref())
                 ));
-                // The run STOPS: the unwind went through the project mutex, so
-                // it is poisoned and nothing after this measures the app rather
-                // than a crippled `AppState`.
+                // The unwind may have gone through a guard; nothing after
+                // this measures the app rather than a crippled state.
                 break;
             }
         };
@@ -638,11 +808,19 @@ fn run_adversarial(seed: u32, moves: usize, closures: bool) -> Outcome {
         outcome.attempted += 1;
         if call.result.success {
             outcome.accepted += 1;
+            let messages = state.integrity_violation_messages();
+            if !messages.is_empty() {
+                outcome.problems.push(format!(
+                    "seed {seed} step {step}: an ACCEPTED command left an invalid survey\n  \
+                     call: {}\n  violations: {messages:?}",
+                    call.label
+                ));
+                break;
+            }
             continue;
         }
         outcome.rejected += 1;
-        let after = observe(&state);
-        let differences = not_a_no_op(&before, &after);
+        let differences = not_a_no_op(&before, &see(&state));
         if !differences.is_empty() {
             outcome.problems.push(format!(
                 "seed {seed} step {step}: a REJECTED command was not a no-op\n  call: {}\n  \
@@ -666,30 +844,30 @@ const GATE_MOVES: usize = 120;
 
 /// THE ADVERSARIAL GATE. Not `#[ignore]`d.
 ///
-/// Two assertions, and a third that keeps them honest: the run has to have
-/// REJECTED something. A generator that accidentally became valid-by-
-/// construction would pass both invariants vacuously, and that is exactly the
-/// way this test would rot.
+/// The run has to have REJECTED something: a generator that became valid by
+/// construction would pass both invariants vacuously.
 #[test]
 fn adversarial_gate() {
     let _config = isolated_config();
     let mut problems = Vec::new();
-    let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
-    let (mut attempted, mut rejected) = (0, 0);
+    let (mut attempted, mut rejected, mut accepted) = (0, 0, 0);
     for &seed in GATE_SEEDS {
-        let outcome = run_adversarial(seed, GATE_MOVES, false);
+        let outcome = run_adversarial(seed, GATE_MOVES, seed % 2 == 0);
         attempted += outcome.attempted;
         rejected += outcome.rejected;
+        accepted += outcome.accepted;
         problems.extend(outcome.problems);
-        for (id, count) in outcome.hits {
-            *total.entry(id).or_insert(0) += count;
-        }
     }
-    println!("adversarial: {attempted} call(s), {rejected} rejected; classified: {total:?}");
+    println!("adversarial: {attempted} call(s), {rejected} rejected, {accepted} accepted");
     assert!(
         rejected > attempted / 10,
         "only {rejected} of {attempted} adversarial calls were rejected - the hostile generators \
-         are producing valid input and the invariants below are passing vacuously"
+         are producing valid input and the invariants are passing vacuously"
+    );
+    assert!(
+        accepted > 0,
+        "no adversarial call was accepted, so the accepted-leaves-a-valid-survey invariant is \
+         vacuous"
     );
     assert!(
         problems.is_empty(),
@@ -711,15 +889,13 @@ fn the_adversarial_engine_is_deterministic() {
                 first.attempted,
                 first.rejected,
                 first.accepted,
-                first.problems.len(),
-                first.hits
+                first.problems.len()
             ),
             (
                 second.attempted,
                 second.rejected,
                 second.accepted,
-                second.problems.len(),
-                second.hits
+                second.problems.len()
             ),
             "seed {seed} did not replay identically"
         );
@@ -735,6 +911,8 @@ fn the_adversarial_engine_is_deterministic() {
 ///   --manifest-path src-tauri/Cargo.toml -p stalagmight-core \
 ///   --lib adversarial_sweep -- --ignored --nocapture
 /// ```
+///
+/// `STALAGMIGHT_RUST_ADV_FIRST_SEED=n` starts the seed window at `n` (default 1).
 #[test]
 #[ignore = "sweep: prints per-seed status, used to choose the adversarial GATE_SEEDS"]
 fn adversarial_sweep() {
@@ -749,27 +927,32 @@ fn adversarial_sweep() {
         .unwrap_or(200);
     let closures = std::env::var("STALAGMIGHT_RUST_ADV_CLOSURES").is_ok();
 
-    let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut dirty = Vec::new();
+    let mut kinds: BTreeMap<&'static str, usize> = BTreeMap::new();
     let (mut attempted, mut rejected, mut accepted) = (0, 0, 0);
-    for seed in 1..=seeds {
+    for seed in crate::test_helpers::sweep_seeds("STALAGMIGHT_RUST_ADV_FIRST_SEED", seeds) {
         let outcome = run_adversarial(seed, moves, closures);
         attempted += outcome.attempted;
         rejected += outcome.rejected;
         accepted += outcome.accepted;
-        for (id, count) in outcome.hits {
-            *total.entry(id).or_insert(0) += count;
-        }
         if !outcome.problems.is_empty() {
             dirty.push(seed);
             for problem in &outcome.problems {
+                let kind = if problem.contains("PANICKED") {
+                    "panic"
+                } else if problem.contains("ACCEPTED") {
+                    "accepted-invalid"
+                } else {
+                    "rejected-not-a-no-op"
+                };
+                *kinds.entry(kind).or_insert(0) += 1;
                 println!("{problem}");
             }
         }
     }
     println!(
         "adversarial sweep: {seeds} seed(s) x {moves} moves, closures={closures}: {attempted} \
-         call(s), {rejected} rejected, {accepted} accepted; classified: {total:?}"
+         call(s), {rejected} rejected, {accepted} accepted; failures by kind: {kinds:?}"
     );
     println!("seeds with a failure ({}): {dirty:?}", dirty.len());
 }
