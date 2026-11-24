@@ -25,7 +25,7 @@ import { Prose, ProsePill } from '../Prose';
 import { HiddenComments } from '../../Dialogs/keptStationParts';
 import { ToastStack } from '../ToastStack';
 import { accessibleText } from '../../../test/accessibleText';
-import { proseParts, proseToken, proseValue } from '../../../utils/prose';
+import { partsToPlain, partsToProse, proseParts, proseToPlain, proseToken, proseValue } from '../../../utils/prose';
 import { identityNoticeMessage } from '../../../utils/identityNotice';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
@@ -122,5 +122,19 @@ describe('hostile prose tokens (RS-PROSE fix 1)', () => {
       expect(() => render(<span data-testid={`pp-${i}`}><ProsePill part={part} /></span>)).not.toThrow();
       expect(screen.getByTestId(`pp-${i}`).textContent).toBe(part.text);
     }
+  });
+});
+
+describe('plain words of backend parts (RS-PROSE delta fix 6)', () => {
+  // partsToPlain (clipboard, aria paths) kept a backend part's controls
+  // while proseToPlain dropped them; both now give the same plain words.
+  // Injection: map partText without dropping controls again.
+  it('partsToPlain drops C0 controls as proseToPlain does', () => {
+    const parts = [
+      { kind: 'text', text: 'Shot \u0001a\u0002 ' },
+      { kind: 'station', text: 'Main / 1\u0007', name: '1', context: 'Main' },
+    ] as ProsePart[];
+    expect(partsToPlain(parts)).toBe('Shot a Main / 1');
+    expect(partsToPlain(parts)).toBe(proseToPlain(partsToProse(parts)));
   });
 });

@@ -487,8 +487,15 @@ fn with_version(entry: &RawJson, version: u32) -> RawJson {
     let current = [OLDEST_HISTORY_FORMAT_VERSION, HISTORY_FORMAT_VERSION]
         .map(|v| format!("{{\"v\":{v},"))
         .into_iter()
-        .find(|v| entry.as_str().starts_with(v.as_str()))
-        .unwrap_or_default();
+        .find(|v| entry.as_str().starts_with(v.as_str()));
+    // Fail loudly: an entry of neither version is a broken setup, and an
+    // empty prefix would insert the version at the start (delta fix 6).
+    assert!(
+        current.is_some(),
+        "setup: the entry starts with version 2 or 3: {}",
+        entry.as_str()
+    );
+    let current = current.unwrap();
     let text = entry
         .as_str()
         .replacen(&current, &format!("{{\"v\":{version},"), 1);

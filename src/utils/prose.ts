@@ -178,7 +178,7 @@ export function hasProse(text: string): boolean {
 /** The plain string of a string that may hold tokens: each token by its words. */
 export function proseToPlain(text: string): string {
   if (!hasProse(text)) return withoutControls(text);
-  return proseParts(text).map(partText).join('');
+  return partsToPlain(proseParts(text));
 }
 
 /** A backend parts list as a token string (words stay words). */
@@ -188,7 +188,9 @@ export function partsToProse(parts: readonly ProsePart[]): string {
 
 /** The plain string of a parts list (what the backend sends beside it). */
 export function partsToPlain(parts: readonly ProsePart[]): string {
-  return parts.map(partText).join('');
+  // Without controls, as proseToPlain gives them (delta fix 6): the
+  // clipboard and the aria paths read the same words either way.
+  return withoutControls(parts.map(partText).join(''));
 }
 
 /**

@@ -40,7 +40,8 @@ export default function ConfirmDialog() {
   const prose = useProse();
 
   const type = dialogData.type as 'station' | 'shot' | 'line' | 'last-shot' | undefined;
-  const message = dialogData.message as string | undefined;
+  // A caller may pass null for "no message of mine": the default then.
+  const message = dialogData.message as string | null | undefined;
   const lineId = dialogData.lineId as number | undefined;
   const line = useProjectStore((s) => (lineId === undefined ? undefined : s.project?.lines.find((l) => l.id === lineId)));
   const shotId = dialogData.shotId as number | undefined;
@@ -234,7 +235,7 @@ export default function ConfirmDialog() {
       <div className="space-y-4">
         <p className="text-text-secondary" data-testid="confirm-dialog-message">
           {/* A caller's message is raw text: no marker in it may become a pill (RS-PROSE fix 1). */}
-          <Prose text={message !== undefined ? proseValue(message) : getDefaultMessage()} />
+          <Prose text={typeof message === 'string' ? proseValue(message) : getDefaultMessage()} />
         </p>
 
         {type === 'station' && (

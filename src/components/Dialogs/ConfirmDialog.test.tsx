@@ -11,7 +11,7 @@
  * `SplitLineDialog`'s failure handling (result-check + try/catch + in-flight guard).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 vi.mock('../../utils/telemetry', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../utils/telemetry')>()),
@@ -206,5 +206,20 @@ describe('ConfirmDialog names the line it deletes (I-9)', () => {
     useUIStore.setState({ dialogData: { type: 'last-shot', lineId: 5, shotId: 5 } });
     render(<ConfirmDialog />);
     expect(message()).toBe('Deleting the last shot will remove the entire line "Sump Tail". Continue?');
+  });
+});
+
+describe('a caller message of null (RS-PROSE delta fix 6)', () => {
+  // A caller may pass `message: null` for "no message of mine": the default
+  // is shown, as before the prose change. Since 597213295 null reached
+  // proseValue and <Prose>, which threw. Injection: test `!== undefined` again.
+  it('shows the default message, and a message of its own is cleaned of markers', () => {
+    useUIStore.setState({ dialogData: { type: 'shot', lineId: LINE_ID, shotId: SHOT_ID, message: null } });
+    expect(() => render(<ConfirmDialog />)).not.toThrow();
+    expect(screen.getByTestId('confirm-dialog-message').textContent).not.toBe('');
+    cleanup();
+    useUIStore.setState({ dialogData: { type: 'shot', lineId: LINE_ID, shotId: SHOT_ID, message: 'Delete \u0001x\u0002 now?' } });
+    render(<ConfirmDialog />);
+    expect(screen.getByTestId('confirm-dialog-message').textContent).toBe('Delete x now?');
   });
 });
