@@ -21,15 +21,40 @@ const KNOWN = new Set([
   'ProseStation.ts -> StationRef',
 ]);
 
-describe('the bindings tree (RS-PROSE fix 8)', () => {
-  it('imports no file it does not hold, but the documented ones', () => {
-    const dangling: string[] = [];
-    for (const file of readdirSync(BINDINGS).filter((f) => f.endsWith('.ts'))) {
-      const text = readFileSync(join(BINDINGS, file), 'utf8');
-      for (const match of text.matchAll(/from "\.\/([A-Za-z0-9_]+)"/g)) {
-        if (!existsSync(join(BINDINGS, `${match[1]}.ts`))) dangling.push(`${file} -> ${match[1]}`);
-      }
+/** Every `file -> import` of the tree whose import is not a file of it. */
+export function danglingImports(dir: string): string[] {
+  const dangling: string[] = [];
+  for (const file of readdirSync(dir).filter((f) => f.endsWith('.ts'))) {
+    const text = readFileSync(join(dir, file), 'utf8');
+    for (const match of text.matchAll(/from "\.\/([A-Za-z0-9_]+)"/g)) {
+      if (!existsSync(join(dir, `${match[1]}.ts`))) dangling.push(`${file} -> ${match[1]}`);
     }
-    expect(dangling.filter((d) => !KNOWN.has(d))).toEqual([]);
+  }
+  return dangling;
+}
+
+/**
+ * The allowlist must match the tree both ways: no unlisted dangling import,
+ * and no listed one that has stopped dangling (delta fix 5: a stale entry
+ * would let the same pair dangle again unnoticed). Injection: dropping the
+ * second check fails "a stale entry".
+ */
+export function allowlistProblems(dangling: readonly string[], known: ReadonlySet<string>): string[] {
+  return [
+    ...dangling.filter((d) => !known.has(d)).map((d) => `not listed: ${d}`),
+    ...[...known].filter((k) => !dangling.includes(k)).map((k) => `listed but resolved: ${k}`),
+  ];
+}
+
+describe('the bindings tree (RS-PROSE fix 8)', () => {
+  it('imports no file it does not hold, but exactly the documented ones', () => {
+    expect(allowlistProblems(danglingImports(BINDINGS), KNOWN)).toEqual([]);
+  });
+
+  it('a stale entry (a pair that resolves now) is a failure too', () => {
+    const dangling = danglingImports(BINDINGS);
+    expect(allowlistProblems(dangling, new Set([...KNOWN, 'ProsePart.ts -> ProseLine']))).toEqual([
+      'listed but resolved: ProsePart.ts -> ProseLine',
+    ]);
   });
 });
