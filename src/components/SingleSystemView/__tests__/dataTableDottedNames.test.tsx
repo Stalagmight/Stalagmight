@@ -4,10 +4,10 @@
  * with Main's dot, and Branch's own 13th station keeps its surveyed name "12";
  * no letter. The data table's stations view shows both "12"s on Branch: the
  * Name column reads the shown name of each, the dotted one followed by a
- * muted "(Main)" (RS-FX6, P2-5), the gutter pill of the foreign slot carries
- * Main's home dot (which reads "(Main)" to a screen reader) and the native
- * one none, and the Station ID column reads the two different shown Station
- * IDs. Below Full, the gutter's plain text says whose station the foreign
+ * muted "(Main)" (RS-FX6, P2-5), the gutter pill of the foreign slot is in
+ * Main's colour, reads "(Main)" to a screen reader and carries Main's
+ * superscript home dot after its name (RS-LEADDOT), the native one none,
+ * and the Station ID column reads the two different shown Station IDs. Below Full, the gutter's plain text says whose station the foreign
  * slot shows.
  *
  * Injection: a gutter pill named by the qualified label ("12 (Main)") fails
@@ -132,13 +132,14 @@ describe('two "12"s on one line, one of them dotted (RS-FX5)', () => {
     expect(cell(12, 'name')).toHaveTextContent(/^12$/);
 
     // The gutter pills name both bare; the foreign slot's is in Main's colour
-    // (RS-OWNERSHIP, where it once carried Main's dot), and says so in words.
+    // (RS-OWNERSHIP), says so in words, and has its home dot (RS-LEADDOT).
     expect(screen.getByTestId(pill(0))).toHaveTextContent(/^12\s*\(Main\)\s*Station ID\s*#112$/);
     expect(screen.getByTestId(pill(12))).toHaveTextContent(/^12\s*Station ID\s*#312$/);
     expect(screen.getByTestId(pill(0))).toHaveAttribute('data-owner-line', String(MAIN));
     expect(screen.getByTestId(pill(0))).toHaveAttribute('title', expect.stringMatching(/^Belongs to /));
     expect(screen.getByTestId(pill(12))).not.toHaveAttribute('data-owner-line');
-    expect(screen.queryByTestId(`${pill(0)}-home-dot`)).toBeNull();
+    expect(screen.getByTestId(`${pill(0)}-home-dot`)).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.queryByTestId(`${pill(12)}-home-dot`)).toBeNull();
 
     // The Station ID column reads each slot's shown Station ID.
     expect(cell(0, '_stationId')).toHaveTextContent(/^112$/);

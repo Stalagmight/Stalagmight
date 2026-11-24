@@ -11,7 +11,11 @@ import { setupMockedPage, createProject, seedProjectWithLines, waitForMapReady, 
  * consecutive lines are compared, with pills (Full highlighting) and as plain
  * text (highlighting off), on the Bulk Delete dialog's summary and on a
  * Warnings tab message holding a two-tone shot (RS-OWNERSHIP: an end of
- * another line). Every gap must equal the line-height within 0.5 px.
+ * another line) and a station of another line. Every gap must equal the
+ * line-height within 0.5 px. Every pill leads with its line's dot
+ * (RS-LEADDOT), and a foreign station or shot end has its superscript home
+ * dot after its name (RS-LEADDOT), measured with them; the home dot takes no
+ * room, stays with its name and clears the Station ID after it.
  */
 
 const LONG_LINE = 'Main Passage of the Northern Sump System';
@@ -126,6 +130,20 @@ async function showWarning(page: Page): Promise<Locator> {
     const parts = [
       { kind: 'text', text: 'The depth readings at ' },
       station(2, '2'),
+      { kind: 'text', text: ' (shown as ' },
+      // A station of Side Passage shown on the long line: Side's colour and
+      // name (RS-OWNERSHIP), its home dot before its Station ID (RS-LEADDOT).
+      {
+        kind: 'station',
+        text: `${lineName} / 0 (${side.name})`,
+        line_id: line.id,
+        context: side.name,
+        name: '0',
+        home_line: side.id,
+        station_id: 900,
+        slot: { line_id: line.id, station_index: 0 },
+      },
+      { kind: 'text', text: ')' },
       { kind: 'text', text: ', where 2 lines meet, differ by 4.0 m; the shots from ' },
       station(1, '1'),
       { kind: 'text', text: ' and ' },
@@ -262,5 +280,181 @@ test.describe('Prose pills keep the line pitch', () => {
     });
     expect(broken.joins).toBe(2);
     expect(broken.bad).toEqual([]);
+  });
+
+  // The dot is an empty inline box whose only text is a zero-width joiner.
+  // Injection: without the joiner Chromium left the dot at the end of the
+  // line before its word whenever the line broke right before the pill.
+  test('the leading dot stays with its first word, inside the glow at its start (RS-LEADDOT)', async ({ page }) => {
+    const message = await showWarning(page);
+    const report = await message.evaluate((root) => {
+      const pills = [...root.querySelectorAll('.sh-ppill')];
+      const mid = (r: DOMRect) => (r.top + r.bottom) / 2;
+      const bad: string[] = [];
+      let dots = 0;
+      let breaksBefore = 0;
+      for (let width = 60; width <= 420; width += 8) {
+        (root as HTMLElement).style.width = `${width}px`;
+        for (const pill of pills) {
+          const found = pill.querySelectorAll('[data-prose-dot]');
+          dots = Math.max(dots, found.length);
+          const dot = found[0] as HTMLElement | undefined;
+          if (!dot || found.length !== 1) {
+            bad.push(`${width}px: ${pill.textContent} has ${found.length} dots`);
+            continue;
+          }
+          const d = dot.getBoundingClientRect();
+          // The first letter after the dot (the context's or the name's) is on its line.
+          const w = document.createTreeWalker(pill.querySelector('.sh-ppill-vis')!, NodeFilter.SHOW_TEXT);
+          let first: Text | null = null;
+          for (let n = w.nextNode(); n; n = w.nextNode()) {
+            if (dot.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING && /\S/.test((n as Text).data)) {
+              first = n as Text;
+              break;
+            }
+          }
+          const r = document.createRange();
+          const at = first!.data.search(/\S/);
+          r.setStart(first!, at);
+          r.setEnd(first!, at + 1);
+          const letter = r.getClientRects()[0]!;
+          if (Math.abs(mid(letter) - mid(d)) > letter.height / 2) bad.push(`${width}px: the dot of ${pill.textContent} left its first word`);
+          // A line may still break before the pill: the dot then starts a line, the words before it end the one above.
+          const prev = pill.previousSibling;
+          if (prev && prev.nodeType === Node.TEXT_NODE && /\S\s*$/.test((prev as Text).data)) {
+            const t = prev as Text;
+            const i = t.data.search(/\S\s*$/);
+            const before = document.createRange();
+            before.setStart(t, i);
+            before.setEnd(t, i + 1);
+            if (mid(before.getClientRects()[0]!) < d.top) breaksBefore += 1;
+          }
+          if (!(d.right <= letter.left + 0.5)) bad.push(`${width}px: the dot of ${pill.textContent} is not before its first word`);
+          // Inside the glow's core at its start, centred on it: the one-colour
+          // pill's first painted fragment, or the two-colour pill's first box.
+          const core = (pill.querySelector('.sh-ppill-vis--split .sh-ppill-w') ?? pill.querySelector('.sh-ppill-vis'))!;
+          const box = core.getClientRects()[0]!;
+          const cs = getComputedStyle(core);
+          const split = core.classList.contains('sh-ppill-w');
+          // A word box keeps the halo's room above and below (spread + 1.5 blur, em); the core is inside it.
+          const ps = getComputedStyle(pill);
+          const em = (name: string) => parseFloat(ps.getPropertyValue(name));
+          const reach = split ? (em('--glow-spread') + 1.5 * em('--glow-blur')) * parseFloat(ps.fontSize) : 0;
+          if (split && !(reach > 0)) bad.push('no halo reach read');
+          const top = box.top + (split ? reach : 0);
+          const bottom = box.bottom - (split ? reach : 0);
+          if (!(d.top >= top - 0.5 && d.bottom <= bottom + 0.5)) bad.push(`${width}px: the dot of ${pill.textContent} sticks out of the core`);
+          if (Math.abs(mid(d) - (top + bottom) / 2) > 1.5) bad.push(`${width}px: the dot of ${pill.textContent} is off the core's middle`);
+          if (!(d.left >= box.left + (split ? parseFloat(cs.paddingLeft) - 0.5 : 0))) bad.push(`${width}px: the dot of ${pill.textContent} starts before the core`);
+        }
+      }
+      return { pills: pills.length, dots, bad, breaksBefore };
+    });
+    expect(report.pills).toBe(6);
+    expect(report.dots).toBe(1);
+    expect(report.breaksBefore).toBeGreaterThan(0);
+    expect(report.bad.slice(0, 10)).toEqual([]);
+  });
+
+  // RS-LEADDOT: "a small color dot in superscript right after the station
+  // name, it doesnt need to take any space horizontally". Injections: a home
+  // dot with its advance (no negative margin) fails "takes no room"; one
+  // without the Station ID's offset fails "clears the Station ID".
+  test('a foreign station\'s home dot is superscript right after its name, takes no room and clears the Station ID (RS-LEADDOT)', async ({ page }) => {
+    const message = await showWarning(page);
+    const report = await message.evaluate((root) => {
+      const homes = () => [...root.querySelectorAll('[data-prose-home-dot]')] as HTMLElement[];
+      const mid = (r: { top: number; bottom: number }) => (r.top + r.bottom) / 2;
+      /** The painted circle: centred in the box's padding, `--home-r` in em of its font. */
+      const circle = (dot: HTMLElement) => {
+        const box = dot.getBoundingClientRect();
+        const cs = getComputedStyle(dot);
+        const fs = parseFloat(cs.fontSize);
+        const r = parseFloat(cs.getPropertyValue('--home-r')) * fs;
+        const cx = box.left + parseFloat(cs.paddingLeft);
+        const cy = mid(box);
+        return { left: cx - r, right: cx + r, top: cy - r, bottom: cy + r, fs };
+      };
+      /** The last visible letter before the dot, and its baseline (a zero-size probe after it). */
+      const before = (dot: HTMLElement) => {
+        const pill = dot.closest('.sh-ppill')!;
+        const w = document.createTreeWalker(pill, NodeFilter.SHOW_TEXT);
+        let last: Text | null = null;
+        for (let n = w.nextNode(); n; n = w.nextNode()) {
+          if (dot.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING) break;
+          if ((n as Text).parentElement!.closest('.sr-only')) continue;
+          if (/\S/.test((n as Text).data)) last = n as Text;
+        }
+        const r = document.createRange();
+        r.setStart(last!, last!.data.length - 1);
+        r.setEnd(last!, last!.data.length);
+        const probe = document.createElement('span');
+        probe.style.cssText = 'display:inline-block;width:0;height:0';
+        last!.parentNode!.insertBefore(probe, last!.nextSibling);
+        const baseline = probe.getBoundingClientRect().bottom;
+        probe.remove();
+        return { glyph: r.getClientRects()[0]!, baseline };
+      };
+      const glyphs = () => {
+        const out: number[] = [];
+        const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let n = w.nextNode(); n; n = w.nextNode()) {
+          if (!(n as Text).data.trim()) continue;
+          const r = document.createRange();
+          r.selectNodeContents(n);
+          for (const x of r.getClientRects()) out.push(x.left, x.top);
+        }
+        return out;
+      };
+      const bad: string[] = [];
+      let count = 0;
+      let sids = 0;
+      let moved = 0;
+      for (let width = 60; width <= 420; width += 8) {
+        (root as HTMLElement).style.width = `${width}px`;
+        const dots = homes();
+        count = Math.max(count, dots.length);
+        for (const dot of dots) {
+          const c = circle(dot);
+          const { glyph, baseline } = before(dot);
+          const where = `${width}px ${dot.closest('.sh-ppill')!.textContent}`;
+          const size = (c.right - c.left) / c.fs;
+          if (size < 0.35 || size > 0.45) bad.push(`${where}: ${size.toFixed(2)}em`);
+          // Right after the name, on its line.
+          const gap = c.left - glyph.right;
+          if (gap < -0.5 || gap > 0.1 * c.fs) bad.push(`${where}: ${gap.toFixed(2)}px after the name`);
+          if (Math.abs(mid(glyph) - mid(c)) > glyph.height / 2) bad.push(`${where}: off its name's line`);
+          // Superscript: its middle well above the baseline, its bottom too.
+          const up = (baseline - mid(c)) / c.fs;
+          if (up < 0.5 || up > 0.75) bad.push(`${where}: middle ${up.toFixed(2)}em up`);
+          // Clear of the Station ID after it.
+          const next = dot.nextElementSibling;
+          if (next?.hasAttribute('data-prose-sid')) {
+            sids += 1;
+            const t = next.firstChild as Text;
+            const r = document.createRange();
+            r.setStart(t, 0);
+            r.setEnd(t, 1);
+            const hash = r.getClientRects()[0]!;
+            if (!(hash.left - c.right >= 0.12 * c.fs)) bad.push(`${where}: ${(hash.left - c.right).toFixed(2)}px to the Station ID`);
+          }
+        }
+        // Takes no room: hiding every home dot moves no glyph.
+        const shown = glyphs();
+        for (const dot of dots) dot.style.display = 'none';
+        const hidden = glyphs();
+        for (const dot of dots) dot.style.display = '';
+        if (shown.length !== hidden.length || shown.some((v, i) => Math.abs(v - hidden[i]!) > 0.1)) {
+          moved += 1;
+          bad.push(`${width}px: hiding the home dots moved text`);
+        }
+      }
+      return { count, sids, moved, bad };
+    });
+    // The foreign station and the two-tone shot's foreign from end.
+    expect(report.count).toBe(2);
+    expect(report.sids).toBeGreaterThan(0);
+    expect(report.moved).toBe(0);
+    expect(report.bad.slice(0, 10)).toEqual([]);
   });
 });

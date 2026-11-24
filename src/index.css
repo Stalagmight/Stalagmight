@@ -1687,18 +1687,20 @@ button.sh-apill {
    Every colour is a custom property set inline from src/theme/pillColors.ts,
    derived from the line's own colour and the theme so the text keeps 7:1 and
    the muted parts 4.5:1 whatever colour the line has. The pill shows its line
-   by its fill and border alone (RS-NODOTS: no dot, no marks). The main part
-   takes the surrounding text size; the context and the Station ID are
-   smaller. Children share one baseline (the smaller context sits on the
-   name's baseline), and the Station ID is lifted off the baseline by a
-   relative offset so it never changes the pill's height. */
+   by its leading dot, its fill and its border (RS-LEADDOT; no loop mark
+   since RS-NODOTS). A foreign station has its home dot, superscript, after
+   its name. The main part takes the surrounding text size; the context and
+   the Station ID are smaller. Children share one baseline (the smaller
+   context sits on the name's baseline); the dot is centred, and the Station
+   ID and the home dot are lifted off the baseline by a relative offset so
+   they never change the pill's height. */
 .sh-lpill {
   display: inline-flex;
   align-items: baseline;
   gap: 0.3em;
   max-width: 100%;
   min-width: 0;
-  padding: 0.18em 0.6em;
+  padding: 0.18em 0.6em 0.18em 0.5em;
   border: 1px solid var(--pill-border);
   border-radius: 9999px;
   background: var(--pill-bg);
@@ -1714,6 +1716,18 @@ button.sh-apill {
 }
 .sh-lpill--missing {
   border-style: dashed;
+}
+/* The line colour, as the Sections panel's row dot draws it, sized for the
+   pill; the ring is drawn only when the colour alone is too close to the
+   fill (RS-LEADDOT, the RS-NODOTS colours otherwise unchanged). */
+.sh-lpill-dot {
+  flex: none;
+  align-self: center;
+  width: 0.6em;
+  height: 0.6em;
+  border-radius: 9999px;
+  background: var(--pill-dot);
+  box-shadow: 0 0 0 1px var(--pill-ring, transparent);
 }
 .sh-lpill-warn {
   flex: none;
@@ -1774,16 +1788,15 @@ button.sh-apill {
   color: var(--pill-text);
 }
 /* A zero-width strut in the pill's own font: every segment, even one holding
-   only the small context (the head), has the text's baseline and height,
-   so the halves line up and are one height. The gap after it is taken
-   back. */
+   only the dot (the head), has the text's baseline and height, so the
+   halves line up and are one height. The gap after it is taken back. */
 .sh-lpill-seg::before {
   content: '\200b';
   margin-right: -0.3em;
 }
 .sh-lpill-seg:first-child {
   flex: 0 1000 auto;
-  padding-left: 0.6em;
+  padding-left: 0.5em;
   border-left-width: 1px;
   border-radius: 9999px 0 0 9999px;
 }
@@ -1838,13 +1851,41 @@ button.sh-apill {
   font-variant-numeric: tabular-nums;
   vertical-align: baseline;
 }
+/* A foreign station's home dot (RS-LEADDOT; the user: "a small color dot in
+   superscript right after the station name, it doesnt need to take any
+   space horizontally"): 0.36em in its owner's colour (`--home-dot`), its
+   1px ring (`--home-ring`) only where the colour alone does not stand 3:1
+   on what it sits on. An empty flex item, so its baseline is its bottom
+   edge: on the name's baseline, then lifted by a relative offset so its
+   middle is 0.65em up, level with the Station ID's digits. Its margins take
+   back the gap before it and give back its width, so it starts 0.02em after
+   the name and nothing moves: the pill keeps its width and a shot's arrow
+   its place (a from end's dot hangs over the arrow's padding, above its
+   tail). Only a Station ID right after it steps aside, about 0.25em clear
+   of it (measured in WebKitGTK: they met at 0.06em). */
+.sh-lpill-home {
+  flex: none;
+  position: relative;
+  top: -0.47em;
+  width: 0.36em;
+  height: 0.36em;
+  margin-left: calc(0.02em - 0.3em);
+  margin-right: -0.38em;
+  border-radius: 9999px;
+  background: var(--home-dot, var(--pill-dot));
+  box-shadow: 0 0 0 1px var(--home-ring, transparent);
+}
+.sh-lpill-home ~ .sh-lpill-sid {
+  margin-left: 0.48em;
+}
 
 /* Prose pill (ProsePill, src/components/common/Prose.tsx; RS-PROSE): a line
-   pill inline in running text, with the link pill's context and Station ID
-   (no dot or marks since RS-NODOTS) and no border: a glow, a soft-edged
-   capsule in the line's colour (theme/proseGlow.ts). Its core is solid
-   behind the whole name, rounded at each end of each line's piece; a halo in
-   the same colour carries it further and fades. The colour is a wash
+   pill inline in running text, with the link pill's leading dot, context
+   and Station ID (no marks after a name since RS-NODOTS) and no border: a
+   glow, a soft-edged capsule in the line's colour (theme/proseGlow.ts). Its
+   core is solid behind the whole name and the dot, rounded at each end of
+   each line's piece; a halo in the same colour carries it further and
+   fades. The colour is a wash
    (`--pill-tint`, prosePillColors and proseTintOf in pillColors.ts) that the
    panel, an accent box or the glow of the line above shows through.
    It must leave the paragraph's line pitch exactly as plain text has it, and
@@ -1855,7 +1896,10 @@ button.sh-apill {
      glyphs instead of the font's whole content area (19 px of a 20 px line
      in Segoe UI), and `.sh-ppill-txt` puts the text back at its size, with a
      zero line-height on every part inside;
-   - the Station ID is lifted by a relative offset, never `vertical-align`.
+   - the dots (`.sh-ppill-dot`, `.sh-ppill-home`) are empty inline boxes
+     with that zero line-height, their circles painted in their padding;
+   - the Station ID and the home dot are lifted by a relative offset, never
+     `vertical-align`.
    The geometry is in em of the text, unitless here and in theme/proseGlow.ts
    (GLOW; a test pins the two equal); in the scaled box it is divided by the
    scale. `box-decoration-break: clone` makes each line's piece of a wrapped
@@ -1943,6 +1987,35 @@ button.sh-apill {
   font-size: 0.857em;
   color: var(--pill-muted);
 }
+/* The leading dot (RS-LEADDOT): the line colour (`--pill-dot`, 0.58em) with
+   its 1px ring (`--pill-ring`, transparent unless the colour alone does not
+   stand 3:1 on the glow), at the start of the glow's core, which covers it.
+   An empty inline box, not an inline-block: WebKit breaks after an atomic
+   inline even where white-space forbids it (RS-ARROW), and the dot must stay
+   with the first word (`.sh-ppill-nw`). Its font is the glow's scaled one,
+   so its content area is the core's and the dot, a radial gradient in its
+   padding, sits on the core's middle, about concentric with the capsule's
+   rounded start. With a zero line-height it adds nothing to the line box. */
+.sh-ppill-dot {
+  --dot-r: calc(0.29em / var(--glow-s));
+  font-size: calc(var(--glow-s) * 1em);
+  margin-right: calc(0.3em / var(--glow-s));
+  padding: 0 calc(var(--dot-r) + 1.25px);
+  background: radial-gradient(
+    circle calc(var(--dot-r) + 1.25px) at center,
+    var(--pill-dot) calc(var(--dot-r) - 0.25px),
+    var(--pill-ring, transparent) calc(var(--dot-r) + 0.25px),
+    var(--pill-ring, transparent) calc(var(--dot-r) + 0.75px),
+    transparent calc(var(--dot-r) + 1.25px)
+  );
+}
+/* A zero-width joiner as the dot's own text: an empty box has no character,
+   so a break before the pill fell between the dot and its word (Chromium
+   kept the closed box on the line before). The joiner allows a break before
+   it after a space and none after it (UAX 14, LB 10 and 8a). */
+.sh-ppill-dot::before {
+  content: '\200d';
+}
 .sh-ppill-sid {
   position: relative;
   top: -0.45em;
@@ -1951,4 +2024,39 @@ button.sh-apill {
   color: var(--pill-muted);
   font-variant-numeric: tabular-nums;
   vertical-align: baseline;
+}
+/* A foreign station's home dot (RS-LEADDOT): 0.36em in its owner's colour
+   (`--home-dot`) with its 1px ring (`--home-ring`, transparent unless the
+   colour alone does not stand 3:1 on the glow, the panel and the blends it
+   can sit on), 0.02em after the name's last word, in its no-wrap run. An
+   empty inline box like the leading dot (never an inline-block: WebKit
+   breaks after an atomic inline, RS-ARROW), its circle a radial gradient in
+   its padding, centred on its content area and lifted by a relative offset
+   to superscript height (its middle about 0.66em up in Segoe UI, as in a
+   link pill, so a from end's dot clears the arrow's tail below it); its
+   negative right margin gives back its whole advance, so it takes no room
+   and, with a zero line-height, adds nothing to the line box. At the end of
+   a pill it hangs into the space before the next word. A word joiner is its
+   text: no break on either side of it. A Station ID right after it steps
+   aside, about 0.22em clear of it. */
+.sh-ppill-home {
+  --home-r: 0.18em;
+  position: relative;
+  top: -0.25em;
+  margin-left: calc(0.02em - 1.25px);
+  margin-right: calc(-0.02em - 2 * var(--home-r) - 1.25px);
+  padding: 0 calc(var(--home-r) + 1.25px);
+  background: radial-gradient(
+    circle calc(var(--home-r) + 1.25px) at center,
+    var(--home-dot, var(--pill-dot)) calc(var(--home-r) - 0.25px),
+    var(--home-ring, transparent) calc(var(--home-r) + 0.25px),
+    var(--home-ring, transparent) calc(var(--home-r) + 0.75px),
+    transparent calc(var(--home-r) + 1.25px)
+  );
+}
+.sh-ppill-home::before {
+  content: '\2060';
+}
+.sh-ppill-home + .sh-ppill-sid {
+  margin-left: 0.86em;
 }

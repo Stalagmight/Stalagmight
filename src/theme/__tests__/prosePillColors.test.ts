@@ -1,7 +1,13 @@
 /**
  * RS-PROSE, RS-NODOTS: a prose pill paints a glow, a capsule solid behind the
  * name whose halo fades to the bare panel, so its text and muted parts must
- * read on both: main text 7:1, the context and Station ID 4.5:1. The glow is
+ * read on both: main text 7:1, the context and Station ID 4.5:1; its leading
+ * dot (RS-LEADDOT) sits inside the core at its start, so the dot or its ring
+ * reaches 3:1 there (on the glow over the panel and over each tinted box,
+ * and on the bare ones). A foreign station's superscript home dot
+ * (RS-LEADDOT) has the same colours (the pill is its owner's); it can hang
+ * past the core into the halo and onto the panel, which the bare backdrops
+ * cover. The glow is
  * a wash at one alpha, lighter than a dark panel and darker than a light
  * one, clearly off the panel, in the line's hue, and further off it for a
  * line nearer the text pole, so a near-white, a grey and a near-black line
@@ -9,13 +15,16 @@
  * (`pillColors.test.ts`) on every theme, measured with `utils/colors`.
  * Injections: the glow on the link pills' side (`theme.lift`) fails "lighter
  * than a dark panel" on cave; one lightness for every line fails "the
- * greys differ"; the old radial tint's centre fails "clearly off the panel".
+ * greys differ"; the old radial tint's centre fails "clearly off the panel";
+ * the link pill's dot (ringed against its fill, not the glow) fails "dot or
+ * ring 3:1 on the glow" for a near-black line on cave.
  */
 import { describe, expect, it } from 'vitest';
 import { themeTokens } from '../tokens';
 import { CSS_COLOR_NAMES, hexOfOklch, oklchOfHex } from '../cssColor';
 import { COMMENT_PALETTE, LIGHT_LINE_COLORS, LINE_COLORS, contrastRatio } from '../../utils/colors';
 import {
+  PILL_DOT_MIN,
   PILL_MUTED_MIN,
   PILL_TEXT_MIN,
   PROSE_ALPHA,
@@ -25,6 +34,7 @@ import {
   prosePillColorsOf,
   proseTintOf,
 } from '../pillColors';
+import { prosePillStyle } from '../../components/common/LinePill';
 
 const THEMES = Object.keys(themeTokens);
 
@@ -59,6 +69,48 @@ describe('prosePillColors sweep', () => {
       }
     }
     expect(failures).toEqual([]);
+  });
+
+  it.each(THEMES)('%s: the dot or its ring 3:1 on the glow over the panel and the tinted boxes, ringed only where needed (RS-LEADDOT)', (name) => {
+    const theme = pillThemeOf(name);
+    const failures: string[] = [];
+    for (const color of COLORS) {
+      const p = prosePillColors(color, theme);
+      const under = proseBackdrops(p.bg, theme);
+      for (const bg of under) {
+        const c = contrastRatio(p.ring ?? p.dot, bg);
+        if (!(c >= PILL_DOT_MIN)) failures.push(`${color} dot on ${bg} ${c.toFixed(2)}`);
+      }
+      const alone = Math.min(...under.map((bg) => contrastRatio(p.dot, bg)));
+      if (p.ring === null && alone < PILL_DOT_MIN) failures.push(`${color} needs a ring`);
+      if (p.ring !== null && alone >= PILL_DOT_MIN + 0.3) failures.push(`${color} ringed for nothing`);
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it.each(THEMES)('%s: a foreign station\'s home dot shares the leading dot\'s colours, swept on the glow and the bare panel (RS-LEADDOT)', (name) => {
+    for (const color of ['#f6f6f2', '#101010', '#ffe600', '#1f4fff', '#c2185b', '#808080']) {
+      const p = prosePillColorsOf(color, name);
+      const style = prosePillStyle(p, name) as Record<string, string>;
+      expect(style['--home-dot']).toBe(p.dot);
+      expect(style['--home-ring']).toBe(p.ring ?? 'transparent');
+      // The panel is among the backdrops the dot is held 3:1 on.
+      const under = proseBackdrops(p.bg, pillThemeOf(name));
+      expect(under).toContain(pillThemeOf(name).panel);
+      for (const bg of under) expect(contrastRatio(p.ring ?? p.dot, bg)).toBeGreaterThanOrEqual(PILL_DOT_MIN);
+    }
+  });
+
+  it('the dot is the line colour itself, ringed where it alone does not read on the glow', () => {
+    const dark = prosePillColors('#101010', pillThemeOf('cave'));
+    expect(dark.dot).toBe('#101010');
+    expect(dark.ring).not.toBeNull();
+    const yellow = prosePillColors('#ffe600', pillThemeOf('cave'));
+    expect(yellow.ring).toBeNull();
+    const white = prosePillColors('#f6f6f2', pillThemeOf('light'));
+    expect(white.ring).not.toBeNull();
+    const blue = prosePillColors('#1f4fff', pillThemeOf('light'));
+    expect(blue.ring).toBeNull();
   });
 
   it.each(THEMES)('%s: the muted words stay apart from the main text', (name) => {

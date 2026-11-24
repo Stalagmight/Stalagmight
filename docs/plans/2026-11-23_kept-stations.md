@@ -2549,3 +2549,86 @@ tint, and amend RS-BLEND's prose bullets.
   near-black one on cave 1.29:1), the tinted-box floors (the muted context
   measured 4.21:1 on the conversion banner and 4.30:1 in the Station details
   box) and the truncating label.
+
+## Deviations (package RS-LEADDOT)
+
+The user's decisions (2026-11-24): every pill leads with its line's colour
+dot again (a station pill's dot is the owning line's colour, a shot pill's
+the shot's own line's, a line pill's the line's; the loop-end mark stays
+removed); and "for foreign stations, instead of dot after, just put a small
+color dot in superscript right after the station name, it doesnt need to
+take any space horizontally". Decisions this package took, each with its
+reason; they amend RS-NODOTS's first bullet (the leading dot and a foreign
+station's dot come back, the loop mark does not).
+
+- **The leading dot is the RS-OWNERSHIP one.** The line colour itself,
+  ringed 1px in its hue on the text side only where it alone falls under
+  3:1 on what it sits on: the link pill's fill at rest and on hover, the
+  prose glow over the panel and the tinted boxes. It is decorative
+  (`aria-hidden`); a missing target draws its warning glyph instead. On a
+  two-colour shot it sits in the shot line's part at the start: when the
+  from end is another line's, a head in the shot's colour holds the dot and
+  the context (with no context, the dot alone), and its ring is checked
+  against the seam's blend. The RS-NODOTS fills and borders are unchanged.
+  In prose the dot is an empty inline box at the start of the glow's core
+  whose only text is a zero-width joiner (without it Chromium left the dot
+  at the end of the previous line when a line broke right before the pill).
+- **Who has a home dot.** A station shown on a line it does not belong to:
+  a station pill whose shown station's owner line is not its slot's line (a
+  foreign slot, or a loop end whose kept end lives on another line), a
+  `bySlot` pill (a delete's lists of slots, in the slot's colour), and a
+  two-colour shot's foreign end. Exactly where the pill already says
+  "Belongs to <line>" or colours a half by another line; the "Also on" rows
+  (which name the line, not the station) have none. The dot is the owner's
+  colour: on its owner's pill the pill's own dot and ring, on a slot's pill
+  ringed against that pill's fill (`homeDotOn`), on a two-colour shot's half
+  ringed against the half, its blends and, for the from end, the start of
+  the arrow's bridge it hangs over (`homeDotStyle`). It is decorative; the
+  tooltip and the words stay.
+- **It takes no room.** 0.36em (the low end of the 0.35 to 0.45em asked
+  for: the larger first build crowded the Station ID and the arrow), 0.02em
+  after the name, its middle about 0.65em above the baseline, level with
+  the Station ID's digits. In a link pill it is an empty flex item, so its
+  baseline is its bottom edge, lifted by a relative offset; its margins take
+  back the gap before it and give back its width. In prose it is an empty
+  inline box in the name's no-wrap run (a word joiner its text, no break on
+  either side, never an inline-block: RS-ARROW), its circle a radial
+  gradient in its padding, lifted by a relative offset, its advance given
+  back as a negative margin; with a zero line-height it adds nothing to the
+  line box. Only a Station ID right after it steps aside, about 0.25em clear
+  (link) and 0.22em (prose): at the first build's margins they met at 0.06em
+  and a prose dot overlapped the `#`.
+- **What it costs, left as asked.** A from end's dot hangs over the arrow's
+  tail (the arrow keeps its place). At the end of a prose pill (a shot's
+  foreign to end) the dot hangs into the space before the next word; a
+  ringed one (near-white or yellow on light) comes within about a pixel of a
+  tall first letter. Room after such a pill (about 0.13em) would clear it
+  but move the words after it, which "it doesnt need to take any space"
+  ruled out; left for the user to decide.
+- **Tests.** The unit tests pin the dot per pill kind, its colour, its place
+  (after the name, before the Station ID, on the foreign end's own half, the
+  last word of a two-word end) and its absence on native stations, line
+  pills and missing targets. The sweeps hold the leading dot and the home
+  dot or their rings at 3:1, ringed only where needed, on every fill, glow
+  and blend on every theme: link fills at rest and on hover, `bySlot` pairs
+  of line colours, prose glows over the panel and the tinted boxes, the
+  ordered hard-colour pairs and three-colour shots along every blend and
+  over the arrow's start (`twoTonePills.test.ts`). Playwright measures, at
+  widths from 60 to 420 px, that a prose home dot moves no glyph, stays on
+  its name's line right after it, is raised, and clears the Station ID, and
+  the line pitch with home dots in the paragraph; `kept-stations.spec.ts`
+  does the same for the data table's foreign slot.
+- **Measured in the real app** (this worktree's build at ce523e370, the
+  RS-NODOTS survey plus two comment edits for history rows; 18 surfaces in
+  light and dark (cave) at 1440x900, line pitch at 860 too; shots and numbers
+  in `pr-assets/survey-graph/rs-leaddot/`):
+  - 45 visible home dots per theme (35 link, 10 prose) at 11 to 16 px: all
+    0.36em, 0.02em after the name, the middle 0.64 to 0.67em up; hiding any
+    of them moves no glyph;
+  - contrast of each dot (its ring's when ringed) against every pixel under
+    it in a capture with the dots hidden: at least 3.34:1 (light, 43 ringed:
+    near-white and yellow) and 3.33:1 (dark, 2 ringed: near-black); no ringed
+    dot whose colour alone reaches 3.6:1 there;
+  - line pitch equal to plain text's in every compared block (59 to 62
+    blocks, 25 to 26 gaps per combination, 0 px deviation), every prose pill
+    with its leading dot.

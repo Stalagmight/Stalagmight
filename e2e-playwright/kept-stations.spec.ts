@@ -12,7 +12,9 @@ import { expectProse } from './helpers/proseSentence';
  * loop end counts for no name uniqueness, RS-FX5); Detach Line from Station
  * brings the archived station back and answers its collision; Create Loop
  * Closure keeps one end or both names; Remove Closure says what comes back;
- * the data table colours a foreign slot by its home line (RS-OWNERSHIP).
+ * the data table colours a foreign slot by its home line (RS-OWNERSHIP) and
+ * marks it with the superscript home dot after its name, which takes no
+ * room (RS-LEADDOT).
  *
  * The mock keeps a junction's first slot in line order unless a merge names
  * `keep`, gives each slot the Station ID `lineId * 100000 + index`, and names
@@ -174,7 +176,9 @@ test.describe('Kept and archived stations (RS)', () => {
     await expect(page.getByTestId('grid-cell-1-name')).toHaveText('3');
     await expect(page.getByTestId(`data-table-station-pill-${sideId}-0`)).toHaveAttribute('data-owner-line', String(mainId));
     await expect(page.getByTestId(`data-table-station-pill-${sideId}-1`)).not.toHaveAttribute('data-owner-line');
-    await expect(page.getByTestId(`data-table-station-pill-${sideId}-0-home-dot`)).toHaveCount(0);
+    // RS-LEADDOT: the dotted one has its home dot; Side's own 3 has none.
+    await expect(page.getByTestId(`data-table-station-pill-${sideId}-0-home-dot`)).toHaveCount(1);
+    await expect(page.getByTestId(`data-table-station-pill-${sideId}-1-home-dot`)).toHaveCount(0);
     await expect(page.getByTestId('grid-cell-0-_stationId')).toHaveText(String(mainId * 100_000 + 3));
     await expect(page.getByTestId('grid-cell-1-_stationId')).toHaveText(String(sideId * 100_000 + 1));
   });
@@ -416,13 +420,58 @@ test.describe('Kept and archived stations (RS)', () => {
     await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
     await page.getByTestId('data-table-view-stations').click();
     await expect(page.getByTestId('data-table-view-stations')).toHaveAttribute('aria-checked', 'true');
-    // Side 0 shows Main / 3: its pill is in Main's colour (RS-OWNERSHIP, no
-    // second dot), says so as a tooltip, and carries Main's Station ID.
+    // Side 0 shows Main / 3: its pill is in Main's colour (RS-OWNERSHIP),
+    // says so as a tooltip, and carries Main's Station ID.
     const pill = page.getByTestId(`data-table-station-pill-${sideId}-0`);
     await expect(pill).toBeVisible();
     await expect(pill).toHaveAttribute('data-owner-line', String(mainId));
     await expect(pill).toHaveAttribute('title', /^Belongs to /);
-    await expect(page.getByTestId(`data-table-station-pill-${sideId}-0-home-dot`)).toHaveCount(0);
+    // RS-LEADDOT: its home dot, a small dot in Main's colour (the pill's
+    // own), raised right after the name; it takes no room (the pill, the
+    // name and the Station ID stand where they stand without it) and clears
+    // the Station ID that follows.
+    const home = page.getByTestId(`data-table-station-pill-${sideId}-0-home-dot`);
+    await expect(home).toBeVisible();
+    await expect(home).toHaveAttribute('aria-hidden', 'true');
+    const geo = await pill.evaluate((el) => {
+      const dot = el.querySelector('.sh-lpill-home') as HTMLElement;
+      const box = (q: Element) => q.getBoundingClientRect();
+      const main = el.querySelector('.sh-lpill-main')!;
+      const sid = el.querySelector('.sh-lpill-sid')!;
+      // The Station ID's first glyph, not its sr-only words.
+      const hash = [...sid.querySelectorAll('[aria-hidden="true"]')][0]!;
+      const fs = parseFloat(getComputedStyle(el).fontSize);
+      const d = box(dot);
+      const at = { pill: box(el).width, main: box(main).left, sid: box(sid).left };
+      dot.style.display = 'none';
+      const without = { pill: box(el).width, main: box(main).left, sid: box(sid).left };
+      dot.style.display = '';
+      const cs = getComputedStyle(dot);
+      return {
+        fs,
+        w: d.width,
+        h: d.height,
+        afterName: d.left - box(main).right,
+        raised: box(main).bottom - d.bottom,
+        clear: box(hash).left - d.right,
+        at,
+        without,
+        colour: cs.backgroundColor,
+        pillDot: getComputedStyle(el).getPropertyValue('--pill-dot').trim(),
+      };
+    });
+    expect(geo.w / geo.fs).toBeGreaterThanOrEqual(0.35);
+    expect(geo.w / geo.fs).toBeLessThanOrEqual(0.45);
+    expect(Math.abs(geo.w - geo.h)).toBeLessThan(0.5);
+    expect(geo.afterName).toBeGreaterThanOrEqual(-0.5);
+    expect(geo.afterName).toBeLessThanOrEqual(0.15 * geo.fs);
+    expect(geo.raised).toBeGreaterThanOrEqual(0.45 * geo.fs);
+    expect(geo.clear).toBeGreaterThanOrEqual(1);
+    expect(Math.abs(geo.at.pill - geo.without.pill)).toBeLessThan(0.5);
+    expect(Math.abs(geo.at.main - geo.without.main)).toBeLessThan(0.5);
+    expect(Math.abs(geo.at.sid - geo.without.sid)).toBeLessThan(0.5);
+    expect(geo.colour).not.toBe('rgba(0, 0, 0, 0)');
+    expect(geo.pillDot).not.toBe('');
     // (The superscript carries sr-only words before the number.)
     await expect(page.getByTestId(`data-table-station-pill-${sideId}-0-station-id`)).toHaveText(
       `Station ID #${mainId * 100_000 + 3}`,
