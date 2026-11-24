@@ -42,6 +42,7 @@
 import type { CSSProperties } from 'react';
 import { contrastOfHex, oklabOf, rgbOfOklab, hexOfRgb } from './cssColor';
 import {
+  HOME_DOT_MIN,
   PILL_MUTED_MIN,
   PILL_TEXT_MIN,
   pillDot,
@@ -293,8 +294,9 @@ export function proseBridgeStyle(left: PillColors, right: PillColors, themeName:
 /**
  * The superscript dot after a foreign shot end's name (RS-LEADDOT), as the
  * custom properties of the end's half (`--home-dot`, `--home-ring`): the
- * half's own line colour (the line the end's station belongs to), ringed
- * where it alone does not reach 3:1 on every colour it can sit on: the
+ * half's own home dot colour (the line the end's station belongs to,
+ * `PillColors.home`), ringed where it alone does not reach the home dot's
+ * floor ({@link HOME_DOT_MIN}) on every colour it can sit on: the
  * half's fill (a prose pill's glow, over the panel and the tinted boxes),
  * its blends toward its neighbours, and, for the from end (`bridgeTo`: the
  * to half's colours), the start of the arrow's bridge, which the dot
@@ -321,6 +323,6 @@ export function homeDotStyle(
     variant === 'link'
       ? [...toward((c) => c.bg), ...toward((c) => c.hoverBg)]
       : toward((c) => c.bg).flatMap((c) => proseBackdrops(c, theme));
-  const dot: PillDot = pillDot(own.dot, under, theme);
+  const dot: PillDot = pillDot(own.home.dot, under, theme, HOME_DOT_MIN);
   return { '--home-dot': dot.dot, '--home-ring': dot.ring ?? 'transparent' } as CSSProperties;
 }

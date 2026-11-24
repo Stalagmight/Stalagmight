@@ -117,8 +117,8 @@ export function useProsePillColors(lineId: number | null | undefined): ResolvedP
  * A prose pill's colours as the custom properties the `.sh-ppill` rules read:
  * the glow as a wash that gives its colour over the panel (`proseTintOf`,
  * RS-NODOTS), the text and muted part, and the leading dot and its ring
- * (RS-LEADDOT), which a foreign station's home dot shares: the pill is its
- * owner's.
+ * (RS-LEADDOT), and a foreign station's home dot (the pill is its owner's;
+ * the dot at its own, lower floor, `PillColors.home`).
  */
 export function prosePillStyle(colors: PillColors, themeName: string): CSSProperties {
   return {
@@ -127,8 +127,8 @@ export function prosePillStyle(colors: PillColors, themeName: string): CSSProper
     '--pill-muted': colors.muted,
     '--pill-dot': colors.dot,
     '--pill-ring': colors.ring ?? 'transparent',
-    '--home-dot': colors.dot,
-    '--home-ring': colors.ring ?? 'transparent',
+    '--home-dot': colors.home.dot,
+    '--home-ring': colors.home.ring ?? 'transparent',
   } as CSSProperties;
 }
 
@@ -260,12 +260,12 @@ export interface HomeMark {
 
 /**
  * The pill's colours as the custom properties the `.sh-lpill` rules read. A
- * foreign station's home dot is the leading dot's colour and ring (the pill
- * is its owner's) unless `homeDot` says otherwise (a slot's pill showing
- * another line's station, `homeDotOn`).
+ * foreign station's home dot is the pill's own line's (the pill is its
+ * owner's, `PillColors.home`) unless `homeDot` says otherwise (a slot's pill
+ * showing another line's station, `homeDotOn`).
  */
 export function pillStyle(colors: PillColors, homeDot?: PillDot | null): CSSProperties {
-  const home = homeDot ?? colors;
+  const home = homeDot ?? colors.home;
   return {
     '--pill-bg': colors.bg,
     '--pill-border': colors.border,
