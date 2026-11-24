@@ -1,12 +1,13 @@
 /**
  * The line pill (DetailLink and EntityBlob at the Full highlighting level):
  * the colour of its line in its leading dot (RS-LEADDOT, decorative), fill
- * and border (no marks after a name since RS-NODOTS, no entity symbol), the
- * muted context first with a colon, the main part, a station's Station ID as a
+ * and border (no loop mark since RS-NODOTS, no entity symbol), the muted
+ * context first with a colon, the main part, a station's Station ID as a
  * muted superscript, the accessible name, the missing-target variant, the
  * lower levels left as they were, and ownership (RS-OWNERSHIP): a station of
- * another line in that line's colour, a two-tone shot, the context giving way
- * first in a narrow place.
+ * another line in that line's colour with its home dot after its name
+ * (RS-LEADDOT), a two-tone shot whose foreign end has its home dot on its
+ * own half, the context giving way first in a narrow place.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -172,6 +173,7 @@ describe('DetailLink at the Full level', () => {
     expect(screen.getByTestId(`station-${MAIN}-0-link-missing`)).toBeInTheDocument();
     expect(screen.queryByTestId(`station-${MAIN}-0-link-dot`)).toBeNull();
     expect(screen.queryByTestId(`station-${MAIN}-0-link-station-id`)).toBeNull();
+    expect(pill.querySelector('.sh-lpill-home')).toBeNull();
   });
 });
 
@@ -235,7 +237,7 @@ describe('EntityBlob', () => {
 });
 
 describe('ownership (RS-OWNERSHIP): a station of another line takes its colour, a shot is two-tone', () => {
-  it("a station pill takes its home line's colour, dot and name, no second dot, and says whose it is", () => {
+  it("a station pill takes its home line's colour, dot and name, the home dot after its name, and says whose it is", () => {
     render(
       <DetailLink
         type="station"
@@ -252,9 +254,16 @@ describe('ownership (RS-OWNERSHIP): a station of another line takes its colour, 
     // Injection: colouring by the slot's line fails these two.
     expect(cssVar(pill, '--pill-bg')).toBe(pillColorsOf(SIDE_COLOR, 'dark').bg);
     expect(cssVar(pill, '--pill-border')).toBe(pillColorsOf(SIDE_COLOR, 'dark').border);
-    // Its one dot is the owner's colour, matching the pill (RS-LEADDOT).
+    // Its leading dot is the owner's colour, matching the pill (RS-LEADDOT),
+    // and so is its home dot, right after its name: a station shown on a
+    // line it does not belong to.
     expect(cssVar(pill, '--pill-dot')).toBe(pillColorsOf(SIDE_COLOR, 'dark').dot);
     expect(pill.querySelectorAll('.sh-lpill-dot')).toHaveLength(1);
+    const home = screen.getByTestId(`station-${MAIN}-1-link-home-dot`);
+    expect(home.previousElementSibling).toHaveClass('sh-lpill-main');
+    expect(home).toHaveAttribute('aria-hidden', 'true');
+    expect(cssVar(pill, '--home-dot')).toBe(pillColorsOf(SIDE_COLOR, 'dark').dot);
+    expect(cssVar(pill, '--home-ring')).toBe(pillColorsOf(SIDE_COLOR, 'dark').ring ?? 'transparent');
     // The context names the line the pill is coloured by, never the slot's.
     expect(screen.getByTestId(`station-${MAIN}-1-link-id`)).toHaveTextContent('Side:');
     expect(pill.querySelector('.sh-lpill-mark')).toBeNull();
@@ -301,12 +310,18 @@ describe('ownership (RS-OWNERSHIP): a station of another line takes its colour, 
     expect(cssVar(from, '--seg-fill')).toBe(
       `linear-gradient(to right, ${pillColorsOf(MAIN_COLOR, 'dark').bg} 0.00%, ${pillColorsOf(MAIN_COLOR, 'dark').bg} 100.00%)`,
     );
-    // The foreign end has no dot of its own (RS-NODOTS): its half's colour
-    // shows it, its tooltip and its words say whose station it is. The
-    // pill's one dot is the leading one.
-    expect(screen.queryByTestId(`shot-${MAIN}-2-link-to-home-dot`)).toBeNull();
+    // The foreign end has its home dot right after its name, on its own
+    // half, in that half's line colour (RS-LEADDOT); its tooltip and its
+    // words say whose station it is. The native from end has none.
+    const home = screen.getByTestId(`shot-${MAIN}-2-link-to-home-dot`);
+    expect(to).toContainElement(home);
+    expect(home.previousElementSibling).toContainElement(screen.getByTestId(`shot-${MAIN}-2-link-to-end`));
+    expect(cssVar(to, '--home-dot')).toBe(pillColorsOf(SIDE_COLOR, 'dark').dot);
+    expect(screen.queryByTestId(`shot-${MAIN}-2-link-from-home-dot`)).toBeNull();
+    expect(cssVar(from, '--home-dot')).toBe('');
     expect(pill.querySelector('.sh-lpill-mark')).toBeNull();
     expect(pill.querySelectorAll('.sh-lpill-dot')).toHaveLength(1);
+    expect(pill.querySelectorAll('.sh-lpill-home')).toHaveLength(1);
     const end = screen.getByTestId(`shot-${MAIN}-2-link-to-end`);
     expect(to).toContainElement(end);
     expect(end).toHaveAttribute('title', 'Belongs to Side');
@@ -335,7 +350,10 @@ describe('ownership (RS-OWNERSHIP): a station of another line takes its colour, 
     expect(head).toHaveTextContent(/^Main Line:$/);
     expect(cssVar(screen.getByTestId('sh-from'), '--pill-bg')).toBe(pillColorsOf(SIDE_COLOR, 'dark').bg);
     expect(cssVar(screen.getByTestId('sh-to'), '--pill-bg')).toBe(pillColorsOf(MAIN_COLOR, 'dark').bg);
-    expect(screen.queryByTestId('sh-from-home-dot')).toBeNull();
+    // The foreign from end's home dot is on its own half, Side's colour.
+    expect(screen.getByTestId('sh-from')).toContainElement(screen.getByTestId('sh-from-home-dot'));
+    expect(cssVar(screen.getByTestId('sh-from'), '--home-dot')).toBe(pillColorsOf(SIDE_COLOR, 'dark').dot);
+    expect(screen.queryByTestId('sh-to-home-dot')).toBeNull();
     expect(screen.getByTestId('sh-from')).toContainElement(screen.getByTestId('sh-from-end'));
     expect(screen.getByTestId('sh-from-end')).toHaveAttribute('title', 'Belongs to Side');
   });
@@ -354,7 +372,7 @@ describe('ownership (RS-OWNERSHIP): a station of another line takes its colour, 
     expect(screen.getByTestId('sh').textContent).toBe('St0 (Side) \u2192 St1');
   });
 
-  it('both ends of other lines: each half its own end\'s colour', () => {
+  it('both ends of other lines: each half its own end\'s colour and home dot', () => {
     useProjectStore.setState((st) => ({
       project: { ...st.project!, lines: [...st.project!.lines, line(3, 'Third', '#00aa00', [])] },
     }));
@@ -370,6 +388,13 @@ describe('ownership (RS-OWNERSHIP): a station of another line takes its colour, 
     );
     expect(cssVar(screen.getByTestId('sh-from'), '--pill-bg')).toBe(pillColorsOf(SIDE_COLOR, 'dark').bg);
     expect(cssVar(screen.getByTestId('sh-to'), '--pill-bg')).toBe(pillColorsOf('#00aa00', 'dark').bg);
+    // Each foreign end's home dot on its own half, in that half's colour (RS-LEADDOT).
+    expect(screen.getByTestId('sh-from')).toContainElement(screen.getByTestId('sh-from-home-dot'));
+    expect(screen.getByTestId('sh-to')).toContainElement(screen.getByTestId('sh-to-home-dot'));
+    expect(cssVar(screen.getByTestId('sh-from'), '--home-dot')).toBe(pillColorsOf(SIDE_COLOR, 'dark').dot);
+    expect(cssVar(screen.getByTestId('sh-to'), '--home-dot')).toBe('#00aa00');
+    // The leading dot stays the shot's, in the head.
+    expect(screen.getByTestId('sh-head')).toContainElement(screen.getByTestId('sh-dot'));
   });
 
   it('a shot whose ends are native stays one colour', () => {
@@ -381,8 +406,10 @@ describe('ownership (RS-OWNERSHIP): a station of another line takes its colour, 
     const pill = screen.getByTestId('sh');
     expect(pill).not.toHaveClass('sh-lpill--split');
     expect(cssVar(pill, '--pill-bg')).toBe(pillColorsOf(MAIN_COLOR, 'dark').bg);
-    // The loop end says so in words and in its tooltip, with no mark (RS-NODOTS).
+    // The loop end says so in words and in its tooltip, with no mark (RS-NODOTS);
+    // its station is the shot's line's, so no home dot either.
     expect(screen.getByTestId('sh-from-loop-end')).toHaveClass('sr-only');
+    expect(pill.querySelector('.sh-lpill-home')).toBeNull();
     expect(screen.getByTestId('sh-from-end').getAttribute('title')).toMatch(/^Loop end/);
     expect(pill.querySelector('.sh-lpill-loop, svg')).toBeNull();
   });

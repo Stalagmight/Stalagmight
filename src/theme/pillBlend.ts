@@ -30,12 +30,14 @@
  *   (`theme/proseGlow.ts`, `components/common/useProseGlow.ts`); here only
  *   its text colours.
  *
- * Text and the leading dot over a blend must read on every colour it passes
+ * Text and the dots over a blend must read on every colour they pass
  * through: {@link blendBackdrops} and {@link bridgeBackdrops} list them
- * (sampled); the dot gets its ring against them (RS-LEADDOT: in a head that
- * holds only the dot it sits on the seam's blend) and the arrow takes the
- * text colour that reads on all of them (`__tests__/twoTonePills.test.ts`
- * sweeps the samples).
+ * (sampled); the leading dot gets its ring against them (RS-LEADDOT: in a
+ * head that holds only the dot it sits on the seam's blend), so does the
+ * superscript dot after a foreign end's name ({@link homeDotStyle}: the
+ * from end's overhangs the start of the arrow's bridge), and the arrow takes
+ * the text colour that reads on all of them
+ * (`__tests__/twoTonePills.test.ts` sweeps the samples).
  */
 import type { CSSProperties } from 'react';
 import { contrastOfHex, oklabOf, rgbOfOklab, hexOfRgb } from './cssColor';
@@ -58,6 +60,14 @@ export const BLEND_SAMPLES = [0.5, 0.625, 0.75, 0.875] as const;
 
 /** Where the samples of a bridge are taken, as the share of its left colour. */
 export const BRIDGE_SAMPLES = [1, 0.875, 0.75, 0.625, 0.5, 0.375, 0.25, 0.125, 0] as const;
+
+/**
+ * The part of a bridge the from end's superscript dot can overhang, as the
+ * share of its left colour: the dot takes no room, so it reaches about 0.45em
+ * past the end's name, into the arrow's first third (a bridge is at least
+ * 1.2em wide).
+ */
+export const HOME_BRIDGE_SAMPLES = [1, 0.875, 0.75, 0.625] as const;
 
 function rgbOfHex(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1, 7), 16);
@@ -278,4 +288,39 @@ export function proseBridgeStyle(left: PillColors, right: PillColors, themeName:
     '--pill-muted': readableOn([left.muted, right.muted, theme.muted], under, PILL_MUTED_MIN + 0.1, theme.dark),
     '--pill-tint': proseTintOf(left.bg, theme.panel).tint,
   } as CSSProperties;
+}
+
+/**
+ * The superscript dot after a foreign shot end's name (RS-LEADDOT), as the
+ * custom properties of the end's half (`--home-dot`, `--home-ring`): the
+ * half's own line colour (the line the end's station belongs to), ringed
+ * where it alone does not reach 3:1 on every colour it can sit on: the
+ * half's fill (a prose pill's glow, over the panel and the tinted boxes),
+ * its blends toward its neighbours, and, for the from end (`bridgeTo`: the
+ * to half's colours), the start of the arrow's bridge, which the dot
+ * overhangs ({@link HOME_BRIDGE_SAMPLES}), with the sRGB points a gradient
+ * paints between those stops.
+ */
+export function homeDotStyle(
+  variant: 'link' | 'prose',
+  own: PillColors,
+  near: Neighbours,
+  bridgeTo: PillColors | null,
+  themeName: string,
+): CSSProperties {
+  const theme = pillThemeOf(themeName);
+  const toward = (pick: (c: PillColors) => string) => {
+    const path = [pick(own)];
+    for (const other of [near.left, near.right]) {
+      if (other && pick(other) !== pick(own)) path.push(...painted([pick(own), ...[...BLEND_SAMPLES].reverse().map((t) => mixHex(pick(own), pick(other), t))]));
+    }
+    if (bridgeTo) path.push(...painted(HOME_BRIDGE_SAMPLES.map((t) => mixHex(pick(own), pick(bridgeTo), t))));
+    return path;
+  };
+  const under =
+    variant === 'link'
+      ? [...toward((c) => c.bg), ...toward((c) => c.hoverBg)]
+      : toward((c) => c.bg).flatMap((c) => proseBackdrops(c, theme));
+  const dot: PillDot = pillDot(own.dot, under, theme);
+  return { '--home-dot': dot.dot, '--home-ring': dot.ring ?? 'transparent' } as CSSProperties;
 }

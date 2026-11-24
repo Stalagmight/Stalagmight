@@ -103,7 +103,8 @@ export interface DetailLinkProps {
   /**
    * The line a station pill's station belongs to, when the pill shows it on
    * another line: the whole pill takes that line's colour and names it as
-   * its context, and its tooltip says "Belongs to Main" (RS-OWNERSHIP).
+   * its context, its tooltip says "Belongs to Main" (RS-OWNERSHIP) and a
+   * home dot in that colour follows its name (RS-LEADDOT).
    * Station links only. Absent: the slot's own (`labels.ownerLine`: a foreign
    * slot's shown station's home line, a loop end's kept end's); null: the
    * slot's line (the "Also on" rows, which name the line).
@@ -211,6 +212,8 @@ export function DetailLink({
         : labels.ownerLine(stationRef);
   const ownerName = owner !== null ? labels.lineName(owner) : null;
   const pill = resolve(owner ?? target.lineId);
+  // A station shown on a line it does not belong to: its home dot (RS-LEADDOT).
+  const foreignStation = showPill && owner !== null && owner !== target.lineId;
   const loopEnd = stationRef !== null && !isMissing && labels.shown(stationRef)?.loop_end === true;
   const spokenText = spokenTarget(type, fullText ?? displayText, stationId);
   const ariaLabel = generateAriaLabel(type, fullText ?? displayText, stationId);
@@ -290,7 +293,7 @@ export function DetailLink({
   // The dot and the context (the shot's line) keep the shot's colour as a
   // head when the from end's half is another line's (RS-LEADDOT).
   const tone = marked ? shotToneOf(resolve, target.lineId, fromOwner, toOwner, 'link') : null;
-  // Whose station a foreign end is: said in its tooltip and words (no dot after it since RS-NODOTS).
+  // Whose station a foreign end is: said in its tooltip and words; its home dot is the tone's (RS-LEADDOT).
   const fromMark = marked ? markOf(pill, endHome(shotHomeLineIds?.from, shotIndex)) : null;
   const toMark = marked ? markOf(pill, endHome(shotHomeLineIds?.to, shotIndex + 1)) : null;
   const fromLoopEnd = marked && labels.shown(endRef(shotIndex))?.loop_end === true;
@@ -345,6 +348,7 @@ export function DetailLink({
           loopEnd={loopEnd}
           loopEndLabel={i18n.t('identity.loopEnd')}
           stationId={stationId}
+          homeDot={foreignStation}
           missing={isMissing}
         />
       ) : (

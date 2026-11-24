@@ -1,15 +1,17 @@
 /**
  * RS-PROSE: the prose pill. A sentence worded with prose tokens draws each
  * station, shot and line it names as an inline pill in its line's tint (the
- * leading dot, RS-LEADDOT; the muted context, the bare name, the Station ID;
- * no marks after a name since RS-NODOTS, the tooltip says whose and a loop
- * end), while a screen reader still reads, word for word, the
+ * leading dot, RS-LEADDOT; the muted context, the bare name, a foreign
+ * station's home dot, RS-LEADDOT, the Station ID; no loop mark since
+ * RS-NODOTS, the tooltip says whose and a loop end), while a screen reader
+ * still reads, word for word, the
  * sentence plain text wrote: the drawing is aria-hidden and the plain words
  * sit beside it as sr-only text. Below Full the sentence is plain text.
  * Injections: rendering the token's words visibly fails "reads the plain
  * sentence"; dropping the sr-only words fails it too; ignoring the level
  * fails "below Full"; a two-colour shot that drops its head when it has no
- * context fails "the shot's dot in the shot line's part".
+ * context fails "the shot's dot in the shot line's part"; a home dot on the
+ * native end of a two-colour shot fails "on its own half".
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -126,12 +128,26 @@ describe('prose pills (RS-PROSE)', () => {
     expect(linePill.querySelector('.sh-ppill-nw')!.firstElementChild).toHaveAttribute('data-prose-dot');
     expect(linePill.style.getPropertyValue('--pill-dot')).toBe(prosePillColorsOf('navy', 'dark').dot);
     // The drawing: the foreign slot in the colour of the line it belongs to
-    // (RS-OWNERSHIP), its dot too, named by it, bare name and Station ID, no
-    // second dot.
+    // (RS-OWNERSHIP), its dot too, named by it, bare name, its home dot and
+    // Station ID (RS-LEADDOT).
     const foreign = pills[1]! as HTMLElement;
     const drawing = foreign.querySelector('[aria-hidden="true"]')!;
     expect(drawing.textContent).toBe('Main: 12#11');
     expect(foreign.querySelector('[data-prose-mark="home"]')).toBeNull();
+    // The home dot: right after the name, in the name's no-wrap run, before
+    // the Station ID, with no words; the pill's own (Main's) colour.
+    const home = foreign.querySelector('[data-prose-home-dot]')!;
+    expect(foreign.querySelectorAll('[data-prose-home-dot]')).toHaveLength(1);
+    expect(home).toHaveClass('sh-ppill-home');
+    expect(home.textContent).toBe('');
+    expect(home.closest('[aria-hidden="true"]')).not.toBeNull();
+    expect(home.parentElement).toHaveClass('sh-ppill-nw');
+    expect(home.previousSibling?.textContent).toBe('12');
+    expect(home.nextElementSibling).toHaveAttribute('data-prose-sid');
+    expect(foreign.style.getPropertyValue('--home-dot')).toBe(prosePillColorsOf('#ffff00', 'dark').dot);
+    expect(foreign.style.getPropertyValue('--home-ring')).toBe(prosePillColorsOf('#ffff00', 'dark').ring ?? 'transparent');
+    // The line pill names no station: no home dot.
+    expect(linePill.querySelector('[data-prose-home-dot]')).toBeNull();
     // The dot leads, before the context.
     expect(foreign.querySelector('.sh-ppill-nw')!.firstElementChild).toHaveAttribute('data-prose-dot');
     expect(foreign.querySelector('.sh-ppill-nw')!.textContent).toBe('Main:');
@@ -149,6 +165,8 @@ describe('prose pills (RS-PROSE)', () => {
     expect(loopEnd.querySelector('[aria-hidden="true"]')!.textContent).toBe('3#3');
     expect(loopEnd.style.getPropertyValue('--pill-tint')).toBe(mainTint);
     expect(loopEnd.style.getPropertyValue('--pill-dot')).toBe(prosePillColorsOf('#ffff00', 'dark').dot);
+    // Main's station shown on Side: the home dot after its name.
+    expect(loopEnd.querySelectorAll('[data-prose-home-dot]')).toHaveLength(1);
     // The shot: two tints, the foreign from end's half in Main's after a
     // head in Side's that holds the shot's dot; no Station ID.
     const shotPill = pills[3]!;
@@ -179,10 +197,59 @@ describe('prose pills (RS-PROSE)', () => {
     // no-break spaces, and the from half, the arrow and the to half are joined.
     expect(seg('from').parentElement).toHaveClass('sh-ppill-join');
     expect(seg('arrow').parentElement).toBe(seg('to').parentElement);
-    // The foreign end says whose it is in its tooltip.
+    // The foreign end says whose it is in its tooltip, and its home dot
+    // follows its name in its box, on its own half, in that half's colour
+    // (RS-LEADDOT); the native to end has none.
     expect(seg('from')).toHaveAttribute('title', 'Belongs to Main');
     expect(seg('to')).not.toHaveAttribute('title');
+    const fromBox = seg('from').querySelector('.sh-ppill-w')!;
+    expect(fromBox.querySelector('.sh-ppill-txt')!.lastElementChild).toHaveAttribute('data-prose-home-dot');
+    expect(shotPill.querySelectorAll('[data-prose-home-dot]')).toHaveLength(1);
+    expect(seg('from').style.getPropertyValue('--home-dot')).toBe(prosePillColorsOf('#ffff00', 'dark').dot);
+    expect(seg('to').querySelector('[data-prose-home-dot]')).toBeNull();
     expect(shotPill.querySelector('[data-prose-sid]')).toBeNull();
+  });
+
+  it('puts the home dot of a foreign end on its own half, after its last word (RS-LEADDOT)', () => {
+    // Side's second shot ends at the loop end that shows Main's 3; its to end
+    // has a name of two words here, so the dot follows the last one.
+    const part = {
+      kind: 'shot',
+      text: 'Side: 1 → Lower 3 (loop end on Side)',
+      line_id: SIDE,
+      context: 'Side',
+      from: { name: '1' },
+      to: { name: 'Lower 3', home_line: MAIN, loop_end: true },
+    } as Extract<ProsePart, { kind: 'shot' }>;
+    render(
+      <p data-testid="p">
+        <BackendProse text="x" parts={[part]} />
+      </p>,
+    );
+    const p = screen.getByTestId('p');
+    const to = p.querySelector('[data-prose-seg="to"]') as HTMLElement;
+    const homes = p.querySelectorAll('[data-prose-home-dot]');
+    expect(homes).toHaveLength(1);
+    expect(to).toContainElement(homes[0] as HTMLElement);
+    const boxes = [...to.querySelectorAll('.sh-ppill-w')];
+    expect(boxes.map((b) => b.textContent)).toEqual(['Lower', ' ', '3']);
+    expect(boxes[2]!.querySelector('[data-prose-home-dot]')).not.toBeNull();
+    expect(to.style.getPropertyValue('--home-dot')).toBe(prosePillColorsOf('#ffff00', 'dark').dot);
+    // No head: the from end is the shot's, and holds the leading dot.
+    expect(p.querySelector('[data-prose-seg="head"]')).toBeNull();
+    expect(p.querySelector('[data-prose-seg="from"] [data-prose-dot]')).not.toBeNull();
+    expect(accessibleText(p)).toBe('Side: 1 → Lower 3 (loop end on Side)');
+  });
+
+  it('draws no home dot for a station shown on its own line', () => {
+    const part = { kind: 'station', text: 'Main / 13', line_id: MAIN, context: 'Main', name: '13', station_id: 13 } as ProsePart;
+    render(
+      <p data-testid="p">
+        <BackendProse text="x" parts={[part]} />
+      </p>,
+    );
+    expect(screen.getByTestId('p').querySelector('[data-prose-home-dot]')).toBeNull();
+    expect(screen.getByTestId('p').querySelectorAll('[data-prose-dot]')).toHaveLength(1);
   });
 
   it("puts a two-colour shot's dot in the shot line's part at the start, a head of its own with no context (RS-LEADDOT)", () => {

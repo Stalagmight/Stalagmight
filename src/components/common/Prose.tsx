@@ -4,11 +4,14 @@
  * comment") draws each name as a `ProsePill`: the line's colour dot, the
  * muted context (`Side:`), the bare name and the muted superscript Station
  * ID in the line's tint, as the link pills (`LinePill.tsx`) draw them. The
- * dot leads (RS-LEADDOT); there are no marks after a name (RS-NODOTS), the
- * tooltip says whose station it is and a loop end. A station of another line
- * takes that line's tint, dot and name (RS-OWNERSHIP); a shot with an end of
+ * dot leads (RS-LEADDOT); a loop end has no mark (RS-NODOTS), the tooltip
+ * says whose station it is and a loop end. A station of another line takes
+ * that line's tint, dot and name (RS-OWNERSHIP); a shot with an end of
  * another line is two tints, blended across the arrow, its dot in the shot
- * line's part at the start.
+ * line's part at the start. A station shown on a line it does not belong to
+ * (a foreign station, or a shot's foreign end) has a small dot in its
+ * owner's colour raised to superscript height right after its name, the
+ * home dot, which takes no room (RS-LEADDOT).
  *
  * It paints no border but a glow (RS-NODOTS, `theme/proseGlow.ts`): a
  * soft-edged capsule in the line's colour, solid behind the whole name and
@@ -19,8 +22,8 @@
  * It never changes the paragraph's line pitch (the `.sh-ppill` rules in
  * index.css): the glow is an inline box's background, padding and
  * box-shadow, none of which grows a line box; every part inside has a zero
- * line-height, the dot is an empty inline box, and the superscript is lifted
- * by a relative offset. It wraps
+ * line-height, the dots are empty inline boxes, and the superscript and the
+ * home dot are lifted by a relative offset. It wraps
  * across lines with each line's piece its own capsule
  * (`box-decoration-break: clone`; a two-colour shot's word boxes paint each
  * line's piece once laid out, `useProseGlow`).
@@ -105,7 +108,7 @@ function Glued({
   );
 }
 
-/** A station's Station ID after its name, a muted superscript (no marks after a name since RS-NODOTS). */
+/** A station's Station ID after its name, a muted superscript. */
 function stationIdOf(stationId: number | undefined): ReactNode {
   if (stationId === undefined) return null;
   return (
@@ -124,6 +127,17 @@ function stationIdOf(stationId: number | undefined): ReactNode {
  */
 const DOT = <span className="sh-ppill-dot" data-prose-dot="" />;
 
+/**
+ * A foreign station's home dot (RS-LEADDOT; `--home-dot`, ringed by
+ * `--home-ring`): an empty inline box right after the name's last word, in
+ * its no-wrap run, lifted to superscript height by a relative offset and
+ * giving back its width as a negative margin, so it takes no room and adds
+ * nothing to the line box; a Station ID after it steps aside to clear it.
+ * Decorative (the drawing is aria-hidden; the words and the tooltip say
+ * whose station it is).
+ */
+const HOME = <span className="sh-ppill-home" data-prose-home-dot="" />;
+
 /** The dot and the muted context (`Side:`), then a space; nothing when there is no context (the name takes the dot). */
 function Head({ context }: { context?: string | undefined }) {
   if (!context) return null;
@@ -139,18 +153,47 @@ function endTitle(pill: ResolvedPill, end: ProseShotEnd): string | undefined {
   return endTitleOf(markOf(pill, end.home_line), end.loop_end);
 }
 
-/** What the pill draws for `part` when it is one colour (aria-hidden: the sr-only words say it). */
-function Drawing({ part, pill, context }: { part: NamePart; pill: ResolvedPill; context: string | undefined }) {
+/**
+ * What the pill draws for `part` when it is one colour (aria-hidden: the
+ * sr-only words say it). `foreign`: a station shown on a line it does not
+ * belong to, which takes its home dot.
+ */
+function Drawing({
+  part,
+  pill,
+  context,
+  foreign,
+}: {
+  part: NamePart;
+  pill: ResolvedPill;
+  context: string | undefined;
+  foreign: boolean;
+}) {
   // The dot leads: before the context when there is one, else the name.
   const dot = context ? null : DOT;
   if (part.kind === 'station') {
     // The whole pill, its dot too, is in the colour of the line the station
-    // belongs to (RS-OWNERSHIP); no marks after the name (RS-NODOTS), its
-    // tooltip says whose it is and whether it is a loop end.
+    // belongs to (RS-OWNERSHIP); a foreign one has its home dot after its
+    // name, in the same colour; the tooltip says whose it is and whether it
+    // is a loop end.
+    const sid = stationIdOf(part.station_id);
     return (
       <>
         <Head context={context} />
-        <Glued before={dot} text={part.name} after={stationIdOf(part.station_id)} />
+        <Glued
+          before={dot}
+          text={part.name}
+          after={
+            foreign ? (
+              <>
+                {HOME}
+                {sid}
+              </>
+            ) : (
+              sid
+            )
+          }
+        />
       </>
     );
   }
@@ -184,10 +227,20 @@ interface Run {
   text: string;
   /** The muted context's words. */
   ctx?: boolean;
+  /** The last word of a foreign end's name: its home dot follows it. */
+  home?: boolean;
 }
 
 /** `text` as runs of letters and runs of spaces. */
 const runsOf = (text: string, ctx = false): Run[] => (text.match(/\s+|\S+/g) ?? []).map((t) => ({ text: t, ctx }));
+
+/** A shot end's name as runs, its last word carrying the home dot when the end is foreign. */
+function endRunsOf(name: string, foreign: boolean): Run[] {
+  const runs = runsOf(name);
+  const last = runs.map((r) => /\S/.test(r.text)).lastIndexOf(true);
+  if (foreign && last >= 0) runs[last] = { ...runs[last]!, home: true };
+  return runs;
+}
 
 /**
  * A two-colour shot (RS-OWNERSHIP) as word boxes (RS-NODOTS): each run of
@@ -201,7 +254,8 @@ const runsOf = (text: string, ctx = false): Run[] => (text.match(/\s+|\S+/g) ?? 
  * first word (RS-ARROW). The leading dot (RS-LEADDOT) is in the first box,
  * before its words, in the shot line's part: the head's when the from half
  * is another line's (a head with no context is the dot alone), else the
- * from half's.
+ * from half's. A foreign end's home dot is in the box of its name's last
+ * word, after it, on its own half (its colours are the half's, `--home-dot`).
  */
 function SplitDrawing({
   part,
@@ -220,9 +274,9 @@ function SplitDrawing({
   const runs: Record<string, Run[]> = {
     // A head holds the dot on its own when there is no context.
     head: tone.head ? (head.length > 0 ? head : [{ text: '' }]) : [],
-    from: [...(tone.head ? [] : head), ...runsOf(part.from.name)],
+    from: [...(tone.head ? [] : head), ...endRunsOf(part.from.name, tone.ends.from)],
     arrow: [{ text: ARROW_GLUED }],
-    to: runsOf(part.to.name),
+    to: endRunsOf(part.to.name, tone.ends.to),
   };
   const total = tone.segments.reduce((n, seg) => n + runs[seg.key]!.length, 0);
   let index = 0;
@@ -236,6 +290,7 @@ function SplitDrawing({
           <span className="sh-ppill-txt">
             {i === 0 && DOT}
             {run.ctx ? <span className="sh-ppill-ctx">{run.text}</span> : run.text}
+            {run.home && HOME}
           </span>
         </span>
       );
@@ -268,8 +323,9 @@ function SplitDrawing({
  * drawing inside it is the painted pill, so the sr-only words beside it
  * (absolutely positioned) never open an empty painted fragment where the
  * pill wraps. A station of another line takes that line's tint and dot and
- * names it as the context (RS-OWNERSHIP); a shot with an end of another line
- * is two-tone, its dot the shot's line's.
+ * names it as the context (RS-OWNERSHIP), with its home dot after its name;
+ * a shot with an end of another line is two-tone, its dot the shot's line's,
+ * the foreign end's home dot on its own half (RS-LEADDOT).
  */
 export function ProsePill({ part: given, testId }: { part: NamePart; testId?: string | undefined }) {
   const level = useUIStore((s) => s.syntacticLevel);
@@ -313,7 +369,7 @@ function DrawnPill({ part, testId }: { part: NamePart; testId: string | undefine
           <SplitDrawing part={part} pill={pill} context={context} tone={tone} glow={glow} />
         ) : (
           <span className="sh-ppill-txt">
-            <Drawing part={part} pill={pill} context={context} />
+            <Drawing part={part} pill={pill} context={context} foreign={owner !== null} />
           </span>
         )}
       </span>

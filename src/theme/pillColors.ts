@@ -545,3 +545,16 @@ export function panelDotOf(lineColor: string | null | undefined, themeName: stri
   const theme = pillThemeOf(themeName);
   return pillDot(lineHex(lineColor, theme.panel) ?? theme.muted, [theme.panel], theme);
 }
+
+/**
+ * The superscript dot after a foreign station's name (RS-LEADDOT) when the
+ * pill it sits on is another line's: a slot's pill in a list of slots
+ * (`StationBlob`'s `bySlot`) showing a station of line `lineColor`. The line
+ * colour, ringed where it alone does not reach 3:1 on the pill's fill at
+ * rest or on hover. On a pill of the station's own line the dot is that
+ * pill's own leading dot (`PillColors.dot` and `ring`).
+ */
+export function homeDotOn(lineColor: string | null | undefined, on: PillColors, themeName: string): PillDot {
+  const theme = pillThemeOf(themeName);
+  return pillDot(lineHex(lineColor, theme.panel) ?? theme.muted, [on.bg, on.hoverBg], theme);
+}
