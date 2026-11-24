@@ -347,7 +347,10 @@ fn prose_parts_word_a_slot_as_its_plain_text_does() {
     assert_eq!(loop_end.home_line, Some(main), "its kept end's home line");
     assert_eq!(loop_end.station_id, Some(m12), "it shows Main's 12");
     let native = station(p.slot_part(slot(br, 12), true));
-    assert_eq!((native.home_line, native.context.as_deref()), (None, Some(br_label.as_str())));
+    assert_eq!(
+        (native.home_line, native.context.as_deref()),
+        (None, Some(br_label.as_str()))
+    );
     assert_eq!(p.slot_part(slot(br, 99), true), None);
 
     let ProsePart::Shot(shot) = p.shot_part(br, 0) else {
