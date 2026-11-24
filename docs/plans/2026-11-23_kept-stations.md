@@ -2137,12 +2137,47 @@ this package took, each with its reason; they supersede section 6's
   the "(keeps 12)" and delete-span names inside history labels, the history
   preview popup's key-value rows, the closure refusal sentence (its dialog
   data comes from the opener) and every command error.
-- **History format version 3.** A history label is persisted, so its parts
-  are too: `label_parts` beside `label`, without slots (stable ids only).
-  Version 2 entries are still read and render plain; parts that do not fit
-  (a cut label, words that differ, an unknown kind) are dropped on read,
-  never the entry. An older build drops a history holding version 3 entries
-  with its banner, as any version bump does.
+- **History format version 3, only where it is needed.** A history label is
+  persisted, so its parts are too: `label_parts` beside `label`, without
+  slots (stable ids only). An entry is written as version 3 only when it has
+  parts; one whose label names nothing keeps version 2's layout, which the
+  previous build reads (pre-PR fix 4). Version 2 entries are still read and
+  render plain; parts that do not fit (a cut label, words that differ, a part
+  drawing a name or context its own words do not hold, an unknown kind) are
+  dropped on read, never the entry (fix 5). An older build drops a history
+  holding version 3 entries with its banner, as any version bump does.
+- **What the parts cost the history budget** (measured, pre-PR item 9;
+  `history_labels_tests::label_parts_cost_a_measured_share_of_the_history_budget`):
+  a typical mix of 16 steps (9 shot cell edits, 2 renames, a comment, an
+  appended shot, a merge, a move, a delete and a reverse) on a small survey
+  encodes to 8881 bytes with parts and 6214 without, +42.9%: about 160 bytes
+  per entry (122 to 185; a merge, naming two stations, 300). Mean entry 555
+  bytes against 388, so the 4 MiB Full-mode budget (`UNDO_BYTE_BUDGET_BYTES`)
+  holds about 7556 such steps instead of 10799: 3243 fewer, 30%. The cost is
+  per entry and does not grow with the survey, so larger changesets pay a
+  smaller share; local projects keep a count window (20 by default), which
+  the parts do not change. Accepted: thousands of steps still fit, and the
+  pills are the point. If it ever matters, a part's `text` (the label's own
+  words) is what could be left to be re-derived.
+- **No value can forge or crash a pill** (pre-PR fixes 1 and 3). A comment, a
+  name or a file name interpolated into a sentence could hold U+0001...U+0002.
+  Frontend: a token carries the page load's random nonce and is read only
+  with a part's full shape (`partOf`); every `t()` interpolation (the i18n
+  escape hook) and every raw value a sentence is built from by hand goes
+  through `proseValue`, which drops the markers and other C0 controls; a pill
+  whose part lacks a field draws its plain words. Backend: marks carry the
+  process's random nonce, `parse` drops every other marker character (the
+  one place raw interpolated text is cleaned), `mark` cleans a part's own
+  fields, and `split` keeps parts only when their words are the text's (the
+  check `Label::of` makes). Loaders and importers keep a name as its file has
+  it (a typed name already refuses control characters); text is cleaned
+  where it is worded and drawn, not by rewriting stored data.
+- **A pill draws its words as recorded** (fix 2): a history row keeps the
+  line names it was recorded with; the live line only colours it. Pills name
+  lines by their display names (fix 6), and what a pill draws from a part is
+  sanitised as displayed names are (fix 5). The conversion banner's sentence
+  reads capitalised with pills as plain (fix 7); the prose types are
+  generated into `src-tauri/bindings` (fix 8).
 - **No pill shape: a soft radial tint.** Measured in the real app (this
   worktree's debug build through the agent harness, a synthetic survey of
   seven lines in near-white, near-black, yellow, blue, grey, magenta and

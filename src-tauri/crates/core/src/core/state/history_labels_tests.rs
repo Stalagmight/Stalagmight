@@ -1912,3 +1912,149 @@ fn recipe_labels_name_their_lines_and_stations_as_parts() {
         .parts
         .is_empty());
 }
+
+/// RS-PROSE measurement 9: what `label_parts` costs a persisted history.
+/// A typical edit mix (mostly shot cell edits, with renames, comments, an
+/// appended shot, a merge, a move, a delete and a reverse) is recorded, and
+/// each entry is encoded with its parts and without them. Prints the bytes
+/// and how many such steps fit the Full-mode budget
+/// (`UNDO_BYTE_BUDGET_BYTES`, 4 MiB); asserts only that the parts cost
+/// something and every entry with parts still decodes with them.
+#[test]
+fn label_parts_cost_a_measured_share_of_the_history_budget() {
+    let o = open();
+    let s = &o.state;
+    let len = |l: f64| ShotUpdates {
+        length: Some(l),
+        ..ShotUpdates::default()
+    };
+    let az = |a: f64| ShotUpdates {
+        azimuth_in: Some(a),
+        azimuth_out: Some(a),
+        ..ShotUpdates::default()
+    };
+    let mix: Vec<Command> = vec![
+        Command::UpdateShot {
+            line_id: MAIN,
+            shot_id: shot_id(s, MAIN, 0),
+            updates: len(10.5),
+        },
+        Command::UpdateShot {
+            line_id: MAIN,
+            shot_id: shot_id(s, MAIN, 1),
+            updates: az(47.0),
+        },
+        Command::UpdateShot {
+            line_id: MAIN,
+            shot_id: shot_id(s, MAIN, 2),
+            updates: len(8.2),
+        },
+        Command::UpdateShot {
+            line_id: SIDE,
+            shot_id: shot_id(s, SIDE, 1),
+            updates: len(4.6),
+        },
+        Command::UpdateShot {
+            line_id: BRANCH,
+            shot_id: shot_id(s, BRANCH, 0),
+            updates: az(181.0),
+        },
+        Command::SetStationName {
+            station_ref: StationRef::new(MAIN, 1),
+            name: "A1".to_string(),
+        },
+        Command::SetStationComment {
+            station_ref: StationRef::new(MAIN, 2),
+            comment: Some("Tight squeeze, line tied left".to_string()),
+        },
+        Command::CreateShot {
+            line_id: SIDE,
+            shot: shot(3.0, 40.0),
+            after_shot_id: None,
+            before_shot_id: None,
+        },
+        Command::UpdateShot {
+            line_id: MAIN,
+            shot_id: shot_id(s, MAIN, 3),
+            updates: len(6.4),
+        },
+        Command::MergeStations {
+            station_a: StationRef::new(SIDE, 0),
+            station_b: StationRef::new(MAIN, 4),
+            keep: None,
+            renames: None,
+        },
+        Command::MoveStation {
+            station_ref: StationRef::new(SIDE, 2),
+            offset: Coordinates {
+                x: 0.5,
+                y: 0.0,
+                z: 0.0,
+            },
+        },
+        Command::UpdateShot {
+            line_id: SIDE,
+            shot_id: shot_id(s, SIDE, 2),
+            updates: az(33.0),
+        },
+        Command::SetStationName {
+            station_ref: StationRef::new(SIDE, 2),
+            name: "S2".to_string(),
+        },
+        Command::DeleteShot {
+            line_id: BRANCH,
+            shot_id: shot_id(s, BRANCH, 1),
+        },
+        Command::ReverseLine {
+            line_id: BRANCH,
+            swap_left_right: false,
+        },
+        Command::UpdateShot {
+            line_id: MAIN,
+            shot_id: shot_id(s, MAIN, 0),
+            updates: az(2.0),
+        },
+    ];
+    for cmd in mix {
+        let r = s.execute(cmd);
+        assert!(r.success, "{:?}", r.error);
+    }
+    let stack = s.undo_stack.lock().unwrap();
+    let (mut with, mut without, mut n, mut named) = (0usize, 0usize, 0usize, 0usize);
+    for held in stack.undo_entries() {
+        let entry = held.entry();
+        let a = encode_entry(entry).unwrap().len();
+        let plain = crate::models::survey::HistoryEntry {
+            label_parts: Vec::new(),
+            ..entry.clone()
+        };
+        let b = encode_entry(&plain).unwrap().len();
+        println!("ENTRY {:>5} {:>5} +{:>4} {}", a, b, a - b, entry.label);
+        with += a;
+        without += b;
+        n += 1;
+        if !entry.label_parts.is_empty() {
+            named += 1;
+            let text = encode_entry(entry).unwrap();
+            let back = decode_entry(&text, &EntryLimits::default()).unwrap();
+            assert_eq!(back.label_parts, entry.label_parts, "{}", entry.label);
+        }
+    }
+    let budget = crate::core::undo::UNDO_BYTE_BUDGET_BYTES;
+    let fit = |total: usize| budget * n / total.max(1);
+    println!(
+        "TOTAL entries {n} (with parts {named}) bytes with {with} without {without} (+{:.1}%) mean {:.0} vs {:.0}; steps in 4 MiB: {} vs {} ({} fewer, {:.1}%)",
+        (with as f64 / without as f64 - 1.0) * 100.0,
+        with as f64 / n as f64,
+        without as f64 / n as f64,
+        fit(with),
+        fit(without),
+        fit(without) - fit(with),
+        (1.0 - fit(with) as f64 / fit(without) as f64) * 100.0
+    );
+    assert!(
+        n >= 14 && named >= 10,
+        "the mix records its entries: {n}, {named}"
+    );
+    assert!(with > without);
+}
