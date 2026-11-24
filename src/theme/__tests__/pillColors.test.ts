@@ -12,7 +12,10 @@
  * to stand out from the panel and the fill, RS-NODOTS), so a near-white, a
  * grey and a near-black line, which share a neutral fill, differ by their
  * borders, and its leading dot (the line colour, ringed only where it alone
- * does not reach 3:1 on the fill, RS-LEADDOT).
+ * does not reach 3:1 on the fill, RS-LEADDOT). A foreign station's
+ * superscript home dot is its owner's leading dot on its owner's pill, and
+ * on a slot's pill of another line (`homeDotOn`) the owner's colour ringed
+ * against that pill's fill: swept over pairs of line colours.
  * Injection: dropping the ring (`ring: null` from `pillDot`) fails "dot or
  * ring 3:1" for a near-black line on the dark themes and a near-white or a
  * yellow one on the light themes.
@@ -26,6 +29,7 @@ import {
   PILL_DOT_MIN,
   PILL_MUTED_MIN,
   PILL_TEXT_MIN,
+  homeDotOn,
   missingPillColors,
   pillColors,
   pillColorsOf,
@@ -104,6 +108,33 @@ describe('pillColors sweep', () => {
       const alone = Math.min(contrastRatio(p.dot, p.bg), contrastRatio(p.dot, p.hoverBg));
       if (p.ring === null) expect(alone, color).toBeGreaterThanOrEqual(PILL_DOT_MIN);
       else expect(alone, color).toBeLessThan(PILL_DOT_MIN + 0.3);
+    }
+  });
+
+  it.each(THEMES)('%s: a home dot on another line\'s pill (bySlot) or its ring 3:1 on the fill, at rest and on hover, ringed only where needed (RS-LEADDOT)', (name) => {
+    // Every pill colour of a coarser sweep against every station line colour of it.
+    const some = COLORS.filter((_, i) => i % 9 === 0).concat(['#f6f6f2', '#101010', '#ffe600', '#1f4fff', '#c2185b', '#808080']);
+    const failures: string[] = [];
+    for (const slot of some) {
+      const on = pillColorsOf(slot, name);
+      for (const owner of some) {
+        const d = homeDotOn(owner, on, name);
+        for (const bg of [on.bg, on.hoverBg]) {
+          const c = contrastRatio(d.ring ?? d.dot, bg);
+          if (!(c >= PILL_DOT_MIN)) failures.push(`${owner} on ${slot} (${bg}) ${c.toFixed(2)}`);
+        }
+        const alone = Math.min(contrastRatio(d.dot, on.bg), contrastRatio(d.dot, on.hoverBg));
+        if (d.ring !== null && alone >= PILL_DOT_MIN + 0.3) failures.push(`${owner} on ${slot} ringed for nothing`);
+      }
+    }
+    expect(failures.slice(0, 20)).toEqual([]);
+  });
+
+  it.each(THEMES)('%s: on its owner\'s pill the home dot is the leading dot itself', (name) => {
+    for (const color of ['#f6f6f2', '#101010', '#ffe600', '#1f4fff', '#c2185b']) {
+      const p = pillColorsOf(color, name);
+      // The owner's own colour on the owner's own fill: what the leading dot sweep holds.
+      expect(homeDotOn(color, p, name)).toEqual({ dot: p.dot, ring: p.ring });
     }
   });
 
