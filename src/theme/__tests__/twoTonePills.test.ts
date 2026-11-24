@@ -4,7 +4,8 @@
  * Each half must meet the floors on its own background: main text 7:1 and
  * the muted context 4.5:1, on the shot's half the leading dot (the shot's
  * line, RS-LEADDOT) or its ring 3:1, and on a foreign end's half that end's
- * superscript home dot (its owner's colour, RS-LEADDOT) or its ring 3:1, at
+ * superscript home dot (its owner's colour, RS-LEADDOT) or its ring 2:1
+ * (`HOME_DOT_MIN`: it repeats what the words say), at
  * rest and on hover for a link pill, on the glow and on the bare panel for a
  * prose pill, along every blend, and for a from end over the start of the
  * arrow it overhangs. Swept over ordered pairs of hard line colours
@@ -18,7 +19,7 @@
  * blends move the dot's backdrop little); a from end's home dot ringed
  * against its half alone (the bridge it overhangs dropped from
  * `homeDotStyle`) fails "both ends foreign, three colours" for prose on
- * every theme but nord.
+ * cave (on every theme but nord at the old 3:1 floor).
  */
 import { describe, expect, it } from 'vitest';
 import { themeTokens } from '../tokens';
@@ -36,11 +37,13 @@ import {
   type Neighbours,
 } from '../pillBlend';
 import {
+  HOME_DOT_MIN,
   PILL_DOT_MIN,
   PILL_MUTED_MIN,
   PILL_TEXT_MIN,
   pillColors,
   pillColorsOf,
+  pillDot,
   pillThemeOf,
   proseBackdrops,
   prosePillColors,
@@ -283,18 +286,28 @@ function homeDotColours(own: PillColors, near: Neighbours, bridgeTo: PillColors 
   return out;
 }
 
-/** The home dot of `own`'s half (its colour or its ring) at 3:1 on every colour of `on`, and ringed only where it needs it. */
-function checkHomeDot(label: string, style: Record<string, string>, own: PillColors, on: readonly string[], failures: string[]) {
+/**
+ * The home dot of `own`'s half (its colour or its ring) at the home dot's
+ * floor (2:1, `HOME_DOT_MIN`) on every colour of `on`, ringed only where it
+ * needs it, and its ring no stronger on the half than the ring a 3:1 dot
+ * would need there (the lower floor makes it quieter, never louder).
+ */
+function checkHomeDot(label: string, style: Record<string, string>, own: PillColors, on: readonly string[], failures: string[], theme: string) {
   const ring = style['--home-ring']!;
   const dot = style['--home-dot']!;
   if (dot !== own.dot) failures.push(`${label} home dot ${dot} is not the line colour ${own.dot}`);
   const shown = ring !== 'transparent' ? ring : dot;
   for (const bg of on) {
     const c = contrastRatio(shown, bg);
-    if (!(c >= PILL_DOT_MIN)) failures.push(`${label} home dot ${shown} on ${bg} ${c.toFixed(2)}`);
+    if (!(c >= HOME_DOT_MIN)) failures.push(`${label} home dot ${shown} on ${bg} ${c.toFixed(2)}`);
   }
   const alone = Math.min(...on.map((bg) => contrastRatio(dot, bg)));
-  if (ring !== 'transparent' && alone >= PILL_DOT_MIN + 0.3) failures.push(`${label} home dot ringed for nothing (${alone.toFixed(2)})`);
+  if (ring !== 'transparent' && alone >= HOME_DOT_MIN + 0.3) failures.push(`${label} home dot ringed for nothing (${alone.toFixed(2)})`);
+  if (ring !== 'transparent') {
+    const full = pillDot(dot, on, pillThemeOf(theme));
+    const strong = (c: string) => contrastRatio(c, on[0]!);
+    if (strong(ring) > strong(full.ring ?? dot) + 0.05) failures.push(`${label} home ring ${ring} louder than a 3:1 one ${full.ring}`);
+  }
 }
 
 describe.each(['link', 'prose'] as const)('the home dot of a foreign end on a two-tone %s pill (RS-LEADDOT)', (variant) => {
@@ -310,11 +323,11 @@ describe.each(['link', 'prose'] as const)('the home dot of a foreign end on a tw
       // A foreign from end: head (the shot's) | from (the owner's) | arrow to the shot's to half.
       const fromNear = { left: S, right: O };
       const from = homeDotStyle(variant, O, fromNear, S, name) as Record<string, string>;
-      checkHomeDot(`${shotLine}|${owner} from end`, from, O, on(homeDotColours(O, fromNear, S, panel)), failures);
+      checkHomeDot(`${shotLine}|${owner} from end`, from, O, on(homeDotColours(O, fromNear, S, panel)), failures, name);
       // A foreign to end: the arrow's right edge is its own colour; the pill ends after it.
       const toNear = { left: O, right: null };
       const to = homeDotStyle(variant, O, toNear, null, name) as Record<string, string>;
-      checkHomeDot(`${shotLine}|${owner} to end`, to, O, on(homeDotColours(O, toNear, null, panel)), failures);
+      checkHomeDot(`${shotLine}|${owner} to end`, to, O, on(homeDotColours(O, toNear, null, panel)), failures, name);
     }
     expect(failures.slice(0, 20)).toEqual([]);
   });
@@ -328,9 +341,9 @@ describe.each(['link', 'prose'] as const)('the home dot of a foreign end on a tw
     for (const [head, fromLine, toLine] of TRIPLES) {
       const [H, F, T] = [of(head), of(fromLine), of(toLine)];
       const fromNear = { left: H, right: F };
-      checkHomeDot(`${head}|${fromLine}|${toLine} from`, homeDotStyle(variant, F, fromNear, T, name) as Record<string, string>, F, on(homeDotColours(F, fromNear, T, panel)), failures);
+      checkHomeDot(`${head}|${fromLine}|${toLine} from`, homeDotStyle(variant, F, fromNear, T, name) as Record<string, string>, F, on(homeDotColours(F, fromNear, T, panel)), failures, name);
       const toNear = { left: T, right: null };
-      checkHomeDot(`${head}|${fromLine}|${toLine} to`, homeDotStyle(variant, T, toNear, null, name) as Record<string, string>, T, on(homeDotColours(T, toNear, null, panel)), failures);
+      checkHomeDot(`${head}|${fromLine}|${toLine} to`, homeDotStyle(variant, T, toNear, null, name) as Record<string, string>, T, on(homeDotColours(T, toNear, null, panel)), failures, name);
     }
     expect(failures.slice(0, 20)).toEqual([]);
   });
