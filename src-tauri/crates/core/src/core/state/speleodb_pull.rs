@@ -14,7 +14,6 @@ use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::models::SpeleoProjectSummary;
 use crate::speleodb::{
     client, sync, SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult, SpeleoReadOnlyOpen,
-    TransportCause,
 };
 pub(super) fn usable_tip(tip: Option<String>, project_id: &str) -> Option<String> {
     let sha = tip?;
@@ -60,21 +59,30 @@ impl DownloadOptions {
     }
 }
 
-/// A connection failure is the only reason to open a cache instead of downloading.
-/// Never use cache availability to bypass access denial or invalid server content.
+/// A download that got no complete reply is the only reason to open a cache
+/// instead of downloading: the connection could not be made, the name did not
+/// resolve, the time ran out, or the connection closed or reset before the whole
+/// reply arrived ([`crate::speleodb::TransportCause::got_no_reply`], F1). Never use
+/// cache availability to bypass access denial or invalid server content: a status,
+/// a reply the app cannot read, a TLS failure and an unclassified transport
+/// failure all report the error.
+///
+/// `tip` is the latest revision the history read before the download named, when
+/// it answered. Then SpeleoDB was reached and the download alone was lost, so the
+/// open says what it knows (`newer_on_server`) instead of calling SpeleoDB
+/// unreachable: whether the copy holds that revision or is behind it
+/// (F1-transport-5).
 fn offline_open_result(
     dest: &std::path::Path,
     endpoint: &str,
     project_id: &str,
     error: &SpeleoDbError,
+    tip: Option<&str>,
 ) -> Option<SpeleoOpenResult> {
-    if !matches!(
-        error,
-        SpeleoDbError::Transport {
-            cause: TransportCause::Refused | TransportCause::Timeout | TransportCause::Dns,
-            ..
-        }
-    ) {
+    let SpeleoDbError::Transport { cause, .. } = error else {
+        return None;
+    };
+    if !cause.got_no_reply() {
         return None;
     }
     let CacheFile::Read {
@@ -86,9 +94,16 @@ fn offline_open_result(
     if link.project_id != project_id || link.endpoint != endpoint {
         return None;
     }
+    let newer_on_server = tip.map(|tip| {
+        !link
+            .base_commit_sha
+            .as_deref()
+            .is_some_and(|base| base.eq_ignore_ascii_case(tip))
+    });
     Some(SpeleoOpenResult {
         local_path: dest.to_string_lossy().into_owned(),
         offline: Some(true),
+        newer_on_server,
         has_unpushed_edits: Some(link.has_unpushed_edits),
         read_only: None,
         other_owner: None,
@@ -154,6 +169,7 @@ fn signed_out_open_result(
     Some(SpeleoOpenResult {
         local_path: dest.to_string_lossy().into_owned(),
         offline: None,
+        newer_on_server: None,
         has_unpushed_edits: Some(link.has_unpushed_edits),
         read_only: Some(reason),
         other_owner: None,
@@ -306,7 +322,8 @@ impl AppState {
             Ok(native) => native,
             Err(error) => {
                 if policy == LocalEditsPolicy::Protect {
-                    if let Some(cached) = offline_open_result(&dest, &endpoint, &project_id, &error)
+                    if let Some(cached) =
+                        offline_open_result(&dest, &endpoint, &project_id, &error, tip.as_deref())
                     {
                         return Ok(other_accounts_work_read_only(
                             cached, &dest, &endpoint, &email,
@@ -347,6 +364,7 @@ impl AppState {
         Ok(SpeleoOpenResult {
             local_path: dest.to_string_lossy().into_owned(),
             offline: None,
+            newer_on_server: None,
             has_unpushed_edits: None,
             read_only: None,
             other_owner: None,
@@ -432,6 +450,7 @@ impl AppState {
         if policy == LocalEditsPolicy::Protect {
             self.guard_local_edits(project_id, &dest)?;
         }
+        let revision = pinned.clone();
         let new_link = crate::models::SpeleoLink {
             endpoint: endpoint.to_owned(),
             project_id: project_id.clone(),
@@ -445,16 +464,20 @@ impl AppState {
         // The installed copy carries no Unwind position or watermark (the prepared
         // download keeps no per-machine state), so the reopened project starts
         // with neither.
-        let prepared = self.prepare_download(
-            native.path(),
-            new_link,
-            InheritedUndo::Drop,
-            &download_decode_options(),
-        )?;
+        let prepared = self
+            .prepare_download(
+                native.path(),
+                new_link,
+                InheritedUndo::Drop,
+                &download_decode_options(),
+            )?
+            .holding_revision(revision.as_deref());
         self.open_project_download(prepared, dest.clone(), consent, was_editing)?;
         Ok(dest.to_string_lossy().into_owned())
     }
 
+    /// Install the download at `source`, which is revision `link`'s BASE (a pull
+    /// downloads by the tip it pins as BASE; `None` is an undated download).
     fn install_linked_download_with_limits(
         &self,
         source: &std::path::Path,
@@ -465,7 +488,10 @@ impl AppState {
         options: DownloadOptions,
     ) -> Result<(), SpeleoDbError> {
         let project_id = link.project_id.clone();
-        let prepared = self.prepare_download(source, link, undo, &options.limits)?;
+        let revision = link.base_commit_sha.clone();
+        let prepared = self
+            .prepare_download(source, link, undo, &options.limits)?
+            .holding_revision(revision.as_deref());
         self.replace_cache_for_session(prepared, dest, &project_id, policy, options.generation)
     }
 }
@@ -484,6 +510,7 @@ mod tests {
     use crate::models::survey::Project;
     use crate::models::{SpeleoLink, UndoMode};
     use crate::persistence::stalx_v2::temp_path;
+    use crate::speleodb::TransportCause;
 
     fn link() -> SpeleoLink {
         SpeleoLink {
@@ -761,6 +788,7 @@ mod tests {
         write_v2(&dest, "Cached", Some(&cached_link));
         for cause in [
             TransportCause::Refused,
+            TransportCause::Dropped,
             TransportCause::Timeout,
             TransportCause::Dns,
         ] {
@@ -773,6 +801,7 @@ mod tests {
                 &cached_link.endpoint,
                 &cached_link.project_id,
                 &error,
+                None,
             )
             .expect("matching cache opens offline");
             assert_eq!(result.offline, Some(true));
@@ -781,18 +810,24 @@ mod tests {
                 &dest,
                 "https://other.example",
                 &cached_link.project_id,
-                &error
+                &error,
+                None
             )
             .is_none());
-            assert!(
-                offline_open_result(&dest, &cached_link.endpoint, "another-project", &error)
-                    .is_none()
-            );
+            assert!(offline_open_result(
+                &dest,
+                &cached_link.endpoint,
+                "another-project",
+                &error,
+                None
+            )
+            .is_none());
             assert!(offline_open_result(
                 &dir.path().join("missing.stalx"),
                 &cached_link.endpoint,
                 &cached_link.project_id,
-                &error
+                &error,
+                None
             )
             .is_none());
         }
@@ -829,7 +864,8 @@ mod tests {
                 &dest,
                 &cached_link.endpoint,
                 &cached_link.project_id,
-                &error
+                &error,
+                None
             )
             .is_none());
         }
@@ -845,7 +881,8 @@ mod tests {
             &SpeleoDbError::Transport {
                 cause: TransportCause::Refused,
                 detail: "offline".into()
-            }
+            },
+            None
         )
         .is_none());
     }
@@ -873,7 +910,7 @@ mod tests {
             "{refused:?}"
         );
         assert!(
-            offline_open_result(&dest, endpoint, &cached_link.project_id, &refused).is_none(),
+            offline_open_result(&dest, endpoint, &cached_link.project_id, &refused, None).is_none(),
             "a refused endpoint is not offline"
         );
 
@@ -889,7 +926,7 @@ mod tests {
             ),
             "an unresolvable http host must be an offline DNS failure, got {error:?}"
         );
-        let opened = offline_open_result(&dest, endpoint, &cached_link.project_id, &error)
+        let opened = offline_open_result(&dest, endpoint, &cached_link.project_id, &error, None)
             .expect("the cached copy opens offline");
         assert_eq!(opened.offline, Some(true));
         assert_eq!(opened.local_path, dest.to_string_lossy());

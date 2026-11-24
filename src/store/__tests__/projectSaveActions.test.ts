@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { createSaveProjectAction } from '../projectSaveActions';
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
+import { useSpeleoStore } from '../speleoStore';
 import { OLDER_BUILDS_DROP_GPS_FIXES, resetOlderVersionsNoticeForTests } from '../../utils/gpsFixSaveNotice';
 const ipc = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({ invokeIpc: ipc }));
@@ -78,4 +79,27 @@ it('tells once per project that older versions drop its GPS fixes (#741)', async
   await save(undefined, true);
   expect(showToast).toHaveBeenCalledTimes(1);
   expect(showToast.mock.calls[0]?.[2]).toBe('warning');
+});
+// S2: the save cleared the SpeleoDB copy's stale un-uploaded mark (its survey is
+// BASE's again); the exit prompt reads the store's mirror of it.
+it('mirrors an un-uploaded mark the save cleared', async () => {
+  const clearUnpushedMark = vi.fn();
+  useSpeleoStore.setState({ clearUnpushedMark } as never);
+  ipc.mockResolvedValue({ success: true, saved_path: '/a.stalx', speleodb_unpushed_cleared: true });
+  await save();
+  expect(clearUnpushedMark).toHaveBeenCalledTimes(1);
+  ipc.mockResolvedValue({ success: true, saved_path: '/a.stalx' });
+  await save();
+  expect(clearUnpushedMark).toHaveBeenCalledTimes(1);
+});
+it('leaves the mark of an edit made while the save ran', async () => {
+  const clearUnpushedMark = vi.fn();
+  useSpeleoStore.setState({ clearUnpushedMark } as never);
+  const pending = deferred<{ success: boolean; speleodb_unpushed_cleared: boolean }>();
+  ipc.mockReturnValue(pending.promise);
+  const operation = save();
+  useProjectStore.setState({ projectTreeGeneration: 11 });
+  pending.resolve({ success: true, speleodb_unpushed_cleared: true });
+  await operation;
+  expect(clearUnpushedMark).not.toHaveBeenCalled();
 });

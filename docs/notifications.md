@@ -191,6 +191,46 @@ regions). Read the comment blocks in those two files plus
   you save", not "Saved", banner or not (N-6). The history-discarded banner
   (`history-discarded-banner`) is unchanged: it also covers an old file's
   history, which the conversion drops.
+- **A choice that may free someone else's lock is worded, and never the default.**
+  SpeleoDB's lock belongs to the account, so a lock the held-lock prompt
+  (`HeldLockResumeDialog`) lists may be the one the same account is editing under on
+  another computer right now; the app cannot tell that from a lock a crashed session
+  left. The prompt says both are possible and what releasing does (others can then
+  change the project under the session still editing), offers the release as
+  "Release anyway" rather than hiding it (a crashed session's lock must stay
+  releasable), and focuses Not now, so Enter keeps every lock. A row it can prove is
+  not this computer's says "Held by this account, not by this computer". The same
+  goes for any confirmation whose action reaches past this computer: say what
+  happens to the lock (Take the SpeleoDB version: "You keep the write lock"), and
+  for every other surface that shows or releases the same lock: the home screen uses
+  the prompt's words, and the sign-out dialog lists such a lock with "Release
+  anyway" per project instead of releasing it behind Disconnect. A promise like
+  "you go on editing" is kept or the read-only notice says it was not.
+- **A lost edit session is never silent.** When a status refresh finds that SpeleoDB
+  no longer gives this account the lock the session was editing under (another
+  session of the account handed it back, someone else took it, access changed), the
+  read-only notice says "Editing stopped" and why; work at risk behind a read-only
+  badge is a modal, not a state change to notice. A release this session made
+  itself (Discard and hand back the lock, Done, Switch to Read Only, a close) is
+  not a loss and never raises it.
+- **An upload that replaced someone's revision is a banner, and stops an exit.**
+  When a SpeleoDB upload lands on top of a revision another session uploaded
+  between the push's check and the upload (R3), the upload succeeded but that
+  revision's work is no longer the latest: data at risk of being overlooked, so
+  never a toast. The replaced-revision banner (`speleo-replaced-banner`, its own
+  slot, `speleoStore.replacedRevisions`) names the revision (description, short
+  id, author), says its changes are not in the upload and that it is still in the
+  Revision History to view or restore, and stays until dismissed: no later push,
+  release, Start editing, failure or notice takes its place; those show in the
+  ordinary banner beside it. It replaces the success toast (one event, one
+  surface); an upload that also left its undo history out still says so in its
+  warning toast, a separate fact. A failure after the landing (the release that
+  followed failed, or a late edit is still to upload) carries the report too. Every close
+  that ran the upload stops instead of closing, so the banner is read first: the
+  exit and sign-out prompts, Save and Close, and the older-version confirmation
+  finishing a close or a quit. The next close asks nothing. An upload refused
+  because another session uploaded first is the
+  divergence prompt, like any divergence.
 
 ## Command-failure contract
 
@@ -240,6 +280,22 @@ regions). Read the comment blocks in those two files plus
 
 - Lead with what happened, then what to do: "Export failed - choose a folder with
   write access", not "An error occurred".
+- **A SpeleoDB failure is worded by its cause, never shown raw.** A rejected
+  SpeleoDB call carries its transport cause typed (`SpeleoErrorDto.transport`;
+  a failed lock release `CommandResult.lock_release_transport`), and every surface
+  words it from that: `humanizeSpeleoError` with an operation prefix,
+  `describeSpeleoError` where the surface frames the failure itself (a dialog with
+  its own title, an error line under a prompt), `describeTransportCause` for a
+  cause alone. The line names the server and says what to check. The backend's
+  "Network error talking to SpeleoDB: <raw cause>" is for the log only: no
+  details line shows it. Sentences the backend builds itself (a lock left held
+  after a delete) name the cause in plain words (`SpeleoDbError::user_reason`).
+- **A notice is titled for what happened.** The SpeleoDB read-only notice says
+  "Project opened read-only" only after an open; after Resume editing or Start
+  editing on a project already open it says "Still read-only". When the lock
+  request may have reached SpeleoDB without anything confirming it, the notice
+  says so in one sentence, so the close that later hands the lock back (or asks
+  "Couldn't hand back the lock") is no surprise.
 - Name things the user recognizes (project, line, shot), active voice, no
   internal jargon or error-code prefixes in the message body.
 - Sentence case, ASCII hyphens only (repo-wide rule), tone per

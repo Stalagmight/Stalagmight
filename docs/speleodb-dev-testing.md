@@ -124,6 +124,25 @@ preferences, preservation during unrelated saves, rollback after a failed settin
 write, owner-only permissions and token-safe diagnostics. Native installation tests
 refuse a failed link write before replacing the cache.
 
+### Lock claims of other accounts
+
+`speleodb_foreign_claim_tests` (core) replays the protocol fuzzer's foreign-claim
+trace (F4) against a loopback SpeleoDB that keeps the project's mutex and tells two
+synthetic accounts apart by their tokens. The owner signs in, opens and locks a
+project; the owner's other session hands the lock back; the collaborator signs in
+without signing out, so the owner's claim stays; the collaborator locks the project
+and then releases it. Every release must reach the server and free the lock: the
+update restart, a close (reported as released, not "not held"), a project switch, a
+delete (with no warning), Start Editing's unwind after a session boundary and the
+stranded-claim cleanup (which must not lose its claim either). A unit case pins the
+rule itself: only a claim of the account the release is for, under any email case,
+stands a release down, whoever is signed in.
+
+```sh
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib speleodb_foreign_claim_tests
+```
+
 ### Version 2 uploads and the server prerequisite
 
 The app uploads the project file in format version 2 (canonical JSON,
@@ -172,6 +191,134 @@ that answers with SpeleoDB's bodies
 of the app against a server without version 2 support should expect that
 refusal on every upload of an edited project; a legacy SQLite revision on the
 server still downloads, and is migrated in memory.
+
+### Lost replies and the offline open (F1)
+
+A request whose reply is lost is classified from the typed error, never its text
+(`client::transport_cause`, one classifier for the SDK's send and its body reads;
+see [SpeleoDB.md](SpeleoDB.md)): `Refused` (no connection), `Dropped` (connected,
+then closed or reset before the whole reply), `Timeout`, `Dns`, `Tls`, `Unknown`. An
+open falls back to the cached copy on the first four (`got_no_reply`). Two offline
+suites pin it, each against a loopback listener that loses its replies on purpose:
+
+- `speleodb::client::tests::transport_causes` (the speleodb crate) drives the real
+  SDK client: a connection closed before the reply, a reset before it, a reply head
+  or body cut short, a reset in the body (each on the project, history and both
+  download reads, which are tried three times), a port nothing listens on, an
+  `https://` name under `.invalid` (one DNS lookup, never a server), a reply that is
+  not HTTP (stays `Unknown`), a 403 whose body is cut short (`Dropped` on a JSON
+  read, a reply on the download), and five writes (acquire, release, create, patch,
+  upload) whose reply is lost: `Dropped`, sent once. The listener keeps accepting
+  after the connections it expects, so a second send is counted
+  (`a_write_sent_twice_is_counted_twice`). The TLS close (an early end of file from
+  rustls) and an unreachable error on an established connection are pinned on
+  hand-built error trees (`cause_of_tree`); no test here serves TLS.
+- `core/state/speleodb_offline_open_tests.rs` runs the whole open path: a clean
+  cached copy opens offline for each way of losing every GET under
+  `/api/v2/projects/` (the fuzzer's seed 900366), untouched and without an owner
+  record written; this account's un-uploaded work opens offline still marked as
+  not uploaded, another account's read-only; a reply that is not HTTP, and a
+  discard, never fall back; and a push whose upload reply is lost stays
+  unconfirmed, dirty at BASE and locked, sent once; a Start Editing whose acquire
+  landed while every read around it was lost leaves an unbound claim, which the
+  close hands back once SpeleoDB answers; and an open whose history read answered
+  but whose download was cut says whether SpeleoDB has a newer revision
+  (`newer_on_server`). The acquire side is
+  `speleodb_acquire_tests.rs` (`an_acquire_whose_reply_was_lost_is_adopted_when_the_lock_is_ours`).
+
+To reproduce by hand, sign a development build in to the development instance
+through a local forwarding proxy you control, open a project once so it is cached,
+then make the proxy accept every connection and close it without forwarding: the
+next open of that project shows "SpeleoDB is unreachable. Opened the last downloaded
+copy; it may be out of date." and the copy opens read-only. Never do this against a
+shared or real SpeleoDB server.
+
+### Un-uploaded work is decided by content
+
+An edit marks the copy un-uploaded at once; the edit itself reaches the file
+with the next save. The mark over a copy that still holds exactly its BASE
+revision's survey (the edit was lost: a crash, or Don't save) is stale, and
+every reader treats it so
+([saving.md](saving.md#the-un-uploaded-mark-and-the-base-survey-digest)).
+`core/state/speleodb_base_survey_tests.rs` drives the real pull, open, edit,
+save and push against a loopback server, with the protocol fuzzer's trace
+(seed 900426) as its first test:
+`an_edit_lost_in_a_crash_leaves_no_un_uploaded_work_behind`,
+`a_crash_after_an_edit_reopens_clean`, `a_saved_edit_keeps_its_mark`,
+`an_edit_taken_back_and_saved_counts_as_clean` (by hand and by Undo),
+`after_a_confirmed_upload_a_lost_edit_leaves_no_un_uploaded_work`,
+`an_edit_taken_back_during_an_upload_stays_un_uploaded` (the push fence) and
+`a_copy_without_a_digest_keeps_its_mark` (a 0.6.0 copy and a version 2 copy
+without the digest), and `the_digest_goes_with_its_base`. The digest itself
+is pinned in
+`persistence/stalx_v2/format_v2_digest_tests.rs`.
+
+A manual check against the test server, with a synthetic project: open it from
+the SpeleoDB browser, edit, and close with Don't save; open it again: it opens
+without the "local edits that were never pushed" prompt, and Close asks
+nothing. Edit and save, then Undo and save: the un-uploaded indicator goes
+away and Close asks nothing. Edit, save and close: the next open still offers
+the local copy.
+
+### Two sessions of one account (R3)
+
+SpeleoDB's lock belongs to the account, so the same account signed in twice (two
+computers, two windows) holds it twice, and its revisions carry the same author
+email. The verified API offers no conditional upload: the upload view takes no
+parent or base, and the revisions list (`GET projects/{id}/revisions/`, each
+commit with its `id`, `parent_ids`, `author_email` and stored `message`) is the
+only way to see what HEAD is and what a landed revision sits on. The 200 upload
+envelope names the new revision (`hexsha`) but not its parent.
+
+So the client checks before every upload that HEAD is still the copy's BASE, and
+the only thing it lets stand between them is this session's own upload whose
+answer was lost (#193), recognised by `sync::OwnUploads` (the revisions its
+uploads were answered with; the one unanswered upload's BASE and description, as
+the server stores it), never by the email. After a 200 it reads the history once
+more and `sync::replaced_by_upload` names what landed between the upload's BASE
+and the new revision's parent: the race between the check and the upload, which
+only a server-side conditional upload could close.
+
+`core/state/speleodb_same_account_tests.rs` pins it against a loopback server that
+keeps a real history (every accepted upload lands as a new revision on the tip,
+authored by the account, with its description) and two `AppState`s of one account,
+each on its own thread, cache root and config:
+`a_second_session_of_the_same_account_is_refused_and_uploads_nothing` (Save
+Changes and Done: `divergence_needed`, one upload on the server, B still dirty and
+locked at BASE), `an_unanswered_upload_is_no_licence_to_adopt_another_sessions_revision`,
+`our_own_unanswered_upload_is_adopted_on_the_retry`,
+`a_push_whose_base_is_still_head_uploads`,
+`a_revision_landed_between_the_check_and_the_upload_is_named_with_the_push`,
+`done_names_the_replaced_revision_too` and
+`the_status_shows_the_conflict_that_save_changes_will_report`. The pure rules are
+unit-tested in `speleodb/sync.rs` (`ancestry_*`, `plan_push_*`, `status_verdict_*`,
+`replaced_by_upload_*`), the frontend routing in vitest (`useSpeleoActions`,
+`speleoStore`, `SpeleoBanner`, the exit and sign-out dialogs) and
+`e2e-playwright/speleodb-same-account.spec.ts`. To try it by hand, sign in with one
+test account in two app instances (two machines, or two config and cache roots),
+open the same project in both, upload from one, then upload from the other: the
+second shows the conflict prompt and SpeleoDB's history gains nothing.
+
+### Where the sync fixes meet
+
+The F1, F2, F4 and R3 fixes above each have their suite;
+`core/state/speleodb_fix_interactions_tests.rs` pins the paths where two of them
+decide the same outcome
+([the plan](plans/2026-11-21_speleodb-sync-fixes.md#how-the-fixes-meet)),
+against one loopback server that keeps a real history and lock holder and can
+lose its replies: an offline open of a copy whose mark is stale opens it clean,
+a saved edit still marked (`an_offline_open_decides_un_uploaded_work_by_content`);
+an edit taken back after an upload whose answer was lost is still uploaded, on
+top of our own revision, because every upload drops the BASE digest
+(`an_edit_taken_back_after_an_unconfirmed_upload_is_still_uploaded`); a stale
+mark is no conflict when another session of the account pushed
+(`a_stale_mark_is_no_conflict_when_another_session_of_the_account_pushed`); an
+exit upload refused for another session's revision keeps the lock through the
+quit's release and the sign-out, and one that replaced a revision hands the lock
+back once (`an_exit_upload_refused_for_another_sessions_revision_keeps_the_lock`,
+`an_exit_upload_that_replaced_a_revision_hands_the_lock_back_once`). Run them
+with
+`cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib speleodb_fix_interactions`.
 
 ### The live test
 

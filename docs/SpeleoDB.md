@@ -30,19 +30,89 @@ closes the editing gate.
 The home screen uses the same card or table row for downloaded and undownloaded
 SpeleoDB projects. Selecting one never exposes local Project Details, local open,
 or local deletion actions. Opening while signed in always attempts a fresh download.
-Only a DNS, connection-unavailable or timeout failure allows opening an existing
-cache, whose stored project ID and endpoint must match. The UI announces that
-offline fallback and preserves the cached unsynced-edit state. Authentication,
+Only a download that got no reply at all allows opening an existing cache, whose
+stored project ID and endpoint must match: the connection could not be made
+(refused, or the network or host unreachable), the name did not resolve, the time
+ran out, or the connection was closed or reset before the whole reply arrived (no
+reply, a reply head cut short, or a body shorter than its length). The UI announces
+that offline fallback and preserves the cached unsynced-edit state. The copy opens
+read-only, and the open does not run its automatic Start Editing: SpeleoDB has just
+lost the open's replies, and a lock request sent into that can land while every
+read around it is lost (F1-transport-1). Start editing takes the lock when the user
+asks. When the history read before the download did answer, SpeleoDB was reached
+and only the download was lost: the result says whether SpeleoDB's latest revision
+is the copy's BASE (`SpeleoOpenResult.newer_on_server`), and the toast says that
+instead of "SpeleoDB is unreachable" (F1-transport-5). The toast fades; when the
+copy is behind (and clean), the SpeleoDB tab says so too, "SpeleoDB has a newer
+revision than this copy", seeded from that answer (`remote_ahead`) and kept by every
+status that reaches SpeleoDB, with "Resume editing downloads it first" where Resume
+editing is offered: Start Editing downloads the newer revision before it opens the
+edit gate, and over un-uploaded work it opens the divergence prompt and downloads
+nothing (demo item 5). One click does all of it: the frontend reconciles that
+download in place and never through a project switch, whose `cancel_loading` would
+end the edit session the download started (sdbdemo2 issue 2). While editing, the
+line says "Reload Project downloads it, and you go on editing" instead: the status
+reports the copy behind only when it is clean, and the reload carries the edit
+session. A download that replaced the copy dismisses the open's toast, which
+described the older copy. While a status cannot reach SpeleoDB the tab's lock line
+says the project is offline and what the last lock scan saw ("Offline - the lock was
+free when last checked"), never "Ready for editing" beside the read-only badge: an
+offline status reads no lock holder, which is "not known", not "free" (demo item
+6). Authentication,
 permission, missing remote project, TLS and invalid-download errors do not fall
-back to the cache (but see the no-session rules below). An `http://` endpoint the
-transport policy allows (see Authentication and transport) falls back exactly as an
-`https://` endpoint does; one it refuses is refused before any request, without
-DNS. Known gap (F1, #669): a DNS, refused or reset failure of the request itself
-(the SDK's send) is currently classified as an unknown transport error, which does
-not fall back, so today only a timeout - or an `http://` host that the transport
-policy finds does not resolve - opens the cached copy. If a successful download would
+back to the cache (but see the no-session rules below), and neither does a reply
+the app cannot read as HTTP or any other unclassified transport failure. One
+limit: the SDK reads a JSON reply's whole body before it looks at the status, so a
+refusal (a 401, 403 or 404) whose body a proxy cut short reaches the app as a
+connection lost mid-reply, with its status gone, and an open of a cached copy falls
+back as for any lost reply. The download can tell (the SDK reads a body in its
+request step only for a status that is not 200), so a cut refusal there is a reply
+and never falls back (F1-transport-2). An
+`http://` endpoint the transport policy allows (see Authentication and transport)
+falls back exactly as an `https://` endpoint does; one it refuses is refused before
+any request, without DNS. If a successful download would
 overwrite unsynced edits, the user can cancel or explicitly confirm replacing
 them; the prompt offers no online local-copy shortcut.
+
+How a failure is classified (F1, #669; `TransportCause`, from the typed error, never
+its text): one classifier (`client::transport_cause`) reads both the SDK's send
+failures and its body reads. `Refused` means the connection could not be made (the
+connector failed), so nothing was sent; `Dropped` means it was made and then
+closed, reset or reported unreachable before the whole reply, so the request may
+have reached the server; then `Timeout`, `Dns`, `Tls` and `Unknown`. After
+`Timeout`, `Dropped`, `Tls` (a TLS error after the handshake can follow a request
+already sent) or `Unknown` the request may have reached the server. Over TLS a
+connection closed before the reply is an early end of file from rustls, not
+hyper's incomplete message; both are `Dropped`. A read that failed with `Refused`, `Dropped`, `Timeout` or `Dns`
+(`TransportCause::got_no_reply`) got nothing from the server, which is what lets an
+open fall back. Writes ignore the cause, with one exception: after any transport
+failure an upload stays unconfirmed and dirty, an acquire asks the server who holds
+the lock, and no mutation is sent twice. The exception is an acquire whose
+connection could not be made or whose server name did not resolve
+(`TransportCause::nothing_sent`): that request never left this computer, so it is a
+plain failure with nothing to look for and nothing to point at (demo item 3: it used
+to leave a claim, and the next Close asked "Couldn't hand back the lock" about a lock
+request SpeleoDB never saw). When an acquire's outcome is unknown and the holder
+cannot be read either, the app keeps an unbound claim to the lock that may be this
+account's, and the Start Editing refusal says so (`SpeleoErrorDto.lock_may_be_held`,
+set whenever a refused Start Editing leaves such a claim): the read-only notice adds
+"The lock request may have reached SpeleoDB; if it did, Stalagmight hands the lock
+back when you close the project, or you can try again.", so the close that hands it
+back, or asks, is no surprise; such a refusal also forgets what the last lock scan
+saw for the project, so the offline lock line says "Offline - lock state not known"
+rather than "the lock was free when last checked". The notice after Resume editing or
+Start editing on a project already open is titled "Still read-only"; only the
+automatic Start Editing after an open says "Project opened read-only" (demo item 7).
+A status refresh that ends an edit session because SpeleoDB no longer gives this
+account the lock (handed back elsewhere, for example by a close in another session
+of the same account; taken by someone else; access that no longer allows editing)
+raises the same notice titled "Editing stopped", saying which and that the changes
+are kept on this computer (sdbdemo2 issue 4). A lost connection is
+worded "The connection to SpeleoDB at <server> was lost before it finished
+answering", never "Could not connect". Before this, a send
+failure knew only timeouts and TLS, so a refused, reset or dropped connection and the
+DNS failure of an `https://` host were all `Unknown`, and an open fell back only on a
+timeout.
 
 Without a usable session the cached copy opens read-only, with no network call:
 
@@ -539,6 +609,20 @@ routing to the upload dialog; the open-from-SpeleoDB and account-change question
 file of its own. Saved edits keep the copy's un-uploaded flag, so the next open
 offers to open the local copy.
 
+The flag is set the moment an edit is made, so a crash right after an edit is
+not forgotten; the edit itself reaches the file only when it is saved. What
+counts is the survey the copy holds: a copy that holds exactly the survey of
+the revision it is based on has nothing to upload, whatever its flag says (the
+edit was lost in a crash or closed with Don't save, or it was taken back and
+saved). Such a copy opens and updates like a clean one, the listing, the
+close, quit and sign-out prompts and the replace guard all say it has no
+un-uploaded changes, and its open clears the flag. A copy whose base
+revision's survey is not known (one downloaded by an earlier version, or a
+restored revision) keeps its flag at its word, and so does a copy since an
+upload whose answer was lost: that upload may be SpeleoDB's latest revision, so
+an edit taken back after it is still uploaded. The mechanism is in
+[saving.md](saving.md#the-un-uploaded-mark-and-the-base-survey-digest).
+
 Uploading requires a nonblank change description, saves locally first, and verifies
 current permission and lock ownership against the server. Ordinary successful upload
 retains the lock. The same centered progress surface blocks the app during explicit
@@ -557,6 +641,44 @@ unresolved.
 Offline, failed or uncertain uploads never report success; the
 message and local work remain available for retry. Autosave and failed-autosave
 retry write only to the local SQLite file.
+
+Every upload checks, right before it is sent, that SpeleoDB's latest revision is
+still the copy's base (fuzzer finding R3, same-account overwrite). The lock is the
+account's, so the same account signed in on another computer or in another window
+holds it too, and its revisions carry the same email: neither the lock nor the
+author says which session uploaded a revision. The one revision the check lets
+stand between the base and the latest is this session's own upload whose answer
+was lost (the #193 recovery), recognised by what this session recorded when it
+sent it (`core/state/speleodb_own_uploads.rs`: the revisions its uploads were
+answered with, and every upload whose answer never came, with its base and
+description, until an answer or an adoption settles it), never by the email. A
+revision with no description counts as that upload only on a server that keeps no
+descriptions at all: the upload always carries one, so where the history shows
+them, an undescribed revision on the base is someone else's. A
+retry sent while an earlier upload's fate was unknown keeps both: the earlier one
+may land late, under the retry, and is still this session's (F4R3-locks-push-5). Anything else there uploads nothing: Save Changes, Finish editing and
+the exit and sign-out uploads get `divergence_needed`, the divergence prompt
+opens, and the work, the lock and the base stay as they were. The status
+refresh uses the same rule, so the SpeleoDB tab shows the conflict before Save
+Changes is pressed, and every `divergence_needed` marks it at once, so a prompt
+cancelled before the next status refresh still leaves "Resolve synchronization
+conflict" on the tab (sdbdemo2, screenshot 16b). Taking the SpeleoDB version from the divergence prompt then
+releases nothing: this session goes on editing the other session's revision under
+the same lock, and the other session keeps the lock it edits under (demo item 2).
+SpeleoDB has no conditional upload, so a revision landing
+between that check and the upload still goes under ours; the history read right
+after the upload finds it, and the result names it (`replaced_revisions`), whatever
+the result: the landing, a landing with a late edit still to upload
+(`push_unconfirmed`), or the failure of the release after it (on the error). A
+banner of its own says which revision the upload replaced and that it is still in
+the Revision History (view or restore it there); it stays until dismissed, beside
+whatever later push, release or Start editing reports (F4R3-locks-push-4). Every
+close that ran the upload (the exit and sign-out prompts, Save and Close, the
+older-version confirmation finishing a close or a quit) stops so the banner is
+read; the next close asks nothing. A revision one of this session's own unanswered
+uploads made is never reported as replaced. Publish's first upload goes through
+the same post-upload check; a project created a moment earlier cannot have been
+raced, so there it would only be logged.
 
 The upload dialog (Save Changes, and Finish editing when it has changes to
 upload) does not upload a survey with errors (validation issues of error
@@ -588,7 +710,8 @@ any work) and in `client::upload_stalx`, so no caller can send one
 (`speleodb/commit_message.rs`, mirrored by `src/utils/commitMessage.ts`).
 
 Save and Close carries its close intent through recovery and closes only after a
-confirmed upload and successful release, with no newer local changes. Cancellation,
+confirmed upload and successful release, with no newer local changes and no
+replaced revision to report (that upload stops on its banner). Cancellation,
 conflict, uncertainty and release failure leave the project open. Plain Close,
 including Hamburger Menu -> Close Project, project switching and Quit hand a
 clean session's lock back without a question, through the holder check (only a
@@ -614,7 +737,14 @@ nothing: the claim stays, unbound, so editing is already paused, and the in-app
 dialog "Couldn't hand back the lock" (`utils/speleoReleaseFailure`) asks. Like every
 other dialog, its body says what went wrong (with the reason of the last attempt)
 and what each answer does, and its buttons are in the one footer row: Cancel /
-Close and keep the lock / Retry (primary).
+Close and keep the lock / Retry (primary). A release that got no answer because of
+a transport failure carries its cause (`CommandResult.lock_release_transport`), and
+the reason is the line every read-only notice uses for that cause, naming the
+server and what to do ("Could not connect to SpeleoDB at <server>. ..."); the
+backend's `error` is shown only for any other failure, and names a transport
+failure in plain words too. The raw diagnostic ("Network error talking to SpeleoDB:
+..."), there and on every other SpeleoDB failure surface (`describeSpeleoError`), is
+only in the log (demo item 4).
 
 - Retry - the holder-checked release again. The dialog stays up, with the new
   reason, while it keeps failing; a lock SpeleoDB now says is someone else's (a
@@ -627,6 +757,12 @@ Close and keep the lock / Retry (primary).
   appears in the next sign-in's held-lock prompt.
 - Cancel - stay in the project, read-only: the switch or quit is abandoned
   (with any update restart riding on it), and Resume editing takes the lock again.
+
+Only a session that was editing knows it holds the lock. From a read-only session
+(whose claim is a pointer to a lock a lost lock request may or may not have taken)
+the body says Stalagmight could not check whether the account holds the lock, "If
+your account holds it, nobody else can edit the project until it is handed back",
+and words Close and keep the lock the same way (sdbdemo2, screenshot 06).
 
 A quit that first waited for a transfer (see below) is re-issued un-confirmed, so
 it reaches the same question rather than exiting. Any other close failure keeps
@@ -745,14 +881,30 @@ on, and every button is in the one footer row, Cancel first and the primary last
   offered only while we hold the open project's lock.
 - Other cached copies with un-uploaded work are always kept on this computer: the
   body names them (names only, no buttons) and says they can be opened and uploaded
-  after connecting again. Their edits and un-uploaded flag survive, and a lock held
-  on one is handed back with the others. The sign-out never discards another
-  project's work.
-- The remaining locks are listed as handed back. With nothing to answer for the open
-  project, the footer is Cancel / Disconnect.
+  after connecting again. Their edits and un-uploaded flag survive, and a lock this
+  run claims on one is handed back with the others. The sign-out never discards
+  another project's work.
+- The remaining locks this run claims (`lock_claimed_here`: taken here, or kept by a
+  close) are listed as handed back. With nothing to answer for the open project, the
+  footer is Cancel / Disconnect.
+- Any other lock the account holds, where this computer has something of the
+  project (a copy, a recent file), may be the lock Stalagmight on another computer
+  with this account is editing under, or one a session that did not exit cleanly
+  left. It is treated as the held-lock prompt treats it (sdbdemo2 issue 5): the body
+  says so in the prompt's words, each project offers "Release anyway", Disconnect
+  leaves it held, and Cancel keeps the initial focus. It used to be handed back
+  behind a plain Disconnect.
+- A lock this computer can positively not have taken is left alone and not listed:
+  no claim of this run, no local copy, not open, and no recent file linked to the
+  project (`lockNotTakenHere`). Signing out here strands nothing of this computer's
+  (demo item 1).
 
-Every answer hands the locks back and then disconnects, with Try again / Disconnect
-anyway (same footer row) when a release fails. There is no keep-the-lock answer.
+When SpeleoDB cannot be asked, the dialog opens on "Could not check your projects"
+with the cause in plain words from the start (Try again / Disconnect anyway).
+
+Every answer hands this run's locks back and then disconnects, with Try again /
+Disconnect anyway (same footer row) when a release fails. There is no keep-the-lock
+answer for them.
 The backend still guards `speleodb_discard_cached_copy` (which the sign-out no
 longer calls): it needs the explicit `discard_unpushed` consent for a copy with
 un-uploaded or unreadable work, and refuses a copy the signed-in account is not the
@@ -801,6 +953,37 @@ release, and SpeleoDB never expires a lock on its own: a lock left held stays he
 until the next sign-in's held-lock prompt or the SpeleoDB website releases it.
 Close, Quit and Save-and-Close retain their separate lifecycle behavior.
 
+The held-lock prompt ("Your account holds SpeleoDB write locks",
+`HeldLockResumeDialog`) lists, at sign-in and app start, every project whose lock
+SpeleoDB names this account as holding, except the one open. SpeleoDB's lock is the
+account's, so the list also holds the lock of the same account signed in on another
+computer, which may be editing under it right now, and nothing here can tell that
+live session from one that crashed (demo item 1). The body says both are possible
+and that releasing a lock while its session edits lets others change the project
+under it. Not now is the default (focused, so Enter keeps every lock). A row with
+changes only on this computer, or whose copy cannot be read, offers Continue editing
+instead of a release; any other row offers "Release anyway", the holder-checked
+release, so a crashed session's lock stays releasable. A row this computer can
+positively not have taken (no claim of this run, no local copy, not open, no recent
+file linked to the project) says "Held by this account, not by this computer". A
+clean copy here does not rule this computer out: a session that crashed over it
+leaves exactly that, and lock claims do not survive a restart.
+
+The home screen says the same about the same lock (sdbdemo2 issue 3, where the card
+behind the prompt said "You are editing"): a card, recents row or badge tooltip says
+"You are editing" only for a lock this run claims, "Held by this account, not by
+this computer" under the prompt's rule, and "Held by this account" when this
+computer cannot tell. And opening such a project does not take the lock over: the
+automatic Start Editing after an open (`speleodb_start_editing` with `afterOpen`)
+stops at a lock the account holds while this run holds no claim on it, before
+anything but the holder read is sent, and answers `locked_by` with the account's own
+email. The project opens read-only, the notice says the lock may be another
+computer's session's or a crashed one's and that Resume editing edits the project
+here too, and the SpeleoDB tab says "Read-only - your account holds the write lock".
+Resume editing, Start editing and the prompt's Continue editing take the lock as
+before; a lock this run claims (taken here, kept by a close) is resumed by the open
+too.
+
 ## Edit gate and lock claims
 
 The edit gate is not a stored flag. It is derived, on every read, from what is
@@ -828,15 +1011,31 @@ Editing inherited it.
   boundary (close, open, create, logout, sign-in, a rejected token) moves the
   generation on, which leaves any binding stale, so the gate shuts without the
   boundary having to remember it.
-- Take remote shuts the gate and releases the lock before it reloads the server
-  version, so the project comes back read-only; the frontend reopens it without
-  re-acquiring and offers Resume editing.
+- Take the SpeleoDB version (Take remote) releases nothing and leaves the claim as it
+  was: an edit session carries over its reload (the claim is still bound) and goes
+  on editing the server version, and a read-only one stays read-only. The session
+  goes on only while SpeleoDB still records this account's lock, read once right
+  before the reload (Reload Project's fast-forward does the same): when another
+  session of the account has handed it back, or someone else holds it, the reload
+  opens read-only and the "Editing stopped" notice says why (`editing_stopped`). A
+  holder read that gets no reply keeps the session; every upload reads the holder
+  again before it sends. The lock is
+  the account's, and another session of the same account may be editing under it;
+  releasing it here used to leave that session editing with no lock on the server
+  (demo item 2). The frontend reconciles the view in place without acquiring and
+  reads the edit state back from the backend. It never reloads through
+  `loadProject`: that is a project switch, whose `cancel_loading` moves the session
+  generation on and so ends the edit session the reload carried, which left Take
+  remote and a Resume editing that downloaded first read-only (sdbdemo2 issues 1
+  and 2). A reload whose re-read status still says read-only says so in the
+  "Still read-only" notice. An edit made after the confirmation, while the history
+  read or the download runs, refuses the reload and is kept.
 - A claim whose release failed is kept as an unbound pointer for a retry: the
   user's Retry in "Couldn't hand back the lock", or a later holder-checked
   release. It opens nothing.
 
 Every release - automatic (close, project switch, quit, restart-to-update, logout,
-account switch, unlink, Take remote, delete, Start Editing's unwind, the
+account switch, unlink, delete, Start Editing's unwind, the
 stranded-claim cleanup) or explicit (Save Changes and release with nothing to
 upload, the held-lock prompt's Release, Switch to Read Only) - first reads the lock
 holder and sends the release only when the server names the signed-in account.
@@ -856,6 +1055,18 @@ whose gate a lost lock or a sign-out already shut still ends its claim. The
 un-uploaded-work rule above applies to all of them except the explicit discard
 paths, and a claim deliberately kept (an earlier veto, Keep the lock, or the case
 below) is left alone by every automatic release.
+
+The releases that can run after a later session has started (a close, a project
+switch, a quit or the update restart, a delete, Start Editing's unwind after a
+session boundary, the stranded-claim cleanup) send nothing when a later session
+of the same account on the same server has claimed the project meanwhile: SpeleoDB
+treats that account's re-acquire as a no-op, so the later session holds the very
+lock the release would free, and the release counts as settled. The account is the
+one the release is for, not the one signed in when it runs. A claim of another
+account never stands a release down. Claims of other accounts are kept across a
+sign-in (each is the only local pointer to a lock that account may still hold), and
+none of them can hold this account's lock: if that account held the lock, this one
+would not, and the holder check sends nothing anyway.
 
 When Start Editing's fast-forward refuses to overwrite the managed cache copy
 because it holds un-uploaded work the open copy does not show, the lock it just

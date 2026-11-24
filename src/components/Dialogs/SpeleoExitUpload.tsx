@@ -7,17 +7,22 @@ import { SpeleoProgressOverlay } from './SpeleoProgressOverlay';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
 import { CommitMessageLimit } from './CommitMessageLimit';
 import { toastLateUploadOutcome } from '../../utils/lateUploadOutcome';
+import { landedOverReplacedRevisions } from '../../utils/speleoReplacedRevisions';
 
 /** Same bound the Save / Finish editing upload uses before it lets the user walk away. */
 export const UPLOAD_PROGRESS_LIMIT_MS = 120_000;
 
 /**
  * How an exit upload ended. `released`: uploaded, lock handed back, nothing newer
- * left behind. `diverged`: SpeleoDB moved on, and its own resolution dialog takes
- * over. `failed`: not uploaded; the failure notice is on screen. `newer`: the
- * upload landed but edits made meanwhile are still only local.
+ * left behind. `diverged`: SpeleoDB moved on (including another session of this
+ * account uploading first, R3), nothing was uploaded, and its own resolution
+ * dialog takes over. `failed`: not uploaded; the failure notice is on screen.
+ * `newer`: the upload landed but edits made meanwhile are still only local.
+ * `replaced`: the upload landed and the lock is back, but on top of revisions
+ * another session uploaded meanwhile (R3, the lost race); the project's banner
+ * names them, so the exit stops for the user to read it.
  */
-export type ExitUploadResult = 'released' | 'diverged' | 'failed' | 'newer';
+export type ExitUploadResult = 'released' | 'diverged' | 'failed' | 'newer' | 'replaced';
 
 /**
  * The upload the exit prompt and the sign-out run: the ordinary Finish editing
@@ -45,6 +50,7 @@ export function useSpeleoExitUpload() {
   const upload = async (message: string, isCurrent: () => boolean, isShown?: () => boolean): Promise<ExitUploadResult> => {
     setSlow(false);
     setUploading(true);
+    const replacedBefore = useSpeleoStore.getState().replacedRevisions;
     try {
       const resolved = await done(message, {
         isCurrent,
@@ -55,6 +61,10 @@ export function useSpeleoExitUpload() {
       });
       if (isShown && !isShown() && isCurrent()) toastLateUploadOutcome(resolved);
       if (resolved?.kind === 'divergence_needed') return 'diverged';
+      // An upload that landed over another session's revision stops the exit,
+      // whatever followed the landing: a late edit still to upload, or a failed
+      // release (that failure carries the report, which `done` raised).
+      if (landedOverReplacedRevisions(resolved) || replacedReported(replacedBefore)) return 'replaced';
       if (resolved?.kind !== 'released') return 'failed';
       if (useProjectStore.getState().isDirty || useSpeleoStore.getState().link?.hasUnpushedEdits) return 'newer';
       return 'released';
@@ -64,6 +74,12 @@ export function useSpeleoExitUpload() {
   };
 
   return { upload, uploading, slow, unwound };
+}
+
+/** Whether a report of replaced revisions (R3) reached the store since `before`. */
+function replacedReported(before: unknown): boolean {
+  const now = useSpeleoStore.getState().replacedRevisions;
+  return !!now?.length && now !== before;
 }
 
 /** The description field and the notices that sit around it. */

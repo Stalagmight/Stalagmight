@@ -556,10 +556,13 @@ impl AppState {
                 );
                 warnings.push(ValidationWarning {
                     code: "delete_project_lock_release_failed".to_string(),
+                    // The cause in plain words, never the raw diagnostic (the
+                    // log line above has it).
                     message: format!(
-                        "Project deleted, but its SpeleoDB write lock could not be released: {e}. \
+                        "Project deleted, but its SpeleoDB write lock could not be released: {}. \
                          Other divers stay locked out until it is released; you can release it \
-                         from the held-lock prompt or on the SpeleoDB website."
+                         from the held-lock prompt or on the SpeleoDB website.",
+                        e.user_reason()
                     ),
                     severity: WarningSeverity::Warning,
                     parts: None,

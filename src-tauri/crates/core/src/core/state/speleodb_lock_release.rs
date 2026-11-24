@@ -11,8 +11,11 @@
 //!
 //! The one exception is a release that CARRIES the user's discard decision:
 //! [`AppState::speleodb_close_discarding_local`] (close with `discard_local`) and
-//! the other explicit-abandon verbs (delete, unlink, take-remote), which destroy
-//! the local work before the lock goes back.
+//! the other explicit-abandon verbs (delete, unlink), which destroy the local
+//! work before the lock goes back. Taking the SpeleoDB version also discards
+//! the local work, but it releases nothing: the copy goes on under the same
+//! lock (`speleodb_take_remote`), which another session of the account may be
+//! editing under too.
 //!
 //! Deferred releases remain scoped to the account, project, and session that
 //! initiated them, so they cannot release a successor editing session's lock.
@@ -85,9 +88,9 @@ enum ReleaseIntent {
     /// are decided from the claim, so both may finish an owned claim after the
     /// edit gate has shut; they differ only in what the log says they were.
     Lifecycle,
-    /// A DELIBERATE abandon of the project's SpeleoDB identity (`speleodb_unlink`,
-    /// `speleodb_take_remote`): the user has said outright they are walking away
-    /// from the local work, so there is no future push for the veto to protect.
+    /// A DELIBERATE abandon of the project's SpeleoDB identity (`speleodb_unlink`):
+    /// the user has said outright they are walking away from the local work, so
+    /// there is no future push for the veto to protect.
     Abandon,
 }
 
@@ -175,10 +178,23 @@ pub(super) fn release_if_held_by_us(
     Ok(HolderCheckedRelease::Released)
 }
 
-/// The user-facing reason a release of the open project's lock did not happen,
-/// carried as the `error` of a result whose `lock_release` is `Failed`.
-fn release_failure_message(error: &SpeleoDbError) -> String {
-    format!("The SpeleoDB lock could not be handed back: {error}")
+/// The result of a release of the open project's lock that did not happen:
+/// `lock_release: Failed`, the reason as its `error`, and a transport failure's
+/// cause typed (`lock_release_transport`), which the frontend words the "Couldn't
+/// hand back the lock" dialog from. The reason names a transport failure's cause
+/// in plain words, never the raw diagnostic: that is in the log line every
+/// caller writes first (demo item 4).
+fn release_failure(error: &SpeleoDbError) -> CommandResult {
+    let transport = match error {
+        SpeleoDbError::Transport { cause, .. } => Some(*cause),
+        _ => None,
+    };
+    CommandResult::failure(format!(
+        "The SpeleoDB lock could not be handed back: {}",
+        error.user_reason()
+    ))
+    .with_lock_release(Some(LockReleaseOutcome::Failed))
+    .with_lock_release_transport(transport)
 }
 
 impl AppState {
@@ -339,6 +355,19 @@ impl AppState {
         Ok(Some(self.speleodb_claim_is_kept(project_id)))
     }
 
+    /// Whether a close of the open project now would try to hand its lock back:
+    /// the signed-in account holds a claim on it that nobody chose to keep. Such a
+    /// close asks SpeleoDB who holds the lock first, and asks "Couldn't hand back
+    /// the lock" when SpeleoDB cannot answer.
+    pub(super) fn speleodb_close_would_hand_back(&self) -> bool {
+        self.speleodb_open_link().is_ok_and(|link| {
+            matches!(
+                self.speleodb_open_claim_kept(&link.project_id),
+                Ok(Some(false))
+            )
+        })
+    }
+
     /// Record that the open project's lock is being kept on purpose (the exit
     /// prompt's "Keep the lock", and the update restart over un-uploaded work).
     ///
@@ -423,8 +452,7 @@ impl AppState {
             Ok(outcome) => self
                 .execute(Command::CloseProject)
                 .with_lock_release(outcome),
-            Err(error) => CommandResult::failure(release_failure_message(&error))
-                .with_lock_release(Some(LockReleaseOutcome::Failed)),
+            Err(error) => release_failure(&error),
         }
     }
 
@@ -446,8 +474,7 @@ impl AppState {
         }
         match self.speleodb_release_held_lock_on_close() {
             Ok(outcome) => CommandResult::success().with_lock_release(outcome),
-            Err(error) => CommandResult::failure(release_failure_message(&error))
-                .with_lock_release(Some(LockReleaseOutcome::Failed)),
+            Err(error) => release_failure(&error),
         }
     }
 
@@ -651,13 +678,15 @@ impl AppState {
     ) -> Result<(), SpeleoDbError> {
         // The capturing session's own claim was already cleared - by
         // `delete_project`, under the SAME `project` guard that snapshotted these
-        // params and decided the file's identity. So a claim naming this project
-        // when the release finally runs can only be a SUCCESSOR session's (a
-        // Start Editing that slipped into the gap and inherited the mutex via the
-        // server's same-account re-acquire no-op), and the reclaim-checked
-        // release stands down for it instead of freeing the lock out from under
-        // a live edit session (F8). Serialized under the lock-ops mutex, so the
-        // check and the POST cannot interleave with an acquire -> commit span.
+        // params and decided the file's identity. So a claim of THIS account
+        // naming this project when the release finally runs can only be a
+        // SUCCESSOR session's (a Start Editing that slipped into the gap and
+        // inherited the mutex via the server's same-account re-acquire no-op),
+        // and the reclaim-checked release stands down for it instead of freeing
+        // the lock out from under a live edit session (F8). Another account's
+        // claim on the project is no successor and is not counted (F4).
+        // Serialized under the lock-ops mutex, so the check and the POST cannot
+        // interleave with an acquire -> commit span.
         self.speleodb_release_unless_reclaimed(params)
     }
 

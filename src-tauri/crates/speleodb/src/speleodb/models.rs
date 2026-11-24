@@ -82,7 +82,9 @@ pub struct RevisionCommit {
     /// neither form.
     #[serde(default)]
     pub authored_date: Option<String>,
-    /// [#218] Commit message, for the history view. `None` if the server omits it.
+    /// [#218] Commit message, for the history view. `None` if the server omits it
+    /// or sends an empty (or blank) one, as an older server that keeps no
+    /// descriptions does (`client::get_revisions`).
     #[serde(default)]
     pub message: Option<String>,
 }
@@ -98,7 +100,7 @@ pub struct RevisionHistory {
 /// [#218] One commit projected for the frontend revision-history view. A read-only
 /// slice of [`RevisionCommit`] carrying only what the UI renders (no token, no
 /// server-internal fields). The list is server-ordered (newest first).
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub struct SpeleoRevision {
     /// 40-hex git commit SHA.
@@ -111,7 +113,7 @@ pub struct SpeleoRevision {
     /// with no zone (see [`RevisionCommit::authored_date`]); `None` when there is
     /// no time to show.
     pub authored_date: Option<String>,
-    /// Commit message, or `None` if the server omitted it.
+    /// Commit message, or `None` if the server omitted it or sent a blank one.
     pub message: Option<String>,
 }
 
@@ -170,6 +172,18 @@ pub struct SpeleoLocalProjectState {
     /// The UI must render this as UNKNOWN (and withhold the destructive choices),
     /// never as clean.
     pub state_unknown: bool,
+    /// This run of the app holds a claim of the signed-in account on the
+    /// project's write lock: since it started it took (or inherited) the lock and
+    /// has not handed it back - an edit session, a lock kept on purpose, a release
+    /// that failed. Claims are not persisted, so `false` says only that THIS run
+    /// points at no such lock, never that this computer did not take it (a run
+    /// that crashed leaves its lock with no claim after the restart).
+    ///
+    /// The held-lock prompt reads it with [`Self::has_local_copy`]: SpeleoDB's lock
+    /// is the account's, so the same account signed in on another computer holds
+    /// it too, and only a row with neither a claim nor a copy here is one this
+    /// computer cannot have taken (demo item 1).
+    pub lock_claimed_here: bool,
 }
 
 /// The active lock ("mutex") on a project, when one is held.
@@ -342,6 +356,14 @@ pub struct SpeleoOpenResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub offline: Option<bool>,
+    /// With [`Self::offline`], when SpeleoDB answered the history read and only
+    /// the download was lost: `true` when its latest revision is not the copy's
+    /// BASE (SpeleoDB has a newer revision than the copy that opened), `false`
+    /// when it is. Absent when nothing answered, so whether the copy is behind
+    /// is unknown (F1-transport-5).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub newer_on_server: Option<bool>,
     /// Preserve unsynced work when seeding the frontend's offline link state.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -422,6 +444,15 @@ pub enum DoneResult {
         #[serde(skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         undo_history_omitted: Option<bool>,
+        /// R3, the lost race: the revisions this upload took HEAD from, newest
+        /// first. Another session of the same account (which holds the same
+        /// per-account lock) landed them after the push checked that HEAD was
+        /// still BASE and before its upload did, so the server put ours on top
+        /// of them and their work is not in it. They are still in the project's
+        /// revision history. Absent in the ordinary case.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        replaced_revisions: Option<Vec<SpeleoRevision>>,
     },
     /// There was no edit session to finish: the backend's edit gate was already
     /// closed, so no lock was held, nothing was pushed and nothing was released.
@@ -436,14 +467,24 @@ pub enum DoneResult {
     /// this arm and route the user back through Start editing (re-login first if
     /// the token is gone).
     NotEditing,
-    /// The server diverged (a stranger commit between our base and the tip):
-    /// nothing was pushed, the lock + dirty bit are retained for the user to
-    /// reconcile (#198).
+    /// The server diverged (a commit between our base and the tip that this
+    /// session did not upload: a stranger's, or another session's of the same
+    /// account, R3): nothing was pushed, the lock + dirty bit are retained for
+    /// the user to reconcile (#198).
     DivergenceNeeded,
-    /// The push outcome was ambiguous (no confirmed server commit): the dirty bit
-    /// AND the lock are retained so a later retry recovers via ancestry (#193) -
-    /// no edits are lost.
-    PushUnconfirmed,
+    /// The push outcome was ambiguous (no confirmed server commit), or the upload
+    /// landed and an edit made after it started is not in it: the dirty bit AND
+    /// the lock are retained so a later retry recovers via ancestry (#193) or
+    /// uploads the late edit - no edits are lost.
+    PushUnconfirmed {
+        /// As on [`Self::Released`]: the revisions an upload that DID land took
+        /// HEAD from (R3), reported here rather than held back for a later
+        /// result the session may never reach (F4R3-locks-push-3). Absent in the
+        /// ordinary case.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        replaced_revisions: Option<Vec<SpeleoRevision>>,
+    },
 }
 
 /// Outcome of `speleodb_update` (#197): a read-only refresh of the open project
@@ -455,10 +496,47 @@ pub enum UpdateResult {
     /// Already at the server tip - nothing to do.
     UpToDate,
     /// Fast-forwarded to the server tip (re-pulled + reloaded the project).
-    FastForwarded { local_path: String },
+    FastForwarded {
+        local_path: String,
+        /// An edit session the reload would have carried, ended because SpeleoDB
+        /// no longer records this account's lock ([`EditingStopped`]); absent in
+        /// the ordinary case.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        editing_stopped: Option<EditingStopped>,
+    },
     /// The server diverged from our base AND we hold un-pushed local edits - the
     /// refresh cannot proceed without reconciliation (#198/#199, next batch).
     DivergenceNeeded,
+}
+
+/// Why an in-place reload that would have carried an edit session (Take the
+/// SpeleoDB version, Reload Project) reopened the project read-only instead:
+/// SpeleoDB, asked right before the reload, no longer records this account as
+/// the lock's holder (farm finding P2-take-remote-editable). The lock is the
+/// account's, so another session of the same account can hand it back (its
+/// Close), and the session's own claim cannot know.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../bindings/")]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EditingStopped {
+    /// SpeleoDB records no lock on the project: it was handed back elsewhere.
+    Released,
+    /// Someone else holds the lock now.
+    HeldBy { email: String },
+}
+
+/// Outcome of `speleodb_take_remote`: the copy now holds SpeleoDB's latest
+/// revision at `local_path`, which the frontend reloads.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../bindings/")]
+pub struct TakeRemoteResult {
+    pub local_path: String,
+    /// The edit session ended because SpeleoDB no longer records this account's
+    /// lock ([`EditingStopped`]); absent when it went on (or there was none).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub editing_stopped: Option<EditingStopped>,
 }
 
 /// Current backend session status, so the dialog can restore its view when
@@ -579,6 +657,11 @@ pub enum PushResult {
         #[serde(skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         undo_history_omitted: Option<bool>,
+        /// As on [`DoneResult::Released`]: the revisions this upload took HEAD
+        /// from (R3, the lost race), newest first; absent in the ordinary case.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        replaced_revisions: Option<Vec<SpeleoRevision>>,
     },
     /// There was no edit session to push from: the backend's edit gate was already
     /// closed, so no lock was held and nothing was uploaded. See
@@ -587,9 +670,15 @@ pub enum PushResult {
     NotEditing,
     /// The server diverged: nothing pushed, lock + dirty bit retained to reconcile.
     DivergenceNeeded,
-    /// Ambiguous push (no confirmed server commit): dirty bit + lock retained so a
-    /// retry recovers via ancestry (#193).
-    PushUnconfirmed,
+    /// Ambiguous push (no confirmed server commit), or a landed one with a late
+    /// edit not in it: dirty bit + lock retained so a retry recovers via
+    /// ancestry (#193) or uploads the late edit.
+    PushUnconfirmed {
+        /// As on [`DoneResult::PushUnconfirmed`].
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        replaced_revisions: Option<Vec<SpeleoRevision>>,
+    },
 }
 
 /// [Track A] #186/D-B2: the structured error the SpeleoDB IPC commands return.
@@ -632,6 +721,25 @@ pub struct SpeleoErrorDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub format_refused: Option<bool>,
+    /// R3, the lost race, on a failure that came AFTER an upload landed (the
+    /// holder-checked release of Done failed): the revisions that upload took
+    /// HEAD from, newest first, as on [`DoneResult::Released`]. The landing is
+    /// reported with the failure that followed it instead of waiting in a
+    /// record the session's end throws away (F4R3-locks-push-3). Absent on every
+    /// other error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub replaced_revisions: Option<Vec<SpeleoRevision>>,
+    /// `Some(true)` ONLY on a Start Editing failure after which this account may
+    /// hold the project's lock on SpeleoDB without editing under it: a lock
+    /// request that may have landed and that nothing could confirm either way.
+    /// This process keeps a pointer to it, so the next close asks SpeleoDB and
+    /// hands the lock back if it is this account's, or asks "Couldn't hand back
+    /// the lock" while SpeleoDB cannot answer. The read-only notice says so, so
+    /// that question is not a surprise. Absent on every other error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub lock_may_be_held: Option<bool>,
 }
 
 /// The local work a refused re-pull would have destroyed, carried on
@@ -702,6 +810,7 @@ mod tests {
         let open = serde_json::to_string(&SpeleoOpenResult {
             local_path: "/cache/project.stalx".to_owned(),
             offline: None,
+            newer_on_server: None,
             has_unpushed_edits: None,
             read_only: Some(SpeleoReadOnlyOpen::SessionExpired),
             other_owner: None,
@@ -720,6 +829,8 @@ mod tests {
             newer_schema: None,
             endpoint_refusal: None,
             format_refused: None,
+            replaced_revisions: None,
+            lock_may_be_held: None,
         })
         .expect("serialize error dto");
         // The single-writer hand-off DTOs (#194/#197) must also never carry a token
@@ -734,10 +845,12 @@ mod tests {
         .expect("serialize locked-by result");
         let done = serde_json::to_string(&DoneResult::Released {
             undo_history_omitted: Some(true),
+            replaced_revisions: None,
         })
         .expect("serialize done result");
         let update = serde_json::to_string(&UpdateResult::FastForwarded {
             local_path: "/cache/project.stalx".to_owned(),
+            editing_stopped: None,
         })
         .expect("serialize update result");
         // #204: the link-status DTO is authed-derived (permission + lock holder)
@@ -756,7 +869,10 @@ mod tests {
             project_id: Some("11111111-1111-1111-1111-111111111111".to_owned()),
         })
         .expect("serialize link status");
-        let push = serde_json::to_string(&PushResult::PushUnconfirmed).expect("serialize push");
+        let push = serde_json::to_string(&PushResult::PushUnconfirmed {
+            replaced_revisions: None,
+        })
+        .expect("serialize push");
 
         for json in [
             &login,
@@ -932,11 +1048,13 @@ mod tests {
         let plain = |v: &serde_json::Value| v.to_string();
         let released = serde_json::to_value(DoneResult::Released {
             undo_history_omitted: None,
+            replaced_revisions: None,
         })
         .expect("serialize");
         assert_eq!(plain(&released), r#"{"kind":"released"}"#);
         let pushed = serde_json::to_value(PushResult::Pushed {
             undo_history_omitted: Some(true),
+            replaced_revisions: None,
         })
         .expect("serialize");
         assert_eq!(
@@ -957,5 +1075,38 @@ mod tests {
         assert_eq!(noted["undo_history_omitted"], serde_json::json!(true));
         let refused = serde_json::to_value(publish(None, Some(true))).expect("serialize");
         assert_eq!(refused["upload_format_refused"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn a_landed_push_names_the_revisions_it_replaced_only_when_there_are_some() {
+        // R3, the lost race: the notice field rides the ordinary success, with
+        // what the frontend needs to name the revision; absent otherwise (above).
+        let revision = SpeleoRevision {
+            id: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            parent_ids: vec!["fedcba9876543210fedcba9876543210fedcba98".to_owned()],
+            author_email: "diver@example.com".to_owned(),
+            authored_date: Some("2026-11-21T10:00:00.000Z".to_owned()),
+            message: Some("Surveyed the sump".to_owned()),
+        };
+        let pushed = serde_json::to_value(PushResult::Pushed {
+            undo_history_omitted: None,
+            replaced_revisions: Some(vec![revision.clone()]),
+        })
+        .expect("serialize");
+        assert_eq!(pushed["kind"], "pushed");
+        assert_eq!(
+            pushed["replaced_revisions"][0]["message"],
+            "Surveyed the sump"
+        );
+        assert!(pushed.get("undo_history_omitted").is_none());
+        let released = serde_json::to_value(DoneResult::Released {
+            undo_history_omitted: None,
+            replaced_revisions: Some(vec![revision]),
+        })
+        .expect("serialize");
+        assert_eq!(
+            released["replaced_revisions"][0]["id"],
+            "0123456789abcdef0123456789abcdef01234567"
+        );
     }
 }

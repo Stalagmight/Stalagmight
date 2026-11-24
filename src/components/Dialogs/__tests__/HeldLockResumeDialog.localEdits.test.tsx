@@ -142,7 +142,7 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
 
     await userEvent.click(await screen.findByTestId(`speleodb-held-lock-continue-${DIRTY}`));
 
-    await waitFor(() => expect(loadProjectMock).toHaveBeenCalledWith('/cache/dirty.stalx'));
+    await waitFor(() => expect(loadProjectMock).toHaveBeenCalledWith('/cache/dirty.stalx', { acquireLock: false }));
     await waitFor(() =>
       expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(true),
     );
@@ -275,7 +275,7 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
 
     await userEvent.click(await screen.findByTestId(`speleodb-held-lock-continue-${DIRTY}`));
 
-    await waitFor(() => expect(loadProjectMock).toHaveBeenCalledWith('/cache/dirty.stalx'));
+    await waitFor(() => expect(loadProjectMock).toHaveBeenCalledWith('/cache/dirty.stalx', { acquireLock: false }));
     await waitFor(() =>
       expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(true),
     );

@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { isUnwoundNotEdited, useSpeleoStore } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
-import { getErrorMessage } from '../../utils/ipc';
+import { describeSpeleoError } from '../../utils/speleoError';
 import { holdsWriteLock } from '../../utils/quit';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
@@ -56,7 +56,7 @@ export default function SpeleoDiscardChangesDialog() {
     } catch (e) {
       openDialog('error', {
         title: t('speleodb.discardChanges.failedTitle'),
-        message: getErrorMessage(e, t('speleodb.discardChanges.failedMessage')),
+        message: describeSpeleoError(e, t('speleodb.discardChanges.failedMessage')),
       });
       setBusy(false);
     }

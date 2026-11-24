@@ -107,7 +107,7 @@ pub fn rename_project(original: &[u8], name: &str) -> Result<Vec<u8>, EncodeErro
 }
 
 /// The text of `original` when it is a complete version 2 file.
-fn complete_v2(original: &[u8]) -> Result<&str, EncodeError> {
+pub(super) fn complete_v2(original: &[u8]) -> Result<&str, EncodeError> {
     match sniff_detail(original) {
         Sniffed::V2(Some(token)) => match token.parse::<u64>() {
             Ok(VERSION) => {}
@@ -149,7 +149,7 @@ fn complete_v2(original: &[u8]) -> Result<&str, EncodeError> {
     })
 }
 
-fn top_members(text: &str) -> Result<Vec<Member<'_>>, EncodeError> {
+pub(super) fn top_members(text: &str) -> Result<Vec<Member<'_>>, EncodeError> {
     let top = members(text, MAX_SMALL_MEMBERS)
         .map_err(|e| EncodeError::Original(e.into_decode("the file", text, text)))?;
     let end = top
@@ -276,7 +276,7 @@ fn write_body(out: &mut Vec<u8>, top: &[Member<'_>]) {
 /// every other member verbatim: with `order`, its keys first in that order
 /// and the others after in file order; else in file order. A key missing
 /// from the original is added at its place in `order`, else at the end.
-fn replace_keys(
+pub(super) fn replace_keys(
     out: &mut Vec<u8>,
     raw: &RawValue,
     order: Option<&[&str]>,

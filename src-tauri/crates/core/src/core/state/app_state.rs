@@ -254,6 +254,11 @@ pub struct AppState {
     /// See `AppState::speleodb_verify_lock_if_expired`. Held only briefly, never
     /// across I/O.
     pub(super) speleodb_reverify: Mutex<Option<super::speleodb::PendingReverify>>,
+    /// What this session uploaded of the open project, and what a landed upload
+    /// replaced (R3): the push's licence to adopt a revision as its own landed
+    /// upload, and the report of a lost race. See `core::state::speleodb_own_uploads`.
+    /// Held only briefly, never across I/O.
+    pub(super) speleodb_own_uploads: Mutex<Option<super::speleodb_own_uploads::OwnUploadsRecord>>,
 }
 
 impl AppState {
@@ -317,6 +322,7 @@ impl AppState {
             speleodb_session_generation: AtomicU64::new(0),
             speleodb_lock_ops: Mutex::new(()),
             speleodb_reverify: Mutex::new(None),
+            speleodb_own_uploads: Mutex::new(None),
         })
     }
 
@@ -463,8 +469,13 @@ impl AppState {
             let mut link = file.speleo_link();
             let l = link.as_mut()?;
             let flipped = !l.has_unpushed_edits || l.last_edit_at.is_none();
+            let now = chrono::Utc::now();
             l.has_unpushed_edits = true;
-            l.last_edit_at = Some(chrono::Utc::now().to_rfc3339());
+            l.last_edit_at = Some(now.to_rfc3339());
+            // S2: this build keeps the BASE survey digest, so it vouches for the
+            // edit time it records - unless an edit by a writer that does not
+            // know the digest came first (F2-digest-2).
+            super::speleodb_base_survey::vouch_for_edit(&mut file.extras.local.speleodb, Some(now));
             file.set_speleo_link(link.as_ref());
             Some(flipped)
         });

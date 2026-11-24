@@ -1,9 +1,15 @@
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
-import { useSpeleoReadOnlyNotice } from '../../utils/autoAcquireSpeleoLock';
+import { useSpeleoReadOnlyNotice, type ReadOnlyNoticeKind } from '../../utils/autoAcquireSpeleoLock';
 import { DialogWrapper } from './DialogWrapper';
 import { Button } from '../common/Button';
+
+const TITLE: Record<ReadOnlyNoticeKind, string> = {
+  opened: 'speleodb.readOnlyNotice.title',
+  stillReadOnly: 'speleodb.readOnlyNotice.stillReadOnlyTitle',
+  lockLost: 'speleodb.readOnlyNotice.lockLostTitle',
+};
 
 export function SpeleoReadOnlyNotice() {
   const { t } = useTranslation();
@@ -13,7 +19,9 @@ export function SpeleoReadOnlyNotice() {
   if (!notice || notice.path !== path || notice.sessionGeneration !== generation) return null;
   const dismiss = () => useSpeleoReadOnlyNotice.setState({ notice: null });
   return (
-    <DialogWrapper title={t('speleodb.readOnlyNotice.title')} onClose={dismiss} size="sm" data-testid="speleodb-read-only-dialog">
+    <DialogWrapper
+      title={t(TITLE[notice.kind])}
+      onClose={dismiss} size="sm" data-testid="speleodb-read-only-dialog">
       <p className="text-sm text-text-secondary mb-4">{notice.message}</p>
       <div className="flex justify-end">
         <Button variant="primary" onClick={dismiss} data-testid="speleodb-read-only-continue">

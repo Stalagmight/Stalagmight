@@ -78,7 +78,7 @@ impl AppState {
     )]
     pub(super) fn speleodb_swap_in_revision(
         &self,
-        native: &Path,
+        (native, revision): (&Path, &str),
         dest: &Path,
         link: SpeleoLink,
         (policy, undo): (LocalEditsPolicy, InheritedUndo),
@@ -94,6 +94,8 @@ impl AppState {
         // The download is read and checked in memory (a legacy SQLite revision
         // migrated), then installed and opened in one commit, which also carries
         // the outgoing copy's view toggles across (`outgoing_display`).
+        // The bytes are `revision`'s: a View's BASE, so its digest is recorded; a
+        // Restore of anything but the tip sits on the tip, so none is (F2-digest-1).
         let prepared = self
             .prepare_download(
                 native,
@@ -101,7 +103,8 @@ impl AppState {
                 undo,
                 &super::speleodb_pull::download_decode_options(),
             )
-            .map_err(local_dto)?;
+            .map_err(local_dto)?
+            .holding_revision(Some(revision));
         // Review G-speleodb-8: a Restore stamps the copy un-pushed on top of the tip,
         // but a revision a newer Stalagmight saved opens read-only here, so its save,
         // and with it every push, is refused: a dirty copy holding the lock that only

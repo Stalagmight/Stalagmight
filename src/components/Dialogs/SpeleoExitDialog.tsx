@@ -106,9 +106,13 @@ function SpeleoExitPrompt({ request }: { request: SpeleoExitRequest }) {
     const shown = () => useSpeleoExitPrompt.getState().request?.id === request.id;
     const result = await upload(text, projectCurrent, shown);
     if (!isCurrent()) return 'stay';
-    if (result === 'diverged') {
+    if (result === 'diverged' || result === 'replaced') {
       // SpeleoDB moved under us: its own resolution dialog is the error surface,
-      // and this prompt gets out of its way. The exit does not happen.
+      // and this prompt gets out of its way. The exit does not happen. Likewise
+      // an upload that landed on top of revisions another session pushed
+      // meanwhile (R3): the project's banner names them, and leaving now would
+      // take that report away before it is read. The lock is back and nothing is
+      // left to upload, so the next close or quit asks nothing.
       request.settle(false);
       return 'stay';
     }

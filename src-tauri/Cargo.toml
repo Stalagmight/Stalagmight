@@ -83,6 +83,13 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls", "s
 # directly only so a handshake / certificate failure can be told apart by its
 # typed `rustls::Error` (TransportCause::Tls) instead of by error text.
 rustls = { version = "0.23", default-features = false, features = ["std"] }
+# Likewise the HTTP stack under reqwest (same versions, no extra features), named
+# only for their typed errors: a send failure reaches the app as the SDK's
+# `reqwest_middleware::Error`, and over plain HTTP a connection closed before the
+# reply is a `hyper::Error` with no I/O error under it (TransportCause::Dropped;
+# over TLS it is an I/O early end of file from rustls).
+hyper = { version = "1", default-features = false }
+reqwest-middleware = { version = "0.5", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "time", "net", "fs", "io-util"] }
 futures-util = "0.3"
 dotenvy = "0.15"

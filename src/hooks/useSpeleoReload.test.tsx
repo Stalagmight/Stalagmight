@@ -35,7 +35,10 @@ it('explicit discard is bound to the inspected session and reload suppresses acq
   await act(() => result.current.update());
   expect(mocks.ipc.mock.calls.map(([cmd]) => cmd)).toEqual(['speleodb_project_access_at', 'speleodb_update']);
   expect(mocks.ipc).toHaveBeenLastCalledWith('speleodb_update', { discardChanges: true, expected });
-  expect(load).toHaveBeenCalledWith('/remote.stalx', { acquireLock: false });
+  // Reconciled in place through the shared seam, never through `loadProject`: a
+  // project switch, whose `cancel_loading` would end an edit session the reload
+  // kept (sdbdemo2 issue 1). No acquisition either way.
+  expect(load).not.toHaveBeenCalled();
   expect(mocks.replace).toHaveBeenCalledOnce();
 });
 it('normal reload never acknowledges discard', async () => {

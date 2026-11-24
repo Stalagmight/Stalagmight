@@ -268,8 +268,14 @@ impl AppState {
                 }
                 let mut project = decoded.project;
                 project.file_path = Some(path.to_path_buf());
+                let bytes: Arc<[u8]> = Arc::from(bytes);
                 let mut file =
-                    FileState::from_v2(decoded.extras, fingerprint, Some(Arc::from(bytes)));
+                    FileState::from_v2(decoded.extras, fingerprint, Some(Arc::clone(&bytes)));
+                // A mark over exactly BASE's survey is stale (S2): the copy opens
+                // clean, and the open's local-only save writes that. It judges
+                // the bytes on disk, so an earlier version 2 file upgraded below
+                // is judged as the file it still is until its first save.
+                super::speleodb_base_survey::settle_on_open(&mut file, &bytes);
                 let mut history = file.saved_history.clone();
                 // An unreadable history member was already dropped by the
                 // decoder (tier 3); the banner says so.
@@ -529,10 +535,10 @@ impl AppState {
     }
 
     /// Write durable state the commit changed in memory only (a materialized
-    /// undo mode), now that no guard is held. The one write an open of a
-    /// version 2 file makes; it copies the file's history byte for byte
-    /// (review finding J-docs-tests-truth-3). A failure leaves it in memory
-    /// for the next save.
+    /// undo mode, a stale un-uploaded mark cleared), now that no guard is
+    /// held. The one write an open of a version 2 file makes; it copies the
+    /// file's history byte for byte (review finding J-docs-tests-truth-3). A
+    /// failure leaves it in memory for the next save.
     pub(super) fn persist_pending_local_state(&self) {
         if self.with_file(|f| f.local_pending) {
             if let Err(e) = self.persist_local_state_keeping_history() {

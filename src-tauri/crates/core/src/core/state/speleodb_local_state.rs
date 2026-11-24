@@ -38,7 +38,7 @@ use super::open_file::FileState;
 use super::AppState;
 use crate::models::SpeleoLink;
 use crate::persistence::legacy_link::{self, ReadOptions};
-use crate::persistence::stalx_v2::{self, Extras, Format};
+use crate::persistence::stalx_v2::{Extras, Format};
 use crate::speleodb::models::SpeleoLocalProjectState;
 use crate::speleodb::SpeleoDbError;
 
@@ -76,9 +76,11 @@ pub(super) enum LegacyRead {
 /// The SpeleoDB link of the `.stalx` at `path`, the one reader every link
 /// reader shares (plan 6.1): the identity from `speleodb` and the sync state
 /// from `local.speleodb` of a version 2 header, or the `speleo_link` row of a
-/// legacy file.
+/// legacy file. A version 2 copy marked un-uploaded that holds exactly its
+/// BASE survey reads as clean (`speleodb_base_survey`, S2): only such a copy
+/// is read whole.
 pub(super) fn probe_link(path: &Path, legacy: LegacyRead) -> FileLink {
-    let header = match stalx_v2::probe_path(path) {
+    let header = match super::speleodb_base_survey::probe_settled(path) {
         Ok(header) => header,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return FileLink::Missing,
         Err(e) => return FileLink::Unreadable(e.to_string()),
@@ -263,6 +265,7 @@ fn read_local_state_at(path: &Path) -> LocalRead {
             last_edit_at: link.last_edit_at,
             is_open: false,
             state_unknown: false,
+            lock_claimed_here: false,
         }),
         CachedLink::NotManaged => LocalRead::Known(SpeleoLocalProjectState::default()),
         CachedLink::Unreadable => LocalRead::Unreadable,
@@ -416,11 +419,16 @@ impl AppState {
                     last_edit_at: live.last_edit_at,
                     is_open: true,
                     state_unknown: false,
+                    lock_claimed_here: self.speleodb_holds_claim(project_id),
                 });
             }
         };
+        let lock_claimed_here = self.speleodb_holds_claim(project_id);
         let Some(live) = live else {
-            return Some(on_disk);
+            return Some(SpeleoLocalProjectState {
+                lock_claimed_here,
+                ..on_disk
+            });
         };
         Some(SpeleoLocalProjectState {
             has_local_copy: true,
@@ -428,6 +436,7 @@ impl AppState {
             last_edit_at: live.last_edit_at.or(on_disk.last_edit_at),
             is_open: true,
             state_unknown: false,
+            lock_claimed_here,
         })
     }
 
@@ -453,6 +462,7 @@ impl AppState {
                     last_edit_at: link.last_edit_at,
                     is_open: true,
                     state_unknown: false,
+                    lock_claimed_here: false,
                 },
             )
         });
@@ -510,11 +520,20 @@ impl AppState {
                         is_open: true,
                         state_unknown: cached.state_unknown
                             && !self.open_project_is_the_cached_copy(cache_root, &id),
+                        lock_claimed_here: false,
                     },
                     None => live,
                 };
                 out.insert(id, merged);
             }
+        }
+        // The claims of this run, joined last onto every row: whatever the disk
+        // says, a row this run holds a claim on is a lock this computer took (or
+        // inherited) and has not handed back. Only this run's, since claims are
+        // not persisted: `false` is "no pointer here now", never "this computer
+        // never took it" (a crashed run's lock has no claim after the restart).
+        for (id, state) in &mut out {
+            state.lock_claimed_here = self.speleodb_holds_claim(id);
         }
         out
     }
@@ -601,6 +620,7 @@ impl AppState {
         Some(crate::speleodb::SpeleoOpenResult {
             local_path: dest.to_string_lossy().into_owned(),
             offline: None,
+            newer_on_server: None,
             has_unpushed_edits: Some(true),
             read_only: None,
             other_owner: None,
@@ -1414,6 +1434,61 @@ mod tests {
         assert!(
             state.guard_local_edits(ID_A, &open_path).is_err(),
             "and that file's own un-pushed edits are still guarded"
+        );
+    }
+
+    /// Demo item 1: SpeleoDB's lock is the account's, so the held-lock prompt has
+    /// to say when a lock this account holds cannot be this computer's. A row
+    /// reports whether THIS run points at the lock (a claim of the signed-in
+    /// account, whatever the disk says); a claim of another account is not this
+    /// account's lock, and a copy alone is no claim.
+    /// Injection: drop the join at the end of the listing and the claimed row
+    /// reads unclaimed.
+    #[test]
+    fn a_row_says_whether_this_run_holds_a_claim_on_the_lock() {
+        const CLAIMED: &str = "33333333-3333-3333-3333-333333333333";
+        const THEIRS: &str = "44444444-4444-4444-4444-444444444444";
+        let temp = tempfile::TempDir::new().expect("temp");
+        let root = temp.path();
+        seed_cache(root, ID_A, false);
+        let state = AppState::new().expect("state");
+        let sign_in = |email: &str| {
+            let mut session = state.speleodb.lock().expect("session");
+            session.endpoint = Some(SERVER.to_owned());
+            session.email = Some(email.to_owned());
+        };
+        sign_in("someone.else@example.com");
+        state.speleodb_record_unbound_claim(THEIRS);
+        sign_in(ME);
+        state.speleodb_record_unbound_claim(CLAIMED);
+
+        let ids = [CLAIMED, THEIRS, ID_A, ID_B].map(str::to_owned).to_vec();
+        let rows = state.speleodb_local_project_states_in(Some(root), Some(ids));
+        let row = |id: &str| rows.get(id).expect("every asked id has a row").clone();
+
+        let claimed = row(CLAIMED);
+        assert!(claimed.lock_claimed_here, "this run points at the lock");
+        assert!(!claimed.has_local_copy, "with no copy here at all");
+        assert!(
+            !row(THEIRS).lock_claimed_here,
+            "another account's claim is not this account's lock"
+        );
+        let copy = row(ID_A);
+        assert!(
+            copy.has_local_copy && !copy.lock_claimed_here,
+            "a copy is no claim"
+        );
+        let nothing = row(ID_B);
+        assert!(
+            !nothing.has_local_copy && !nothing.state_unknown && !nothing.lock_claimed_here,
+            "nothing here at all"
+        );
+        assert!(
+            state
+                .local_copy_state(CLAIMED, &cache_path_in(root, CLAIMED))
+                .expect("a missing file is known")
+                .lock_claimed_here,
+            "the single-file form says the same"
         );
     }
 }

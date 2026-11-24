@@ -61,7 +61,8 @@ function ReleaseFailedPrompt({ request }: { request: ReleaseFailureRequest }) {
     >
       <div className="space-y-4" data-reason={request.reason}>
         <p className="text-sm text-text-secondary" data-testid="speleodb-release-failed-body">
-          {t('speleoReleaseFailed.body', { name: projectName, action: t(`speleoExitPrompt.action.${request.reason}`) })}
+          {t(request.lockCertain ? 'speleoReleaseFailed.body' : 'speleoReleaseFailed.bodyMaybeHeld',
+            { name: projectName, action: t(`speleoExitPrompt.action.${request.reason}`) })}
         </p>
         {detail && (
           <p role="alert" className="text-xs text-text-secondary break-words" data-testid="speleodb-release-failed-reason">
@@ -69,7 +70,7 @@ function ReleaseFailedPrompt({ request }: { request: ReleaseFailureRequest }) {
           </p>
         )}
         <p className="text-sm text-text-secondary" data-testid="speleodb-release-failed-choices">
-          {t('speleoReleaseFailed.choices')}
+          {t(request.lockCertain ? 'speleoReleaseFailed.choices' : 'speleoReleaseFailed.choicesMaybeHeld')}
         </p>
         <div className="flex flex-wrap justify-end gap-2 pt-4 border-t border-border" data-testid="speleodb-release-failed-footer">
           <Button onClick={cancel} disabled={working} data-testid="speleodb-release-failed-cancel">

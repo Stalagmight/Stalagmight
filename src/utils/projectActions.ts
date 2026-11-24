@@ -23,6 +23,7 @@ import { surfaceSaveFailure } from './saveFeedback';
 import { notifyIfFileReadOnly } from '../hooks/useEditingBlocked';
 import i18n from '../i18n';
 import { getErrorMessage, invokeIpc } from './ipc';
+import { describeSpeleoError } from './speleoError';
 import {
   ensureExtension,
   projectSaveFilters,
@@ -194,7 +195,7 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
     await invokeIpc('speleodb_unlink');
   } catch (e) {
     surfaceSaveFailure(
-      getErrorMessage(e, 'The local copy was saved, but detaching from SpeleoDB failed'),
+      describeSpeleoError(e, 'The local copy was saved, but detaching from SpeleoDB failed'),
       openDialog,
       { title: i18n.t('dialogs.saveFailure.detachTitle') },
     );

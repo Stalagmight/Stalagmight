@@ -10,8 +10,53 @@ import { dispatchProjectSave } from '../../utils/dispatchProjectSave';
 import { getSetAsideUploadMessage, getUploadContinuation, setUploadContinuation } from '../../utils/uploadContinuation';
 import { useSpeleoExitPrompt } from '../../utils/speleoExit';
 import { useSpeleoSignOut } from '../../utils/speleoSignOut';
+import { replacedRevisionsNotice } from '../../utils/speleoReplacedRevisions';
 
+/**
+ * The shell's SpeleoDB banners: the report of an upload that replaced another
+ * session's revisions (R3), in a slot of its own so no later outcome takes its
+ * place, above the banner of the last push, release or notice.
+ */
 export function SpeleoBanner() {
+  return (
+    <>
+      <SpeleoReplacedBanner />
+      <SpeleoActionBanner />
+    </>
+  );
+}
+
+/**
+ * [R3] The upload landed, but on top of revisions another session uploaded
+ * meanwhile: names them and where they still are. Persistent until dismissed
+ * (F4R3-locks-push-4): it is the only report of the lost race.
+ */
+function SpeleoReplacedBanner() {
+  const { t } = useTranslation();
+  const revisions = useSpeleoStore((s) => s.replacedRevisions);
+  const dismiss = useSpeleoStore((s) => s.dismissReplacedRevisions);
+  if (!revisions?.length) return null;
+  return (
+    <div
+      className="flex items-center justify-between gap-3 px-4 py-2 bg-warning-20 text-warning text-sm border-b border-border"
+      role="status"
+      data-testid="speleo-replaced-banner"
+      data-kind="replaced_revision"
+    >
+      <span>{replacedRevisionsNotice(t, revisions)}</span>
+      <button
+        type="button"
+        onClick={dismiss}
+        className="text-xs underline flex-shrink-0"
+        data-testid="speleo-replaced-banner-dismiss"
+      >
+        {t('common.actions.dismiss')}
+      </button>
+    </div>
+  );
+}
+
+function SpeleoActionBanner() {
   const { t } = useTranslation();
   const banner = useSpeleoStore((s) => s.banner);
   const dismissBanner = useSpeleoStore((s) => s.dismissBanner);

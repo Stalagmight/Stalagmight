@@ -283,8 +283,11 @@ async function authResult(page: Page): Promise<unknown> {
 const summary = (id: string, lockHolder: string | null) => ({
   id, name: `Synthetic ${id}`, permission: 'READ_AND_WRITE', lock_holder: lockHolder, type_tag: 'stalx', latest_commit_sha: null,
 });
-const localState = (unpushed: boolean) => ({
+// The locks below are this computer's own (`lock_claimed_here`, as the backend
+// reports a lock this run took or kept), so Disconnect hands them back.
+const localState = (unpushed: boolean, claimedHere = true) => ({
   has_local_copy: true, has_unpushed_edits: unpushed, last_edit_at: null, is_open: false, state_unknown: false,
+  lock_claimed_here: claimedHere,
 });
 
 test.describe('Sign-out never strands a lock or un-uploaded work', () => {
@@ -395,6 +398,33 @@ test.describe('Sign-out never strands a lock or un-uploaded work', () => {
     expect((await calls(page, 'close_project')).map((c) => c.args)).toEqual([{ releaseLock: true, discardLocal: true }]);
     expect(await calls(page, 'speleodb_discard_cached_copy')).toEqual([]);
     expect((await calls(page, 'speleodb_release_lock')).map((c) => c.args)).toEqual([{ projectId: 'x' }]);
+  });
+
+  // sdbdemo2 issue 5 (screenshots 27, 28): the account's lock that this computer
+  // never took, over a copy here (Stalagmight on another computer with this account
+  // may be editing under it), used to be handed back behind a plain Disconnect.
+  test('a lock this computer never took is asked about; Disconnect leaves it, Release anyway releases it', async ({ page }) => {
+    await seedLockedWithChanges(page);
+    await page.evaluate(() => {
+      const s = (window as unknown as { __E2E_TEST__: { speleoStore: { setState: (s: unknown) => void } } }).__E2E_TEST__.speleoStore;
+      s.setState({ link: null, remoteProjectId: null });
+    });
+    await setIpcOverrides(page, {
+      speleodb_list_projects: [summary('shared', ME), summary('other', ME)],
+      speleodb_local_project_states: { shared: localState(false, false), other: localState(false, false) },
+    });
+    await startAuthChange(page, { kind: 'logout' });
+    const section = page.getByTestId('speleodb-signout-held-unclaimed');
+    await expect(section).toContainText('did not take them');
+    await expect(section).toContainText('another computer with this account');
+    await expect(page.getByTestId('speleodb-signout-releasable')).toHaveCount(0);
+    await expect(page.getByTestId('speleodb-signout-cancel')).toBeFocused();
+
+    await page.getByTestId('speleodb-signout-release-anyway-shared').click();
+    await expect(page.getByTestId('speleodb-signout-unclaimed-shared')).toHaveCount(0);
+    await page.getByTestId('speleodb-signout-go').click();
+    await expect.poll(() => authResult(page)).toEqual({ ok: true });
+    expect((await calls(page, 'speleodb_release_lock')).map((c) => c.args)).toEqual([{ projectId: 'shared' }]);
   });
 
   test('a release that fails is reported; "Disconnect anyway" then signs out', async ({ page }) => {

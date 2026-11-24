@@ -796,7 +796,9 @@ impl AppState {
                 }
             }
             Err(e) => {
-                let reason = e.to_string();
+                // Shown in the removal's warning: a transport failure by its cause,
+                // never the raw diagnostic.
+                let reason = e.user_reason();
                 if matches!(e, crate::speleodb::SpeleoDbError::Transport { .. }) {
                     server.unreachable = Some(reason.clone());
                 }
@@ -812,7 +814,7 @@ impl AppState {
                 );
                 LockHandBack::Released
             }
-            Err(e) => LockHandBack::Unknown(e.message),
+            Err(e) => LockHandBack::Unknown(e.user_reason()),
         }
     }
 

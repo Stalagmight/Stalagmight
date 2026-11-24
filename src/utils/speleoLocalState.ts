@@ -72,3 +72,54 @@ export function localStateUnknown(
   if (!projectId) return false;
   return states[projectId]?.state_unknown === true;
 }
+
+/**
+ * Whether this computer can positively NOT have taken the write lock the account
+ * holds on `projectId` (demo item 1).
+ *
+ * SpeleoDB's lock belongs to the ACCOUNT, so the same account signed in on another
+ * computer holds it too, and the server cannot say which session took it. This
+ * computer can only rule itself out: the row was read (not `state_unknown`), there
+ * is no local copy, the project is not open, this run holds no claim on the lock
+ * (`lock_claimed_here`), and no recent file is linked to the project
+ * (`linkedHere`, a published copy kept outside the cache). A clean copy here is
+ * NOT enough: a session on this computer that crashed over it leaves exactly that,
+ * and claims are not persisted across a restart.
+ *
+ * A positive report only: no row, or a failed read, is "cannot tell" (false).
+ */
+export function lockNotTakenHere(
+  states: SpeleoLocalStateMap,
+  projectId: string | null | undefined,
+  linkedHere: boolean,
+): boolean {
+  if (!projectId || linkedHere) return false;
+  const state = states[projectId];
+  if (!state) return false;
+  return (
+    !state.has_local_copy &&
+    !state.state_unknown &&
+    !state.is_open &&
+    state.lock_claimed_here !== true
+  );
+}
+
+/**
+ * Where this account's write lock on `projectId` was taken, as far as this
+ * computer can tell (sdbdemo2 issue 3): `here` when this run holds a claim on it
+ * (`lock_claimed_here`), `elsewhere` when this computer can positively not have
+ * taken it ({@link lockNotTakenHere}), `unknown` otherwise (a copy here, a
+ * failed or missing read, a recent file linked to the project). Only `here`
+ * may say "You are editing": the Home card used to say it for every lock of
+ * the account, right behind the held-lock prompt's "not by this computer".
+ */
+export type SpeleoLockOrigin = 'here' | 'elsewhere' | 'unknown';
+
+export function speleoLockOrigin(
+  states: SpeleoLocalStateMap,
+  projectId: string | null | undefined,
+  linkedHere: boolean,
+): SpeleoLockOrigin {
+  if (projectId && states[projectId]?.lock_claimed_here === true) return 'here';
+  return lockNotTakenHere(states, projectId, linkedHere) ? 'elsewhere' : 'unknown';
+}

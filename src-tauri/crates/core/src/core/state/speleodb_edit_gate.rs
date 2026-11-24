@@ -236,7 +236,8 @@ impl AppState {
 
     /// SHUT the edit gate, keeping every claim as the pointer a later
     /// holder-checked release needs: lost or unverifiable ownership, a release
-    /// that ends the session, Take remote.
+    /// that ends the session. (Not Take remote: it keeps the lock and the
+    /// session, see `speleodb_take_remote`.)
     pub(super) fn speleodb_shut_edit_gate(&self) {
         self.speleodb
             .lock()
