@@ -69,6 +69,12 @@ export interface PillTheme {
    * their pills sink below the panel instead of the text being changed).
    */
   lift: 1 | -1;
+  /**
+   * The tinted boxes prose sits in besides the panel (the accent, warning and
+   * error washes at 10%), flattened on the panel: a prose glow is a
+   * wash, so it is held legible over each of them too (RS-NODOTS).
+   */
+  surfaces: string[];
 }
 
 /** A dot and, when it needs one, the ring that keeps it visible on the pill. */
@@ -149,6 +155,8 @@ export function pillTheme(tokens: {
   textPrimary: string;
   textSecondary: string;
   warningText: string;
+  /** Tinted box colours (any CSS colour, translucent ones flattened on the panel). */
+  surfaces?: readonly string[];
 }): PillTheme {
   const panel = tokens.panel.toLowerCase();
   const panelL = oklchOfHex(panel).L;
@@ -170,6 +178,7 @@ export function pillTheme(tokens: {
     warning: pushUntil(tokens.warningText.toLowerCase(), dark, reaches(edges, DOT_TARGET)),
     dark,
     lift,
+    surfaces: (tokens.surfaces ?? []).map((c) => lineHex(c, panel)).filter((c): c is string => c !== null),
   };
 }
 
@@ -342,28 +351,40 @@ function proseReachable(target: string, panel: string): string {
 export function prosePillColors(lineColor: string | null | undefined, theme: PillTheme): PillColors {
   const pill = pillColors(lineColor, theme);
   const tone = lineTone(lineHex(lineColor, theme.panel));
-  const panelL = oklchOfHex(theme.panel).L;
   const lineL = clamp(tone.L, 0, 1);
-  // A glow lightens a dark panel and darkens a light one; a pale line on a
-  // dark theme (a dark one on a light theme) goes furthest.
-  const toward = theme.dark ? 1 : -1;
+  // A pale line on a dark theme (a dark one on a light theme) goes furthest,
+  // spread over the room the theme's text leaves (`proseRoom`).
   const pole = theme.dark ? lineL : 1 - lineL;
-  const want = PROSE_LIFT.near + (PROSE_LIFT.far - PROSE_LIFT.near) * pole;
+  const room = proseRoom(theme);
+  const far = room >= PROSE_LIFT.near + PROSE_SPREAD_MIN ? room : PROSE_LIFT.far;
+  const want = PROSE_LIFT.near + (far - PROSE_LIFT.near) * pole;
   const C = Math.min(tone.C * PROSE_CHROMA.share, PROSE_CHROMA.max);
+  return proseFurthest(pill, theme, want, C, tone.h).colors;
+}
+
+/**
+ * The prose colours at the furthest lift up to `want` whose words keep their
+ * floors (they only get harder further from the panel, so found by halving),
+ * or at `PROSE_LIFT.least` when even that one fails.
+ */
+function proseFurthest(pill: PillColors, theme: PillTheme, want: number, C: number, h: number): { colors: PillColors; lift: number } {
+  const panelL = oklchOfHex(theme.panel).L;
+  // A glow lightens a dark panel and darkens a light one.
+  const toward = theme.dark ? 1 : -1;
   const apart = Math.min(PROSE_MUTED_APART, contrastOfHex(theme.text, theme.muted));
-  const on = (bg: string) => (min: number) => (c: string) => contrastOfHex(c, bg) >= min && contrastOfHex(c, theme.panel) >= min;
   const [textMin, mutedMin] = [TEXT_TARGET * PROSE_SPARE, MUTED_TARGET * PROSE_SPARE];
   const at = (d: number): { colors: PillColors; ok: boolean } => {
-    const bg = proseReachable(hexOfOklch({ L: clamp(panelL + toward * d, 0, 1), C, h: tone.h }), theme.panel);
-    const text = pushUntil(pill.text, theme.dark, on(bg)(textMin));
-    const muted = pushUntil(pill.muted, theme.dark, on(bg)(mutedMin));
-    const ok = on(bg)(textMin)(text) && on(bg)(mutedMin)(muted) && contrastOfHex(text, muted) >= apart;
+    const bg = proseReachable(hexOfOklch({ L: clamp(panelL + toward * d, 0, 1), C, h }), theme.panel);
+    // The glow and what it gives over every surface prose sits on, and those surfaces bare.
+    const under = proseBackdrops(bg, theme);
+    const on = (min: number) => (c: string) => under.every((u) => contrastOfHex(c, u) >= min);
+    const text = pushUntil(pill.text, theme.dark, on(textMin));
+    const muted = pushUntil(pill.muted, theme.dark, on(mutedMin));
+    const ok = on(textMin)(text) && on(mutedMin)(muted) && contrastOfHex(text, muted) >= apart;
     return { colors: { ...pill, bg, hoverBg: theme.panel, text, muted }, ok };
   };
-  // The floors only get harder further from the panel: the furthest lift up
-  // to `want` that keeps them, found by halving.
   const wanted = at(want);
-  if (wanted.ok) return wanted.colors;
+  if (wanted.ok) return { colors: wanted.colors, lift: want };
   let lo = at(PROSE_LIFT.least);
   let [near, far]: [number, number] = [PROSE_LIFT.least, want];
   for (let i = 0; i < 12 && lo.ok; i++) {
@@ -372,7 +393,41 @@ export function prosePillColors(lineColor: string | null | undefined, theme: Pil
     if (m.ok) [lo, near] = [m, mid];
     else far = mid;
   }
-  return lo.colors;
+  return { colors: lo.colors, lift: near };
+}
+
+/** Below this much room past `PROSE_LIFT.near` the band is not spread: every grey glows alike (nord). */
+const PROSE_SPREAD_MIN = 0.04;
+
+const roomCache = new WeakMap<PillTheme, number>();
+
+/**
+ * How far a neutral prose glow can leave the panel on `theme` with its words
+ * legible on it and on the tinted surfaces (at most `PROSE_LIFT.far`): the
+ * band a pole-most line takes, so a theme whose text leaves less room spreads
+ * the greys over what there is instead of piling the palest together.
+ */
+function proseRoom(theme: PillTheme): number {
+  const cached = roomCache.get(theme);
+  if (cached !== undefined) return cached;
+  const room = proseFurthest(pillColors(null, theme), theme, PROSE_LIFT.far, 0, 0).lift;
+  roomCache.set(theme, room);
+  return room;
+}
+
+/**
+ * Everything a prose pill's words can sit on for a glow of colour `bg` (over
+ * the panel): the glow, the panel, and each of the theme's tinted surfaces,
+ * bare and under the glow's wash ({@link PROSE_ALPHA}, the colour that gives
+ * `bg` over the panel).
+ */
+export function proseBackdrops(bg: string, theme: PillTheme): string[] {
+  const o = proseOverlayOf(bg, theme.panel);
+  const wash = (s: string) => {
+    const p = rgbOfHex(s);
+    return hexOfRgb(...(p.map((v, i) => v + o.alpha * (o.rgb[i]! / 255 - v)) as [number, number, number]));
+  };
+  return [bg, theme.panel, ...theme.surfaces, ...theme.surfaces.map(wash)];
 }
 
 /**
@@ -422,18 +477,26 @@ export function pillThemeOf(themeName: string): PillTheme {
   const cached = themeCache.get(themeName);
   if (cached) return cached;
   const all = themeTokens as Record<string, Record<string, string> | undefined>;
-  const t = all[themeName] ?? themeTokens.dark;
+  const t: Record<string, string> = all[themeName] ?? themeTokens.dark;
   const theme = pillTheme({
     panel: t['--cc-panel']!,
     textPrimary: t['--cc-text-primary']!,
     textSecondary: t['--cc-text-secondary']!,
     warningText: t['--cc-warning-text']!,
+    surfaces: PROSE_SURFACES.map((k) => t[k]).filter((c): c is string => c !== undefined),
   });
   themeCache.set(themeName, theme);
   return theme;
 }
 
 const themeCache = new Map<string, PillTheme>();
+
+/**
+ * The theme tokens of the tinted boxes prose sits in (dialog notes, the
+ * conversion banner, the Station details box). No prose sits on a 20% wash
+ * (only the data table's view toggle uses one).
+ */
+const PROSE_SURFACES = ['--cc-accent-10', '--cc-warning-10', '--cc-error-10'];
 const colorCache = new Map<string, PillColors>();
 
 /** {@link pillColors} for a named app theme, cached per (theme, colour). */

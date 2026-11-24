@@ -36,7 +36,7 @@
  */
 import type { CSSProperties } from 'react';
 import { contrastOfHex, oklabOf, rgbOfOklab, hexOfRgb } from './cssColor';
-import { PILL_MUTED_MIN, PILL_TEXT_MIN, pillThemeOf, proseTintOf, type PillColors } from './pillColors';
+import { PILL_MUTED_MIN, PILL_TEXT_MIN, pillThemeOf, proseBackdrops, proseTintOf, type PillColors } from './pillColors';
 
 /** How far a segment fades at a seam; the cross-fade is twice this, centred on the seam. */
 export const SEAM_EM = 0.4;
@@ -233,11 +233,13 @@ export function linkBridgeStyle(left: PillColors, right: PillColors, themeName: 
 export function proseSegmentStyle(own: PillColors, near: Neighbours, themeName: string): CSSProperties {
   const theme = pillThemeOf(themeName);
   // The glow's stops toward each neighbour (own colour to the midpoint, as
-  // `blendBackdrops` samples them) and what is painted between them.
-  const under = [theme.panel, own.bg];
+  // `blendBackdrops` samples them) and what is painted between them, over
+  // the panel and over every tinted surface prose sits on.
+  const path = [own.bg];
   for (const other of [near.left, near.right]) {
-    if (other && other.bg !== own.bg) under.push(...painted([own.bg, ...[...BLEND_SAMPLES].reverse().map((t) => mixHex(own.bg, other.bg, t))]));
+    if (other && other.bg !== own.bg) path.push(...painted([own.bg, ...[...BLEND_SAMPLES].reverse().map((t) => mixHex(own.bg, other.bg, t))]));
   }
+  const under = path.flatMap((c) => proseBackdrops(c, theme));
   const others = [near.left, near.right].filter((c): c is PillColors => c !== null);
   return {
     '--pill-text': readableOn([own.text, ...others.map((c) => c.text), theme.text], under, PILL_TEXT_MIN + 0.1, theme.dark),
@@ -249,7 +251,7 @@ export function proseSegmentStyle(own: PillColors, near: Neighbours, themeName: 
 /** The arrow of a prose pill: a bridge, its text in a colour that reads on every colour under it. */
 export function proseBridgeStyle(left: PillColors, right: PillColors, themeName: string): CSSProperties {
   const theme = pillThemeOf(themeName);
-  const under = [theme.panel, ...painted(BRIDGE_SAMPLES.map((t) => mixHex(left.bg, right.bg, t)))];
+  const under = painted(BRIDGE_SAMPLES.map((t) => mixHex(left.bg, right.bg, t))).flatMap((c) => proseBackdrops(c, theme));
   return {
     '--pill-text': readableOn([left.text, right.text, theme.text], under, PILL_TEXT_MIN + 0.1, theme.dark),
     '--pill-muted': readableOn([left.muted, right.muted, theme.muted], under, PILL_MUTED_MIN + 0.1, theme.dark),

@@ -61,10 +61,13 @@ describe('prose segments (RS-BLEND, RS-NODOTS)', () => {
     const black = prosePillColorsOf('#101010', 'dark');
     const white = prosePillColorsOf('#f6f6f2', 'dark');
     const style = proseSegmentStyle(black, { left: null, right: white }, 'dark') as Record<string, string>;
-    const seam = mixHex(black.bg, white.bg, 0.5);
-    expect(contrastOfHex(black.muted, seam)).toBeLessThan(4.5);
-    expect(contrastOfHex(style['--pill-muted']!, seam)).toBeGreaterThanOrEqual(4.5);
-    expect(contrastOfHex(style['--pill-text']!, seam)).toBeGreaterThanOrEqual(7);
+    for (const t of [1, 0.875, 0.75, 0.625, 0.5]) {
+      const under = mixHex(black.bg, white.bg, t);
+      expect(contrastOfHex(style['--pill-muted']!, under)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastOfHex(style['--pill-text']!, under)).toBeGreaterThanOrEqual(7);
+    }
+    // The near-white glow's own words are the ones that read there.
+    expect(style['--pill-muted']).toBe(white.muted);
   });
 });
 

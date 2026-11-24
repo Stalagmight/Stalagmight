@@ -20,6 +20,7 @@ import {
   PILL_TEXT_MIN,
   PROSE_ALPHA,
   pillThemeOf,
+  proseBackdrops,
   prosePillColors,
   prosePillColorsOf,
   proseTintOf,
@@ -43,15 +44,16 @@ function sweepColors(): string[] {
 const COLORS = sweepColors();
 
 describe('prosePillColors sweep', () => {
-  it.each(THEMES)('%s: text 7:1, muted 4.5:1 on the tint and on the panel', (name) => {
+  it.each(THEMES)('%s: text 7:1, muted 4.5:1 on the glow, the panel and the tinted boxes, bare and under the glow', (name) => {
     const theme = pillThemeOf(name);
+    expect(theme.surfaces.length).toBe(3);
     const failures: string[] = [];
     const check = (label: string, value: number, min: number) => {
       if (!(value >= min)) failures.push(`${label} ${value.toFixed(2)} < ${min}`);
     };
     for (const color of COLORS) {
       const p = prosePillColors(color, theme);
-      for (const [where, bg] of [['tint', p.bg], ['panel', theme.panel]] as const) {
+      for (const [where, bg] of proseBackdrops(p.bg, theme).map((b, i) => [String(i), b] as const)) {
         check(`${color} ${where} text`, contrastRatio(p.text, bg), PILL_TEXT_MIN);
         check(`${color} ${where} muted`, contrastRatio(p.muted, bg), PILL_MUTED_MIN);
       }
@@ -88,8 +90,10 @@ describe('prosePillColors sweep', () => {
     const off = (c: string) => Math.abs(oklchOfHex(prosePillColors(c, theme).bg).L - panelL);
     const [white, grey, black] = [off('#f6f6f2'), off('#808080'), off('#101010')];
     const [near, mid, far] = theme.dark ? [black, grey, white] : [white, grey, black];
-    expect(mid - near).toBeGreaterThan(0.03);
-    expect(far - mid).toBeGreaterThan(0.03);
+    // Spread over the room the theme's text leaves: 0.04 to 0.05 of OKLCH
+    // lightness apart on the light themes, 0.026 to 0.05 on the dark ones.
+    expect(mid - near).toBeGreaterThan(0.02);
+    expect(far - mid).toBeGreaterThan(0.02);
   });
 
   it.each(THEMES)("%s: a coloured line's glow keeps its hue", (name) => {

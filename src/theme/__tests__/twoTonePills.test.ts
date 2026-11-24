@@ -28,6 +28,7 @@ import {
   pillColors,
   pillColorsOf,
   pillThemeOf,
+  proseBackdrops,
   prosePillColors,
   prosePillColorsOf,
   type PillColors,
@@ -128,6 +129,9 @@ function blendedColours(own: PillColors, near: Neighbours, panel?: string): stri
   return out;
 }
 
+/** A prose glow's colours over the panel as they also fall on every tinted surface of `theme` (`proseBackdrops`). */
+const onSurfaces = (colours: readonly string[], theme: string) => colours.flatMap((c) => proseBackdrops(c, pillThemeOf(theme)));
+
 /** The text and muted colours a segment is painted with (its style's), on every colour of it. */
 function checkBlended(label: string, style: Record<string, string>, on: readonly string[], failures: string[]) {
   for (const bg of on) {
@@ -162,8 +166,8 @@ describe.each(['link', 'prose'] as const)('blended two-tone %s pills (RS-BLEND)'
       const onB = blendedColours(B, { left: A, right: null }, panel);
       const styleA = segmentStyle(variant, A, { left: null, right: B }, name);
       const styleB = segmentStyle(variant, B, { left: A, right: null }, name);
-      checkBlended(`${shotLine}|${owner} shot half`, styleA, panel ? [...onA, panel] : onA, failures);
-      checkBlended(`${shotLine}|${owner} owner half`, styleB, panel ? [...onB, panel] : onB, failures);
+      checkBlended(`${shotLine}|${owner} shot half`, styleA, panel ? onSurfaces(onA, name) : onA, failures);
+      checkBlended(`${shotLine}|${owner} owner half`, styleB, panel ? onSurfaces(onB, name) : onB, failures);
     }
     expect(failures.slice(0, 20)).toEqual([]);
   });
@@ -177,7 +181,7 @@ describe.each(['link', 'prose'] as const)('blended two-tone %s pills (RS-BLEND)'
       const [H, F, T] = [of(head), of(from), of(to)];
       const near = { left: H, right: T };
       const on = blendedColours(F, near, panel);
-      checkBlended(`${head}|${from}|${to} middle`, segmentStyle(variant, F, near, name), panel ? [...on, panel] : on, failures);
+      checkBlended(`${head}|${from}|${to} middle`, segmentStyle(variant, F, near, name), panel ? onSurfaces(on, name) : on, failures);
     }
     expect(failures.slice(0, 20)).toEqual([]);
   });
@@ -224,7 +228,7 @@ describe.each(['link', 'prose'] as const)('the arrow of a two-tone %s pill reads
       const R = of(b);
       const css = style(L, R, name) as Record<string, string>;
       const text = css['--pill-text']!;
-      for (const bg of bridgeColours(L, R, panel)) {
+      for (const bg of variant === 'prose' ? onSurfaces(bridgeColours(L, R, panel), name) : bridgeColours(L, R, panel)) {
         if (contrastRatio(text, bg) < PILL_TEXT_MIN) failures.push(`${a}->${b} arrow ${text} on ${bg}`);
       }
     }
