@@ -1823,8 +1823,8 @@ button.sh-apill {
 }
 .sh-lpill-seg.sh-lpill-seg--arrow {
   flex: none;
-  padding-left: 0.25em;
-  padding-right: 0.25em;
+  padding-left: 0.32em;
+  padding-right: 0.32em;
 }
 .sh-lpill--split:hover:not([aria-disabled='true']) .sh-lpill-seg {
   background:
@@ -1972,7 +1972,6 @@ button.sh-apill {
 .sh-ppill-mark {
   margin-left: 0.14em;
   padding: 0 calc(0.21em + 1px);
-  vertical-align: 0.06em;
   background: radial-gradient(
     circle closest-side,
     var(--mark-dot) calc(100% - 1.25px),
