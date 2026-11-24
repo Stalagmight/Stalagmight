@@ -9,7 +9,7 @@
  * segment's middle fails "the prose fade is centred on the seam".
  */
 import { describe, expect, it } from 'vitest';
-import { linkSegmentStyle, mixHex, proseSegmentStyle, proseSegmentTint, SEAM_EM } from '../pillBlend';
+import { linkBridgeStyle, linkSegmentStyle, mixHex, proseBridgeTint, proseSegmentStyle, proseSegmentTint, SEAM_EM } from '../pillBlend';
 import { pillColorsOf, pillThemeOf, prosePillColorsOf } from '../pillColors';
 
 const stops = (gradient: string) => {
@@ -68,5 +68,49 @@ describe('prose segments (RS-BLEND)', () => {
     expect(style['--seg-tint']).toMatch(/^url\("data:image\/svg\+xml,/);
     expect(style['--pill-text']).toBe(A.text);
     expect(style['--pill-dot']).toBe(A.dot);
+  });
+});
+
+/**
+ * RS-ARROW: the blend between the from and the to half is centred on the
+ * arrow: the arrow is a bridge segment whose colour runs from the from
+ * half's colour (its left edge) to the to half's (its right edge), the
+ * midpoint at its middle; the halves keep their own colour up to it.
+ * Injection: a bridge with its stops reversed fails "runs from the from
+ * half's colour to the to half's".
+ */
+describe('the arrow bridge (RS-ARROW)', () => {
+  const L = pillColorsOf('#ffe600', 'light');
+  const R = pillColorsOf('#1f4fff', 'light');
+  const arrow = linkBridgeStyle(L, R, 'light') as Record<string, string>;
+  const from = linkSegmentStyle(L, { left: null, right: L }, 'light') as Record<string, string>;
+  const to = linkSegmentStyle(R, { left: R, right: null }, 'light') as Record<string, string>;
+
+  it("runs from the from half's colour to the to half's, the midpoint on the arrow's middle", () => {
+    for (const [key, pick] of [
+      ['--seg-fill', (c: typeof L) => c.bg],
+      ['--seg-fill-hover', (c: typeof L) => c.hoverBg],
+      ['--seg-edge', (c: typeof L) => c.border],
+      ['--seg-edge-hover', (c: typeof L) => c.hoverBorder],
+    ] as const) {
+      const s = stops(arrow[key]!);
+      expect(s[0]).toBe(pick(L));
+      expect(s[2]).toBe(mixHex(pick(L), pick(R), 0.5));
+      expect(lastOf(s)).toBe(pick(R));
+      // The halves meet it in their own colour.
+      expect(lastOf(stops(from[key]!))).toBe(pick(L));
+      expect(stops(to[key]!)[0]).toBe(pick(R));
+    }
+    expect(arrow['--seg-fill']).toContain(`${mixHex(L.bg, R.bg, 0.5)} 50.00%`);
+  });
+
+  it('a prose bridge fades only top and bottom between its halves', () => {
+    const panel = pillThemeOf('light').panel;
+    const svg = decodeURIComponent(
+      /data:image\/svg\+xml,(.*)"\)$/.exec(proseBridgeTint(L, R, panel, { left: true, right: true }))?.[1] ?? '',
+    );
+    expect(svg).toMatch(/linearGradient id='f' x1='0' y1='0' x2='0' y2='1'/);
+    const half = svg.match(/stop offset='0\.5000'/g);
+    expect(half).toHaveLength(1);
   });
 });

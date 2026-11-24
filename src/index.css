@@ -1805,6 +1805,20 @@ button.sh-apill {
   position: relative;
   margin-left: -1px;
 }
+/* The arrow is a segment of its own (RS-ARROW): its fill and border run
+   from the from half's colour to the to half's, so the cross-fade is
+   centred on the arrow. The halves beside it give up their padding on that
+   side, so the arrow keeps the one-colour pill's spacing and the blend
+   spans the arrow and the space around it. */
+.sh-lpill-seg.sh-lpill-seg--to-arrow {
+  padding-right: 0;
+}
+.sh-lpill-seg.sh-lpill-seg--from-arrow {
+  padding-left: 0;
+}
+.sh-lpill-seg--arrow {
+  flex: none;
+}
 .sh-lpill--split:hover:not([aria-disabled='true']) .sh-lpill-seg {
   background:
     var(--seg-fill-hover, linear-gradient(var(--pill-bg-hover), var(--pill-bg-hover))) padding-box,
@@ -1910,6 +1924,28 @@ button.sh-apill {
   color: var(--pill-text);
   -webkit-box-decoration-break: slice;
   box-decoration-break: slice;
+}
+/* The arrow's segment carries its own spaces (RS-ARROW); the halves beside
+   it give up their padding on that side. */
+.sh-ppill-seg.sh-ppill-seg--to-arrow {
+  padding-right: 0;
+}
+.sh-ppill-seg.sh-ppill-seg--from-arrow {
+  padding-left: 0;
+}
+.sh-ppill-seg.sh-ppill-seg--arrow {
+  padding: 0;
+}
+/* A wrap never separates the arrow from either end (RS-ARROW): the join is
+   nowrap, so no break falls at its spaces or between its parts, while each
+   end's own words (`.sh-ppill-end`, a half) still wrap between them. */
+.sh-ppill-join {
+  white-space: nowrap;
+}
+.sh-ppill-join > .sh-ppill-end,
+.sh-ppill-join > .sh-ppill-seg--to-arrow,
+.sh-ppill-join > .sh-ppill-seg--from-arrow {
+  white-space: normal;
 }
 .sh-ppill-nw {
   white-space: nowrap;

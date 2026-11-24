@@ -38,7 +38,7 @@ import {
   type PillDot,
 } from '../../theme/pillColors';
 import { SHOT_ARROW } from '../../utils/formatters';
-import { blendBackdrops, linkSegmentStyle, proseSegmentStyle } from '../../theme/pillBlend';
+import { blendBackdrops, linkBridgeStyle, linkSegmentStyle, proseBridgeStyle, proseSegmentStyle } from '../../theme/pillBlend';
 import { lineDisplayName } from '../../utils/stationIdentity';
 import i18n from '../../i18n';
 
@@ -140,9 +140,11 @@ export function useResolvePill(variant: 'link' | 'prose' = 'link'): (lineId: num
 }
 
 /**
- * The styles of a two-tone shot pill's segments (RS-OWNERSHIP), blended at
- * each seam (RS-BLEND, `theme/pillBlend.ts`), or null for a one-colour shot
- * (neither end belongs to another line).
+ * The styles of a two-tone shot pill's segments (RS-OWNERSHIP), blended
+ * (RS-BLEND, `theme/pillBlend.ts`): the arrow is a segment of its own whose
+ * colour runs from the from half's to the to half's, so the halves blend
+ * across the arrow (RS-ARROW); a head blends into the from half at their
+ * seam. Null for a one-colour shot (neither end belongs to another line).
  */
 export interface ShotTone {
   /** The leading dot and the context, in the shot's colour, on their own:
@@ -150,21 +152,31 @@ export interface ShotTone {
   head: CSSProperties | null;
   /** The from end's half: its owner's colour, or the shot's. */
   from: CSSProperties;
-  /** The to end's half, from the arrow on: its owner's colour, or the shot's. */
+  /** The arrow: a blend from the from half's colour to the to half's. */
+  arrow: CSSProperties;
+  /** The to end's half, after the arrow: its owner's colour, or the shot's. */
   to: CSSProperties;
   /** What the from end's dot can sit on (its half's colours and blends). */
   fromOn: string[];
   /** What the to end's dot can sit on. */
   toOn: string[];
-  /** The segments in order, with their colours: a prose pill tints each
-   *  line's fragment of them once laid out (`useSegmentTints`). */
-  segments: Array<{ key: SegmentKey; colors: PillColors }>;
+  /** The segments in order, with their colours (a bridge's run to
+   *  `bridgeTo`): a prose pill tints each line's fragment of them once laid
+   *  out (`useSegmentTints`). */
+  segments: ToneSegment[];
   /** The panel the pill sits on (a prose tint is an overlay on it). */
   panel: string;
 }
 
-/** A two-tone shot pill's segments: the head (when the from half is another line's), the from half, the to half. */
-export type SegmentKey = 'head' | 'from' | 'to';
+/** A two-tone shot pill's segments: the head (when the from half is another line's), the from half, the arrow, the to half. */
+export type SegmentKey = 'head' | 'from' | 'arrow' | 'to';
+
+/** One segment of a two-tone shot: its colours, and for the arrow the colours it runs to. */
+export interface ToneSegment {
+  key: SegmentKey;
+  colors: PillColors;
+  bridgeTo?: PillColors | undefined;
+}
 
 /** The words of a two-tone shot's segments, for a prose tint's seam width. */
 export interface ShotWords {
@@ -175,6 +187,10 @@ export interface ShotWords {
 
 /** About how wide `words` are in em (a pill's average glyph, its padding and a dot). */
 const widthEmOf = (words: string) => words.length * 0.56 + 0.9;
+
+/** The colours at a segment's left and right edges. */
+export const leftEdgeOf = (seg: ToneSegment): PillColors => seg.colors;
+export const rightEdgeOf = (seg: ToneSegment): PillColors => seg.bridgeTo ?? seg.colors;
 
 /**
  * {@link ShotTone} of a shot of line `lineId` whose ends belong to
@@ -194,31 +210,44 @@ export function shotToneOf(
   const foreign = (owner: number | null | undefined) => owner !== null && owner !== undefined && owner !== lineId;
   if (!foreign(fromOwner) && !foreign(toOwner)) return null;
   const shot = resolve(lineId);
-  const lines = [
-    ...(foreign(fromOwner) ? [{ key: 'head' as const, pill: shot }] : []),
-    { key: 'from' as const, pill: foreign(fromOwner) ? resolve(fromOwner) : shot },
-    { key: 'to' as const, pill: foreign(toOwner) ? resolve(toOwner) : shot },
+  const fromPill = foreign(fromOwner) ? resolve(fromOwner) : shot;
+  const toPill = foreign(toOwner) ? resolve(toOwner) : shot;
+  const segs: Array<ToneSegment & { pill: ResolvedPill }> = [
+    ...(foreign(fromOwner) ? [{ key: 'head' as const, pill: shot, colors: shot.colors }] : []),
+    { key: 'from', pill: fromPill, colors: fromPill.colors },
+    { key: 'arrow', pill: fromPill, colors: fromPill.colors, bridgeTo: toPill.colors },
+    { key: 'to', pill: toPill, colors: toPill.colors },
   ];
   const panel = pillThemeOf(shot.theme).panel;
   const styles: Partial<Record<SegmentKey, CSSProperties>> = {};
   const on: Partial<Record<'from' | 'to', string[]>> = {};
-  lines.forEach((seg, i) => {
-    const near = { left: lines[i - 1]?.pill.colors ?? null, right: lines[i + 1]?.pill.colors ?? null };
+  segs.forEach((seg, i) => {
+    const prev = segs[i - 1];
+    const next = segs[i + 1];
+    if (seg.bridgeTo) {
+      styles.arrow =
+        variant === 'link'
+          ? linkBridgeStyle(seg.colors, seg.bridgeTo, seg.pill.theme)
+          : proseBridgeStyle(seg.colors, seg.bridgeTo, seg.pill.theme);
+      return;
+    }
+    const near = { left: prev ? rightEdgeOf(prev) : null, right: next ? leftEdgeOf(next) : null };
     styles[seg.key] =
       variant === 'link'
-        ? linkSegmentStyle(seg.pill.colors, near, seg.pill.theme)
-        : proseSegmentStyle(seg.pill.colors, near, seg.pill.theme, widthEmOf(words?.[seg.key] ?? ''));
-    if (seg.key !== 'head') {
-      on[seg.key] = blendBackdrops(seg.pill.colors, near, variant === 'prose' ? panel : undefined);
+        ? linkSegmentStyle(seg.colors, near, seg.pill.theme)
+        : proseSegmentStyle(seg.colors, near, seg.pill.theme, widthEmOf(seg.key === 'arrow' ? '' : (words?.[seg.key] ?? '')));
+    if (seg.key === 'from' || seg.key === 'to') {
+      on[seg.key] = blendBackdrops(seg.colors, near, variant === 'prose' ? panel : undefined);
     }
   });
   return {
     head: styles.head ?? null,
     from: styles.from!,
+    arrow: styles.arrow!,
     to: styles.to!,
     fromOn: on.from ?? [],
     toOn: on.to ?? [],
-    segments: lines.map((seg) => ({ key: seg.key, colors: seg.pill.colors })),
+    segments: segs.map(({ key, colors, bridgeTo }) => ({ key, colors, bridgeTo })),
     panel,
   };
 }
@@ -304,19 +333,30 @@ export function HomeLineMark({ mark, testId }: { mark: HomeMark; testId?: string
  *  ring in the pill's muted colour, with words for a screen reader. */
 export function LoopEndMark({ label, testId }: { label?: string | undefined; testId?: string | undefined }) {
   return (
-    <span className="sh-lpill-loop" data-testid={testId}>
+    <span className="sh-lpill-loop" data-testid={testId} title={i18n.t('identity.loopEndMarkTitle')}>
       <LoopGlyph />
       {label && <span className="sr-only"> {label}</span>}
     </span>
   );
 }
 
-/** The loop mark's glyph (an open ring with an arrowhead) in `currentColor`, 1em square. */
+/**
+ * The loop mark's glyph, a reversed tilde (`∽`, the loop-closure sign) in
+ * `currentColor`, 1em square (RS-ARROW). It replaced an open ring with an
+ * arrowhead, which at pill size read as a second colour dot ("why does
+ * table-shots-blue-link have two dots at the end"). Drawn, not typed, so it
+ * looks the same in every webview whatever fonts it has.
+ */
 export function LoopGlyph() {
   return (
-    <svg viewBox="0 0 12 12" width="1em" height="1em" aria-hidden="true" focusable="false">
-      <path d="M9.6 4.2A4 4 0 1 0 10 6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-      <path d="M11.2 2.4 L10.4 5.4 L7.6 4.4 Z" fill="currentColor" />
+    <svg viewBox="0 0 12 12" width="1em" height="1em" aria-hidden="true" focusable="false" data-glyph="loop">
+      <path
+        d="M1.2 4.9C2.5 8.4 4.5 8.4 6 6C7.5 3.6 9.5 3.6 10.8 7.1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }
@@ -336,7 +376,7 @@ export interface PillPartsProps {
   /** Test id root: parts get `-dot`, `-id` (the context), `-loop-end`, `-station-id`,
    *  `-owner` (a station's owner words), and a shot's ends `-from-home-dot`,
    *  `-from-loop-end`, `-to-home-dot`, `-to-loop-end`; a two-tone shot's
-   *  segments `-head`, `-from`, `-to`. */
+   *  segments `-head`, `-from`, `-arrow`, `-to`. */
   testId?: string | undefined;
   /** Muted context before the main part, shown with a colon (`Main Line:`). */
   context?: string | null | undefined;
@@ -407,9 +447,9 @@ export function PillParts({
     );
   };
   if (shotEnds && tone) {
-    // Two-tone (RS-OWNERSHIP): the split falls before the arrow; the head
-    // (dot, context) stays in the shot's colour when the from end's half is
-    // another line's.
+    // Two-tone (RS-OWNERSHIP): the head (dot, context) stays in the shot's
+    // colour when the from end's half is another line's; the arrow is its
+    // own segment, the blend between the halves (RS-ARROW).
     return (
       <>
         {tone.head && (
@@ -418,17 +458,19 @@ export function PillParts({
             {ctx}
           </span>
         )}
-        <span className="sh-lpill-seg" style={tone.from} data-testid={part('from')}>
+        <span className="sh-lpill-seg sh-lpill-seg--to-arrow" style={tone.from} data-testid={part('from')}>
           {!tone.head && dot}
           {!tone.head && ctx}
           <span className="sh-lpill-main">{shotEnds.from}</span>
           {endMarks('from')}
         </span>{' '}
-        <span className="sh-lpill-seg" style={tone.to} data-testid={part('to')}>
-          <span className="sh-lpill-main">
-            {`${SHOT_ARROW} `}
-            {shotEnds.to}
-          </span>
+        {/* The spaces between the segments are not drawn (flex items), but
+            keep the pill's words those of the plain shot. */}
+        <span className="sh-lpill-seg sh-lpill-seg--arrow" style={tone.arrow} data-testid={part('arrow')}>
+          <span className="sh-lpill-main">{SHOT_ARROW}</span>
+        </span>{' '}
+        <span className="sh-lpill-seg sh-lpill-seg--from-arrow" style={tone.to} data-testid={part('to')}>
+          <span className="sh-lpill-main">{shotEnds.to}</span>
           {endMarks('to')}
           {trailing}
         </span>

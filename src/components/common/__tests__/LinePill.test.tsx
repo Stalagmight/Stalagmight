@@ -249,7 +249,7 @@ describe('ownership (RS-OWNERSHIP): a station of another line takes its colour, 
     expect(pill).toHaveAccessibleName('Select station Main Line / St1 (Side), Station ID 41');
   });
 
-  it('a shot with one end of another line is split before the arrow, that half in its colour, its dot kept', () => {
+  it('a shot with one end of another line is split at the arrow, that half in its colour, its dot kept', () => {
     render(
       <DetailLink
         type="shot"
@@ -267,10 +267,21 @@ describe('ownership (RS-OWNERSHIP): a station of another line takes its colour, 
     expect(screen.queryByTestId(`shot-${MAIN}-2-link-head`)).toBeNull();
     expect(cssVar(from, '--pill-bg')).toBe(pillColorsOf(MAIN_COLOR, 'dark').bg);
     expect(cssVar(to, '--pill-bg')).toBe(pillColorsOf(SIDE_COLOR, 'dark').bg);
-    // The leading dot and the from end in the shot's half; the arrow opens the other.
+    // The leading dot and the from end in the shot's half; the arrow is a
+    // segment of its own whose fill runs from that half's colour to the
+    // other's (RS-ARROW), so the blend is centred on it.
     expect(from).toContainElement(screen.getByTestId(`shot-${MAIN}-2-link-dot`));
     expect(from.querySelector('.sh-lpill-main')?.textContent).toBe('St1');
-    expect(to.querySelector('.sh-lpill-main')?.textContent).toBe('\u2192 St2');
+    expect(to.querySelector('.sh-lpill-main')?.textContent).toBe('St2');
+    const arrow = screen.getByTestId(`shot-${MAIN}-2-link-arrow`);
+    expect(arrow.textContent).toBe('\u2192');
+    const fill = cssVar(arrow, '--seg-fill');
+    expect(fill.startsWith(`linear-gradient(to right, ${pillColorsOf(MAIN_COLOR, 'dark').bg} 0.00%`)).toBe(true);
+    expect(fill.endsWith(`${pillColorsOf(SIDE_COLOR, 'dark').bg} 100.00%)`)).toBe(true);
+    // The halves keep their own colour up to the arrow.
+    expect(cssVar(from, '--seg-fill')).toBe(
+      `linear-gradient(to right, ${pillColorsOf(MAIN_COLOR, 'dark').bg} 0.00%, ${pillColorsOf(MAIN_COLOR, 'dark').bg} 100.00%)`,
+    );
     // The foreign end keeps its dot, checked against its own half (its line's own dot).
     const dot = screen.getByTestId(`shot-${MAIN}-2-link-to-home-dot`);
     expect(to).toContainElement(dot);
