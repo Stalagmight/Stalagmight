@@ -25,6 +25,7 @@ import type { StationRef } from '../types/project';
 import { displayStationName, formatStationLabel } from './formatters';
 import {
   lineNameOf,
+  ownerLineOf,
   planStationLabelOf,
   shotIndexOf,
   shotLabelAt,
@@ -133,21 +134,24 @@ export function backendProse(plain: string, parts: readonly ProsePart[] | null |
 
 /**
  * The slot `ref` as a station part: the words of `stationLabelOf` (with or
- * without the line), and what `StationBlob` draws: the slot's line colour,
- * the line as the context with `withLine`, the bare name, the home-line dot
- * of a foreign slot, the loop mark of a loop end and the Station ID it shows.
+ * without the line), and what `StationBlob` draws: the colour of the line
+ * the station belongs to (the slot's, or for a foreign slot or a loop end
+ * of another line `ownerLineOf`'s, RS-OWNERSHIP), with `withLine` that line
+ * as the context, the bare name, the loop mark of a loop end and the
+ * Station ID it shows.
  */
 export function stationPartOf(src: IdentitySource, ref: StationRef, withLine = false): ProsePart {
   const shown = shownSlotOf(src, ref);
-  const home = shown?.foreign && shown.home_line !== undefined && shown.home_line !== ref.line_id ? shown.home_line : undefined;
+  const home = ownerLineOf(src, ref);
   const station: ProseStation = {
     text: stationLabelOf(src, ref, withLine),
     line_id: ref.line_id,
     name: formatStationLabel(stationNameOf(src, ref)),
     slot: ref,
   };
-  if (withLine) station.context = lineNameOf(src, ref.line_id);
-  if (home !== undefined) station.home_line = home;
+  // The context names the line the pill is coloured by (RS-OWNERSHIP).
+  if (withLine) station.context = lineNameOf(src, home ?? ref.line_id);
+  if (home !== null) station.home_line = home;
   if (shown?.loop_end) station.loop_end = true;
   const id = shownStationIdOf(src, ref);
   if (id !== null) station.station_id = id;
@@ -206,7 +210,8 @@ export function shotPartAt(src: IdentitySource, lineId: number, shotIndex: numbe
     const out: { name: string; home_line?: number; loop_end?: boolean } = {
       name: formatStationLabel(stationNameOf(src, ref)),
     };
-    if (shown?.foreign && shown.home_line !== undefined && shown.home_line !== lineId) out.home_line = shown.home_line;
+    const owner = ownerLineOf(src, ref);
+    if (owner !== null) out.home_line = owner;
     if (shown?.loop_end) out.loop_end = true;
     return out;
   };

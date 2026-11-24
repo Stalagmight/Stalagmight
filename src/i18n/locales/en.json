@@ -4435,6 +4435,7 @@
     "loopEndPinLabelLine": "Loop end on {{line}}, shown as {{station}}",
     "homeMarkTitle": "Belongs to {{line}}",
     "homeMarkLabel": "({{line}})",
+    "onLineLabel": "(on {{line}})",
     "foreignLabel": "{{station}} ({{home}})"
   },
   "notices": {

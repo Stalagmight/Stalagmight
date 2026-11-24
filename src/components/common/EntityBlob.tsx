@@ -16,7 +16,7 @@ import { useUIStore } from '../../store/uiStore';
 import type { BlobEntity } from '../../theme/syntacticPalette';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import type { StationRef } from '../../types/project';
-import { markOf, PillParts, pillStyle, usePillColors } from './LinePill';
+import { markOf, PillParts, pillStyle, shotToneOf, useResolvePill } from './LinePill';
 import type { ShotEndMarks } from './shotEndMarks';
 
 export interface EntityBlobProps {
@@ -30,11 +30,14 @@ export interface EntityBlobProps {
   context?: string | null | undefined;
   /** A station's Station ID, as a muted superscript at the end. */
   stationId?: number | null | undefined;
-  /** A station pill's home-line mark: the line the station belongs to (see `LinePill.tsx`). */
+  /** The line a station pill's station belongs to, when not `lineId`: the
+   *  pill takes its colour and names it as the context (RS-OWNERSHIP, see
+   *  `LinePill.tsx`). */
   homeLineId?: number | null | undefined;
   /** A station pill's loop mark: a loop closure shows this station as its other end (RS 6). */
   loopEnd?: boolean | undefined;
-  /** A shot pill's two ends, each with an optional home-line mark and loop mark; replaces `children` in the pill. */
+  /** A shot pill's two ends, each with an optional home-line mark, loop mark
+   *  and owner line (its half's colour); replaces `children` in the pill. */
   shotEnds?: ShotEndMarks | null | undefined;
   /** What the lower highlighting levels show; defaults to `children`. */
   plain?: ReactNode | undefined;
@@ -64,7 +67,11 @@ export function EntityBlob({
 }: EntityBlobProps) {
   const { t } = useTranslation();
   const level = useUIStore((s) => s.syntacticLevel);
-  const pill = usePillColors(lineId);
+  const resolve = useResolvePill();
+  // A station of another line takes that line's colour and name (RS-OWNERSHIP).
+  const owner = entity === 'station' && homeLineId !== null && homeLineId !== undefined && homeLineId !== lineId ? homeLineId : null;
+  const pill = resolve(owner ?? lineId);
+  const ownerName = owner !== null ? (pill.lineNameOf?.(owner) ?? null) : null;
 
   // Only the Full level paints pills; otherwise keep the plain text rendering.
   if (!syntacticLevelAtLeast(level, 'full')) {
@@ -76,35 +83,50 @@ export function EntityBlob({
     );
   }
 
+  const tone =
+    entity === 'shot' && shotEnds
+      ? shotToneOf(resolve, lineId, shotEnds.fromOwnerLineId, shotEnds.toOwnerLineId, (p) => pillStyle(p.colors))
+      : null;
+  // A foreign end's dot sits in its own half, so it is checked against that half's colours.
+  const endPill = (end: number | null | undefined) =>
+    tone && end !== null && end !== undefined && end !== lineId ? resolve(end) : pill;
   return (
     <span
-      className={`sh-lpill ${className}`}
-      style={pillStyle(pill.colors)}
+      className={`sh-lpill${tone ? ' sh-lpill--split' : ''} ${className}`}
+      style={tone ? undefined : pillStyle(pill.colors)}
       data-entity={entity}
+      data-owner-line={owner ?? undefined}
       data-testid={testId}
-      title={title}
+      title={title ?? (ownerName !== null ? t('identity.homeMarkTitle', { line: ownerName }) : undefined)}
     >
       <PillParts
         testId={testId}
-        context={context}
+        context={owner !== null && context ? (ownerName ?? context) : context}
         main={children}
         shotEnds={
           shotEnds
             ? {
                 from: shotEnds.from,
                 to: shotEnds.to,
-                fromMark: markOf(pill, shotEnds.fromHomeLineId),
-                toMark: markOf(pill, shotEnds.toHomeLineId),
+                fromMark: markOf(endPill(shotEnds.fromOwnerLineId), shotEnds.fromHomeLineId),
+                toMark: markOf(endPill(shotEnds.toOwnerLineId), shotEnds.toHomeLineId),
                 fromLoopEnd: shotEnds.fromLoopEnd,
                 toLoopEnd: shotEnds.toLoopEnd,
               }
             : null
         }
-        mark={entity === 'station' ? markOf(pill, homeLineId) : null}
+        tone={tone}
         loopEnd={entity === 'station' && loopEnd}
         loopEndLabel={t('identity.loopEnd')}
         stationId={entity === 'station' ? stationId : null}
         stationIdLabel={t('identity.stationId')}
+        ownerWords={
+          ownerName === null
+            ? null
+            : context
+              ? t('identity.onLineLabel', { line: pill.lineNameOf?.(lineId) ?? '' })
+              : t('identity.homeMarkLabel', { line: ownerName })
+        }
         trailing={trailing}
       />
     </span>
@@ -114,8 +136,10 @@ export function EntityBlob({
 /**
  * A station as a pill: its bare name, the Station ID it shows, its line's
  * colour and, with `withLine`, its line as the context (`Main Line: 17`). A
- * foreign slot carries the dot of its shown station's home line, and a loop
- * end the loop mark (RS 6), unless `homeLineId` says otherwise. Below Full it
+ * foreign slot, or a loop end whose kept end lives on another line, takes
+ * the colour and name of the line its shown station belongs to
+ * (RS-OWNERSHIP), unless `homeLineId` says otherwise; a loop end keeps the
+ * loop mark (RS 6). Below Full it
  * is the plain label (`17`, `Main Line / 17`; `12 (Main)`, `Side / 12 (Main)`
  * for a foreign slot; `3 (loop end on Side)` for a loop end).
  */
@@ -141,7 +165,7 @@ export function StationBlob({
       lineId={station.line_id}
       context={withLine ? labels.lineName(station.line_id) : null}
       stationId={labels.shownStationId(station)}
-      homeLineId={homeLineId === undefined ? labels.homeMark(station) : homeLineId}
+      homeLineId={homeLineId === undefined ? labels.ownerLine(station) : homeLineId}
       loopEnd={labels.shown(station)?.loop_end === true}
       plain={labels.station(station, withLine)}
       className={className}

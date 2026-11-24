@@ -34,7 +34,17 @@ import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { SHOT_ARROW } from '../../utils/formatters';
 import { isNamePart, proseParts, type ProsePart } from '../../utils/prose';
 import i18n from '../../i18n';
-import { LoopGlyph, markOf, prosePillStyle, useProsePillColors, type HomeMark, type ResolvedPill } from './LinePill';
+import type { ProseShotEnd } from '../../types/ipc/ProseShotEnd';
+import {
+  LoopGlyph,
+  markOf,
+  prosePillStyle,
+  shotToneOf,
+  useResolvePill,
+  type HomeMark,
+  type ResolvedPill,
+  type ShotTone,
+} from './LinePill';
 
 type NamePart = Exclude<ProsePart, { kind: 'text' }>;
 
@@ -114,7 +124,7 @@ function Glued({
   );
 }
 
-/** A name's marks: the home-line dot, the loop mark, the Station ID. */
+/** A name's marks: a foreign shot end's home-line dot, the loop mark, the Station ID. */
 function marksOf(
   pill: ResolvedPill,
   homeLine: number | undefined,
@@ -148,24 +158,72 @@ function Head({ context }: { context?: string | undefined }) {
   );
 }
 
+/** The dot after a shot end: a foreign end's home-line dot (a loop end has its loop mark instead). */
+function endDot(end: ProseShotEnd): number | undefined {
+  return end.loop_end ? undefined : end.home_line;
+}
+
 /** What the pill draws for `part` (aria-hidden: the sr-only words say it). */
-function Drawing({ part, pill }: { part: NamePart; pill: ResolvedPill }) {
-  const dot = part.kind !== 'line' && part.context ? null : DOT;
+function Drawing({
+  part,
+  pill,
+  context,
+  tone,
+  resolve,
+}: {
+  part: NamePart;
+  pill: ResolvedPill;
+  context: string | undefined;
+  tone: ShotTone | null;
+  resolve: (lineId: number | null | undefined) => ResolvedPill;
+}) {
+  const dot = part.kind !== 'line' && context ? null : DOT;
   if (part.kind === 'station') {
+    // No home-line dot: the whole pill is in the colour of the line the
+    // station belongs to (RS-OWNERSHIP); a loop end keeps its loop mark.
     return (
       <>
-        <Head context={part.context} />
-        <Glued before={dot} text={part.name} after={marksOf(pill, part.home_line, part.loop_end, part.station_id)} />
+        <Head context={context} />
+        <Glued before={dot} text={part.name} after={marksOf(pill, undefined, part.loop_end, part.station_id)} />
       </>
     );
   }
   if (part.kind === 'shot') {
     // A break may fall before the arrow, never after it.
+    if (!tone) {
+      return (
+        <>
+          <Head context={context} />
+          <Glued before={dot} text={part.from.name} after={marksOf(pill, endDot(part.from), part.from.loop_end)} />{' '}
+          <Glued before={`${SHOT_ARROW} `} text={part.to.name} after={marksOf(pill, endDot(part.to), part.to.loop_end)} />
+        </>
+      );
+    }
+    // Two tints (RS-OWNERSHIP): the half holding an end of another line in
+    // that line's tint, split before the arrow; the head stays the shot's.
+    const endPill = (owner: number | undefined) => (owner !== undefined && owner !== part.line_id ? resolve(owner) : pill);
     return (
       <>
-        <Head context={part.context} />
-        <Glued before={dot} text={part.from.name} after={marksOf(pill, part.from.home_line, part.from.loop_end)} />{' '}
-        <Glued before={`${SHOT_ARROW} `} text={part.to.name} after={marksOf(pill, part.to.home_line, part.to.loop_end)} />
+        {tone.head && (
+          <span className="sh-ppill-seg" style={tone.head} data-prose-seg="head">
+            {context ? <Head context={context} /> : DOT}
+          </span>
+        )}
+        <span className="sh-ppill-seg" style={tone.from} data-prose-seg="from">
+          {!tone.head && <Head context={context} />}
+          <Glued
+            before={tone.head ? null : dot}
+            text={part.from.name}
+            after={marksOf(endPill(part.from.home_line), endDot(part.from), part.from.loop_end)}
+          />
+        </span>{' '}
+        <span className="sh-ppill-seg" style={tone.to} data-prose-seg="to">
+          <Glued
+            before={`${SHOT_ARROW} `}
+            text={part.to.name}
+            after={marksOf(endPill(part.to.home_line), endDot(part.to), part.to.loop_end)}
+          />
+        </span>
       </>
     );
   }
@@ -177,16 +235,35 @@ function Drawing({ part, pill }: { part: NamePart; pill: ResolvedPill }) {
  * span carries the colours and the test hooks and paints nothing; the
  * drawing inside it is the painted pill, so the sr-only words beside it
  * (absolutely positioned) never open an empty painted fragment where the
- * pill wraps.
+ * pill wraps. A station of another line takes that line's tint and names it
+ * as the context (RS-OWNERSHIP); a shot with an end of another line is
+ * two-tone.
  */
 export function ProsePill({ part, testId }: { part: NamePart; testId?: string | undefined }) {
   const level = useUIStore((s) => s.syntacticLevel);
-  const pill = useProsePillColors(part.line_id ?? null);
+  const resolve = useResolvePill('prose');
   if (!syntacticLevelAtLeast(level, 'full')) return <>{part.text}</>;
+  const owner = part.kind === 'station' && part.home_line !== undefined && part.home_line !== part.line_id ? part.home_line : null;
+  const pill = resolve(owner ?? part.line_id ?? null);
+  const ownerName = owner !== null ? (pill.lineNameOf?.(owner) ?? null) : null;
+  const context = part.kind === 'line' ? undefined : owner !== null && part.context ? (ownerName ?? part.context) : part.context;
+  const tone =
+    part.kind === 'shot'
+      ? shotToneOf(resolve, part.line_id ?? null, part.from.home_line, part.to.home_line, (p) =>
+          prosePillStyle(p.colors, p.theme),
+        )
+      : null;
   return (
-    <span className="sh-ppill" style={prosePillStyle(pill.colors, pill.theme)} data-prose-kind={part.kind} data-testid={testId}>
-      <span className="sh-ppill-vis" aria-hidden="true">
-        <Drawing part={part} pill={pill} />
+    <span
+      className="sh-ppill"
+      style={prosePillStyle(pill.colors, pill.theme)}
+      data-prose-kind={part.kind}
+      data-owner-line={owner ?? undefined}
+      data-testid={testId}
+      title={ownerName !== null ? i18n.t('identity.homeMarkTitle', { line: ownerName }) : undefined}
+    >
+      <span className={tone ? 'sh-ppill-vis sh-ppill-vis--split' : 'sh-ppill-vis'} aria-hidden="true">
+        <Drawing part={part} pill={pill} context={context ?? undefined} tone={tone} resolve={resolve} />
       </span>
       <span className="sr-only">{part.text}</span>
     </span>

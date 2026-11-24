@@ -147,7 +147,7 @@ fn slot_part_of(
     let (home_line, loop_end) = match shows {
         Shows::Native => (None, false),
         Shows::Foreign(home) => (Some(home), false),
-        Shows::LoopEnd(_) => (None, true),
+        Shows::LoopEnd(home) => (home.filter(|&h| h != slot.line_id), true),
     };
     let text = if with_line {
         full_text(project, slot, shows)?
@@ -157,7 +157,8 @@ fn slot_part_of(
     Some(ProsePart::Station(ProseStation {
         text,
         line_id: Some(slot.line_id),
-        context: with_line.then(|| project.line_label_of(slot.line_id)),
+        // The context names the line the pill is coloured by (RS-OWNERSHIP).
+        context: with_line.then(|| project.line_label_of(home_line.unwrap_or(slot.line_id))),
         name,
         home_line,
         loop_end: loop_flag(loop_end),
@@ -189,7 +190,7 @@ fn shot_part_by(
             .map_or_else(|| i.to_string(), str::to_string);
         let (home_line, loop_end) = match shows(slot) {
             Some(Shows::Foreign(home)) => (Some(home), false),
-            Some(Shows::LoopEnd(_)) => (None, true),
+            Some(Shows::LoopEnd(home)) => (home.filter(|&h| h != line), true),
             Some(Shows::Native) | None => (None, false),
         };
         ProseShotEnd {

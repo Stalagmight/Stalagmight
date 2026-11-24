@@ -6,15 +6,20 @@
  * superscript. Every colour comes from `theme/pillColors.ts` through CSS
  * custom properties (the `.sh-lpill` rules in index.css).
  *
- * A station can also carry a home-line mark: a small second dot, in the colour
- * of the line the station belongs to, right after its name, for a station
- * shown on a line that is not its home line. A loop end (a station a loop
- * closure shows as its other end, RS 6) carries a small loop mark there too,
- * even where it has no dot. A shot pill carries each end's marks after that
- * end's name. The marks stand for the qualifier plain text adds (`12 (Main)`,
- * `3 (loop end on Side)`), so a pill's names are bare; each mark carries those
- * words for a screen reader, and the home-line mark a tooltip ("Belongs to
- * Main", RS-FX6 P2-5), as the loop mark does.
+ * A station pill takes the colour of the line its shown station belongs to
+ * (RS-OWNERSHIP): a foreign slot (Side's junction showing Main's 12) or a
+ * loop end whose kept end lives on another line is a Main pill, its dot
+ * Main's and its context "Main:", where it once carried a second, smaller
+ * dot. Its words for a screen reader and its tooltip ("Belongs to Main")
+ * say the same. A loop end keeps its loop mark after the name.
+ *
+ * A shot pill with an end whose station belongs to another line is two-tone
+ * ({@link ShotTone}): split at the arrow, the half holding that end takes
+ * that line's colour and the other half keeps the shot's; the foreign end
+ * keeps its home-line dot after its name, and a loop end its loop mark.
+ * When the from end is the foreign one, the leading dot and the context
+ * (the shot's line) keep the shot's colour on their own, so no half reads
+ * one line's name in another's colour.
  */
 import { useCallback, type CSSProperties, type ReactNode } from 'react';
 import { useShallow } from 'zustand/react/shallow';
@@ -109,6 +114,61 @@ export function prosePillStyle(colors: PillColors, themeName: string): CSSProper
   } as CSSProperties;
 }
 
+/**
+ * Any line's pill on the current theme, for a pill that paints more than one
+ * line (a two-tone shot pill). `prose`: the prose pill's colours.
+ */
+export function useResolvePill(variant: 'link' | 'prose' = 'link'): (lineId: number | null | undefined) => ResolvedPill {
+  const theme = useUIStore((s) => s.resolvedTheme);
+  const colorOf = useLineColorOf();
+  const lineNameOf = useLineNameOf();
+  return useCallback(
+    (lineId) => ({
+      colors: (variant === 'prose' ? prosePillColorsOf : pillColorsOf)(colorOf(lineId), theme),
+      theme,
+      colorOf,
+      lineNameOf,
+    }),
+    [variant, theme, colorOf, lineNameOf],
+  );
+}
+
+/**
+ * The styles of a two-tone shot pill's segments (RS-OWNERSHIP), or null for
+ * a one-colour shot (neither end belongs to another line).
+ */
+export interface ShotTone {
+  /** The leading dot and the context, in the shot's colour, on their own:
+   *  only when the from end's half takes another line's colour. */
+  head: CSSProperties | null;
+  /** The from end's half: its owner's colour, or the shot's. */
+  from: CSSProperties;
+  /** The to end's half, from the arrow on: its owner's colour, or the shot's. */
+  to: CSSProperties;
+}
+
+/**
+ * {@link ShotTone} of a shot of line `lineId` whose ends belong to
+ * `fromOwner` / `toOwner` (null: the shot's own line), each segment styled by
+ * `style` from its line's resolved pill.
+ */
+export function shotToneOf(
+  resolve: (lineId: number | null | undefined) => ResolvedPill,
+  lineId: number | null,
+  fromOwner: number | null | undefined,
+  toOwner: number | null | undefined,
+  style: (pill: ResolvedPill) => CSSProperties,
+): ShotTone | null {
+  const foreign = (owner: number | null | undefined) => owner !== null && owner !== undefined && owner !== lineId;
+  if (!foreign(fromOwner) && !foreign(toOwner)) return null;
+  const own = style(resolve(lineId));
+  return {
+    head: foreign(fromOwner) ? own : null,
+    from: foreign(fromOwner) ? style(resolve(fromOwner)) : own,
+    to: foreign(toOwner) ? style(resolve(toOwner)) : own,
+  };
+}
+
 /** A home-line mark: its dot, and the name of the line it stands for. */
 export type HomeMark = PillDot & { line?: string | undefined };
 
@@ -197,7 +257,7 @@ export function LoopGlyph() {
 }
 
 /** A shot's two station names, each with its home-line mark and its loop
- *  mark when it has one (a station pill's marks, per end). */
+ *  mark when it has one (the foreign end's dot stays, RS-OWNERSHIP). */
 export interface ShotEnds {
   from: string;
   to: string;
@@ -208,8 +268,10 @@ export interface ShotEnds {
 }
 
 export interface PillPartsProps {
-  /** Test id root: parts get `-dot`, `-id` (the context), `-home-dot`, `-loop-end`, `-station-id`,
-   *  and a shot's ends `-from-home-dot`, `-from-loop-end`, `-to-home-dot`, `-to-loop-end`. */
+  /** Test id root: parts get `-dot`, `-id` (the context), `-loop-end`, `-station-id`,
+   *  `-owner` (a station's owner words), and a shot's ends `-from-home-dot`,
+   *  `-from-loop-end`, `-to-home-dot`, `-to-loop-end`; a two-tone shot's
+   *  segments `-head`, `-from`, `-to`. */
   testId?: string | undefined;
   /** Muted context before the main part, shown with a colon (`Main Line:`). */
   context?: string | null | undefined;
@@ -217,9 +279,10 @@ export interface PillPartsProps {
   main: ReactNode;
   /** A shot pill's main part as its two ends, so each can carry a mark. Overrides `main`. */
   shotEnds?: ShotEnds | null | undefined;
-  /** A station pill's home-line mark, right after the name. */
-  mark?: HomeMark | null | undefined;
-  /** A station pill's loop mark (a loop end, RS 6), after the name and its dot. */
+  /** A two-tone shot pill's segment styles (RS-OWNERSHIP); the caller gives the
+   *  pill `sh-lpill--split` and no colours of its own. Needs `shotEnds`. */
+  tone?: ShotTone | null | undefined;
+  /** A station pill's loop mark (a loop end, RS 6), after the name. */
   loopEnd?: boolean | undefined;
   /** Words read for a loop mark (the station's, or a shot end's) by a screen reader. */
   loopEndLabel?: string | undefined;
@@ -227,6 +290,10 @@ export interface PillPartsProps {
   stationId?: number | null | undefined;
   /** Words read before the Station ID by a screen reader (a span pill has no aria-label). */
   stationIdLabel?: string | undefined;
+  /** Words read after a station's name by a screen reader when the pill
+   *  takes another line's colour (`(Main)`, RS-OWNERSHIP): what the home-line
+   *  dot used to say. A button pill's aria-label says it already. */
+  ownerWords?: string | null | undefined;
   /** The target is gone: a warning glyph instead of the dot. */
   missing?: boolean | undefined;
   /** After everything (the data table's picker chevron). */
@@ -239,47 +306,93 @@ export function PillParts({
   context,
   main,
   shotEnds,
-  mark,
+  tone,
   loopEnd = false,
   loopEndLabel,
   stationId,
   stationIdLabel,
+  ownerWords,
   missing = false,
   trailing,
 }: PillPartsProps) {
   const part = (suffix: string) => (testId ? `${testId}-${suffix}` : undefined);
+  const dot = missing ? (
+    <span className="sh-lpill-warn" aria-hidden="true" data-testid={part('missing')}>
+      &#x26A0;
+    </span>
+  ) : (
+    <span className="sh-lpill-dot" aria-hidden="true" data-testid={part('dot')} />
+  );
+  const ctx = context ? (
+    <>
+      <span className="sh-lpill-ctx" data-testid={part('id')}>
+        {context}:
+      </span>{' '}
+    </>
+  ) : null;
+  const endMarks = (which: 'from' | 'to') => {
+    if (!shotEnds) return null;
+    const mark = which === 'from' ? shotEnds.fromMark : shotEnds.toMark;
+    const loop = which === 'from' ? shotEnds.fromLoopEnd : shotEnds.toLoopEnd;
+    return (
+      <>
+        {mark && <HomeLineMark mark={mark} testId={part(`${which}-home-dot`)} />}
+        {loop && <LoopEndMark label={loopEndLabel} testId={part(`${which}-loop-end`)} />}
+      </>
+    );
+  };
+  if (shotEnds && tone) {
+    // Two-tone (RS-OWNERSHIP): the split falls before the arrow; the head
+    // (dot, context) stays in the shot's colour when the from end's half is
+    // another line's.
+    return (
+      <>
+        {tone.head && (
+          <span className="sh-lpill-seg" style={tone.head} data-testid={part('head')}>
+            {dot}
+            {ctx}
+          </span>
+        )}
+        <span className="sh-lpill-seg" style={tone.from} data-testid={part('from')}>
+          {!tone.head && dot}
+          {!tone.head && ctx}
+          <span className="sh-lpill-main">{shotEnds.from}</span>
+          {endMarks('from')}
+        </span>{' '}
+        <span className="sh-lpill-seg" style={tone.to} data-testid={part('to')}>
+          <span className="sh-lpill-main">
+            {`${SHOT_ARROW} `}
+            {shotEnds.to}
+          </span>
+          {endMarks('to')}
+          {trailing}
+        </span>
+      </>
+    );
+  }
   return (
     <>
-      {missing ? (
-        <span className="sh-lpill-warn" aria-hidden="true" data-testid={part('missing')}>
-          &#x26A0;
-        </span>
-      ) : (
-        <span className="sh-lpill-dot" aria-hidden="true" data-testid={part('dot')} />
-      )}
-      {context ? (
-        <>
-          <span className="sh-lpill-ctx" data-testid={part('id')}>
-            {context}:
-          </span>{' '}
-        </>
-      ) : null}
+      {dot}
+      {ctx}
       <span className="sh-lpill-main">
         {shotEnds ? (
           <>
             {shotEnds.from}
-            {shotEnds.fromMark && <HomeLineMark mark={shotEnds.fromMark} testId={part('from-home-dot')} />}
-            {shotEnds.fromLoopEnd && <LoopEndMark label={loopEndLabel} testId={part('from-loop-end')} />}
+            {endMarks('from')}
             {` ${SHOT_ARROW} `}
             {shotEnds.to}
-            {shotEnds.toMark && <HomeLineMark mark={shotEnds.toMark} testId={part('to-home-dot')} />}
-            {shotEnds.toLoopEnd && <LoopEndMark label={loopEndLabel} testId={part('to-loop-end')} />}
+            {endMarks('to')}
           </>
         ) : (
           main
         )}
       </span>
-      {mark && <HomeLineMark mark={mark} testId={part('home-dot')} />}
+      {ownerWords && (
+        <span className="sr-only" data-testid={part('owner')}>
+          {' '}
+          {ownerWords}
+        </span>
+      )}
       {loopEnd && <LoopEndMark label={loopEndLabel} testId={part('loop-end')} />}
       {stationId !== null && stationId !== undefined && (
         <>

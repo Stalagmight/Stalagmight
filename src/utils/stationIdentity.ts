@@ -304,6 +304,19 @@ export function homeMarkOf(src: IdentitySource, ref: StationRef): number | null 
   return shown?.foreign && shown.home_line !== undefined ? shown.home_line : null;
 }
 
+/**
+ * The line a slot's shown station belongs to, when it is not the slot's own
+ * line (RS-OWNERSHIP): a foreign slot's shown station's home line, or a loop
+ * end's kept end's home line. A station pill takes this line's colour and
+ * names it as its context; a shot pill colours the half holding that end by
+ * it. Null for a native slot (and a loop end on its kept end's own line).
+ */
+export function ownerLineOf(src: IdentitySource, ref: StationRef): number | null {
+  const shown = shownSlotOf(src, ref);
+  if (!shown || shown.home_line === undefined || shown.home_line === ref.line_id) return null;
+  return shown.foreign || shown.loop_end ? shown.home_line : null;
+}
+
 /** A line's name for display (sanitized), never its id: "Unnamed line" when it has none. */
 export function lineDisplayName(name: string | null | undefined): string {
   const shown = displayStationName(name).trim();
@@ -449,8 +462,10 @@ export interface IdentityLabels {
   shownStationId: (ref: StationRef) => number | null;
   /** How the slot shows its node (see {@link shownSlotOf}). */
   shown: (ref: StationRef) => ShownSlot | undefined;
-  /** The home-line dot a foreign slot carries (see {@link homeMarkOf}). */
+  /** The home-line dot a foreign shot end carries (see {@link homeMarkOf}). */
   homeMark: (ref: StationRef) => number | null;
+  /** The line whose colour a station pill takes (see {@link ownerLineOf}). */
+  ownerLine: (ref: StationRef) => number | null;
   lineName: (lineId: number) => string;
   /** A slot's plain-text label, qualified for a dotted slot (see {@link stationLabelOf}). */
   station: (ref: StationRef, withLine?: boolean) => string;
@@ -478,6 +493,7 @@ export function identityLabels(src: IdentitySource): IdentityLabels {
     shownStationId: (ref) => shownStationIdOf(src, ref),
     shown: (ref) => shownSlotOf(src, ref),
     homeMark: (ref) => homeMarkOf(src, ref),
+    ownerLine: (ref) => ownerLineOf(src, ref),
     lineName: (lineId) => lineNameOf(src, lineId),
     station: (ref, withLine) => stationLabelOf(src, ref, withLine),
     stationPill: (ref) => stationPillLabelOf(src, ref),

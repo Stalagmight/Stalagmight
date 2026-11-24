@@ -68,7 +68,10 @@ pub struct ProseStation {
     pub context: Option<String>,
     /// The bare name the pill shows.
     pub name: String,
-    /// A foreign slot's home line: the dot after the name.
+    /// The line the shown station belongs to, when it is not the slot's
+    /// (RS-OWNERSHIP): a foreign slot's shown station's home line, or a loop
+    /// end's kept end's. The pill takes its colour and names it as the
+    /// context; the plain words (`text`) say it as `12 (Main)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub home_line: Option<LineId>,
@@ -94,7 +97,10 @@ pub struct ProseStation {
 pub struct ProseShotEnd {
     /// The bare name.
     pub name: String,
-    /// A foreign end's home line.
+    /// The line this end's shown station belongs to, when it is not the
+    /// shot's (a foreign end, or a loop end whose kept end lives on another
+    /// line): the half of the pill holding this end takes its colour, and a
+    /// foreign end (not a loop end) keeps its home-line dot (RS-OWNERSHIP).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub home_line: Option<LineId>,
