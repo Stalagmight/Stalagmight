@@ -460,8 +460,9 @@ test.describe('Kept and archived stations (RS)', () => {
         pillDot: getComputedStyle(el).getPropertyValue('--pill-dot').trim(),
       };
     });
-    expect(geo.w / geo.fs).toBeGreaterThanOrEqual(0.35);
-    expect(geo.w / geo.fs).toBeLessThanOrEqual(0.45);
+    // "More subtle": 0.26em.
+    expect(geo.w / geo.fs).toBeGreaterThanOrEqual(0.24);
+    expect(geo.w / geo.fs).toBeLessThanOrEqual(0.3);
     expect(Math.abs(geo.w - geo.h)).toBeLessThan(0.5);
     expect(geo.afterName).toBeGreaterThanOrEqual(-0.5);
     expect(geo.afterName).toBeLessThanOrEqual(0.15 * geo.fs);

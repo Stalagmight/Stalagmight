@@ -365,12 +365,12 @@ test.describe('Prose pills keep the line pitch', () => {
     const report = await message.evaluate((root) => {
       const homes = () => [...root.querySelectorAll('[data-prose-home-dot]')] as HTMLElement[];
       const mid = (r: { top: number; bottom: number }) => (r.top + r.bottom) / 2;
-      /** The painted circle: centred in the box's padding, `--home-r` in em of its font. */
+      /** The painted circle: centred in the box's padding, which is its radius and 1.25px of room for its ring. */
       const circle = (dot: HTMLElement) => {
         const box = dot.getBoundingClientRect();
         const cs = getComputedStyle(dot);
         const fs = parseFloat(cs.fontSize);
-        const r = parseFloat(cs.getPropertyValue('--home-r')) * fs;
+        const r = parseFloat(cs.paddingLeft) - 1.25;
         const cx = box.left + parseFloat(cs.paddingLeft);
         const cy = mid(box);
         return { left: cx - r, right: cx + r, top: cy - r, bottom: cy + r, fs };
@@ -419,7 +419,8 @@ test.describe('Prose pills keep the line pitch', () => {
           const { glyph, baseline } = before(dot);
           const where = `${width}px ${dot.closest('.sh-ppill')!.textContent}`;
           const size = (c.right - c.left) / c.fs;
-          if (size < 0.35 || size > 0.45) bad.push(`${where}: ${size.toFixed(2)}em`);
+          // "More subtle" (RS-LEADDOT): 0.26em.
+          if (size < 0.24 || size > 0.3) bad.push(`${where}: ${size.toFixed(2)}em`);
           // Right after the name, on its line.
           const gap = c.left - glyph.right;
           if (gap < -0.5 || gap > 0.1 * c.fs) bad.push(`${where}: ${gap.toFixed(2)}px after the name`);
