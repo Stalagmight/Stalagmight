@@ -91,8 +91,14 @@ function blockOf(el: HTMLElement): HTMLElement | null {
 
 /**
  * The per-line tints of the segments drawn in `vis` for `tone` (see the
- * module doc), measured after every render and when the block around the
- * pill resizes; null until laid out or for a one-colour pill.
+ * module doc), measured after a render from outside (the words, the
+ * colours or the text around the pill may have moved its line breaks) and
+ * when the block around the pill resizes; null until laid out or for a
+ * one-colour pill.
+ *
+ * A render this hook's own new tints caused is not measured again: while
+ * the layout moves (a panel sliding open) every measure differs, and
+ * measuring it would loop until React gives up on the update (#185).
  */
 export function useSegmentTints(
   vis: RefObject<HTMLElement | null>,
@@ -101,6 +107,8 @@ export function useSegmentTints(
   const [tints, setTints] = useState<{ key: string; styles: Partial<Record<SegmentKey, CSSProperties>> } | null>(null);
   const toneRef = useRef(tone);
   toneRef.current = tone;
+  const applied = useRef('');
+  const ownRender = useRef(false);
   const measure = useRef(() => {});
   measure.current = () => {
     const el = vis.current;
@@ -116,10 +124,18 @@ export function useSegmentTints(
     if (!styles) return;
     const next = Object.fromEntries(t.segments.map((s, i) => [s.key, styles[i]!])) as Partial<Record<SegmentKey, CSSProperties>>;
     const key = JSON.stringify(next);
-    setTints((cur) => (cur?.key === key ? cur : { key, styles: next }));
+    if (key === applied.current) return;
+    applied.current = key;
+    ownRender.current = true;
+    setTints({ key, styles: next });
   };
-  // After every render: the words, the colours or the wrap may have changed.
-  useLayoutEffect(() => measure.current());
+  useLayoutEffect(() => {
+    if (ownRender.current) {
+      ownRender.current = false;
+      return;
+    }
+    measure.current();
+  });
   const split = tone !== null;
   useEffect(() => {
     const el = vis.current;
