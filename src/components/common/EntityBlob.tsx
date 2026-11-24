@@ -90,7 +90,7 @@ export function EntityBlob({
 
   const tone =
     entity === 'shot' && shotEnds
-      ? shotToneOf(resolve, lineId, shotEnds.fromOwnerLineId, shotEnds.toOwnerLineId, 'link', undefined, Boolean(context))
+      ? shotToneOf(resolve, lineId, shotEnds.fromOwnerLineId, shotEnds.toOwnerLineId, 'link', Boolean(context))
       : null;
   return (
     <span

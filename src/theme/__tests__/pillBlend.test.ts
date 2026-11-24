@@ -2,15 +2,17 @@
  * RS-BLEND: two-tone pill segments blend at their seams. Each segment's fill
  * and border fade from its own colour to the OKLab midpoint with its
  * neighbour over the last 0.4em at a seam, so neighbours meet in the same
- * colour (no seam line), at rest and on hover; a prose segment's tint
- * shifts to the same midpoint and fades around the seam, never to nothing
- * at it (no dip). Injections: a segment ending in its own colour at a seam
- * fails "neighbours meet in one colour"; a radial fade centred on the
- * segment's middle fails "the prose fade is centred on the seam".
+ * colour (no seam line), at rest and on hover. A prose segment's glow is
+ * painted per line (`useProseGlow`, `proseGlow.test.ts`); its style carries
+ * the words' colours, which must read on the blend toward a stronger
+ * neighbour. Injections: a segment ending in its own colour at a seam fails
+ * "neighbours meet in one colour"; a prose segment keeping its own muted
+ * colour fails "words that read on the blend".
  */
 import { describe, expect, it } from 'vitest';
-import { linkBridgeStyle, linkSegmentStyle, mixHex, proseBridgeTint, proseSegmentStyle, proseSegmentTint, SEAM_EM } from '../pillBlend';
-import { pillColorsOf, pillThemeOf, prosePillColorsOf } from '../pillColors';
+import { linkBridgeStyle, linkSegmentStyle, mixHex, proseSegmentStyle, SEAM_EM } from '../pillBlend';
+import { contrastOfHex } from '../cssColor';
+import { pillColorsOf, pillThemeOf, prosePillColorsOf, proseTintOf } from '../pillColors';
 
 const stops = (gradient: string) => {
   const inner = /linear-gradient\(to right, (.*)\)$/.exec(gradient)?.[1] ?? '';
@@ -42,32 +44,27 @@ describe('link segments (RS-BLEND)', () => {
   });
 });
 
-describe('prose segments (RS-BLEND)', () => {
-  const panel = pillThemeOf('light').panel;
-  const A = prosePillColorsOf('#ffe600', 'light');
-  const B = prosePillColorsOf('#1f4fff', 'light');
-  const svg = (url: string) => decodeURIComponent(/data:image\/svg\+xml,(.*)"\)$/.exec(url)?.[1] ?? '');
-
-  it('the tint shifts to the midpoint at the seam, and the fade is centred on the seam', () => {
-    const left = svg(proseSegmentTint(A, { left: null, right: B }, panel, 0.3));
-    const right = svg(proseSegmentTint(B, { left: A, right: null }, panel, 0.3));
-    const middle = svg(proseSegmentTint(B, { left: A, right: A }, panel, 0.3));
-    // The radial fade's centre is the seam: the right edge, the left edge.
-    expect(left).toMatch(/radialGradient id='f' cx='1'/);
-    expect(right).toMatch(/radialGradient id='f' cx='0'/);
-    // Between two seams, only the top and bottom fade.
-    expect(middle).toMatch(/linearGradient id='f' x1='0' y1='0' x2='0' y2='1'/);
-    // Both sides of the seam stop in the same overlay.
-    const last = /<stop offset='1\.0000' stop-color='([^']+)' stop-opacity='([^']+)'\/><\/linearGradient>/.exec(left);
-    const first = /<linearGradient id='c'[^>]*><stop offset='0\.0000' stop-color='([^']+)' stop-opacity='([^']+)'/.exec(right);
-    expect(last?.slice(1)).toEqual(first?.slice(1));
-  });
-
-  it('a segment style carries its tint and text, and no dot (RS-NODOTS)', () => {
-    const style = proseSegmentStyle(A, { left: null, right: B }, 'light', 3) as Record<string, string>;
-    expect(style['--seg-tint']).toMatch(/^url\("data:image\/svg\+xml,/);
+describe('prose segments (RS-BLEND, RS-NODOTS)', () => {
+  it('a segment style carries its words and its glow\'s wash, and no dot', () => {
+    const A = prosePillColorsOf('#ffe600', 'light');
+    const B = prosePillColorsOf('#1f4fff', 'light');
+    const style = proseSegmentStyle(A, { left: null, right: B }, 'light') as Record<string, string>;
+    expect(style['--pill-tint']).toBe(proseTintOf(A.bg, pillThemeOf('light').panel).tint);
     expect(style['--pill-text']).toBe(A.text);
     expect(style['--pill-dot']).toBeUndefined();
+    expect(style['--seg-tint']).toBeUndefined();
+  });
+
+  it('beside a stronger glow, its words read on the blend toward it', () => {
+    // A near-black line's glow beside a near-white line's on the dark theme:
+    // the blend is lighter than the near-black glow its words were set for.
+    const black = prosePillColorsOf('#101010', 'dark');
+    const white = prosePillColorsOf('#f6f6f2', 'dark');
+    const style = proseSegmentStyle(black, { left: null, right: white }, 'dark') as Record<string, string>;
+    const seam = mixHex(black.bg, white.bg, 0.5);
+    expect(contrastOfHex(black.muted, seam)).toBeLessThan(4.5);
+    expect(contrastOfHex(style['--pill-muted']!, seam)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastOfHex(style['--pill-text']!, seam)).toBeGreaterThanOrEqual(7);
   });
 });
 
@@ -104,13 +101,4 @@ describe('the arrow bridge (RS-ARROW)', () => {
     expect(arrow['--seg-fill']).toContain(`${mixHex(L.bg, R.bg, 0.5)} 50.00%`);
   });
 
-  it('a prose bridge fades only top and bottom between its halves', () => {
-    const panel = pillThemeOf('light').panel;
-    const svg = decodeURIComponent(
-      /data:image\/svg\+xml,(.*)"\)$/.exec(proseBridgeTint(L, R, panel, { left: true, right: true }))?.[1] ?? '',
-    );
-    expect(svg).toMatch(/linearGradient id='f' x1='0' y1='0' x2='0' y2='1'/);
-    const half = svg.match(/stop offset='0\.5000'/g);
-    expect(half).toHaveLength(1);
-  });
 });

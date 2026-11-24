@@ -12,15 +12,25 @@ import { describe, expect, it } from 'vitest';
 import { themeTokens } from '../tokens';
 import { hexOfOklch, oklchOfHex } from '../cssColor';
 import { contrastRatio } from '../../utils/colors';
-import { blendBackdrops, bridgeBackdrops, linkBridgeStyle, mixHex, proseBridgeStyle, type Neighbours } from '../pillBlend';
+import {
+  blendBackdrops,
+  bridgeBackdrops,
+  linkBridgeStyle,
+  linkSegmentStyle,
+  mixHex,
+  proseBridgeStyle,
+  proseSegmentStyle,
+  type Neighbours,
+} from '../pillBlend';
 import {
   PILL_MUTED_MIN,
   PILL_TEXT_MIN,
   pillColors,
+  pillColorsOf,
   pillThemeOf,
   prosePillColors,
+  prosePillColorsOf,
   type PillColors,
-  type PillTheme,
 } from '../pillColors';
 
 const THEMES = Object.keys(themeTokens);
@@ -109,20 +119,26 @@ function blendedColours(own: PillColors, near: Neighbours, panel?: string): stri
   const out = blendBackdrops(own, near, panel);
   for (const other of [near.left, near.right]) {
     if (!other) continue;
-    const m75 = mixHex(own.bg, other.bg, 0.75);
-    const m50 = mixHex(own.bg, other.bg, 0.5);
-    out.push(srgbMid(own.bg, m75), srgbMid(m75, m50));
+    // A link pill's stops are its own colour, 75% and 50% toward the
+    // neighbour; a prose glow's are eighths of the blend (`samplePoints`).
+    const shares = panel === undefined ? [1, 0.75, 0.5] : [1, 0.875, 0.75, 0.625, 0.5];
+    const stops = shares.map((t) => mixHex(own.bg, other.bg, t));
+    for (let i = 1; i < stops.length; i++) out.push(srgbMid(stops[i - 1]!, stops[i]!));
   }
   return out;
 }
 
-/** Text and muted parts on every colour of a segment. */
-function checkBlended(label: string, own: PillColors, on: readonly string[], failures: string[]) {
+/** The text and muted colours a segment is painted with (its style's), on every colour of it. */
+function checkBlended(label: string, style: Record<string, string>, on: readonly string[], failures: string[]) {
   for (const bg of on) {
-    if (contrastRatio(own.text, bg) < PILL_TEXT_MIN) failures.push(`${label} text on ${bg}`);
-    if (contrastRatio(own.muted, bg) < PILL_MUTED_MIN) failures.push(`${label} muted on ${bg}`);
+    if (contrastRatio(style['--pill-text']!, bg) < PILL_TEXT_MIN) failures.push(`${label} text on ${bg}`);
+    if (contrastRatio(style['--pill-muted']!, bg) < PILL_MUTED_MIN) failures.push(`${label} muted on ${bg}`);
   }
 }
+
+/** A segment's style as the variant paints it. */
+const segmentStyle = (variant: 'link' | 'prose', own: PillColors, near: Neighbours, theme: string) =>
+  (variant === 'link' ? linkSegmentStyle(own, near) : proseSegmentStyle(own, near, theme)) as Record<string, string>;
 
 /** Shots of three regions (head, from half, to half): the pairs, each with a third hard colour. */
 const TRIPLES: Array<[string, string, string]> = PAIRS.flatMap(([a, b]) =>
@@ -130,21 +146,24 @@ const TRIPLES: Array<[string, string, string]> = PAIRS.flatMap(([a, b]) =>
 );
 
 type PillTint = 'link' | 'prose';
-const colorsOf = (variant: PillTint) => (c: string, t: PillTheme) => (variant === 'link' ? pillColors(c, t) : prosePillColors(c, t));
+/** A variant's colours on a named theme (cached: the sweeps ask for each colour many times). */
+const colorsOf = (variant: PillTint, name: string) => (c: string) => (variant === 'link' ? pillColorsOf(c, name) : prosePillColorsOf(c, name));
 
 describe.each(['link', 'prose'] as const)('blended two-tone %s pills (RS-BLEND)', (variant) => {
   it.each(THEMES)('%s: text and muted parts read on every blend of every pair', (name) => {
     const theme = pillThemeOf(name);
     const panel = variant === 'prose' ? theme.panel : undefined;
     const failures: string[] = [];
-    const of = colorsOf(variant);
+    const of = colorsOf(variant, name);
     for (const [shotLine, owner] of PAIRS) {
-      const A = of(shotLine, theme);
-      const B = of(owner, theme);
+      const A = of(shotLine);
+      const B = of(owner);
       const onA = blendedColours(A, { left: null, right: B }, panel);
       const onB = blendedColours(B, { left: A, right: null }, panel);
-      checkBlended(`${shotLine}|${owner} shot half`, A, panel ? [...onA, panel] : onA, failures);
-      checkBlended(`${shotLine}|${owner} owner half`, B, panel ? [...onB, panel] : onB, failures);
+      const styleA = segmentStyle(variant, A, { left: null, right: B }, name);
+      const styleB = segmentStyle(variant, B, { left: A, right: null }, name);
+      checkBlended(`${shotLine}|${owner} shot half`, styleA, panel ? [...onA, panel] : onA, failures);
+      checkBlended(`${shotLine}|${owner} owner half`, styleB, panel ? [...onB, panel] : onB, failures);
     }
     expect(failures.slice(0, 20)).toEqual([]);
   });
@@ -153,12 +172,12 @@ describe.each(['link', 'prose'] as const)('blended two-tone %s pills (RS-BLEND)'
     const theme = pillThemeOf(name);
     const panel = variant === 'prose' ? theme.panel : undefined;
     const failures: string[] = [];
-    const of = colorsOf(variant);
+    const of = colorsOf(variant, name);
     for (const [head, from, to] of TRIPLES) {
-      const [H, F, T] = [of(head, theme), of(from, theme), of(to, theme)];
+      const [H, F, T] = [of(head), of(from), of(to)];
       const near = { left: H, right: T };
       const on = blendedColours(F, near, panel);
-      checkBlended(`${head}|${from}|${to} middle`, F, panel ? [...on, panel] : on, failures);
+      checkBlended(`${head}|${from}|${to} middle`, segmentStyle(variant, F, near, name), panel ? [...on, panel] : on, failures);
     }
     expect(failures.slice(0, 20)).toEqual([]);
   });
@@ -184,8 +203,10 @@ describe('the blend mixes in OKLab (RS-BLEND)', () => {
 /** Every colour under a bridge: its samples and the sRGB points the browser draws between its quarter stops. */
 function bridgeColours(left: PillColors, right: PillColors, panel?: string): string[] {
   const out = bridgeBackdrops(left, right, panel);
+  // A link pill's bridge has stops at its quarters, a prose glow's at its eighths (`samplePoints`).
+  const shares = panel === undefined ? [1, 0.75, 0.5, 0.25, 0] : [1, 0.875, 0.75, 0.625, 0.5, 0.375, 0.25, 0.125, 0];
   for (const pick of panel === undefined ? [(c: PillColors) => c.bg, (c: PillColors) => c.hoverBg] : [(c: PillColors) => c.bg]) {
-    const q = [1, 0.75, 0.5, 0.25, 0].map((t) => mixHex(pick(left), pick(right), t));
+    const q = shares.map((t) => mixHex(pick(left), pick(right), t));
     for (let i = 0; i < q.length - 1; i++) out.push(srgbMid(q[i]!, q[i + 1]!));
   }
   return out;
@@ -195,12 +216,12 @@ describe.each(['link', 'prose'] as const)('the arrow of a two-tone %s pill reads
   it.each(THEMES)('%s: the arrow (text 7:1) on every colour from one half to the other, both ways', (name) => {
     const theme = pillThemeOf(name);
     const panel = variant === 'prose' ? theme.panel : undefined;
-    const of = colorsOf(variant);
+    const of = colorsOf(variant, name);
     const style = variant === 'link' ? linkBridgeStyle : proseBridgeStyle;
     const failures: string[] = [];
     for (const [a, b] of PAIRS) {
-      const L = of(a, theme);
-      const R = of(b, theme);
+      const L = of(a);
+      const R = of(b);
       const css = style(L, R, name) as Record<string, string>;
       const text = css['--pill-text']!;
       for (const bg of bridgeColours(L, R, panel)) {

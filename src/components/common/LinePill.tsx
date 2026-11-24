@@ -101,15 +101,12 @@ export function useProsePillColors(lineId: number | null | undefined): ResolvedP
 
 /**
  * A prose pill's colours as the custom properties the `.sh-ppill` rules read:
- * the tint as a translucent overlay that gives the tint's centre over the
- * panel (`proseTintOf`), the same colour fully transparent (what the glow
- * fades to), and the text and muted part.
+ * the glow as a wash that gives its colour over the panel (`proseTintOf`,
+ * RS-NODOTS), and the text and muted part.
  */
 export function prosePillStyle(colors: PillColors, themeName: string): CSSProperties {
-  const { tint, clear } = proseTintOf(colors.bg, pillThemeOf(themeName).panel);
   return {
-    '--pill-tint': tint,
-    '--pill-tint-clear': clear,
+    '--pill-tint': proseTintOf(colors.bg, pillThemeOf(themeName).panel).tint,
     '--pill-text': colors.text,
     '--pill-muted': colors.muted,
   } as CSSProperties;
@@ -152,10 +149,10 @@ export interface ShotTone {
   /** The to end's half, after the arrow: its owner's colour, or the shot's. */
   to: CSSProperties;
   /** The segments in order, with their colours (a bridge's run to
-   *  `bridgeTo`): a prose pill tints each line's fragment of them once laid
-   *  out (`useSegmentTints`). */
+   *  `bridgeTo`): a prose pill paints each line's piece of its glow from
+   *  them once laid out (`useProseGlow`). */
   segments: ToneSegment[];
-  /** The panel the pill sits on (a prose tint is an overlay on it). */
+  /** The panel the pill sits on (a prose glow is a wash over it). */
   panel: string;
 }
 
@@ -169,16 +166,6 @@ export interface ToneSegment {
   bridgeTo?: PillColors | undefined;
 }
 
-/** The words of a two-tone shot's segments, for a prose tint's seam width. */
-export interface ShotWords {
-  head: string;
-  from: string;
-  to: string;
-}
-
-/** About how wide `words` are in em (a pill's average glyph and its padding). */
-const widthEmOf = (words: string) => words.length * 0.56 + 0.9;
-
 /** The colours at a segment's left and right edges. */
 export const leftEdgeOf = (seg: ToneSegment): PillColors => seg.colors;
 export const rightEdgeOf = (seg: ToneSegment): PillColors => seg.bridgeTo ?? seg.colors;
@@ -186,9 +173,9 @@ export const rightEdgeOf = (seg: ToneSegment): PillColors => seg.bridgeTo ?? seg
 /**
  * {@link ShotTone} of a shot of line `lineId` whose ends belong to
  * `fromOwner` / `toOwner` (null: the shot's own line), each segment's
- * colours from `resolve` (a link or a prose pill's) and blended with its
- * neighbours: a link pill's fill and border gradients, a prose pill's tint
- * (`words` sizes its seam fade).
+ * colours from `resolve` (a link or a prose pill's): a link pill's fill and
+ * border gradients blended with its neighbours, a prose pill's text colours
+ * (its glow is painted once laid out).
  */
 export function shotToneOf(
   resolve: (lineId: number | null | undefined) => ResolvedPill,
@@ -196,7 +183,6 @@ export function shotToneOf(
   fromOwner: number | null | undefined,
   toOwner: number | null | undefined,
   variant: 'link' | 'prose' = 'link',
-  words?: ShotWords,
   /** Whether the pill has a context to keep in the shot's colour (a head segment). */
   withHead = true,
 ): ShotTone | null {
@@ -224,10 +210,7 @@ export function shotToneOf(
       return;
     }
     const near = { left: prev ? rightEdgeOf(prev) : null, right: next ? leftEdgeOf(next) : null };
-    styles[seg.key] =
-      variant === 'link'
-        ? linkSegmentStyle(seg.colors, near)
-        : proseSegmentStyle(seg.colors, near, seg.pill.theme, widthEmOf(seg.key === 'arrow' ? '' : (words?.[seg.key] ?? '')));
+    styles[seg.key] = variant === 'link' ? linkSegmentStyle(seg.colors, near) : proseSegmentStyle(seg.colors, near, seg.pill.theme);
   });
   return {
     head: styles.head ?? null,

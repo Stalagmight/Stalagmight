@@ -30,6 +30,7 @@ import {
   contrastOfHex,
   flattenOver,
   hexOfOklch,
+  hexOfRgb,
   oklabOf,
   oklchOfHex,
   oklchOfOklab,
@@ -286,56 +287,121 @@ export function missingPillColors(theme: PillTheme): MissingPillColors {
 }
 
 /**
- * A prose pill's colours (RS-PROSE): the pill inline in running text paints
- * no fill and no border but a soft radial tint of the line's hue, strongest
- * at its centre (the hover band's tint, `hoverBg`) and fading to nothing at
- * its edges, where the bare panel shows. So everything on it is held on both
- * ends of the fade: main text 7:1 and the muted context and Station ID 4.5:1,
- * on the tint and on the panel. `bg` is the tint's centre and `hoverBg` the
- * panel; there is no hover, and `border` is the resting pill's, unused. Text
- * is the theme's own unless a floor needs it nudged, as for the link pill.
+ * A prose glow's opacity over what it sits on (RS-NODOTS): every prose glow is
+ * a wash of one colour at this alpha, so it moves an accent or warning box
+ * the way it moves the panel, the glows of two stacked lines stay see-through
+ * where they meet, and a two-colour glow's stops interpolate exactly.
  */
-export function prosePillColors(lineColor: string | null | undefined, theme: PillTheme): PillColors {
-  const pill = pillColors(lineColor, theme);
-  const on = [pill.hoverBg, theme.panel];
-  const reaches = (min: number) => (c: string) => on.every((bg) => contrastOfHex(c, bg) >= min);
-  const text = pushUntil(pill.text, theme.dark, reaches(TEXT_TARGET));
-  const muted = pushUntil(pill.muted, theme.dark, reaches(MUTED_TARGET));
-  return { ...pill, bg: pill.hoverBg, hoverBg: theme.panel, text, muted };
+export const PROSE_ALPHA = 0.5;
+/**
+ * How far a prose glow's colour leaves the panel's lightness (OKLCH L), toward
+ * the text pole (lighter on a dark theme, darker on a light one): a line far
+ * from the pole (a pale line on a light theme) at `near`, one at the pole at
+ * `far`, so a near-white, a grey and a near-black line, which share no hue,
+ * differ by lightness. `least` is as close to the panel as it steps back.
+ */
+const PROSE_LIFT = { near: 0.07, far: 0.19, least: 0.03 } as const;
+/** The prose glow's share of the line's chroma, and its cap. */
+const PROSE_CHROMA = { share: 0.9, max: 0.1 } as const;
+/** The prose pill's muted words stay at least this far (contrast) from its main text, however the glow pushes them. */
+const PROSE_MUTED_APART = 1.4;
+/**
+ * The prose floors are solved with this much to spare: across a two-colour
+ * glow the OKLab blend of two hues can be a little lighter (on a dark theme)
+ * or darker (on a light one) in WCAG luminance than both ends, costing a word
+ * up to 1.4% of its contrast (measured over hard colour pairs on every
+ * theme), so a word that reads on both ends reads on the blend too.
+ */
+const PROSE_SPARE = 1.02;
+
+/** `target` moved to the nearest colour a wash at {@link PROSE_ALPHA} over `panel` can give. */
+function proseReachable(target: string, panel: string): string {
+  const t = rgbOfHex(target);
+  const p = rgbOfHex(panel);
+  const out = t.map((v, i) => p[i]! + PROSE_ALPHA * (clamp(p[i]! + (v - p[i]!) / PROSE_ALPHA, 0, 1) - p[i]!));
+  return hexOfRgb(out[0]!, out[1]!, out[2]!);
 }
 
 /**
- * The prose tint as a translucent overlay (RS-PROSE): a colour and an alpha
- * that, composited over the panel, give exactly `target` (the tint's centre,
- * `prosePillColors().bg`). Prose sits on more than the panel (an accent or
- * warning wash, a toast, a lighter box), and an opaque tint computed for the
- * panel read there as a dark smudge; the overlay moves whatever is behind it
- * the same way it moves the panel. The alpha is the least that keeps the
- * overlay colour inside sRGB, so the overlay is as close to its surroundings
- * as it can be. Returns CSS `rgba()` strings: the overlay and the same colour
- * fully transparent (what the radial tint fades to, so no grey fringe).
+ * A prose pill's colours (RS-PROSE, RS-NODOTS): the pill inline in running
+ * text paints no border but a glow of the line's colour, a capsule solid
+ * behind the name whose halo fades to the bare panel (index.css
+ * `.sh-ppill-vis`). `bg` is the glow over the panel: the line's hue with up
+ * to 90% of its chroma, its lightness off the panel's toward the text pole
+ * by {@link PROSE_LIFT} (further for a line nearer the pole), reachable by a
+ * wash at {@link PROSE_ALPHA}. Always toward the pole, even on a theme whose
+ * link pills sink below a dark panel (`theme.lift`): a wash that darkens a
+ * near-black panel has no room left for a hue. Main text
+ * holds 7:1 and the muted context and Station ID 4.5:1 on the glow and on
+ * the panel (with {@link PROSE_SPARE} to spare, for a two-colour blend), the
+ * theme's tokens nudged toward the text pole where the glow needs it; the glow steps back toward the panel only as far as it must for
+ * those floors and to keep the muted words {@link PROSE_MUTED_APART} from the
+ * main text. `hoverBg` is the panel; there is no hover, and `border` is the
+ * resting pill's, unused.
+ */
+export function prosePillColors(lineColor: string | null | undefined, theme: PillTheme): PillColors {
+  const pill = pillColors(lineColor, theme);
+  const tone = lineTone(lineHex(lineColor, theme.panel));
+  const panelL = oklchOfHex(theme.panel).L;
+  const lineL = clamp(tone.L, 0, 1);
+  // A glow lightens a dark panel and darkens a light one; a pale line on a
+  // dark theme (a dark one on a light theme) goes furthest.
+  const toward = theme.dark ? 1 : -1;
+  const pole = theme.dark ? lineL : 1 - lineL;
+  const want = PROSE_LIFT.near + (PROSE_LIFT.far - PROSE_LIFT.near) * pole;
+  const C = Math.min(tone.C * PROSE_CHROMA.share, PROSE_CHROMA.max);
+  const apart = Math.min(PROSE_MUTED_APART, contrastOfHex(theme.text, theme.muted));
+  const on = (bg: string) => (min: number) => (c: string) => contrastOfHex(c, bg) >= min && contrastOfHex(c, theme.panel) >= min;
+  const [textMin, mutedMin] = [TEXT_TARGET * PROSE_SPARE, MUTED_TARGET * PROSE_SPARE];
+  const at = (d: number): { colors: PillColors; ok: boolean } => {
+    const bg = proseReachable(hexOfOklch({ L: clamp(panelL + toward * d, 0, 1), C, h: tone.h }), theme.panel);
+    const text = pushUntil(pill.text, theme.dark, on(bg)(textMin));
+    const muted = pushUntil(pill.muted, theme.dark, on(bg)(mutedMin));
+    const ok = on(bg)(textMin)(text) && on(bg)(mutedMin)(muted) && contrastOfHex(text, muted) >= apart;
+    return { colors: { ...pill, bg, hoverBg: theme.panel, text, muted }, ok };
+  };
+  // The floors only get harder further from the panel: the furthest lift up
+  // to `want` that keeps them, found by halving.
+  const wanted = at(want);
+  if (wanted.ok) return wanted.colors;
+  let lo = at(PROSE_LIFT.least);
+  let [near, far]: [number, number] = [PROSE_LIFT.least, want];
+  for (let i = 0; i < 12 && lo.ok; i++) {
+    const mid = (near + far) / 2;
+    const m = at(mid);
+    if (m.ok) [lo, near] = [m, mid];
+    else far = mid;
+  }
+  return lo.colors;
+}
+
+/**
+ * The prose glow as CSS colours (RS-PROSE, RS-NODOTS): the wash that,
+ * composited at {@link PROSE_ALPHA} over the panel, gives `target` (the
+ * glow's colour, `prosePillColors().bg`), and the same colour fully
+ * transparent. Prose sits on more than the panel (an accent or warning wash,
+ * a toast, a lighter box), and an opaque glow computed for the panel read
+ * there as a smudge; the wash moves whatever is behind it the same way it
+ * moves the panel.
  */
 export function proseTintOf(target: string, panel: string): { tint: string; clear: string } {
   const o = proseOverlayOf(target, panel);
   if (o.alpha === 0) return { tint: 'rgba(0, 0, 0, 0)', clear: 'rgba(0, 0, 0, 0)' };
   const rgb = `${o.rgb[0]}, ${o.rgb[1]}, ${o.rgb[2]}`;
-  return { tint: `rgba(${rgb}, ${o.alpha.toFixed(4)})`, clear: `rgba(${rgb}, 0)` };
+  return { tint: `rgba(${rgb}, ${o.alpha})`, clear: `rgba(${rgb}, 0)` };
 }
 
-/** {@link proseTintOf} as numbers: the overlay's 8-bit channels and its alpha (0 for none). */
+/**
+ * {@link proseTintOf} as numbers: the wash's 8-bit channels at
+ * {@link PROSE_ALPHA} (a target out of its reach is clamped), or alpha 0
+ * when the target is the panel.
+ */
 export function proseOverlayOf(target: string, panel: string): { rgb: [number, number, number]; alpha: number } {
   const t = rgbOfHex(target.toLowerCase());
   const p = rgbOfHex(panel.toLowerCase());
-  let alpha = 0;
-  for (let i = 0; i < 3; i++) {
-    const d = t[i]! - p[i]!;
-    if (d > 0) alpha = Math.max(alpha, d / (1 - p[i]!));
-    else if (d < 0) alpha = Math.max(alpha, -d / p[i]!);
-  }
-  if (alpha === 0) return { rgb: [0, 0, 0], alpha: 0 };
-  alpha = Math.min(1, alpha);
-  const channel = (i: number) => Math.round(clamp(p[i]! + (t[i]! - p[i]!) / alpha, 0, 1) * 255);
-  return { rgb: [channel(0), channel(1), channel(2)], alpha };
+  if (t.every((v, i) => v === p[i])) return { rgb: [0, 0, 0], alpha: 0 };
+  const channel = (i: number) => Math.round(clamp(p[i]! + (t[i]! - p[i]!) / PROSE_ALPHA, 0, 1) * 255);
+  return { rgb: [channel(0), channel(1), channel(2)], alpha: PROSE_ALPHA };
 }
 
 const proseCache = new Map<string, PillColors>();

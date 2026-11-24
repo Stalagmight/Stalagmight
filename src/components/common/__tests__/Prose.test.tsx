@@ -137,14 +137,18 @@ describe('prose pills (RS-PROSE)', () => {
     const seg = (name: string) => shotPill.querySelector(`[data-prose-seg="${name}"]`) as HTMLElement;
     expect(seg('head').textContent).toBe('Side: ');
     expect(seg('from').textContent).toBe('12');
-    // RS-ARROW: the arrow and its spaces are a segment of their own, whose
-    // tint runs from the from half's to the to half's; each half's tint
-    // blends toward its neighbour.
+    // RS-ARROW: the arrow and its spaces are a segment of their own.
     expect(seg('arrow').textContent).toBe('\u00a0→\u00a0');
     expect(seg('to').textContent).toBe('1');
-    const tint = (el: HTMLElement) => el.style.getPropertyValue('--seg-tint');
-    for (const name of ['head', 'from', 'arrow', 'to']) expect(tint(seg(name))).toMatch(/^url\("data:image\/svg\+xml,/);
-    expect(tint(seg('from'))).not.toBe(tint(seg('to')));
+    // RS-NODOTS: every word, space and the arrow is a box of its own (its
+    // glow painted per line once laid out), in its segment's colours.
+    const boxes = [...shotPill.querySelectorAll('.sh-ppill-w')].map((b) => [b.textContent, (b as HTMLElement).dataset.seg]);
+    expect(boxes).toEqual([['Side:', '0'], [' ', '0'], ['12', '1'], ['\u00a0→\u00a0', '2'], ['1', '3']]);
+    expect(shotPill.querySelector('.sh-ppill-w')).toHaveClass('sh-ppill-w--start');
+    expect([...shotPill.querySelectorAll('.sh-ppill-w')].pop()).toHaveClass('sh-ppill-w--end');
+    expect(shotPill.querySelectorAll('.sh-ppill-w--sp')).toHaveLength(1);
+    const text = (el: HTMLElement) => el.style.getPropertyValue('--pill-text');
+    for (const name of ['head', 'from', 'arrow', 'to']) expect(text(seg(name))).not.toBe('');
     // A wrap never separates the arrow from either end: its spaces are
     // no-break spaces, and the from half, the arrow and the to half are joined.
     expect(seg('from').parentElement).toHaveClass('sh-ppill-join');
@@ -155,15 +159,17 @@ describe('prose pills (RS-PROSE)', () => {
     expect(shotPill.querySelector('[data-prose-sid]')).toBeNull();
   });
 
-  it('tints a two-tone shot per line once laid out, and a moving layout never loops the update (RS-BLEND)', () => {
-    // Every measure sees another box, as while a panel slides open: a hook
+  it("paints a two-colour shot's glow per line once laid out, and a moving layout never loops the update (RS-NODOTS)", () => {
+    // Every measure sees other boxes, as while a panel slides open: a hook
     // that measured on every render would never settle (React #185).
     let calls = 0;
-    const rects = vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(function (this: HTMLElement) {
+    const rects = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
       calls += 1;
-      const width = 20 + (calls % 2) * 10;
-      const rect = { top: 0, bottom: 16, left: 0, right: width, width, height: 16, x: 0, y: 0, toJSON: () => ({}) };
-      return Object.assign([rect], { item: (i: number) => (i === 0 ? rect : null) }) as unknown as DOMRectList;
+      // A border box: the words, 10 px a box along one line, and the padding the glow gave the box.
+      const pad = (side: string) => parseFloat(this.style.getPropertyValue(`padding-${side}`)) || 0;
+      const at = 10 * [...(this.closest('.sh-ppill-vis')?.querySelectorAll('.sh-ppill-w') ?? [])].indexOf(this) + (calls % 2);
+      const [left, right] = [at - pad('left'), at + 10 + pad('right')];
+      return { top: 0, bottom: 28, left, right, width: right - left, height: 28, x: left, y: 0, toJSON: () => ({}) } as DOMRect;
     });
     try {
       const { rerender } = render(
@@ -176,9 +182,10 @@ describe('prose pills (RS-PROSE)', () => {
           <Prose text={sentence(true)} />
         </p>,
       );
-      const seg = screen.getByTestId('p').querySelector('[data-prose-seg="from"]') as HTMLElement;
-      // Laid out: one layer per line, placed over its fragment.
-      expect(seg.style.getPropertyValue('--seg-tint-size')).toBe('100.0000% 100%');
+      // Laid out on one line: its first box paints the whole piece.
+      const boxes = [...screen.getByTestId('p').querySelectorAll('.sh-ppill-vis--split .sh-ppill-w')] as HTMLElement[];
+      expect(boxes[0]!.style.getPropertyValue('--w-glow')).toMatch(/^url\("data:image\/svg\+xml,/);
+      expect(boxes.slice(1).every((b) => b.style.getPropertyValue('--w-glow') === '')).toBe(true);
     } finally {
       rects.mockRestore();
     }

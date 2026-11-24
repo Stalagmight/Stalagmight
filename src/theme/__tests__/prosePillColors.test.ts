@@ -1,18 +1,24 @@
 /**
- * RS-PROSE: a prose pill paints a soft radial tint that fades from the line's
- * tint at its centre to the bare panel at its edges, so its text and muted
- * parts must read on both: main text 7:1, the context and Station ID 4.5:1
- * (no dots since RS-NODOTS). Swept over the same line colours as the link
- * pill (`pillColors.test.ts`) on every theme, measured with `utils/colors`.
+ * RS-PROSE, RS-NODOTS: a prose pill paints a glow, a capsule solid behind the
+ * name whose halo fades to the bare panel, so its text and muted parts must
+ * read on both: main text 7:1, the context and Station ID 4.5:1. The glow is
+ * a wash at one alpha, lighter than a dark panel and darker than a light
+ * one, clearly off the panel, in the line's hue, and further off it for a
+ * line nearer the text pole, so a near-white, a grey and a near-black line
+ * differ. Swept over the same line colours as the link pill
+ * (`pillColors.test.ts`) on every theme, measured with `utils/colors`.
+ * Injections: the glow on the link pills' side (`theme.lift`) fails "lighter
+ * than a dark panel" on cave; one lightness for every line fails "the
+ * greys differ"; the old radial tint's centre fails "clearly off the panel".
  */
 import { describe, expect, it } from 'vitest';
 import { themeTokens } from '../tokens';
-import { CSS_COLOR_NAMES, hexOfOklch } from '../cssColor';
+import { CSS_COLOR_NAMES, hexOfOklch, oklchOfHex } from '../cssColor';
 import { COMMENT_PALETTE, LIGHT_LINE_COLORS, LINE_COLORS, contrastRatio } from '../../utils/colors';
 import {
   PILL_MUTED_MIN,
   PILL_TEXT_MIN,
-  pillColors,
+  PROSE_ALPHA,
   pillThemeOf,
   prosePillColors,
   prosePillColorsOf,
@@ -53,12 +59,48 @@ describe('prosePillColors sweep', () => {
     expect(failures).toEqual([]);
   });
 
-  it.each(THEMES)("%s: the tint's centre is the link pill's hover tint, and it fades to the panel", (name) => {
+  it.each(THEMES)('%s: the muted words stay apart from the main text', (name) => {
     const theme = pillThemeOf(name);
-    for (const color of ['#ffe600', '#1f4fff', '#101010', '#f6f6f2']) {
+    const apart = Math.min(1.4, contrastRatio(theme.text, theme.muted));
+    for (const color of COLORS) {
       const p = prosePillColors(color, theme);
-      expect(p.bg).toBe(pillColors(color, theme).hoverBg);
+      expect(contrastRatio(p.text, p.muted), color).toBeGreaterThanOrEqual(apart - 0.01);
+    }
+  });
+
+  it.each(THEMES)('%s: the glow lightens a dark panel and darkens a light one, clearly off it', (name) => {
+    const theme = pillThemeOf(name);
+    const panelL = oklchOfHex(theme.panel).L;
+    for (const color of COLORS) {
+      const p = prosePillColors(color, theme);
+      const off = oklchOfHex(p.bg).L - panelL;
+      expect(theme.dark ? off : -off, color).toBeGreaterThan(0.025);
+      expect(contrastRatio(p.bg, theme.panel), color).toBeGreaterThanOrEqual(1.1);
       expect(p.hoverBg).toBe(theme.panel);
+    }
+  });
+
+  // nord's text leaves the glow one lightness (its panel is light for a dark
+  // theme): its greys differ on link pills by their borders only.
+  it.each(THEMES.filter((t) => t !== 'nord'))('%s: a near-white, a grey and a near-black line glow apart, the pole-most furthest', (name) => {
+    const theme = pillThemeOf(name);
+    const panelL = oklchOfHex(theme.panel).L;
+    const off = (c: string) => Math.abs(oklchOfHex(prosePillColors(c, theme).bg).L - panelL);
+    const [white, grey, black] = [off('#f6f6f2'), off('#808080'), off('#101010')];
+    const [near, mid, far] = theme.dark ? [black, grey, white] : [white, grey, black];
+    expect(mid - near).toBeGreaterThan(0.03);
+    expect(far - mid).toBeGreaterThan(0.03);
+  });
+
+  it.each(THEMES)("%s: a coloured line's glow keeps its hue", (name) => {
+    const theme = pillThemeOf(name);
+    for (const color of COLORS) {
+      if (!/^#[0-9a-f]{6}$/.test(color)) continue;
+      const line = oklchOfHex(color);
+      const glow = oklchOfHex(prosePillColors(color, theme).bg);
+      if (line.C < 0.08 || glow.C < 0.03) continue;
+      const gap = Math.abs(glow.h - line.h) % 360;
+      expect(Math.min(gap, 360 - gap), color).toBeLessThan(25);
     }
   });
 
@@ -77,7 +119,7 @@ describe('proseTintOf', () => {
   };
   const hex = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
 
-  it.each(THEMES)('%s: over the panel the overlay is the tint itself, within one 8-bit step', (name) => {
+  it.each(THEMES)('%s: over the panel the wash at the glow alpha is the glow itself, within one 8-bit step', (name) => {
     const theme = pillThemeOf(name);
     for (const color of COLORS) {
       const target = prosePillColors(color, theme).bg;
@@ -86,8 +128,7 @@ describe('proseTintOf', () => {
       const panel = hex(theme.panel);
       const composed = panel.map((p, i) => p * (1 - o.a) + o.rgb[i]! * o.a);
       hex(target).forEach((t, i) => expect(Math.abs(composed[i]! - t), `${name} ${color}`).toBeLessThanOrEqual(1.01));
-      expect(o.a).toBeGreaterThan(0);
-      expect(o.a).toBeLessThanOrEqual(1);
+      expect(o.a).toBe(PROSE_ALPHA);
       expect(rgba(clear).rgb).toEqual(o.rgb);
       expect(rgba(clear).a).toBe(0);
     }

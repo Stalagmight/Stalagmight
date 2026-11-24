@@ -289,7 +289,7 @@ export function DetailLink({
   const toOwner = marked ? (shotHomeLineIds?.to !== undefined ? shotHomeLineIds.to : labels.ownerLine(endRef(shotIndex + 1))) : null;
   // The context (the shot's line) keeps the shot's colour as a head when
   // the from end's half is another line's; with no context there is none.
-  const tone = marked ? shotToneOf(resolve, target.lineId, fromOwner, toOwner, 'link', undefined, Boolean(pillContext)) : null;
+  const tone = marked ? shotToneOf(resolve, target.lineId, fromOwner, toOwner, 'link', Boolean(pillContext)) : null;
   // Whose station a foreign end is: said in its tooltip and words (RS-NODOTS).
   const fromMark = marked ? markOf(pill, endHome(shotHomeLineIds?.from, shotIndex)) : null;
   const toMark = marked ? markOf(pill, endHome(shotHomeLineIds?.to, shotIndex + 1)) : null;

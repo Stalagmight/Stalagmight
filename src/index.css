@@ -1841,37 +1841,47 @@ button.sh-apill {
 
 /* Prose pill (ProsePill, src/components/common/Prose.tsx; RS-PROSE): a line
    pill inline in running text, with the link pill's context and Station ID
-   (no dot or marks since RS-NODOTS), but no pill shape: a soft radial tint in the line's colour
-   (`--pill-tint`, a translucent overlay: prosePillColors and proseTintOf in
-   pillColors.ts) that fades to nothing at each fragment's edges. A bordered fill stood 0 to 1 px from the fill of
-   the line above on most stacked pairs (the fill covers the font's whole
-   content area), so two lines of pills read as one block; a tint with no
-   hard edge cannot collide. It must leave the paragraph's line pitch exactly
-   as plain text has it:
-   - the painted part (`.sh-ppill-vis`) is `display: inline` with no vertical
-     padding: an inline box's background and padding never take part in the
-     line box's height (CSS 2.1 10.8.1);
-   - every text part inside has line-height 0 (a smaller font with the
-     paragraph's line-height would sit lower and push the line box down);
-   - the Station ID is lifted by a relative offset, never `vertical-align`,
-     and stays inside the text's own height.
-   `box-decoration-break: clone` gives each line's fragment of a wrapped pill
-   its own tint and padding; `.sh-ppill-nw` keeps the Station ID with the
-   last word.
-   `.sh-ppill` itself paints nothing: it holds the colours and the sr-only
-   words, which a copy and a screen reader take. */
+   (no dot or marks since RS-NODOTS) and no border: a glow, a soft-edged
+   capsule in the line's colour (theme/proseGlow.ts). Its core is solid
+   behind the whole name, rounded at each end of each line's piece; a halo in
+   the same colour carries it further and fades. The colour is a wash
+   (`--pill-tint`, prosePillColors and proseTintOf in pillColors.ts) that the
+   panel, an accent box or the glow of the line above shows through.
+   It must leave the paragraph's line pitch exactly as plain text has it, and
+   it does, because nothing it paints takes part in a line box's height:
+   - the glow is the background, padding and box-shadow of an inline box
+     (`.sh-ppill-vis`), whose line-height is 0 (CSS 2.1 10.8.1);
+   - its font is scaled (`--glow-s`) so its content area, the core, hugs the
+     glyphs instead of the font's whole content area (19 px of a 20 px line
+     in Segoe UI), and `.sh-ppill-txt` puts the text back at its size, with a
+     zero line-height on every part inside;
+   - the Station ID is lifted by a relative offset, never `vertical-align`.
+   The geometry is in em of the text, unitless here and in theme/proseGlow.ts
+   (GLOW; a test pins the two equal); in the scaled box it is divided by the
+   scale. `box-decoration-break: clone` makes each line's piece of a wrapped
+   pill its own capsule. `.sh-ppill` itself paints nothing: it holds the
+   colours and the sr-only words, which a copy and a screen reader take. */
 .sh-ppill {
+  --glow-s: 0.75;
+  --glow-pt: 0.04;
+  --glow-pb: 0.06;
+  --glow-px: 0.22;
+  --glow-mx: -0.1;
+  --glow-spread: 0.14;
+  --glow-blur: 0.28;
+  --glow-reach: calc(var(--glow-spread) + 1.5 * var(--glow-blur));
   color: var(--pill-text);
 }
 .sh-ppill-vis {
-  padding: 0 0.14em;
-  background: radial-gradient(
-    farthest-side,
-    var(--pill-tint) 0%,
-    var(--pill-tint) 45%,
-    var(--pill-tint-clear) 100%
-  );
+  font-size: calc(var(--glow-s) * 1em);
   line-height: 0;
+  padding: calc(var(--glow-pt) * 1em / var(--glow-s)) calc(var(--glow-px) * 1em / var(--glow-s))
+    calc(var(--glow-pb) * 1em / var(--glow-s));
+  margin: 0 calc(var(--glow-mx) * 1em / var(--glow-s));
+  border-radius: 9999px;
+  background: var(--pill-tint);
+  box-shadow: 0 0 calc(var(--glow-blur) * 1em / var(--glow-s)) calc(var(--glow-spread) * 1em / var(--glow-s))
+    var(--pill-tint);
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
   -webkit-user-select: none;
@@ -1880,37 +1890,44 @@ button.sh-apill {
 .sh-ppill-vis * {
   line-height: 0;
 }
-/* A two-tone shot (RS-OWNERSHIP): each segment its own line's tint, fading
-   as one pill does; the drawing itself paints nothing. */
+.sh-ppill-txt {
+  font-size: calc(1em / var(--glow-s));
+}
+/* A two-colour shot (RS-OWNERSHIP, RS-NODOTS): the drawing paints nothing
+   and is not scaled; its word boxes are, each painting its share of its
+   line's capsule once laid out (`--w-glow`, an SVG of the same core and
+   halo, useProseGlow.ts), its colour running across the arrow. A box keeps
+   the halo's room above and below; the pill's first and last box keep the
+   room for its rounded ends and give back as much of it as the one-colour
+   pill's padding does not take. No word box wraps; a space box may. */
 .sh-ppill-vis--split {
+  font-size: 1em;
   padding: 0;
+  margin: 0;
+  border-radius: 0;
   background: none;
+  box-shadow: none;
+}
+.sh-ppill-w {
+  font-size: calc(var(--glow-s) * 1em);
+  padding: calc((var(--glow-pt) + var(--glow-reach)) * 1em / var(--glow-s)) 0
+    calc((var(--glow-pb) + var(--glow-reach)) * 1em / var(--glow-s));
+  background: var(--w-glow, none) 0 0 / 100% 100% no-repeat;
+  white-space: nowrap;
+}
+.sh-ppill-w.sh-ppill-w--sp {
+  white-space: normal;
+}
+.sh-ppill-w.sh-ppill-w--start {
+  padding-left: calc((var(--glow-px) + var(--glow-reach)) * 1em / var(--glow-s));
+  margin-left: calc((var(--glow-mx) - var(--glow-reach)) * 1em / var(--glow-s));
+}
+.sh-ppill-w.sh-ppill-w--end {
+  padding-right: calc((var(--glow-px) + var(--glow-reach)) * 1em / var(--glow-s));
+  margin-right: calc((var(--glow-mx) - var(--glow-reach)) * 1em / var(--glow-s));
 }
 .sh-ppill-seg {
-  padding: 0 0.14em;
-  /* One continuous tint across the seams (RS-BLEND): an SVG whose colour
-     shifts to the midpoint with the neighbour at a seam, masked by the
-     tint's fade centred on the seam (theme/pillBlend.ts). Laid out, each
-     line's fragment gets its own layer over the fragments put end to end
-     (slice), blended only at a seam on its line (useSegmentTints.ts). */
-  background-image: var(--seg-tint, none);
-  background-size: var(--seg-tint-size, 100% 100%);
-  background-position: var(--seg-tint-pos, 0 0);
-  background-repeat: no-repeat;
   color: var(--pill-text);
-  -webkit-box-decoration-break: slice;
-  box-decoration-break: slice;
-}
-/* The arrow's segment carries its own spaces (RS-ARROW); the halves beside
-   it give up their padding on that side. */
-.sh-ppill-seg.sh-ppill-seg--to-arrow {
-  padding-right: 0;
-}
-.sh-ppill-seg.sh-ppill-seg--from-arrow {
-  padding-left: 0;
-}
-.sh-ppill-seg.sh-ppill-seg--arrow {
-  padding: 0;
 }
 .sh-ppill-nw {
   white-space: nowrap;
