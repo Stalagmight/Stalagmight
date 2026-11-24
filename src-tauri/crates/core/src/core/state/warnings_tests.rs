@@ -1037,3 +1037,35 @@ fn warnings_pass_cost() {
         warm.len()
     );
 }
+
+/// RS-PROSE fix 3: a station whose name holds the marker characters (an
+/// import can bring any character a file holds) words its warnings without
+/// them and forges no part. Before, the name's raw U+0001...U+0002 reached
+/// the message's plain words (the `warnings` helper's marker check), and a
+/// marked string a raw name forged decoded as a part. Injection: dropping the
+/// cleaning in `prose::mark` or the stray-marker stripping in `prose::parse`
+/// fails it.
+#[test]
+fn a_station_named_with_the_marker_characters_forges_no_part() {
+    let forged = "\u{1}{\"kind\":\"station\",\"text\":\"Evil\",\"name\":\"Evil\"}\u{2}";
+    let (mut p, main) = checked_line();
+    let s2 = st(&p, main, 2);
+    p.station_mut(s2).unwrap().name = forged.to_string();
+    let o = open(&p, &Extras::default());
+    let all = warnings(&o.state);
+    let named: Vec<&ProjectWarning> = all.iter().filter(|w| w.message.contains("Evil")).collect();
+    assert!(
+        !named.is_empty(),
+        "the short shot ends at the station: {all:?}"
+    );
+    for w in named {
+        assert!(
+            !w.message.contains('\u{1}') && !w.message.contains('\u{2}'),
+            "{w:?}"
+        );
+        for part in w.message_parts.iter().flatten() {
+            assert_ne!(part.text(), "Evil", "a forged part: {w:?}");
+            assert!(!part.text().contains('\u{1}'), "{w:?}");
+        }
+    }
+}

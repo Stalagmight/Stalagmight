@@ -95,7 +95,7 @@ impl Label {
     /// placeholder, a label that names nothing): never read for marks.
     pub(crate) fn plain(text: String) -> Self {
         Self {
-            text: bounded(text),
+            text: bounded(prose::clean(&text)),
             parts: Vec::new(),
         }
     }
@@ -103,7 +103,9 @@ impl Label {
     /// The label `plain`, with the parts of `marked` (the same label worded
     /// with marked names) when they say its words, bounded.
     fn of(plain: String, marked: &str) -> Self {
-        let text = bounded(plain);
+        // A raw name may hold the marker characters; the label goes without
+        // them, as the marked words do (RS-PROSE fix 3).
+        let text = bounded(prose::clean(&plain));
         let (words, parts) = prose::split(marked);
         let parts = if words == text {
             prose::without_slots(parts)

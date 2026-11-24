@@ -14,10 +14,21 @@
 //! before pills.
 //!
 //! Builders word a text with `format!` as before and put a **marked** name
-//! where a name goes ([`mark`]): the part as JSON between U+0001 and U+0002,
-//! which no name holds (`sanitize_display_text` drops control characters).
-//! [`parse`] splits a marked string into parts at the boundary that sends
-//! it; a marked string never leaves the backend.
+//! where a name goes ([`mark`]): U+0001, this process's random nonce, the
+//! part as JSON, U+0002. [`parse`] splits a marked string into parts at the
+//! boundary that sends it; a marked string never leaves the backend.
+//!
+//! A raw string a builder interpolates (a name an import brought, a comment)
+//! may hold any character, the markers included (RS-PROSE fix 3). It cannot
+//! forge a part: only marks with the nonce are read, and [`parse`] drops
+//! every other marker character from the words, the one place raw text is
+//! cleaned; a mark's own fields are cleaned when it is made ([`mark`]); and
+//! [`split`] keeps the parts only when their words are the text's (the check
+//! `Label::of` makes), so a text whose raw words held a marker is plain.
+//! Loaders and importers keep a name as its file has it (a user-typed name
+//! refuses control characters, `station_naming::user_station_name`); text
+//! is cleaned where it is worded, here, and the frontend sanitises what it
+//! draws.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -28,6 +39,57 @@ use crate::{LineId, StationId, StationRef};
 pub const MARK_OPEN: char = '\u{1}';
 /// Closes a marked part.
 pub const MARK_CLOSE: char = '\u{2}';
+
+/// This process's nonce: the hex of a randomly keyed hash, after
+/// [`MARK_OPEN`] in every mark. Raw text cannot know it, so it cannot forge
+/// a mark ([`parse`] reads only marks that carry it).
+static NONCE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    use std::hash::BuildHasher;
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    format!(
+        "{:016x}",
+        std::collections::hash_map::RandomState::new().hash_one((seed, std::process::id()))
+    )
+});
+
+/// `text` without the marker characters (RS-PROSE fix 3).
+pub fn clean(text: &str) -> String {
+    text.replace([MARK_OPEN, MARK_CLOSE], "")
+}
+
+impl ProsePart {
+    /// The part with every text field cleaned of the marker characters.
+    #[must_use]
+    fn cleaned(self) -> Self {
+        let end = |e: ProseShotEnd| ProseShotEnd {
+            name: clean(&e.name),
+            ..e
+        };
+        match self {
+            Self::Text { text } => Self::Text { text: clean(&text) },
+            Self::Station(s) => Self::Station(ProseStation {
+                text: clean(&s.text),
+                name: clean(&s.name),
+                context: s.context.as_deref().map(clean),
+                ..s
+            }),
+            Self::Shot(s) => Self::Shot(ProseShot {
+                text: clean(&s.text),
+                context: s.context.as_deref().map(clean),
+                from: end(s.from),
+                to: end(s.to),
+                ..s
+            }),
+            Self::Line(l) => Self::Line(ProseLine {
+                text: clean(&l.text),
+                name: clean(&l.name),
+                ..l
+            }),
+        }
+    }
+}
 
 /// One piece of a text that names stations, shots and lines.
 // `export_to` without `export` (as on `StationRef`): no export test writes
@@ -174,33 +236,64 @@ impl ProsePart {
     }
 }
 
-/// `part` marked for a builder's `format!` ([`parse`] splits it back out).
+/// `part` marked for a builder's `format!` ([`parse`] splits it back out),
+/// its fields cleaned of the marker characters.
 pub fn mark(part: &ProsePart) -> String {
-    match serde_json::to_string(part) {
-        Ok(json) => format!("{MARK_OPEN}{json}{MARK_CLOSE}"),
+    let part = part.clone().cleaned();
+    match serde_json::to_string(&part) {
+        // serde_json escapes control characters: the JSON holds no marker.
+        Ok(json) => format!("{MARK_OPEN}{}{json}{MARK_CLOSE}", *NONCE),
         // A part is plain data and always serialises; never lose its words.
         Err(_) => part.text().to_owned(),
     }
 }
 
+/// The marks of `marked` and the raw text around them: `(words, part)` in
+/// order, `part` None for the raw text after the last mark. Only marks with
+/// this process's nonce count; a marker character anywhere else stays in the
+/// words (the caller decides what to do with it).
+fn marks(marked: &str) -> Vec<(&str, Option<ProsePart>)> {
+    let nonce = NONCE.as_str();
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut from = 0;
+    while let Some(found) = marked[from..].find(MARK_OPEN) {
+        let open = from + found;
+        let body = &marked[open + MARK_OPEN.len_utf8()..];
+        let read = body.strip_prefix(nonce).and_then(|rest| {
+            let close = rest.find(MARK_CLOSE)?;
+            let part = serde_json::from_str::<ProsePart>(&rest[..close]).ok()?;
+            Some((
+                part,
+                open + MARK_OPEN.len_utf8() + nonce.len() + close + MARK_CLOSE.len_utf8(),
+            ))
+        });
+        match read {
+            Some((part, end)) => {
+                out.push((&marked[start..open], Some(part)));
+                start = end;
+                from = end;
+            }
+            None => from = open + MARK_OPEN.len_utf8(),
+        }
+    }
+    out.push((&marked[start..], None));
+    out
+}
+
 /// The parts of a marked string: its words, and each marked name. Adjacent
-/// words are one part. A malformed mark is read as its words without the
-/// marker characters.
+/// words are one part. Only this process's marks are read; every other
+/// marker character is dropped from the words (the one place raw
+/// interpolated text is cleaned, RS-PROSE fix 3), so a malformed or forged
+/// mark reads as its words without them.
 pub fn parse(marked: &str) -> Vec<ProsePart> {
     let mut parts = Vec::new();
     let mut words = String::new();
-    let mut rest = marked;
-    while let Some(open) = rest.find(MARK_OPEN) {
-        words.push_str(&rest[..open]);
-        let after = &rest[open + MARK_OPEN.len_utf8()..];
-        let Some(close) = after.find(MARK_CLOSE) else {
-            words.push_str(after);
-            rest = "";
-            break;
-        };
-        match serde_json::from_str::<ProsePart>(&after[..close]) {
-            Ok(ProsePart::Text { text }) => words.push_str(&text),
-            Ok(part) => {
+    for (raw, part) in marks(marked) {
+        words.push_str(&clean(raw));
+        match part {
+            Some(ProsePart::Text { text }) => words.push_str(&text),
+            Some(part) => {
                 if !words.is_empty() {
                     parts.push(ProsePart::Text {
                         text: std::mem::take(&mut words),
@@ -208,11 +301,9 @@ pub fn parse(marked: &str) -> Vec<ProsePart> {
                 }
                 parts.push(part);
             }
-            Err(_) => words.push_str(&after[..close]),
+            None => {}
         }
-        rest = &after[close + MARK_CLOSE.len_utf8()..];
     }
-    words.push_str(rest);
     if !words.is_empty() {
         parts.push(ProsePart::Text { text: words });
     }
@@ -230,11 +321,19 @@ pub fn unmark(marked: &str) -> String {
 }
 
 /// The plain string of a marked string and its parts, the parts empty when
-/// it names nothing (a text with no name needs no parts on the wire).
+/// it names nothing (a text with no name needs no parts on the wire), or
+/// when their words are not the text's: the marked string with each mark
+/// read as its words and the raw text around as it is (the check
+/// `Label::of` makes, RS-PROSE fix 3). They differ only when raw text held
+/// a marker character, which the plain string then goes without.
 pub fn split(marked: &str) -> (String, Vec<ProsePart>) {
     let parts = parse(marked);
     let text = plain(&parts);
-    if parts.iter().any(ProsePart::is_name) {
+    let raw: String = marks(marked)
+        .into_iter()
+        .map(|(words, part)| format!("{words}{}", part.as_ref().map_or("", ProsePart::text)))
+        .collect();
+    if parts.iter().any(ProsePart::is_name) && raw == text {
         (text, parts)
     } else {
         (text, Vec::new())
@@ -408,5 +507,42 @@ mod tests {
         };
         assert_eq!(s.slot, None);
         assert_eq!(s.station_id, Some(42));
+    }
+
+    /// RS-PROSE fix 3: a raw string interpolated into a marked one cannot
+    /// forge a part, however well-formed its JSON: only this process's marks
+    /// (with its nonce) are read, every other marker character is dropped
+    /// from the words, and a text whose raw words held one keeps no parts.
+    /// Injection: decoding a mark without the nonce check fails it.
+    #[test]
+    fn a_raw_string_cannot_forge_a_part() {
+        let forged = "\u{1}{\"kind\":\"station\",\"text\":\"Evil\",\"name\":\"Evil\"}\u{2}";
+        let real = station("Side / 0", "0");
+        let marked = format!("Rename {} to \"{forged}\"", mark(&real));
+        let (text, parts) = split(&marked);
+        assert!(
+            !text.contains('\u{1}') && !text.contains('\u{2}'),
+            "{text:?}"
+        );
+        assert!(text.contains("Evil"));
+        assert!(
+            parts.iter().all(|p| p.text() != "Evil"),
+            "a forged part: {parts:?}"
+        );
+        // The words held a stray marker: the text is plain.
+        assert!(parts.is_empty(), "{parts:?}");
+    }
+
+    /// A part's own fields lose the marker characters when it is marked, so
+    /// a name holding them words its text without them.
+    #[test]
+    fn a_marked_part_carries_no_marker_characters() {
+        let dirty = station("Side / \u{1}0\u{2}", "\u{1}0\u{2}");
+        let (text, parts) = split(&format!("{} is archived", mark(&dirty)));
+        assert_eq!(text, "Side / 0 is archived");
+        let ProsePart::Station(s) = &parts[0] else {
+            panic!("a station part: {parts:?}");
+        };
+        assert_eq!((s.text.as_str(), s.name.as_str()), ("Side / 0", "0"));
     }
 }
