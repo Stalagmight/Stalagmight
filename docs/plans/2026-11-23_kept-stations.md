@@ -2218,9 +2218,10 @@ and RS-FX6's home-line mark on station pills.
   `ProseShotEnd.home_line` are now the owner line (a loop end's kept end's
   home line included), and a station part's context names it. History
   entries written by RS-PROSE builds before this package carried the slot's
-  line as context and no home line for a loop end; they render with the
-  slot's colour, which only affects unreleased development files, so the
-  format version stays 3.
+  line as context and no home line for a loop end: a foreign station in them
+  still renders in its owner's colour and name (the renderer names the
+  owner line itself), a loop end in its slot's colour. That only affects
+  unreleased development files, so the format version stays 3.
 - **A two-tone shot pill, split before the arrow.** A shot with an end of
   another line paints segments instead of one pill: the from end's half and
   the to end's half (the arrow opens the second), each in its owner's
