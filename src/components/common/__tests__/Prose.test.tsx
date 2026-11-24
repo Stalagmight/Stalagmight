@@ -132,10 +132,12 @@ describe('prose pills (RS-PROSE)', () => {
     const seg = (name: string) => shotPill.querySelector(`[data-prose-seg="${name}"]`) as HTMLElement;
     expect(seg('head').textContent).toBe('Side: ');
     expect(seg('from').textContent).toBe('12');
-    expect(seg('to').textContent).toBe('→ 1');
-    const tint = (el: HTMLElement) => el.style.getPropertyValue('--pill-tint');
+    // RS-BLEND: the space before the arrow is inside the to half, so the
+    // tints meet with no gap; each half's tint blends toward its neighbour.
+    expect(seg('to').textContent).toBe(' → 1');
+    const tint = (el: HTMLElement) => el.style.getPropertyValue('--seg-tint');
+    for (const name of ['head', 'from', 'to']) expect(tint(seg(name))).toMatch(/^url\("data:image\/svg\+xml,/);
     expect(tint(seg('from'))).not.toBe(tint(seg('to')));
-    expect(tint(seg('head'))).toBe(tint(seg('to')));
     expect(seg('from')).toContainElement(shotPill.querySelector('[data-prose-mark="home"]') as HTMLElement);
     expect(shotPill.querySelector('[data-prose-sid]')).toBeNull();
     // Colours come from the line (custom properties of pillColors.ts).

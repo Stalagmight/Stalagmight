@@ -1753,9 +1753,14 @@ button.sh-apill {
 /* A two-tone shot pill (RS-OWNERSHIP): the pill itself paints nothing and
    each segment is painted in its own line's colours (custom properties set
    per segment): the half holding an end of another line in that line's,
-   the rest in the shot's. The halves meet before the arrow with no border
-   between them; the later one overlaps the earlier by 1px so no hairline of
-   the panel shows through the seam at a fractional position. */
+   the rest in the shot's. The halves meet before the arrow and blend
+   (RS-BLEND, theme/pillBlend.ts): each segment's fill (padding box) and
+   border (border box, under a transparent border) are gradients that fade
+   from its own colour to the midpoint with its neighbour over the last
+   0.4em at a seam, so the two meet in one colour across a 0.8em cross-fade
+   and the rounded ends stay intact. The later segment overlaps the earlier
+   by 1px (both are the midpoint there), so no hairline of the panel shows
+   through the seam at a fractional position. */
 .sh-lpill.sh-lpill--split,
 .sh-lpill.sh-lpill--split:hover:not([aria-disabled='true']) {
   gap: 0;
@@ -1770,10 +1775,12 @@ button.sh-apill {
   gap: 0.3em;
   min-width: 0;
   padding: 0.18em 0.3em;
-  border: 1px solid var(--pill-border);
+  border: 1px solid transparent;
   border-left-width: 0;
   border-right-width: 0;
-  background: var(--pill-bg);
+  background:
+    var(--seg-fill, linear-gradient(var(--pill-bg), var(--pill-bg))) padding-box,
+    var(--seg-edge, linear-gradient(var(--pill-border), var(--pill-border))) border-box;
   color: var(--pill-text);
 }
 /* A zero-width strut in the pill's own font: every segment, even one holding
@@ -1799,8 +1806,9 @@ button.sh-apill {
   margin-left: -1px;
 }
 .sh-lpill--split:hover:not([aria-disabled='true']) .sh-lpill-seg {
-  background: var(--pill-bg-hover);
-  border-color: var(--pill-border-hover);
+  background:
+    var(--seg-fill-hover, linear-gradient(var(--pill-bg-hover), var(--pill-bg-hover))) padding-box,
+    var(--seg-edge-hover, linear-gradient(var(--pill-border-hover), var(--pill-border-hover))) border-box;
 }
 /* A station's home-line mark: a smaller dot right after its name. Inline in a
    shot's two ends, a flex item after a station's name. */
@@ -1890,12 +1898,10 @@ button.sh-apill {
 }
 .sh-ppill-seg {
   padding: 0 0.14em;
-  background: radial-gradient(
-    farthest-side,
-    var(--pill-tint) 0%,
-    var(--pill-tint) 45%,
-    var(--pill-tint-clear) 100%
-  );
+  /* One continuous tint across the seams (RS-BLEND): an SVG whose colour
+     shifts to the midpoint with the neighbour at a seam, masked by the
+     tint's fade centred on the seam (theme/pillBlend.ts). */
+  background: var(--seg-tint, none) center / 100% 100% no-repeat;
   color: var(--pill-text);
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;

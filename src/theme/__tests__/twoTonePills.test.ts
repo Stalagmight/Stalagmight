@@ -14,17 +14,22 @@
  */
 import { describe, expect, it } from 'vitest';
 import { themeTokens } from '../tokens';
-import { hexOfOklch } from '../cssColor';
+import { hexOfOklch, oklchOfHex } from '../cssColor';
 import { contrastRatio } from '../../utils/colors';
+import { blendBackdrops, mixHex, type Neighbours } from '../pillBlend';
 import {
   PILL_DOT_MIN,
   PILL_MUTED_MIN,
   PILL_TEXT_MIN,
   pillColors,
+  pillDot,
   pillMarkOf,
+  pillMarkOver,
   pillThemeOf,
   prosePillColors,
   type PillColors,
+  type PillDot,
+  type PillTheme,
 } from '../pillColors';
 
 const THEMES = Object.keys(themeTokens);
@@ -105,5 +110,98 @@ describe('two-tone shot pills (RS-OWNERSHIP)', () => {
       expect(contrastRatio(half.text, half.bg)).toBeGreaterThanOrEqual(PILL_TEXT_MIN);
       expect(contrastRatio(half.ring ?? half.dot, half.bg)).toBeGreaterThanOrEqual(PILL_DOT_MIN);
     }
+  });
+});
+
+// ---- RS-BLEND: the blended seams ------------------------------------------------
+
+
+/** sRGB halfway between two colours: what a browser draws between two gradient stops. */
+function srgbMid(a: string, b: string): string {
+  const ch = (h: string, i: number) => parseInt(h.slice(1 + 2 * i, 3 + 2 * i), 16);
+  return `#${[0, 1, 2].map((i) => Math.round((ch(a, i) + ch(b, i)) / 2).toString(16).padStart(2, '0')).join('')}`;
+}
+
+/**
+ * Every colour a blended segment shows: its backdrops (`blendBackdrops`) and,
+ * between its gradient stops (own, 75%, 50% toward a neighbour), the sRGB
+ * points the browser interpolates.
+ */
+function blendedColours(own: PillColors, near: Neighbours, panel?: string): string[] {
+  const out = blendBackdrops(own, near, panel);
+  for (const other of [near.left, near.right]) {
+    if (!other) continue;
+    const m75 = mixHex(own.bg, other.bg, 0.75);
+    const m50 = mixHex(own.bg, other.bg, 0.5);
+    out.push(srgbMid(own.bg, m75), srgbMid(m75, m50));
+  }
+  return out;
+}
+
+/** Text, muted parts and the given dots on every colour of a segment. */
+function checkBlended(label: string, own: PillColors, on: readonly string[], dots: readonly PillDot[], failures: string[]) {
+  for (const bg of on) {
+    if (contrastRatio(own.text, bg) < PILL_TEXT_MIN) failures.push(`${label} text on ${bg}`);
+    if (contrastRatio(own.muted, bg) < PILL_MUTED_MIN) failures.push(`${label} muted on ${bg}`);
+    for (const d of dots) if (contrastRatio(d.ring ?? d.dot, bg) < PILL_DOT_MIN) failures.push(`${label} dot ${d.dot} on ${bg}`);
+  }
+}
+
+/** Shots of three regions (head, from half, to half): the pairs, each with a third hard colour. */
+const TRIPLES: Array<[string, string, string]> = PAIRS.flatMap(([a, b]) =>
+  ['#f6f6f2', '#101010', '#ffe600', '#1f4fff'].filter((c) => c !== a && c !== b).map((c) => [a, b, c] as [string, string, string]),
+);
+
+type PillTint = 'link' | 'prose';
+const colorsOf = (variant: PillTint) => (c: string, t: PillTheme) => (variant === 'link' ? pillColors(c, t) : prosePillColors(c, t));
+
+describe.each(['link', 'prose'] as const)('blended two-tone %s pills (RS-BLEND)', (variant) => {
+  it.each(THEMES)('%s: text, muted parts and dots read on every blend of every pair', (name) => {
+    const theme = pillThemeOf(name);
+    const panel = variant === 'prose' ? theme.panel : undefined;
+    const failures: string[] = [];
+    const of = colorsOf(variant);
+    for (const [shotLine, owner] of PAIRS) {
+      const A = of(shotLine, theme);
+      const B = of(owner, theme);
+      // The shot's half (its leading dot near the seam) and the owner's half (its end's dot).
+      const onA = blendedColours(A, { left: null, right: B }, panel);
+      const onB = blendedColours(B, { left: A, right: null }, panel);
+      const leading = pillDot(A.dot, blendBackdrops(A, { left: null, right: B }, panel), theme);
+      const end = pillMarkOver(owner, blendBackdrops(B, { left: A, right: null }, panel), name);
+      checkBlended(`${shotLine}|${owner} shot half`, A, panel ? [...onA, panel] : onA, [leading], failures);
+      checkBlended(`${shotLine}|${owner} owner half`, B, panel ? [...onB, panel] : onB, [end], failures);
+    }
+    expect(failures.slice(0, 20)).toEqual([]);
+  });
+
+  it.each(THEMES)('%s: a middle region blends at both seams and still reads', (name) => {
+    const theme = pillThemeOf(name);
+    const panel = variant === 'prose' ? theme.panel : undefined;
+    const failures: string[] = [];
+    const of = colorsOf(variant);
+    for (const [head, from, to] of TRIPLES) {
+      const [H, F, T] = [of(head, theme), of(from, theme), of(to, theme)];
+      const near = { left: H, right: T };
+      const end = pillMarkOver(from, blendBackdrops(F, near, panel), name);
+      const on = blendedColours(F, near, panel);
+      checkBlended(`${head}|${from}|${to} middle`, F, panel ? [...on, panel] : on, [end], failures);
+    }
+    expect(failures.slice(0, 20)).toEqual([]);
+  });
+});
+
+describe('the blend mixes in OKLab (RS-BLEND)', () => {
+  it('meets in a clean midpoint: yellow and blue keep chroma, near-white and near-black a mid grey', () => {
+    const lab = (hex: string) => oklchOfHex(hex);
+    const yb = lab(mixHex('#ffe600', '#1f4fff', 0.5));
+    const srgb = lab(srgbMid('#ffe600', '#1f4fff'));
+    // The sRGB midpoint of yellow and blue is a grey; OKLab keeps more colour.
+    expect(yb.C).toBeGreaterThan(srgb.C);
+    const wb = lab(mixHex('#f6f6f2', '#101010', 0.5));
+    expect(wb.L).toBeGreaterThan(0.45);
+    expect(wb.L).toBeLessThan(0.65);
+    expect(mixHex('#123456', '#abcdef', 1)).toBe('#123456');
+    expect(mixHex('#123456', '#abcdef', 0)).toBe('#abcdef');
   });
 });

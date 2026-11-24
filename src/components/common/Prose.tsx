@@ -41,6 +41,7 @@ import type { ProseShotEnd } from '../../types/ipc/ProseShotEnd';
 import {
   LoopGlyph,
   markOf,
+  markOver,
   prosePillStyle,
   shotToneOf,
   useResolvePill,
@@ -133,8 +134,10 @@ function marksOf(
   homeLine: number | undefined,
   loopEnd: boolean | undefined,
   stationId?: number | undefined,
+  /** A two-tone segment's colours and blends, for its end's dot (RS-BLEND). */
+  over?: readonly string[] | undefined,
 ): ReactNode {
-  const mark = markOf(pill, homeLine);
+  const mark = over ? markOver(pill, homeLine, over) : markOf(pill, homeLine);
   if (!mark && !loopEnd && stationId === undefined) return null;
   return (
     <>
@@ -172,13 +175,11 @@ function Drawing({
   pill,
   context,
   tone,
-  resolve,
 }: {
   part: NamePart;
   pill: ResolvedPill;
   context: string | undefined;
   tone: ShotTone | null;
-  resolve: (lineId: number | null | undefined) => ResolvedPill;
 }) {
   const dot = part.kind !== 'line' && context ? null : DOT;
   if (part.kind === 'station') {
@@ -204,7 +205,8 @@ function Drawing({
     }
     // Two tints (RS-OWNERSHIP): the half holding an end of another line in
     // that line's tint, split before the arrow; the head stays the shot's.
-    const endPill = (owner: number | undefined) => (owner !== undefined && owner !== part.line_id ? resolve(owner) : pill);
+    // The tints blend at each seam into one (RS-BLEND): the space before the
+    // arrow is inside the to half, so no gap opens between them.
     return (
       <>
         {tone.head && (
@@ -217,14 +219,15 @@ function Drawing({
           <Glued
             before={tone.head ? null : dot}
             text={part.from.name}
-            after={marksOf(endPill(part.from.home_line), endDot(part.from), part.from.loop_end)}
+            after={marksOf(pill, endDot(part.from), part.from.loop_end, undefined, tone.fromOn)}
           />
-        </span>{' '}
+        </span>
         <span className="sh-ppill-seg" style={tone.to} data-prose-seg="to">
+          {' '}
           <Glued
             before={`${SHOT_ARROW} `}
             text={part.to.name}
-            after={marksOf(endPill(part.to.home_line), endDot(part.to), part.to.loop_end)}
+            after={marksOf(pill, endDot(part.to), part.to.loop_end, undefined, tone.toOn)}
           />
         </span>
       </>
@@ -261,9 +264,11 @@ export function ProsePill({ part: given, testId }: { part: NamePart; testId?: st
   const ownerName = owner === null ? null : context ?? (pill.lineNameOf?.(owner) || null);
   const tone =
     part.kind === 'shot'
-      ? shotToneOf(resolve, part.line_id ?? null, part.from.home_line, part.to.home_line, (p) =>
-          prosePillStyle(p.colors, p.theme),
-        )
+      ? shotToneOf(resolve, part.line_id ?? null, part.from.home_line, part.to.home_line, 'prose', {
+          head: context ? `${context}:` : '',
+          from: part.from.name,
+          to: `${SHOT_ARROW} ${part.to.name}`,
+        })
       : null;
   return (
     <span
@@ -275,7 +280,7 @@ export function ProsePill({ part: given, testId }: { part: NamePart; testId?: st
       title={ownerName !== null ? i18n.t('identity.homeMarkTitle', { line: ownerName }) : undefined}
     >
       <span className={tone ? 'sh-ppill-vis sh-ppill-vis--split' : 'sh-ppill-vis'} aria-hidden="true">
-        <Drawing part={part} pill={pill} context={context} tone={tone} resolve={resolve} />
+        <Drawing part={part} pill={pill} context={context} tone={tone} />
       </span>
       <span className="sr-only">{withoutControls(part.text)}</span>
     </span>

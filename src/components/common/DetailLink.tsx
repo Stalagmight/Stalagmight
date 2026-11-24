@@ -19,7 +19,7 @@ import i18n from '../../i18n';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useUIStore } from '../../store/uiStore';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
-import { markOf, PillParts, pillStyle, shotToneOf, useMissingPillStyle, useResolvePill } from './LinePill';
+import { markOf, markOver, PillParts, pillStyle, shotToneOf, useMissingPillStyle, useResolvePill } from './LinePill';
 
 export type DetailLinkType = 'station' | 'shot' | 'line';
 
@@ -286,11 +286,13 @@ export function DetailLink({
     end !== undefined ? end : labels.homeMark(endRef(index));
   const fromOwner = marked ? (shotHomeLineIds?.from !== undefined ? shotHomeLineIds.from : labels.ownerLine(endRef(shotIndex))) : null;
   const toOwner = marked ? (shotHomeLineIds?.to !== undefined ? shotHomeLineIds.to : labels.ownerLine(endRef(shotIndex + 1))) : null;
-  const tone = marked ? shotToneOf(resolve, target.lineId, fromOwner, toOwner, (p) => pillStyle(p.colors)) : null;
-  // A foreign end's dot sits in its own half, so it is checked against that half's colours.
-  const endPill = (owner: number | null) => (tone && owner !== null ? resolve(owner) : pill);
-  const fromMark = marked ? markOf(endPill(fromOwner), endHome(shotHomeLineIds?.from, shotIndex)) : null;
-  const toMark = marked ? markOf(endPill(toOwner), endHome(shotHomeLineIds?.to, shotIndex + 1)) : null;
+  const tone = marked ? shotToneOf(resolve, target.lineId, fromOwner, toOwner, 'link') : null;
+  // A foreign end's dot sits in its own half, near a blended seam: it is
+  // checked against that half's colours and the blends (RS-BLEND).
+  const endMark = (home: number | null | undefined, on: readonly string[] | undefined) =>
+    tone && on ? markOver(pill, home, on) : markOf(pill, home);
+  const fromMark = marked ? endMark(endHome(shotHomeLineIds?.from, shotIndex), tone?.fromOn) : null;
+  const toMark = marked ? endMark(endHome(shotHomeLineIds?.to, shotIndex + 1), tone?.toOn) : null;
   const fromLoopEnd = marked && labels.shown(endRef(shotIndex))?.loop_end === true;
   const toLoopEnd = marked && labels.shown(endRef(shotIndex + 1))?.loop_end === true;
   const shotEnds =
