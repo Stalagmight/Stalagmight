@@ -1,8 +1,8 @@
 /**
  * RS-PROSE: the prose pill. A sentence worded with prose tokens draws each
- * station, shot and line it names as an inline pill (the line's dot, the
- * muted context, the bare name, the home-line dot, the loop mark, the
- * Station ID), while a screen reader still reads, word for word, the
+ * station, shot and line it names as an inline pill in its line's tint (the
+ * muted context, the bare name, the Station ID; no dot or marks since
+ * RS-NODOTS, the tooltip says whose and a loop end), while a screen reader still reads, word for word, the
  * sentence plain text wrote: the drawing is aria-hidden and the plain words
  * sit beside it as sr-only text. Below Full the sentence is plain text.
  * Injections: rendering the token's words visibly fails "reads the plain
@@ -27,6 +27,7 @@ import {
 } from '../../../utils/prose';
 import { identityLabels } from '../../../utils/stationIdentity';
 import { prosePillColorsOf } from '../../../theme/pillColors';
+import { prosePillStyle } from '../LinePill';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { surveyDataFromLegacy } from '../../../types/survey-data';
@@ -111,59 +112,64 @@ describe('prose pills (RS-PROSE)', () => {
     expect([...pills].map((el) => el.getAttribute('data-prose-kind'))).toEqual(['line', 'station', 'station', 'shot']);
     expect(accessibleText(p)).toBe(plain);
     // The drawing: the foreign slot in the colour of the line it belongs to
-    // (RS-OWNERSHIP), named by it, bare name and Station ID, no second dot.
+    // (RS-OWNERSHIP), named by it, bare name and Station ID, no dot.
     const foreign = pills[1]! as HTMLElement;
     const drawing = foreign.querySelector('[aria-hidden="true"]')!;
     expect(drawing.textContent).toBe('Main: 12#11');
     expect(foreign.querySelector('[data-prose-mark="home"]')).toBeNull();
     expect(foreign.getAttribute('title')).toBe('Belongs to Main');
     expect(foreign.getAttribute('data-owner-line')).toBe(String(MAIN));
-    expect(foreign.style.getPropertyValue('--pill-dot')).toBe(prosePillColorsOf('#ffff00', 'dark').dot);
-    // The loop end: its loop mark, the Station ID it shows, its kept end's (Main's) colour.
+    const mainTint = (prosePillStyle(prosePillColorsOf('#ffff00', 'dark'), 'dark') as Record<string, string>)['--pill-tint'];
+    expect(foreign.style.getPropertyValue('--pill-tint')).toBe(mainTint);
+    expect(foreign.style.getPropertyValue('--pill-dot')).toBe('');
+    // The loop end: no mark, the Station ID it shows, its kept end's (Main's)
+    // colour; its tooltip says whose it is and that it is a loop end.
     const loopEnd = pills[2]! as HTMLElement;
-    // The loop mark: the loop-closure glyph as a mask on an empty inline box
-    // (no atomic inline a line could break after, RS-ARROW).
-    const loopMark = loopEnd.querySelector('[data-prose-mark="loop"][data-glyph="loop"]') as HTMLElement;
-    expect(loopMark.style.getPropertyValue('--loop-glyph')).toContain(encodeURIComponent('M1.2 4.9C2.5'));
-    expect(loopMark.querySelector('svg')).toBeNull();
-    expect(loopEnd.querySelector('[data-prose-mark="loop"]')).toHaveAttribute('title', 'Loop end: a loop closure shows this station here');
+    expect(loopEnd.querySelector('[data-prose-mark], [data-glyph], svg')).toBeNull();
+    expect(loopEnd.getAttribute('title')).toBe('Belongs to Main\nLoop end: a loop closure shows this station here');
     expect(loopEnd.querySelector('[aria-hidden="true"]')!.textContent).toBe('3#3');
-    expect(loopEnd.style.getPropertyValue('--pill-dot')).toBe(prosePillColorsOf('#ffff00', 'dark').dot);
+    expect(loopEnd.style.getPropertyValue('--pill-tint')).toBe(mainTint);
     // The shot: two tints, the foreign from end's half in Main's after a
-    // head in Side's, the end's dot kept; no Station ID.
+    // head in Side's, no dot; no Station ID.
     const shotPill = pills[3]!;
     expect(shotPill.querySelector('[aria-hidden="true"]')!.textContent).toBe('Side: 12\u00a0→\u00a01');
-    expect(shotPill.querySelectorAll('[data-prose-mark="home"]')).toHaveLength(1);
+    expect(shotPill.querySelectorAll('[data-prose-mark]')).toHaveLength(0);
     const seg = (name: string) => shotPill.querySelector(`[data-prose-seg="${name}"]`) as HTMLElement;
     expect(seg('head').textContent).toBe('Side: ');
     expect(seg('from').textContent).toBe('12');
-    // RS-ARROW: the arrow and its spaces are a segment of their own, whose
-    // tint runs from the from half's to the to half's; each half's tint
-    // blends toward its neighbour.
+    // RS-ARROW: the arrow and its spaces are a segment of their own.
     expect(seg('arrow').textContent).toBe('\u00a0→\u00a0');
     expect(seg('to').textContent).toBe('1');
-    const tint = (el: HTMLElement) => el.style.getPropertyValue('--seg-tint');
-    for (const name of ['head', 'from', 'arrow', 'to']) expect(tint(seg(name))).toMatch(/^url\("data:image\/svg\+xml,/);
-    expect(tint(seg('from'))).not.toBe(tint(seg('to')));
+    // RS-NODOTS: every word, space and the arrow is a box of its own (its
+    // glow painted per line once laid out), in its segment's colours.
+    const boxes = [...shotPill.querySelectorAll('.sh-ppill-w')].map((b) => [b.textContent, (b as HTMLElement).dataset.seg]);
+    expect(boxes).toEqual([['Side:', '0'], [' ', '0'], ['12', '1'], ['\u00a0→\u00a0', '2'], ['1', '3']]);
+    expect(shotPill.querySelector('.sh-ppill-w')).toHaveClass('sh-ppill-w--start');
+    expect([...shotPill.querySelectorAll('.sh-ppill-w')].pop()).toHaveClass('sh-ppill-w--end');
+    expect(shotPill.querySelectorAll('.sh-ppill-w--sp')).toHaveLength(1);
+    const text = (el: HTMLElement) => el.style.getPropertyValue('--pill-text');
+    for (const name of ['head', 'from', 'arrow', 'to']) expect(text(seg(name))).not.toBe('');
     // A wrap never separates the arrow from either end: its spaces are
     // no-break spaces, and the from half, the arrow and the to half are joined.
     expect(seg('from').parentElement).toHaveClass('sh-ppill-join');
     expect(seg('arrow').parentElement).toBe(seg('to').parentElement);
-    expect(seg('from')).toContainElement(shotPill.querySelector('[data-prose-mark="home"]') as HTMLElement);
+    // The foreign end says whose it is in its tooltip.
+    expect(seg('from')).toHaveAttribute('title', 'Belongs to Main');
+    expect(seg('to')).not.toHaveAttribute('title');
     expect(shotPill.querySelector('[data-prose-sid]')).toBeNull();
-    // Colours come from the line (custom properties of pillColors.ts).
-    expect((foreign as HTMLElement).style.getPropertyValue('--pill-dot')).not.toBe('');
   });
 
-  it('tints a two-tone shot per line once laid out, and a moving layout never loops the update (RS-BLEND)', () => {
-    // Every measure sees another box, as while a panel slides open: a hook
+  it("paints a two-colour shot's glow per line once laid out, and a moving layout never loops the update (RS-NODOTS)", () => {
+    // Every measure sees other boxes, as while a panel slides open: a hook
     // that measured on every render would never settle (React #185).
     let calls = 0;
-    const rects = vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(function (this: HTMLElement) {
+    const rects = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
       calls += 1;
-      const width = 20 + (calls % 2) * 10;
-      const rect = { top: 0, bottom: 16, left: 0, right: width, width, height: 16, x: 0, y: 0, toJSON: () => ({}) };
-      return Object.assign([rect], { item: (i: number) => (i === 0 ? rect : null) }) as unknown as DOMRectList;
+      // A border box: the words, 10 px a box along one line, and the padding the glow gave the box.
+      const pad = (side: string) => parseFloat(this.style.getPropertyValue(`padding-${side}`)) || 0;
+      const at = 10 * [...(this.closest('.sh-ppill-vis')?.querySelectorAll('.sh-ppill-w') ?? [])].indexOf(this) + (calls % 2);
+      const [left, right] = [at - pad('left'), at + 10 + pad('right')];
+      return { top: 0, bottom: 28, left, right, width: right - left, height: 28, x: left, y: 0, toJSON: () => ({}) } as DOMRect;
     });
     try {
       const { rerender } = render(
@@ -176,9 +182,10 @@ describe('prose pills (RS-PROSE)', () => {
           <Prose text={sentence(true)} />
         </p>,
       );
-      const seg = screen.getByTestId('p').querySelector('[data-prose-seg="from"]') as HTMLElement;
-      // Laid out: one layer per line, placed over its fragment.
-      expect(seg.style.getPropertyValue('--seg-tint-size')).toBe('100.0000% 100%');
+      // Laid out on one line: its first box paints the whole piece.
+      const boxes = [...screen.getByTestId('p').querySelectorAll('.sh-ppill-vis--split .sh-ppill-w')] as HTMLElement[];
+      expect(boxes[0]!.style.getPropertyValue('--w-glow')).toMatch(/^url\("data:image\/svg\+xml,/);
+      expect(boxes.slice(1).every((b) => b.style.getPropertyValue('--w-glow') === '')).toBe(true);
     } finally {
       rects.mockRestore();
     }

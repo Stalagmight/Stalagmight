@@ -1,25 +1,25 @@
 /**
  * Prose pills (RS-PROSE): a line pill inline in running text. A sentence
  * that names a station, a shot or a line ("Side / 0 is archived with its
- * comment") draws each name as a `ProsePill`: the line's colour dot, the
- * muted context (`Side:`), the bare name, the loop mark of a loop end and
- * the muted superscript Station ID, as the link pills (`LinePill.tsx`) draw
- * them. A station of another line takes that line's tint and name
- * (RS-OWNERSHIP); a shot with an end of another line is two tints, split
- * before the arrow, the foreign end keeping its home-line dot.
+ * comment") draws each name as a `ProsePill`: the muted context (`Side:`),
+ * the bare name and the muted superscript Station ID in the line's tint, as
+ * the link pills (`LinePill.tsx`) draw them; no dot or marks (RS-NODOTS),
+ * the tooltip says whose station it is and a loop end. A station of another
+ * line takes that line's tint and name (RS-OWNERSHIP); a shot with an end
+ * of another line is two tints, blended across the arrow.
  *
- * It paints no pill shape: a bordered fill on every line of a wrapped
- * sentence stood 0 to 1 px from the one above (measured in the real app on
- * 78% of stacked pairs), so the prose pill is a soft radial tint in the
- * line's colour that fades to the panel at its edges (`prosePillColors`
- * holds its text, muted parts and dots on both).
+ * It paints no border but a glow (RS-NODOTS, `theme/proseGlow.ts`): a
+ * soft-edged capsule in the line's colour, solid behind the whole name and
+ * fading beyond it, a wash the panel shows through (`prosePillColors` holds
+ * its text and muted parts on the glow and on the panel).
  *
  * It never changes the paragraph's line pitch (the `.sh-ppill` rules in
- * index.css): it is an inline box with no vertical padding, every part inside
- * has a zero line-height or a zero-height margin box, and the superscript is
- * lifted by a relative offset. It wraps across lines with each fragment
- * tinted on its own (`box-decoration-break: clone`; a two-tone shot's
- * segments tint each line's fragment once laid out, `useSegmentTints`).
+ * index.css): the glow is an inline box's background, padding and
+ * box-shadow, none of which grows a line box; every part inside has a zero
+ * line-height, and the superscript is lifted by a relative offset. It wraps
+ * across lines with each line's piece its own capsule
+ * (`box-decoration-break: clone`; a two-colour shot's word boxes paint each
+ * line's piece once laid out, `useProseGlow`).
  *
  * The pill's drawing is `aria-hidden` and not selectable; beside it an
  * `sr-only` span carries the part's plain words (`Side / 0`), so a screen
@@ -37,60 +37,20 @@ import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { displayStationName, SHOT_ARROW } from '../../utils/formatters';
 import { isNamePart, partOf, proseParts, type ProsePart } from '../../utils/prose';
 import { withoutControls } from '../../utils/proseTokenCore';
-import i18n from '../../i18n';
 import type { ProseShotEnd } from '../../types/ipc/ProseShotEnd';
-import {
-  LOOP_GLYPH_URL,
-  markOf,
-  markOver,
-  prosePillStyle,
-  shotToneOf,
-  useResolvePill,
-  type HomeMark,
-  type ResolvedPill,
-  type SegmentKey,
-  type ShotTone,
-} from './LinePill';
-import { useSegmentTints } from './useSegmentTints';
+import { endTitleOf, markOf, prosePillStyle, shotToneOf, useResolvePill, type ResolvedPill, type ShotTone } from './LinePill';
+import { useProseGlow } from './useProseGlow';
 
 type NamePart = Exclude<ProsePart, { kind: 'text' }>;
 
 /** The arrow between a shot's ends, with no-break spaces: no line break on either side of it (RS-ARROW). */
 const ARROW_GLUED = `\u00a0${SHOT_ARROW}\u00a0`;
 
-/** A home-line dot after a name, with its tooltip ("Belongs to Main"). */
-function ProseMark({ mark }: { mark: HomeMark }) {
-  const style = { '--mark-dot': mark.dot, '--mark-ring': mark.ring ?? 'transparent' } as CSSProperties;
-  return (
-    <span
-      className="sh-ppill-mark"
-      style={style}
-      title={mark.line ? i18n.t('identity.homeMarkTitle', { line: mark.line }) : undefined}
-      data-prose-mark="home"
-    />
-  );
-}
-
-function ProseLoop() {
-  // An empty inline box with the glyph as a mask, not an inline SVG: an
-  // atomic inline after the from end's name let WebKit break before the
-  // arrow (RS-ARROW).
-  return (
-    <span
-      className="sh-ppill-loop"
-      data-prose-mark="loop"
-      data-glyph="loop"
-      title={i18n.t('identity.loopEndMarkTitle')}
-      style={{ '--loop-glyph': LOOP_GLYPH_URL } as CSSProperties}
-    />
-  );
-}
-
 /**
  * `text` as three runs: its first word, what lies between, its last word
  * (`['Upper', ' Sump ', 'Passage']`; one word: `['12', '', '']`), so the
- * dot can stay with the first word and the marks with the last while a long
- * name still wraps between its words.
+ * Station ID can stay with the last word while a long name still wraps
+ * between its words.
  */
 export function splitWords(text: string): [string, string, string] {
   const first = /^\S*/.exec(text)?.[0] ?? '';
@@ -141,69 +101,41 @@ function Glued({
   );
 }
 
-/** A name's marks: a foreign shot end's home-line dot, the loop mark, the Station ID. */
-function marksOf(
-  pill: ResolvedPill,
-  homeLine: number | undefined,
-  loopEnd: boolean | undefined,
-  stationId?: number | undefined,
-  /** A two-tone segment's colours and blends, for its end's dot (RS-BLEND). */
-  over?: readonly string[] | undefined,
-): ReactNode {
-  const mark = over ? markOver(pill, homeLine, over) : markOf(pill, homeLine);
-  if (!mark && !loopEnd && stationId === undefined) return null;
+/** A station's Station ID after its name, a muted superscript (no marks since RS-NODOTS). */
+function stationIdOf(stationId: number | undefined): ReactNode {
+  if (stationId === undefined) return null;
   return (
-    <>
-      {mark && <ProseMark mark={mark} />}
-      {loopEnd && <ProseLoop />}
-      {stationId !== undefined && (
-        <span className="sh-ppill-sid" data-prose-sid="">
-          #{stationId}
-        </span>
-      )}
-    </>
+    <span className="sh-ppill-sid" data-prose-sid="">
+      #{stationId}
+    </span>
   );
 }
 
-const DOT = <span className="sh-ppill-dot" />;
-
-/** The dot and the muted context (`Side:`), then a space; or the dot alone when there is none. */
+/** The muted context (`Side:`), then a space. */
 function Head({ context }: { context?: string | undefined }) {
   if (!context) return null;
   return (
     <>
-      <Glued before={DOT} text={`${context}:`} textClass="sh-ppill-ctx" />{' '}
+      <Glued text={`${context}:`} textClass="sh-ppill-ctx" />{' '}
     </>
   );
 }
 
-/** The dot after a shot end of another line: its home-line dot (a loop end has its loop mark too), as on a link pill. */
-function endDot(end: ProseShotEnd): number | undefined {
-  return end.home_line;
+/** A shot end's tooltip: whose station it is, and whether it is a loop end (RS-NODOTS: no marks). */
+function endTitle(pill: ResolvedPill, end: ProseShotEnd): string | undefined {
+  return endTitleOf(markOf(pill, end.home_line), end.loop_end);
 }
 
-/** What the pill draws for `part` (aria-hidden: the sr-only words say it). */
-function Drawing({
-  part,
-  pill,
-  context,
-  tone,
-  tints,
-}: {
-  part: NamePart;
-  pill: ResolvedPill;
-  context: string | undefined;
-  tone: ShotTone | null;
-  tints: Partial<Record<SegmentKey, CSSProperties>> | null;
-}) {
-  const dot = part.kind !== 'line' && context ? null : DOT;
+/** What the pill draws for `part` when it is one colour (aria-hidden: the sr-only words say it). */
+function Drawing({ part, pill, context }: { part: NamePart; pill: ResolvedPill; context: string | undefined }) {
   if (part.kind === 'station') {
-    // No home-line dot: the whole pill is in the colour of the line the
-    // station belongs to (RS-OWNERSHIP); a loop end keeps its loop mark.
+    // The whole pill is in the colour of the line the station belongs to
+    // (RS-OWNERSHIP); no dot or marks (RS-NODOTS), its tooltip says whose
+    // it is and whether it is a loop end.
     return (
       <>
         <Head context={context} />
-        <Glued before={dot} text={part.name} after={marksOf(pill, undefined, part.loop_end, part.station_id)} />
+        <Glued text={part.name} after={stationIdOf(part.station_id)} />
       </>
     );
   }
@@ -214,54 +146,98 @@ function Drawing({
     // three), while each name still wraps between its own words. Not
     // white-space: both WebKit and Chromium broke at the space before the
     // arrow inside a nowrap span when the from end's own box allowed wraps.
-    if (!tone) {
-      return (
-        <>
-          <Head context={context} />
-          <span className="sh-ppill-join">
-            <span className="sh-ppill-end">
-              <Glued before={dot} text={part.from.name} after={marksOf(pill, endDot(part.from), part.from.loop_end)} />
-            </span>
-            {ARROW_GLUED}
-            <span className="sh-ppill-end">
-              <Glued text={part.to.name} after={marksOf(pill, endDot(part.to), part.to.loop_end)} />
-            </span>
-          </span>
-        </>
-      );
-    }
-    // Two tints (RS-OWNERSHIP): the half holding an end of another line in
-    // that line's tint; the head stays the shot's and blends into the from
-    // half (RS-BLEND). The arrow is a segment of its own whose tint runs
-    // from the from half's to the to half's, so the halves blend across it
-    // (RS-ARROW).
     return (
       <>
-        {tone.head && (
-          <span className="sh-ppill-seg" style={{ ...tone.head, ...tints?.head }} data-prose-seg="head">
-            {context ? <Head context={context} /> : DOT}
-          </span>
-        )}
+        <Head context={context} />
         <span className="sh-ppill-join">
-          <span className="sh-ppill-seg sh-ppill-seg--to-arrow" style={{ ...tone.from, ...tints?.from }} data-prose-seg="from">
-            {!tone.head && <Head context={context} />}
-            <Glued
-              before={tone.head ? null : dot}
-              text={part.from.name}
-              after={marksOf(pill, endDot(part.from), part.from.loop_end, undefined, tone.fromOn)}
-            />
+          <span className="sh-ppill-end" title={endTitle(pill, part.from)}>
+            <Glued text={part.from.name} />
           </span>
-          <span className="sh-ppill-seg sh-ppill-seg--arrow" style={{ ...tone.arrow, ...tints?.arrow }} data-prose-seg="arrow">
-            {ARROW_GLUED}
-          </span>
-          <span className="sh-ppill-seg sh-ppill-seg--from-arrow" style={{ ...tone.to, ...tints?.to }} data-prose-seg="to">
-            <Glued text={part.to.name} after={marksOf(pill, endDot(part.to), part.to.loop_end, undefined, tone.toOn)} />
+          {ARROW_GLUED}
+          <span className="sh-ppill-end" title={endTitle(pill, part.to)}>
+            <Glued text={part.to.name} />
           </span>
         </span>
       </>
     );
   }
-  return <Glued before={DOT} text={part.name} />;
+  return <Glued text={part.name} />;
+}
+
+/** One run of a two-colour pill's words: a word, the spaces between, or the arrow. */
+interface Run {
+  text: string;
+  /** The muted context's words. */
+  ctx?: boolean;
+}
+
+/** `text` as runs of letters and runs of spaces. */
+const runsOf = (text: string, ctx = false): Run[] => (text.match(/\s+|\S+/g) ?? []).map((t) => ({ text: t, ctx }));
+
+/**
+ * A two-colour shot (RS-OWNERSHIP) as word boxes (RS-NODOTS): each run of
+ * its words, each space and the arrow a box of its own in a segment (the
+ * head, when the from half is another line's, the from half, the arrow, the
+ * to half), so each line's piece of the pill is whole boxes and its glow can
+ * run from one line's colour to the other's across the arrow
+ * (`useProseGlow`). No word box wraps inside; a space box may, and a line
+ * break there ends one piece and starts the next. The arrow's no-break
+ * spaces keep it on the line of the from end's last word and the to end's
+ * first word (RS-ARROW).
+ */
+function SplitDrawing({
+  part,
+  pill,
+  context,
+  tone,
+  glow,
+}: {
+  part: Extract<NamePart, { kind: 'shot' }>;
+  pill: ResolvedPill;
+  context: string | undefined;
+  tone: ShotTone;
+  glow: CSSProperties[] | null;
+}) {
+  const head = context ? [...runsOf(`${context}:`, true), { text: ' ' }] : [];
+  const runs: Record<string, Run[]> = {
+    head: tone.head ? head : [],
+    from: [...(tone.head ? [] : head), ...runsOf(part.from.name)],
+    arrow: [{ text: ARROW_GLUED }],
+    to: runsOf(part.to.name),
+  };
+  const total = tone.segments.reduce((n, seg) => n + runs[seg.key]!.length, 0);
+  let index = 0;
+  const boxes = (seg: number, key: string) =>
+    runs[key]!.map((run) => {
+      const i = index++;
+      const space = /^\s+$/.test(run.text);
+      const cls = `sh-ppill-w${space ? ' sh-ppill-w--sp' : ''}${i === 0 ? ' sh-ppill-w--start' : ''}${i === total - 1 ? ' sh-ppill-w--end' : ''}`;
+      return (
+        <span key={i} className={cls} data-seg={seg} style={glow?.[i]}>
+          <span className="sh-ppill-txt">{run.ctx ? <span className="sh-ppill-ctx">{run.text}</span> : run.text}</span>
+        </span>
+      );
+    });
+  const segment = (key: 'head' | 'from' | 'arrow' | 'to') => {
+    const seg = tone.segments.findIndex((s) => s.key === key);
+    if (seg < 0) return null;
+    const title = key === 'from' ? endTitle(pill, part.from) : key === 'to' ? endTitle(pill, part.to) : undefined;
+    return (
+      <span className="sh-ppill-seg" style={tone[key] ?? undefined} data-prose-seg={key} title={title}>
+        {boxes(seg, key)}
+      </span>
+    );
+  };
+  return (
+    <>
+      {segment('head')}
+      <span className="sh-ppill-join">
+        {segment('from')}
+        {segment('arrow')}
+        {segment('to')}
+      </span>
+    </>
+  );
 }
 
 /**
@@ -296,15 +272,11 @@ function DrawnPill({ part, testId }: { part: NamePart; testId: string | undefine
   const ownerName = owner === null ? null : context ?? (pill.lineNameOf?.(owner) || null);
   const tone =
     part.kind === 'shot'
-      ? shotToneOf(resolve, part.line_id ?? null, part.from.home_line, part.to.home_line, 'prose', {
-          head: context ? `${context}:` : '',
-          from: part.from.name,
-          to: part.to.name,
-        })
+      ? shotToneOf(resolve, part.line_id ?? null, part.from.home_line, part.to.home_line, 'prose', Boolean(context))
       : null;
-  // Each line's fragment of a two-tone shot tinted on its own (RS-BLEND).
+  // Each line's piece of a two-colour shot's glow, once laid out (RS-NODOTS).
   const vis = useRef<HTMLSpanElement>(null);
-  const tints = useSegmentTints(vis, tone);
+  const glow = useProseGlow(vis, tone);
   return (
     <span
       className="sh-ppill"
@@ -312,10 +284,16 @@ function DrawnPill({ part, testId }: { part: NamePart; testId: string | undefine
       data-prose-kind={part.kind}
       data-owner-line={owner ?? undefined}
       data-testid={testId}
-      title={ownerName !== null ? i18n.t('identity.homeMarkTitle', { line: ownerName }) : undefined}
+      title={part.kind === 'station' ? endTitleOf(ownerName === null ? null : { line: ownerName }, part.loop_end) : undefined}
     >
       <span ref={vis} className={tone ? 'sh-ppill-vis sh-ppill-vis--split' : 'sh-ppill-vis'} aria-hidden="true">
-        <Drawing part={part} pill={pill} context={context} tone={tone} tints={tints} />
+        {tone && part.kind === 'shot' ? (
+          <SplitDrawing part={part} pill={pill} context={context} tone={tone} glow={glow} />
+        ) : (
+          <span className="sh-ppill-txt">
+            <Drawing part={part} pill={pill} context={context} />
+          </span>
+        )}
       </span>
       <span className="sr-only">{withoutControls(part.text)}</span>
     </span>

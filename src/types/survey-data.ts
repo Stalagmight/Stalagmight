@@ -138,7 +138,7 @@ export interface SurveyData {
    *  first), on every slot of it; sparse, only stations that have some. */
   stationArchived: Map<number, ArchivedStation[]>;
   /** How a foreign slot or a loop end shows its node (RS 6): the Station ID
-   *  shown, the home-line dot and the loop mark; sparse, absent on every
+   *  shown, its home line and whether it is a loop end; sparse, absent on every
    *  slot that shows its node's own identity natively. */
   stationShown: Map<number, ShownSlot>;
 }

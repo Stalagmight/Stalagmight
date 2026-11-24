@@ -2433,3 +2433,119 @@ reason; they amend RS-BLEND's link and prose bullets and RS 6's loop mark.
   line gaps, 0 px deviation), with 14 two-tone prose pills on screen per
   combination; no two tint fragments on adjacent lines overlap (65 and 90
   pairs).
+
+## Deviations (package RS-NODOTS)
+
+The user's requests (2026-11-24), in order: "get rid of the circle and
+squiggle indicators.. the prose glow is too weak, it should also cover, it
+dosent spread far enough. the blue circle as well,"; "when the prose glow has
+two colors, they should blend into each other, not blend to white and white
+to second color"; "the glow should be much more pill shaped". Decisions this
+package took, each with its reason; they replace RS-OWNERSHIP's home-line
+dot, RS-ARROW's loop mark, every pill's leading dot and RS-PROSE's radial
+tint, and amend RS-BLEND's prose bullets.
+
+- **No dot or mark on any pill.** Link, blob and prose pills, the data
+  table gutter, history and warning rows and the dialogs lose the leading
+  line-colour dot (the "blue circle"), a foreign shot end's home-line dot
+  (the "circle") and the loop-end mark `∽` (the "squiggle"), with the code
+  and CSS that only served them (`HomeLineMark`, `LoopEndMark`, `LoopGlyph`,
+  the prose mark boxes, the dot and ring colours, `pillMarkOf`,
+  `pillMarkOver`, the end dots' blend backdrops). What they said stays in
+  words: the tooltip ("Belongs to Main", "Loop end: a loop closure shows this
+  station here", now on the station pill or on the shot end's name), the
+  sr-only words ("(Main)", "loop end") and the data table's Name column
+  (`12 (Main)`, `3 (loop end)`). A two-tone link shot with no context has no
+  head segment any more (it held the dot). The Sections panel's row dot is
+  not a pill and stays.
+- **The line colour without the dot (link pills).** The rule: the fill is a
+  tint of the line's hue with up to 80% of its chroma (cap 0.08 on dark
+  themes, 0.07 on light, was 50% and 0.05 / 0.04) inside the legible band;
+  the border is the line colour itself, moved toward the text pole only
+  until it stands 1.8:1 from the panel and from the fill; on hover the fill
+  steps and the border moves at most half way to the pole, so a pale line's
+  border keeps its hue. Near-white, grey and near-black lines share a neutral
+  fill and differ by their borders (light: #b1b1ae, #808080, #101010; cave:
+  #f6f6f2, #808080, #444444). Main text 7:1 and muted 4.5:1 are unchanged
+  (`pillColors.test.ts`). Two lines whose colours are close stay close: on
+  nord a mid grey's border lands 1.29:1 from a near-black line's lifted one.
+- **The prose glow is a soft-edged capsule** (`theme/proseGlow.ts`, the
+  `.sh-ppill` rules). Its core is solid behind the whole name: the painted
+  box's content area with its font scaled to 0.75 (Segoe UI's content area
+  filled 19 px of a 20 px line, so two lines of cores would meet), 0.04em
+  above and 0.06em below, rounded ends 0.22em beyond the words, 0.12em more
+  room per side than the words (padding given back as margin). A halo in the
+  same colour carries it further: a box-shadow, solid 0.14em, then a
+  Gaussian of sigma 0.14em (blur 0.28em), gone about 0.56em out. Background,
+  inline padding and a box-shadow never grow a line box, so the line pitch
+  is plain text's (`prose-line-pitch.spec.ts`). Each line's piece of a
+  wrapped pill is its own capsule (`box-decoration-break: clone`).
+- **The glow's colour is a wash.** One alpha, 0.5, of a colour whose result
+  over the panel is the glow (`prosePillColors`, `proseTintOf`): it moves a
+  tinted box the way it moves the panel, glows on stacked lines stay
+  see-through where they meet, and a two-colour gradient interpolates
+  exactly. The glow takes the line's hue with up to 90% of its chroma (cap
+  0.1), lighter than a dark panel and darker than a light one, always toward
+  the text pole even on themes whose link pills sink below a dark panel (a
+  darker wash on a near-black panel has no room for a hue), between 0.09
+  and 0.20 of OKLCH lightness off the panel by the line's own lightness, so
+  a near-white, a grey and a near-black line differ; where the theme's text
+  leaves less room, the lines are spread over the room there is
+  (`proseRoom`): 0.026 to 0.05 apart on every theme but nord, whose text
+  leaves one lightness for every grey. Main text 7:1 and muted 4.5:1 hold on
+  the glow, the panel and the theme's tinted boxes (accent, warning and
+  error at 10%), bare and under the wash (`proseBackdrops`), solved with 2%
+  to spare for two-colour blends (measured: the OKLab blend of two hues is
+  up to 1.4% lighter or darker in WCAG luminance than both ends). The
+  theme's tokens are pushed toward the pole where the glow needs it, and
+  the glow steps back where the muted words would come within 1.4:1 of the
+  main text.
+- **Two colours blend into each other.** A two-colour shot draws its words,
+  spaces and arrow as boxes of their own (`.sh-ppill-w`; no word box wraps,
+  a space box may). Once laid out (`useProseGlow`), the first box of each
+  line's piece paints the whole piece as one SVG: the core and the blurred,
+  grown core as a mask over washes sampled along the piece, the same shape
+  as the one-colour CSS. Its colour runs from one line's glow to the other's
+  across the arrow, mixed in OKLab, sampled at the arrow's eighths and at
+  eighths of a head's 0.8em seam, so the gradient between samples stays on
+  the OKLab path; lightness stays between the two ends, never dipping toward
+  the panel (`proseGlow.test.ts` over hard pairs on every theme). A line
+  break ends one capsule and starts the next, and a seam blends only on one
+  line. One image per piece: one image per word showed a hairline at every
+  word boundary in the first capture (adjacent images at fractional
+  positions). Each segment's words take whichever of its own, its
+  neighbours' and the theme's text colours reads on every colour of its
+  blends and the sRGB points between their stops, over the panel and the
+  tinted boxes, pushed toward the pole if none does (`twoTonePills.test.ts`).
+  A pale middle is a near-white line's own colour, not a fade: in Blue
+  Link: 4 -> 3 the from end is Main's (near-white), so the capsule runs
+  blue, light grey, yellow. The OKLab midpoint of two opposite hues (yellow
+  and blue) is a low-chroma colour of the same lightness.
+- **A truncating label keeps the halo's room.** Station details' "On
+  <line>:" label truncates, and its one-line overflow box cut the halo into
+  flat top and bottom edges; `.sh-ppill-clip` gives it the room back as
+  padding and negative margin. Where the ellipsis cuts the words, the glow
+  is cut with them.
+- **Measured in the real app** (this worktree's build at 562df3ec6, the
+  RS-ARROW survey plus a grey line whose start shows Main's 8; 16 surfaces
+  in light and dark (cave) at 1440x900 and 860x900, about 80 prose pills
+  each, five of them two-colour; shots and numbers in
+  `pr-assets/survey-graph/rs-nodots/`):
+  - line pitch equal to plain text's in every compared block (9 to 15
+    blocks, 17 to 23 gaps per combination, 0 px deviation);
+  - stacked glows: 63 to 81 pairs of cores on adjacent lines per
+    combination; every pair's halos meet (cores 2.8 to 4.6 px apart), no two
+    cores overlap; where they meet, the gap stays filled to a median 74 to
+    82% of the weaker glow and the strongest pixel exceeds the stronger core
+    by a median 0.4 to 0.5 OKLab lightness points, at most 1.0 (light) and
+    1.9 (dark), on 1 to 2 px rows: no darkened band (the glows themselves
+    are 9.3 and 15 points off their background);
+  - contrast of every visible prose word against the pixels under its glyph
+    zone (glow, a neighbour's halo, a tinted box): main text at least
+    10.49:1 (light) and 7.2:1 (dark), muted at least 4.52:1 and 4.79:1,
+    descender rows included.
+  Adjusted from the captures: the per-piece image, a stronger near end of
+  the band (0.09, was 0.07: a near-white glow on light was #e7e7e7 and a
+  near-black one on cave 1.29:1), the tinted-box floors (the muted context
+  measured 4.21:1 on the conversion banner and 4.30:1 in the Station details
+  box) and the truncating label.

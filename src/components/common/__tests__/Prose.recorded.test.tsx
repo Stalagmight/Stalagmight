@@ -18,6 +18,7 @@ import { ProsePill } from '../Prose';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { prosePillColorsOf } from '../../../theme/pillColors';
+import { prosePillStyle } from '../LinePill';
 import type { ProsePart } from '../../../types/ipc/ProsePart';
 
 const MAIN = 1;
@@ -57,7 +58,9 @@ describe('a recorded part keeps its words (RS-PROSE fix 2)', () => {
     expect(drawing.textContent).toBe('Old Main: 12#11');
     expect(pill.querySelector('.sr-only')!.textContent).toBe(RECORDED.text);
     expect(pill).toHaveAttribute('title', 'Belongs to Old Main');
-    expect(pill.style.getPropertyValue('--pill-dot')).toBe(prosePillColorsOf('#ffff00', 'dark').dot);
+    expect(pill.style.getPropertyValue('--pill-tint')).toBe(
+      (prosePillStyle(prosePillColorsOf('#ffff00', 'dark'), 'dark') as Record<string, string>)['--pill-tint'],
+    );
   });
 
   it('a live line with an empty name does not blank the recorded context', () => {

@@ -297,8 +297,9 @@ export function shownStationIdOf(src: IdentitySource, ref: StationRef): number |
   return shownSlotOf(src, ref)?.id ?? stationIdOf(src, ref);
 }
 
-/** The line whose colour the dot after a foreign slot's name takes (its shown
- *  station's home line, RS 2), or null for a slot that needs no dot. */
+/** The line a foreign slot's station belongs to (its shown station's home
+ *  line, RS 2), which a pill says in its tooltip and words, or null for a
+ *  slot that shows its own station. */
 export function homeMarkOf(src: IdentitySource, ref: StationRef): number | null {
   const shown = shownSlotOf(src, ref);
   return shown?.foreign && shown.home_line !== undefined ? shown.home_line : null;
@@ -332,8 +333,7 @@ export function lineNameOf(src: IdentitySource, lineId: number): string {
 
 /**
  * A slot's plain-text label: `17`, or `Main Line / 17` with `withLine`. It is
- * the one label every text that names a slot without drawing the dot or the
- * loop mark uses (warnings, toasts, search results, history rows, aria labels,
+ * the one label every text that names a slot without drawing a pill uses (warnings, toasts, search results, history rows, aria labels,
  * tooltips, dialog sentences, closure texts), so it says whose station a
  * dotted slot shows (RS 6, U-P3-8), with or without the line: two slots of one
  * line may show one name since dotted slots don't collide (RS-FX5), and the
@@ -345,7 +345,7 @@ export function lineNameOf(src: IdentitySource, lineId: number): string {
  *   with the line, named on the shown station's home line,
  *   `Main / 3 (loop end on Side)`.
  *
- * A pill, which draws the dot and the loop mark itself, takes the bare name
+ * A pill, which says it by its colour, tooltip and words, takes the bare name
  * ({@link stationPillLabelOf}); an edit field takes {@link stationNameOf}.
  */
 export function stationLabelOf(src: IdentitySource, ref: StationRef, withLine = false): string {
@@ -368,8 +368,8 @@ export function stationLabelOf(src: IdentitySource, ref: StationRef, withLine = 
 /**
  * A slot's bare name for a pill's main part (`12`), where the pill takes the
  * colour of the line a foreign slot's station belongs to (RS-OWNERSHIP) and
- * draws a loop end's loop mark: the colour and the mark say what
- * {@link stationLabelOf}'s qualifier says in text.
+ * says in its tooltip and words whose station it is and that it is a loop
+ * end: they say what {@link stationLabelOf}'s qualifier says in text.
  */
 export function stationPillLabelOf(src: IdentitySource, ref: StationRef): string {
   return formatStationLabel(stationNameOf(src, ref));
@@ -415,8 +415,8 @@ export function shotLabelAt(src: IdentitySource, lineId: number, shotIndex: numb
 
 /**
  * A shot pill's main part, `12 → 13`: each end's bare name, where the pill
- * draws each foreign end's dot and loop mark and colours an end of another
- * line's half by that line ({@link stationPillLabelOf}).
+ * says in a tooltip and words whose each foreign end is and that a loop end
+ * is one, and colours an end of another line's half by that line ({@link stationPillLabelOf}).
  */
 export function shotPillLabelAt(src: IdentitySource, lineId: number, shotIndex: number): string {
   return formatShotLabel(
@@ -464,7 +464,7 @@ export interface IdentityLabels {
   shownStationId: (ref: StationRef) => number | null;
   /** How the slot shows its node (see {@link shownSlotOf}). */
   shown: (ref: StationRef) => ShownSlot | undefined;
-  /** The home-line dot a foreign shot end carries (see {@link homeMarkOf}). */
+  /** The home line a foreign shot end belongs to (see {@link homeMarkOf}). */
   homeMark: (ref: StationRef) => number | null;
   /** The line whose colour a station pill takes (see {@link ownerLineOf}). */
   ownerLine: (ref: StationRef) => number | null;

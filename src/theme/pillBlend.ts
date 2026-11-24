@@ -5,9 +5,8 @@
  * it").
  *
  * A shot with an end of another line is drawn in segments, each in its own
- * line's colours (RS-OWNERSHIP): an optional head (the leading dot and the
- * context, in the shot's colour, when the from end's half is another
- * line's), the from end's half, the arrow, the to end's half.
+ * line's colours (RS-OWNERSHIP): an optional head (the context, in the
+ * shot's colour, when the from end's half is another line's), the from end's half, the arrow, the to end's half.
  *
  * - The arrow is a segment of its own, a **bridge**: its colour runs from
  *   the from half's to the to half's across its whole width, so the
@@ -24,20 +23,20 @@
  * - A link pill paints its fill on the padding box and its border on the
  *   border box (`--seg-fill`, `--seg-edge`, and their hover forms), so the
  *   border blends with the fill and the rounded ends stay intact.
- * - A prose pill has no fill or border but a radial tint; a segment's tint
- *   is an SVG background whose colour follows the same stops, masked by the
- *   tint's fade, which is solid at every joined side: one continuous tint,
- *   fading only at the outer ends and top and bottom, with no dip. A wrapped
- *   pill is tinted per line (`components/common/useSegmentTints.ts`).
+ * - A prose pill has no fill or border but a glow, a soft-edged capsule per
+ *   line whose colour follows the same blends, mixed in OKLab, straight from
+ *   one colour to the other with no dip toward the panel
+ *   (`theme/proseGlow.ts`, `components/common/useProseGlow.ts`); here only
+ *   its text colours.
  *
- * Text and dots over a blend must read on every colour it passes through:
- * {@link blendBackdrops} and {@link bridgeBackdrops} list them (sampled);
- * dots get their ring against them and the arrow takes the text colour that
- * reads on all of them (`__tests__/twoTonePills.test.ts` sweeps the samples).
+ * Text over a blend must read on every colour it passes through:
+ * {@link blendBackdrops} and {@link bridgeBackdrops} list them (sampled),
+ * and the arrow takes the text colour that reads on all of them
+ * (`__tests__/twoTonePills.test.ts` sweeps the samples).
  */
 import type { CSSProperties } from 'react';
 import { contrastOfHex, oklabOf, rgbOfOklab, hexOfRgb } from './cssColor';
-import { pillDot, pillThemeOf, proseOverlayOf, type PillColors, type PillDot } from './pillColors';
+import { PILL_MUTED_MIN, PILL_TEXT_MIN, pillThemeOf, proseBackdrops, proseTintOf, type PillColors } from './pillColors';
 
 /** How far a segment fades at a seam; the cross-fade is twice this, centred on the seam. */
 export const SEAM_EM = 0.4;
@@ -75,7 +74,7 @@ export interface Neighbours {
 }
 
 /**
- * Every colour a segment's text and dots can sit on: its fill and hover fill
+ * Every colour a segment's text can sit on: its fill and hover fill
  * (a prose pill's tint centre and the bare panel, `panel` given), and the
  * blends toward each neighbour at {@link BLEND_SAMPLES} (the hover blends
  * too).
@@ -92,6 +91,23 @@ export function blendBackdrops(own: PillColors, near: Neighbours, panel?: string
   return out;
 }
 
+/** The sRGB point halfway between two colours: what a gradient paints between two stops. */
+function srgbMidHex(a: string, b: string): string {
+  const [x, y] = [rgbOfHex(a), rgbOfHex(b)];
+  return hexOfRgb((x[0] + y[0]) / 2, (x[1] + y[1]) / 2, (x[2] + y[2]) / 2);
+}
+
+/**
+ * Every colour a prose glow paints along a path of stops: the stops and the
+ * sRGB midpoints between them (an SVG gradient interpolates in sRGB, and a
+ * mix of two hues can be lighter there than either stop).
+ */
+function painted(path: readonly string[]): string[] {
+  const out = [...path];
+  for (let i = 1; i < path.length; i++) out.push(srgbMidHex(path[i - 1]!, path[i]!));
+  return out;
+}
+
 /** Every colour under a bridge from `left` to `right` at {@link BRIDGE_SAMPLES} (hover too; the panel for prose). */
 export function bridgeBackdrops(left: PillColors, right: PillColors, panel?: string): string[] {
   const out: string[] = panel === undefined ? [] : [panel];
@@ -102,28 +118,39 @@ export function bridgeBackdrops(left: PillColors, right: PillColors, panel?: str
   return out;
 }
 
-/** The first of `candidates` reaching `min` on every backdrop, else the one whose worst contrast is best. */
-export function readableOn(candidates: readonly string[], backdrops: readonly string[], min: number): string {
+/**
+ * The first of `candidates` reaching `min` on every backdrop. When none does
+ * (a blend of two glows can be lighter than either, OKLab lightness and
+ * WCAG luminance part ways where the hue turns), the best of them moved
+ * toward the text pole (`towardWhite`: a dark theme's) until it does.
+ */
+export function readableOn(candidates: readonly string[], backdrops: readonly string[], min: number, towardWhite?: boolean): string {
   let best = candidates[0]!;
   let bestWorst = -1;
+  const worstOf = (c: string) => Math.min(...backdrops.map((bg) => contrastOfHex(c, bg)));
   for (const c of candidates) {
-    const worst = Math.min(...backdrops.map((bg) => contrastOfHex(c, bg)));
+    const worst = worstOf(c);
     if (worst >= min) return c;
     if (worst > bestWorst) {
       best = c;
       bestWorst = worst;
     }
   }
-  return best;
+  if (towardWhite === undefined) return best;
+  const pole = towardWhite ? '#ffffff' : '#000000';
+  for (let step = 1; step <= 20; step++) {
+    const c = mixHex(best, pole, 1 - step / 20);
+    if (worstOf(c) >= min) return c;
+  }
+  return pole;
 }
 
 /** Colour stops across a segment: [offset (0..1, or a CSS length string), colour]. */
 type Stop = [number | string, string];
 
 /** A seam segment's stops: its own colour, fading to the midpoint with each neighbour over SEAM_EM. */
-function seamStops(own: string, left: string | null, right: string | null, seam: number | null): Stop[] {
-  const at = (fromRight: boolean, share: number): number | string => {
-    if (seam !== null) return fromRight ? 1 - seam * share : seam * share;
+function seamStops(own: string, left: string | null, right: string | null): Stop[] {
+  const at = (fromRight: boolean, share: number): string => {
     const em = `${SEAM_EM * share}em`;
     return fromRight ? `calc(100% - ${em})` : em;
   };
@@ -161,12 +188,9 @@ function linkPaint(stopsOf: (pick: (c: PillColors) => string) => Stop[]): CSSPro
 
 /**
  * A link pill segment's custom properties: its own colours (the `.sh-lpill`
- * names), its dot and ring checked against every backdrop, and its fill and
- * border as gradients, at rest and on hover.
+ * names), and its fill and border as gradients, at rest and on hover.
  */
-export function linkSegmentStyle(own: PillColors, near: Neighbours, themeName: string): CSSProperties {
-  const theme = pillThemeOf(themeName);
-  const dot: PillDot = pillDot(own.dot, blendBackdrops(own, near), theme);
+export function linkSegmentStyle(own: PillColors, near: Neighbours): CSSProperties {
   return {
     '--pill-bg': own.bg,
     '--pill-border': own.border,
@@ -174,9 +198,7 @@ export function linkSegmentStyle(own: PillColors, near: Neighbours, themeName: s
     '--pill-border-hover': own.hoverBorder,
     '--pill-text': own.text,
     '--pill-muted': own.muted,
-    '--pill-dot': dot.dot,
-    '--pill-ring': dot.ring ?? 'transparent',
-    ...linkPaint((pick) => seamStops(pick(own), near.left ? pick(near.left) : null, near.right ? pick(near.right) : null, null)),
+    ...linkPaint((pick) => seamStops(pick(own), near.left ? pick(near.left) : null, near.right ? pick(near.right) : null)),
   } as CSSProperties;
 }
 
@@ -199,83 +221,40 @@ export function linkBridgeStyle(left: PillColors, right: PillColors, themeName: 
   } as CSSProperties;
 }
 
-/** An overlay colour for an SVG stop: `stop-color` and `stop-opacity`. */
-function overlayStop(offset: number, target: string, panel: string): string {
-  const o = proseOverlayOf(target, panel);
-  const [r, g, b] = o.rgb;
-  return `<stop offset='${offset.toFixed(4)}' stop-color='rgb(${r},${g},${b})' stop-opacity='${o.alpha.toFixed(4)}'/>`;
-}
-
 /**
- * A prose tint as an SVG `url()`: the colour stops (overlays that give
- * those colours over the panel), masked by the tint's fade (solid to 45%
- * of the radius, nothing at the edge, as the one-colour tint), whose centre
- * is a joined side: a radial fade centred on the one joined side (the
- * middle, when neither is), a top-and-bottom fade only when both are.
+ * A prose pill segment's custom properties: its text and muted part, each
+ * whichever of its own, its neighbours' and the theme's reads on every
+ * colour it can sit on (its glow, the blends toward its neighbours and the
+ * panel, {@link blendBackdrops}: a near-black half's words beside a
+ * near-white half sit on a lighter blend than their own glow), and its
+ * glow's wash for the CSS fallback (`--pill-tint`). The glow itself is
+ * painted per line once laid out (`useProseGlow`).
  */
-function proseTint(stops: Stop[], panel: string, joinLeft: boolean, joinRight: boolean): string {
-  const colour = stops.map(([o, c]) => overlayStop(typeof o === 'number' ? o : 0, c, panel)).join('');
-  const fadeStops = `<stop offset='0' stop-color='white'/><stop offset='0.45' stop-color='white'/><stop offset='1' stop-color='white' stop-opacity='0'/>`;
-  let fade: string;
-  if (joinLeft && joinRight) {
-    fade = `<linearGradient id='f' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='white' stop-opacity='0'/><stop offset='0.275' stop-color='white'/><stop offset='0.725' stop-color='white'/><stop offset='1' stop-color='white' stop-opacity='0'/></linearGradient>`;
-  } else {
-    // A radial fade centred on the joined side (or the middle): the ellipse
-    // reaches the far end and the top and bottom.
-    const cx = joinRight ? 1 : joinLeft ? 0 : 0.5;
-    const rx = joinLeft || joinRight ? 1 : 0.5;
-    fade = `<radialGradient id='f' cx='${cx}' cy='0.5' r='1' gradientTransform='translate(${cx} 0.5) scale(${rx} 0.5) translate(${-cx} -0.5)'>${fadeStops}</radialGradient>`;
-  }
-  const svg =
-    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'>` +
-    `<defs><linearGradient id='c' x1='0' y1='0' x2='1' y2='0'>${colour}</linearGradient>${fade}` +
-    `<mask id='m'><rect width='100' height='100' fill='url(#f)'/></mask></defs>` +
-    `<rect width='100' height='100' fill='url(#c)' mask='url(#m)'/></svg>`;
-  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
-}
-
-/**
- * A prose segment's tint (see {@link proseTint}): its own colour, shifting
- * to the midpoint with a neighbour over `seam` of its width at a seam; a
- * side whose neighbour is a bridge (its own colour) is joined but keeps its
- * colour.
- */
-export function proseSegmentTint(own: PillColors, near: Neighbours, panel: string, seam: number): string {
-  const s = Math.min(0.45, Math.max(0.08, seam));
-  return proseTint(seamStops(own.bg, near.left?.bg ?? null, near.right?.bg ?? null, s), panel, near.left !== null, near.right !== null);
-}
-
-/** A prose bridge's tint: `left`'s tint to `right`'s across its width; `join` says which sides meet a segment on the same line. */
-export function proseBridgeTint(left: PillColors, right: PillColors, panel: string, join: { left: boolean; right: boolean }): string {
-  return proseTint(bridgeStops(left.bg, right.bg), panel, join.left, join.right);
-}
-
-/**
- * A prose pill segment's custom properties: its text, muted part, its dot
- * and ring checked against every backdrop (the tint, the panel and the
- * blends), and its tint (`--seg-tint`, {@link proseSegmentTint}).
- * `widthEm` estimates the segment's width, so the seam fade is about
- * {@link SEAM_EM} wide.
- */
-export function proseSegmentStyle(own: PillColors, near: Neighbours, themeName: string, widthEm: number): CSSProperties {
+export function proseSegmentStyle(own: PillColors, near: Neighbours, themeName: string): CSSProperties {
   const theme = pillThemeOf(themeName);
-  const dot: PillDot = pillDot(own.dot, blendBackdrops(own, near, theme.panel), theme);
+  // The glow's stops toward each neighbour (own colour to the midpoint, as
+  // `blendBackdrops` samples them) and what is painted between them, over
+  // the panel and over every tinted surface prose sits on.
+  const path = [own.bg];
+  for (const other of [near.left, near.right]) {
+    if (other && other.bg !== own.bg) path.push(...painted([own.bg, ...[...BLEND_SAMPLES].reverse().map((t) => mixHex(own.bg, other.bg, t))]));
+  }
+  const under = path.flatMap((c) => proseBackdrops(c, theme));
+  const others = [near.left, near.right].filter((c): c is PillColors => c !== null);
   return {
-    '--pill-text': own.text,
-    '--pill-muted': own.muted,
-    '--pill-dot': dot.dot,
-    '--pill-ring': dot.ring ?? 'transparent',
-    '--seg-tint': proseSegmentTint(own, near, theme.panel, SEAM_EM / Math.max(widthEm, 0.1)),
+    '--pill-text': readableOn([own.text, ...others.map((c) => c.text), theme.text], under, PILL_TEXT_MIN + 0.1, theme.dark),
+    '--pill-muted': readableOn([own.muted, ...others.map((c) => c.muted), theme.muted], under, PILL_MUTED_MIN + 0.1, theme.dark),
+    '--pill-tint': proseTintOf(own.bg, theme.panel).tint,
   } as CSSProperties;
 }
 
-/** The arrow of a prose pill: a bridge (both sides joined), its text in a colour that reads on every colour under it. */
+/** The arrow of a prose pill: a bridge, its text in a colour that reads on every colour under it. */
 export function proseBridgeStyle(left: PillColors, right: PillColors, themeName: string): CSSProperties {
   const theme = pillThemeOf(themeName);
-  const under = bridgeBackdrops(left, right, theme.panel);
+  const under = painted(BRIDGE_SAMPLES.map((t) => mixHex(left.bg, right.bg, t))).flatMap((c) => proseBackdrops(c, theme));
   return {
-    '--pill-text': readableOn([left.text, right.text, theme.text], under, 7),
-    '--pill-muted': readableOn([left.muted, right.muted, theme.muted], under, 4.5),
-    '--seg-tint': proseBridgeTint(left, right, theme.panel, { left: true, right: true }),
+    '--pill-text': readableOn([left.text, right.text, theme.text], under, PILL_TEXT_MIN + 0.1, theme.dark),
+    '--pill-muted': readableOn([left.muted, right.muted, theme.muted], under, PILL_MUTED_MIN + 0.1, theme.dark),
+    '--pill-tint': proseTintOf(left.bg, theme.panel).tint,
   } as CSSProperties;
 }

@@ -19,7 +19,7 @@ import i18n from '../../i18n';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useUIStore } from '../../store/uiStore';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
-import { markOf, markOver, PillParts, pillStyle, shotToneOf, useMissingPillStyle, useResolvePill } from './LinePill';
+import { endTitleOf, markOf, PillParts, pillStyle, shotToneOf, useMissingPillStyle, useResolvePill } from './LinePill';
 
 export type DetailLinkType = 'station' | 'shot' | 'line';
 
@@ -86,9 +86,10 @@ export interface DetailLinkProps {
   /**
    * The main part of the Full-level pill, at the surrounding text size: the
    * station's bare name (`17`, `labels.stationPill`: the pill's colour says
-   * whose station a dotted slot shows, and it draws a loop end's mark), the
-   * shot (`4 → 5`) or the line name. Defaults to `displayText`. A shot pill
-   * with a marked end draws each end's bare name and marks instead.
+   * whose station a dotted slot shows, its tooltip and words say it and a
+   * loop end), the shot (`4 → 5`) or the line name. Defaults to
+   * `displayText`. A shot pill with an end of another line's station or a
+   * loop end draws each end's bare name, with its tooltip and words, instead.
    */
   pillLabel?: string;
   /**
@@ -114,7 +115,7 @@ export interface DetailLinkProps {
    * name the other LINE (UX-7), and the Station ID row above already says it.
    */
   stationIdShown?: boolean | undefined;
-  /** A shot pill's home-line marks and half colours, per end (see
+  /** A shot pill's ends' home lines (their tooltips and words) and half colours, per end (see
    *  `homeLineId`). Shot links only. Absent: each end's own (a foreign end's
    *  home line). */
   shotHomeLineIds?: { from?: number | null | undefined; to?: number | null | undefined } | undefined;
@@ -196,7 +197,7 @@ export function DetailLink({
   const position = hasPosition(target) ? target.position : null;
   // A station pill ends with the station's Station ID (the one the Station
   // IDs label mode shows); the spoken name carries it too.
-  // The Station ID the slot shows (RS 6) and its loop mark.
+  // The Station ID the slot shows (RS 6), and whether it is a loop end (its tooltip and words).
   const stationRef = type === 'station' && position !== null ? { line_id: target.lineId, station_index: position } : null;
   const stationId =
     showPill && stationIdShown && !isMissing && stationRef !== null ? labels.shownStationId(stationRef) : null;
@@ -274,11 +275,11 @@ export function DetailLink({
     : `underline ${isMissing ? 'text-warning' : 'text-accent'} ${focusClasses} ${cursorClass} ${className}`;
   const style = showPill ? (isMissing ? missingStyle : pillStyle(pill.colors)) : undefined;
 
-  // A shot with a home-line mark, a loop mark or an end that belongs to
-  // another line shows its two ends separately, so each mark sits right
-  // after its station's bare name (the marks say what the plain text's
-  // qualifier says); with an end of another line it is two-tone, that end's
-  // half in that line's colour (RS-OWNERSHIP).
+  // A shot with an end of another line's station or a loop end shows its
+  // two ends separately, so each end's tooltip and words sit on its bare
+  // name (they say what the plain text's qualifier says); with an end of
+  // another line it is two-tone, that end's half in that line's colour
+  // (RS-OWNERSHIP).
   const shotIndex = type === 'shot' && position !== null ? position - 1 : null;
   const marked = showPill && shotIndex !== null && !isMissing;
   const endRef = (index: number) => ({ line_id: target.lineId, station_index: index });
@@ -286,13 +287,12 @@ export function DetailLink({
     end !== undefined ? end : labels.homeMark(endRef(index));
   const fromOwner = marked ? (shotHomeLineIds?.from !== undefined ? shotHomeLineIds.from : labels.ownerLine(endRef(shotIndex))) : null;
   const toOwner = marked ? (shotHomeLineIds?.to !== undefined ? shotHomeLineIds.to : labels.ownerLine(endRef(shotIndex + 1))) : null;
-  const tone = marked ? shotToneOf(resolve, target.lineId, fromOwner, toOwner, 'link') : null;
-  // A foreign end's dot sits in its own half, near a blended seam: it is
-  // checked against that half's colours and the blends (RS-BLEND).
-  const endMark = (home: number | null | undefined, on: readonly string[] | undefined) =>
-    tone && on ? markOver(pill, home, on) : markOf(pill, home);
-  const fromMark = marked ? endMark(endHome(shotHomeLineIds?.from, shotIndex), tone?.fromOn) : null;
-  const toMark = marked ? endMark(endHome(shotHomeLineIds?.to, shotIndex + 1), tone?.toOn) : null;
+  // The context (the shot's line) keeps the shot's colour as a head when
+  // the from end's half is another line's; with no context there is none.
+  const tone = marked ? shotToneOf(resolve, target.lineId, fromOwner, toOwner, 'link', Boolean(pillContext)) : null;
+  // Whose station a foreign end is: said in its tooltip and words (RS-NODOTS).
+  const fromMark = marked ? markOf(pill, endHome(shotHomeLineIds?.from, shotIndex)) : null;
+  const toMark = marked ? markOf(pill, endHome(shotHomeLineIds?.to, shotIndex + 1)) : null;
   const fromLoopEnd = marked && labels.shown(endRef(shotIndex))?.loop_end === true;
   const toLoopEnd = marked && labels.shown(endRef(shotIndex + 1))?.loop_end === true;
   const shotEnds =
@@ -330,8 +330,8 @@ export function DetailLink({
       title={
         isMissing
           ? `${type} not found`
-          : showPill && ownerName !== null
-            ? i18n.t('identity.homeMarkTitle', { line: ownerName })
+          : showPill
+            ? endTitleOf(ownerName !== null ? { line: ownerName } : null, loopEnd)
             : undefined
       }
     >

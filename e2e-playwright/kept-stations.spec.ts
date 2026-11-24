@@ -369,7 +369,7 @@ test.describe('Kept and archived stations (RS)', () => {
     await page.getByTestId('closure-create').click();
     await expect(page.getByTestId('closure-dialog')).toBeHidden();
     await expect.poll(closures).toEqual([{ id: '1', archived: true }]);
-    // The hidden end shows the kept end's name with the loop mark.
+    // The hidden end shows the kept end's name, as a loop end.
     await expect.poll(() => nameAt(page, ref(sideId, 2))).toBe('1');
 
     // The same pair again, keeping both names (the mock refuses a duplicate,
@@ -502,8 +502,8 @@ test.describe('Kept and archived stations (RS)', () => {
   // closure never repeats a name.
   test("a closure whose rule K end may not be kept says why; a loop end repeats no name", async ({ page }) => {
     const [mainId, sideId] = await setUp(page);
-    // Main / 1 - Side / 2 keeping Main / 1: Side / 2 is a loop end showing 1
-    // with the loop mark, beside Side's own 1.
+    // Main / 1 - Side / 2 keeping Main / 1: Side / 2 is a loop end showing 1,
+    // beside Side's own 1.
     expect((await createClosure(page, ref(mainId, 1), ref(sideId, 2), mainId * 100_000 + 1)).success).toBe(true);
     await expect.poll(() => nameAt(page, ref(sideId, 2))).toBe('1');
     await expect.poll(() => nameAt(page, ref(sideId, 1))).toBe('1');

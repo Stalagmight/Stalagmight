@@ -105,7 +105,7 @@ afterwards:
   station numbers) and names any others by the rules above. A name the line
   already has gets a letter: a second `5` becomes `5a`, a second `Sump`
   becomes `Sump-a`. A station a line shows in another line's colour (a
-  merged station kept on its own line) or with the loop mark (a loop
+  merged station kept on its own line) or as a loop end (a loop
   closure end) does not take up its name on that line: the line may have a
   station of its own with that name too.
 
@@ -127,7 +127,8 @@ once.
 
 A loop closure can show its two ends as one station in the same way: the
 hidden end keeps its own point on the map, but gets no label, and its slot
-carries a small loop mark, `∽` (hover it for "Loop end"). **Remove Closure** brings its name back. Its
+shows the kept station in its line's colour (hover it for "Loop end"; the
+data table's Name column reads `3 (loop end)`). **Remove Closure** brings its name back. Its
 **Details** show the station it is shown as, then its own point's position;
 a Plan pin on it names it by its own station first: `Loop / L8 (loop end,
 shown as Main / 8)`.
