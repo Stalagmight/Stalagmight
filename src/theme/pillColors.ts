@@ -300,7 +300,7 @@ export const PROSE_ALPHA = 0.5;
  * `far`, so a near-white, a grey and a near-black line, which share no hue,
  * differ by lightness. `least` is as close to the panel as it steps back.
  */
-const PROSE_LIFT = { near: 0.07, far: 0.19, least: 0.03 } as const;
+const PROSE_LIFT = { near: 0.09, far: 0.2, least: 0.03 } as const;
 /** The prose glow's share of the line's chroma, and its cap. */
 const PROSE_CHROMA = { share: 0.9, max: 0.1 } as const;
 /** The prose pill's muted words stay at least this far (contrast) from its main text, however the glow pushes them. */
