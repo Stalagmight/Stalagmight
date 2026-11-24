@@ -45,6 +45,9 @@ export interface EntityBlobProps {
   trailing?: ReactNode | undefined;
   /** Optional tooltip. */
   title?: string | undefined;
+  /** Screen-reader words after a station's name, in place of the owner
+   *  words the pill works out itself (`StationBlob`'s `bySlot`). */
+  words?: string | null | undefined;
   /** Extra classes for the pill. */
   className?: string | undefined;
   testId?: string | undefined;
@@ -62,6 +65,7 @@ export function EntityBlob({
   plain,
   trailing,
   title,
+  words,
   className = '',
   testId,
 }: EntityBlobProps) {
@@ -121,11 +125,13 @@ export function EntityBlob({
         stationId={entity === 'station' ? stationId : null}
         stationIdLabel={t('identity.stationId')}
         ownerWords={
-          ownerName === null
-            ? null
-            : context
-              ? t('identity.onLineLabel', { line: pill.lineNameOf?.(lineId) ?? '' })
-              : t('identity.homeMarkLabel', { line: ownerName })
+          words !== undefined
+            ? words
+            : ownerName === null
+              ? null
+              : context
+                ? t('identity.onLineLabel', { line: pill.lineNameOf?.(lineId) ?? '' })
+                : t('identity.homeMarkLabel', { line: ownerName })
         }
         trailing={trailing}
       />
@@ -139,7 +145,11 @@ export function EntityBlob({
  * foreign slot, or a loop end whose kept end lives on another line, takes
  * the colour and name of the line its shown station belongs to
  * (RS-OWNERSHIP), unless `homeLineId` says otherwise; a loop end keeps the
- * loop mark (RS 6). Below Full it
+ * loop mark (RS 6). With `bySlot` it is the slot's pill instead: its own
+ * line's colour and name, for a list of slots whose point is which lines
+ * they are on (a delete's "no longer shared" pairs, as the "Also on" rows
+ * name a line); its tooltip and screen-reader words still say whose station
+ * it shows. Below Full it
  * is the plain label (`17`, `Main Line / 17`; `12 (Main)`, `Side / 12 (Main)`
  * for a foreign slot; `3 (loop end on Side)` for a loop end).
  */
@@ -147,6 +157,7 @@ export function StationBlob({
   station,
   withLine = false,
   homeLineId,
+  bySlot = false,
   className,
   testId,
   title,
@@ -154,23 +165,29 @@ export function StationBlob({
   station: StationRef;
   withLine?: boolean | undefined;
   homeLineId?: number | null | undefined;
+  /** The slot's own line's colour and name (see above). */
+  bySlot?: boolean | undefined;
   className?: string | undefined;
   testId?: string | undefined;
   title?: string | undefined;
 }) {
   const labels = useIdentityLabels();
+  const { t } = useTranslation();
+  const owner = labels.ownerLine(station);
+  const ownerName = owner === null ? null : labels.lineName(owner);
   return (
     <EntityBlob
       entity="station"
       lineId={station.line_id}
       context={withLine ? labels.lineName(station.line_id) : null}
       stationId={labels.shownStationId(station)}
-      homeLineId={homeLineId === undefined ? labels.ownerLine(station) : homeLineId}
+      homeLineId={bySlot ? null : homeLineId === undefined ? owner : homeLineId}
       loopEnd={labels.shown(station)?.loop_end === true}
       plain={labels.station(station, withLine)}
       className={className}
       testId={testId}
-      title={title}
+      title={title ?? (bySlot && ownerName !== null ? t('identity.homeMarkTitle', { line: ownerName }) : undefined)}
+      words={bySlot ? (ownerName === null ? null : t('identity.homeMarkLabel', { line: ownerName })) : undefined}
     >
       {labels.stationPill(station)}
     </EntityBlob>

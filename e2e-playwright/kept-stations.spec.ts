@@ -12,7 +12,7 @@ import { expectProse } from './helpers/proseSentence';
  * loop end counts for no name uniqueness, RS-FX5); Detach Line from Station
  * brings the archived station back and answers its collision; Create Loop
  * Closure keeps one end or both names; Remove Closure says what comes back;
- * the data table marks a foreign slot with its home line's dot.
+ * the data table colours a foreign slot by its home line (RS-OWNERSHIP).
  *
  * The mock keeps a junction's first slot in line order unless a merge names
  * `keep`, gives each slot the Station ID `lineId * 100000 + index`, and names
@@ -141,7 +141,7 @@ test.describe('Kept and archived stations (RS)', () => {
     // confirms (shot 01 said only "Side will show Main / 3").
     await expectSpoken(
       page.getByTestId(`merge-repeat-${sideId}-${sideId * 100_000 + 1}`),
-      `Side already has a station 3 (Station ID ${sideId * 100_000 + 1}); it keeps its name, and Side shows 3 twice, the junction with Main's dot.`,
+      `Side already has a station 3 (Station ID ${sideId * 100_000 + 1}); it keeps its name, and Side shows 3 twice, the junction in Main's colour.`,
       { exact: true },
     );
 
@@ -151,8 +151,8 @@ test.describe('Kept and archived stations (RS)', () => {
     await expect.poll(() => nameAt(page, ref(sideId, 1))).toBe('3');
     await expect.poll(() => nameAt(page, ref(mainId, 3))).toBe('3');
 
-    // The data table shows both 3s on Side: the start with Main's dot and
-    // Main's Station ID, Side's own 3 plain with its own.
+    // The data table shows both 3s on Side: the start in Main's colour with
+    // Main's Station ID, Side's own 3 in Side's with its own.
     await page.evaluate((lineId) => {
       (window as unknown as { __E2E_TEST__: E2E }).__E2E_TEST__.uiStore
         .getState()
@@ -162,7 +162,7 @@ test.describe('Kept and archived stations (RS)', () => {
     await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
     await page.getByTestId('data-table-view-stations').click();
     await expect(page.getByTestId('data-table-view-stations')).toHaveAttribute('aria-checked', 'true');
-    // The gutter pills name both 3 (the dot says whose the first one is).
+    // The gutter pills name both 3 (the colour says whose the first one is).
     await expect(page.getByTestId(`data-table-station-pill-${sideId}-0`).locator('.sh-lpill-main')).toHaveText('3');
     await expect(page.getByTestId(`data-table-station-pill-${sideId}-1`).locator('.sh-lpill-main')).toHaveText('3');
     // So does the Name column (hidden by default; the eye menu shows it).
@@ -172,8 +172,9 @@ test.describe('Kept and archived stations (RS)', () => {
     // RS-FX6, P2-5: the dotted one says whose it is, muted.
     await expect(page.getByTestId('grid-cell-0-name')).toHaveText('3 (Main)');
     await expect(page.getByTestId('grid-cell-1-name')).toHaveText('3');
-    await expect(page.getByTestId(`data-table-station-pill-${sideId}-0-home-dot`)).toBeVisible();
-    await expect(page.getByTestId(`data-table-station-pill-${sideId}-1-home-dot`)).toHaveCount(0);
+    await expect(page.getByTestId(`data-table-station-pill-${sideId}-0`)).toHaveAttribute('data-owner-line', String(mainId));
+    await expect(page.getByTestId(`data-table-station-pill-${sideId}-1`)).not.toHaveAttribute('data-owner-line');
+    await expect(page.getByTestId(`data-table-station-pill-${sideId}-0-home-dot`)).toHaveCount(0);
     await expect(page.getByTestId('grid-cell-0-_stationId')).toHaveText(String(mainId * 100_000 + 3));
     await expect(page.getByTestId('grid-cell-1-_stationId')).toHaveText(String(sideId * 100_000 + 1));
   });
@@ -190,7 +191,7 @@ test.describe('Kept and archived stations (RS)', () => {
     // RS-FX6, P2-6: Main's own 0 keeps its name beside the dotted 0.
     await expectSpoken(
       page.getByTestId(`merge-repeat-${mainId}-${mainId * 100_000}`),
-      `Main already has a station 0 (Station ID ${mainId * 100_000}); it keeps its name, and Main shows 0 twice, the junction with Side's dot.`,
+      `Main already has a station 0 (Station ID ${mainId * 100_000}); it keeps its name, and Main shows 0 twice, the junction in Side's colour.`,
       { exact: true },
     );
 
@@ -398,7 +399,7 @@ test.describe('Kept and archived stations (RS)', () => {
     await expect.poll(() => nameAt(page, ref(sideId, 2))).toBe('2');
   });
 
-  test('the data table marks a foreign slot with its home line dot and shows the kept Station ID', async ({ page }) => {
+  test('the data table colours a foreign slot by its home line and shows the kept Station ID', async ({ page }) => {
     const [mainId, sideId] = await setUp(page);
     await page.evaluate(
       async ({ a, b }) => {
@@ -415,16 +416,19 @@ test.describe('Kept and archived stations (RS)', () => {
     await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
     await page.getByTestId('data-table-view-stations').click();
     await expect(page.getByTestId('data-table-view-stations')).toHaveAttribute('aria-checked', 'true');
-    // Side 0 shows Main / 3: its pill carries Main's dot and Main's Station ID.
+    // Side 0 shows Main / 3: its pill is in Main's colour (RS-OWNERSHIP, no
+    // second dot), says so as a tooltip, and carries Main's Station ID.
     const pill = page.getByTestId(`data-table-station-pill-${sideId}-0`);
     await expect(pill).toBeVisible();
-    await expect(page.getByTestId(`data-table-station-pill-${sideId}-0-home-dot`)).toBeVisible();
+    await expect(pill).toHaveAttribute('data-owner-line', String(mainId));
+    await expect(pill).toHaveAttribute('title', /^Belongs to /);
+    await expect(page.getByTestId(`data-table-station-pill-${sideId}-0-home-dot`)).toHaveCount(0);
     // (The superscript carries sr-only words before the number.)
     await expect(page.getByTestId(`data-table-station-pill-${sideId}-0-station-id`)).toHaveText(
       `Station ID #${mainId * 100_000 + 3}`,
     );
-    // Side's own stations carry no dot.
-    await expect(page.getByTestId(`data-table-station-pill-${sideId}-1-home-dot`)).toHaveCount(0);
+    // Side's own stations are in Side's colour.
+    await expect(page.getByTestId(`data-table-station-pill-${sideId}-1`)).not.toHaveAttribute('data-owner-line');
   });
 
   // ui-1, ui-8: the remaining-junction picker. Main keeps a junction of three

@@ -349,7 +349,7 @@ describe('Merge Stations says the name repeats and what travels inside (RS-FX6)'
       }),
     );
     expect(said(screen.getByTestId(`merge-repeat-${SIDE}-41`))).toContain(
-      "Side already has a station 12 (Station ID 41); it keeps its name, and Side shows 12 twice, the junction with Main's dot.",
+      "Side already has a station 12 (Station ID 41); it keeps its name, and Side shows 12 twice, the junction in Main's colour.",
     );
     // RS-PROSE: the lines are pills; the name it repeats stays a name.
     expect(pillKinds(screen.getByTestId(`merge-repeat-${SIDE}-41`))).toEqual(['line', 'line', 'line']);

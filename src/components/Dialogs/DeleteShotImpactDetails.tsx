@@ -8,10 +8,12 @@ import { Prose } from '../common/Prose';
 /**
  * A station as the line pill (Full level) or plain text: `Main Line / 17`.
  * Every station named here exists before the delete, so the open project
- * names it.
+ * names it. The pairs are slots of one station on two lines, so each pill is
+ * its slot's (its own line's colour and name, `bySlot`): two pills of the
+ * line the station belongs to would read the same (RS-OWNERSHIP).
  */
 function StationRefBlob({ station }: { station: StationRef }) {
-  return <StationBlob station={station} withLine />;
+  return <StationBlob station={station} withLine bySlot />;
 }
 
 function Pair({ a, b }: { a: StationRef; b: StationRef }) {

@@ -10,7 +10,8 @@ import { setupMockedPage, createProject, seedProjectWithLines, waitForMapReady, 
  * (`Range.getClientRects`, clustered into lines), and the gaps between
  * consecutive lines are compared, with pills (Full highlighting) and as plain
  * text (highlighting off), on the Bulk Delete dialog's summary and on a
- * Warnings tab message. Every gap must equal the line-height within 0.5 px.
+ * Warnings tab message holding a two-tone shot (RS-OWNERSHIP: an end of
+ * another line). Every gap must equal the line-height within 0.5 px.
  */
 
 const LONG_LINE = 'Main Passage of the Northern Sump System';
@@ -25,6 +26,12 @@ const lineSeeds: LineSeed[] = [
       { azimuth_in: 135, azimuth_out: 315, length: 8, depth_in: -4, depth_out: -6 },
       { azimuth_in: 180, azimuth_out: 0, length: 15, depth_in: -6, depth_out: -8 },
     ],
+  },
+  {
+    name: 'Side Passage',
+    direction: 'in',
+    color: '#1f4fff',
+    shots: [{ azimuth_in: 10, azimuth_out: 190, length: 6, depth_in: 0, depth_out: -1 }],
   },
 ];
 
@@ -141,12 +148,13 @@ test.describe('Prose pills keep the line pitch', () => {
       const e2e = (window as unknown as {
         __E2E_TEST__: {
           projectStore: {
-            getState: () => { project: { lines: Array<{ id: number; shots: Array<{ id: number }> }> } };
+            getState: () => { project: { lines: Array<{ id: number; name: string; shots: Array<{ id: number }> }> } };
             setState: (s: unknown) => void;
           };
         };
       }).__E2E_TEST__;
       const line = e2e.projectStore.getState().project.lines[0]!;
+      const side = e2e.projectStore.getState().project.lines[1]!;
       const station = (index: number, name: string) => ({
         kind: 'station',
         text: `${lineName} / ${name}`,
@@ -163,7 +171,16 @@ test.describe('Prose pills keep the line pitch', () => {
         station(1, '1'),
         { kind: 'text', text: ' and ' },
         station(3, '3'),
-        { kind: 'text', text: ' disagree. Check the depths of the shots that meet here.' },
+        { kind: 'text', text: ' disagree, and the shot ' },
+        {
+          kind: 'shot',
+          text: `${lineName}: 1 (${side.name}) \u2192 2`,
+          line_id: line.id,
+          context: lineName,
+          from: { name: '1', home_line: side.id },
+          to: { name: '2' },
+        },
+        { kind: 'text', text: ' is one of them. Check the depths of the shots that meet here.' },
       ];
       const message = parts.map((p) => p.text).join('');
       e2e.projectStore.setState({
@@ -184,6 +201,9 @@ test.describe('Prose pills keep the line pitch', () => {
     await page.getByTestId('detail-tab-warnings').click();
     const message = page.getByTestId('warnings-content').locator('.text-sm').filter({ hasText: 'The depth readings at' });
     await expect(message).toHaveCount(1);
+    // The shot is two-tone: its from end belongs to Side Passage.
+    await expect(message.locator('.sh-ppill-vis--split')).toHaveCount(1);
+    await expect(message.locator('.sh-ppill-seg')).toHaveCount(3);
     await expectSamePitch(page, message);
   });
 });

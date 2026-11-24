@@ -116,6 +116,15 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     expect(screen.getByTestId('loop').style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('#ffff00', 'dark').bg);
   });
 
+  it("bySlot: a list of slots keeps each slot's line, and still says whose station it shows", () => {
+    render(<StationBlob station={{ line_id: SIDE, station_index: 0 }} withLine bySlot testId="slot" />);
+    const pill = screen.getByTestId('slot');
+    expect(pill.style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('navy', 'dark').bg);
+    expect(screen.getByTestId('slot-id')).toHaveTextContent('Side:');
+    expect(pill).toHaveAttribute('title', 'Belongs to Main');
+    expect(screen.getByTestId('slot-owner').textContent).toBe(' (Main)');
+  });
+
   it("lets a caller keep the slot's colour", () => {
     render(<StationBlob station={{ line_id: SIDE, station_index: 0 }} homeLineId={null} testId="none" />);
     expect(screen.getByTestId('none').style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('navy', 'dark').bg);
