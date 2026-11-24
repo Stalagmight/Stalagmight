@@ -1,0 +1,16 @@
+{
+ "light-1440": {
+  "dots": 45,
+  "ringed": 30,
+  "min_contrast": 2.35,
+  "below_floor": [],
+  "ringed_but_alone_well_above": []
+ },
+ "dark-1440": {
+  "dots": 45,
+  "ringed": 5,
+  "min_contrast": 2.33,
+  "below_floor": [],
+  "ringed_but_alone_well_above": []
+ }
+}

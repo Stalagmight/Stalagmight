@@ -1,0 +1,3577 @@
+[
+ {
+  "name": "table-shots-blue",
+  "file": "table-shots-blue-light-1440.png",
+  "rects": [
+   {
+    "all": [
+     [
+      1331,
+      152,
+      1388,
+      168
+     ],
+     [
+      1160,
+      172,
+      1409,
+      188
+     ],
+     [
+      1160,
+      192,
+      1190,
+      208
+     ]
+    ],
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3#32",
+    "p": "station-detail-loop-end-shown",
+    "k": "prose",
+    "r": [
+     1331,
+     152,
+     1388,
+     168
+    ]
+   },
+   {
+    "all": [
+     [
+      1239,
+      214,
+      1263,
+      227
+     ]
+    ],
+    "t": "1",
+    "p": "station-detail-loop-end-own",
+    "k": "prose",
+    "r": [
+     1239,
+     214,
+     1263,
+     227
+    ]
+   },
+   {
+    "all": [
+     [
+      1343,
+      327,
+      1428,
+      350
+     ]
+    ],
+    "t": "Blue Link",
+    "p": "line-3-link",
+    "k": "link",
+    "r": [
+     1343,
+     327,
+     1428,
+     350
+    ]
+   },
+   {
+    "all": [
+     [
+      1152,
+      539,
+      1398,
+      562
+     ]
+    ],
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3 #32",
+    "p": "station-2-3-link",
+    "k": "link",
+    "r": [
+     1152,
+     539,
+     1398,
+     562
+    ]
+   },
+   {
+    "all": [
+     [
+      1151,
+      589,
+      1235,
+      602
+     ]
+    ],
+    "t": "Blue Link: 1#36",
+    "p": "closure-archive-1",
+    "k": "prose",
+    "r": [
+     1151,
+     589,
+     1235,
+     602
+    ]
+   },
+   {
+    "all": [
+     [
+      1374,
+      589,
+      1424,
+      602
+     ],
+     [
+      1152,
+      605,
+      1383,
+      618
+     ]
+    ],
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3#32",
+    "p": "closure-archive-1",
+    "k": "prose",
+    "r": [
+     1374,
+     589,
+     1424,
+     602
+    ]
+   },
+   {
+    "all": [
+     [
+      1359,
+      683,
+      1428,
+      706
+     ]
+    ],
+    "t": "4 (Main Passage of the Northern Sump System) → 3 (Lemon Squeeze Crawlway past th",
+    "p": "shot-3-1-link",
+    "k": "link",
+    "r": [
+     1359,
+     683,
+     1428,
+     706
+    ]
+   },
+   {
+    "all": [
+     [
+      649,
+      439,
+      741,
+      459
+     ]
+    ],
+    "t": "Blue Link",
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     649,
+     439,
+     741,
+     459
+    ]
+   },
+   {
+    "all": [
+     [
+      270,
+      505,
+      325,
+      523
+     ]
+    ],
+    "t": "4 (Main Passage of the Northern Sump System) → 3 (Lemon Squeeze Crawlway past th",
+    "p": "data-table-shot-row-label-3-300000",
+    "k": "link",
+    "r": [
+     270,
+     505,
+     325,
+     523
+    ]
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "table-shots-branch",
+  "file": "table-shots-branch-light-1440.png",
+  "rects": [
+   {
+    "all": [
+     [
+      1188,
+      205,
+      1428,
+      228
+     ]
+    ],
+    "t": "Upper Branch towards the Dry Chamber",
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1188,
+     205,
+     1428,
+     228
+    ]
+   },
+   {
+    "all": [
+     [
+      1351,
+      373,
+      1428,
+      396
+     ]
+    ],
+    "t": "12 (Main Passage of the Northern Sump System) → 1",
+    "p": "shot-1-1-link",
+    "k": "link",
+    "r": [
+     1351,
+     373,
+     1428,
+     396
+    ]
+   },
+   {
+    "all": [
+     [
+      1362,
+      400,
+      1428,
+      423
+     ]
+    ],
+    "t": "1 → 2",
+    "p": "shot-1-2-link",
+    "k": "link",
+    "r": [
+     1362,
+     400,
+     1428,
+     423
+    ]
+   },
+   {
+    "all": [
+     [
+      569,
+      439,
+      821,
+      459
+     ]
+    ],
+    "t": "Upper Branch towards the Dry Chamber",
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     569,
+     439,
+     821,
+     459
+    ]
+   },
+   {
+    "all": [
+     [
+      267,
+      505,
+      328,
+      523
+     ]
+    ],
+    "t": "12 (Main Passage of the Northern Sump System) → 1",
+    "p": "data-table-shot-row-label-1-100000",
+    "k": "link",
+    "r": [
+     267,
+     505,
+     328,
+     523
+    ]
+   },
+   {
+    "all": [
+     [
+      271,
+      538,
+      324,
+      556
+     ]
+    ],
+    "t": "1 → 2",
+    "p": "data-table-shot-row-label-1-100001",
+    "k": "link",
+    "r": [
+     271,
+     538,
+     324,
+     556
+    ]
+   },
+   {
+    "all": [
+     [
+      271,
+      571,
+      324,
+      589
+     ]
+    ],
+    "t": "2 → 3",
+    "p": "data-table-shot-row-label-1-100002",
+    "k": "link",
+    "r": [
+     271,
+     571,
+     324,
+     589
+    ]
+   },
+   {
+    "all": [
+     [
+      271,
+      604,
+      324,
+      622
+     ]
+    ],
+    "t": "3 → 4",
+    "p": "data-table-shot-row-label-1-100003",
+    "k": "link",
+    "r": [
+     271,
+     604,
+     324,
+     622
+    ]
+   },
+   {
+    "all": [
+     [
+      271,
+      637,
+      324,
+      655
+     ]
+    ],
+    "t": "4 → 5",
+    "p": "data-table-shot-row-label-1-100004",
+    "k": "link",
+    "r": [
+     271,
+     637,
+     324,
+     655
+    ]
+   },
+   {
+    "all": [
+     [
+      271,
+      670,
+      324,
+      688
+     ]
+    ],
+    "t": "5 → 6",
+    "p": "data-table-shot-row-label-1-100005",
+    "k": "link",
+    "r": [
+     271,
+     670,
+     324,
+     688
+    ]
+   },
+   {
+    "all": [
+     [
+      271,
+      703,
+      324,
+      721
+     ]
+    ],
+    "t": "6 → 7",
+    "p": "data-table-shot-row-label-1-100006",
+    "k": "link",
+    "r": [
+     271,
+     703,
+     324,
+     721
+    ]
+   },
+   {
+    "all": [
+     [
+      271,
+      736,
+      324,
+      754
+     ]
+    ],
+    "t": "7 → 8",
+    "p": "data-table-shot-row-label-1-100007",
+    "k": "link",
+    "r": [
+     271,
+     736,
+     324,
+     754
+    ]
+   },
+   {
+    "all": [
+     [
+      271,
+      769,
+      324,
+      787
+     ]
+    ],
+    "t": "8 → 9",
+    "p": "data-table-shot-row-label-1-100008",
+    "k": "link",
+    "r": [
+     271,
+     769,
+     324,
+     787
+    ]
+   },
+   {
+    "all": [
+     [
+      268,
+      802,
+      327,
+      820
+     ]
+    ],
+    "t": "9 → 10",
+    "p": "data-table-shot-row-label-1-100009",
+    "k": "link",
+    "r": [
+     268,
+     802,
+     327,
+     820
+    ]
+   },
+   {
+    "all": [
+     [
+      265,
+      835,
+      330,
+      853
+     ]
+    ],
+    "t": "10 → 11",
+    "p": "data-table-shot-row-label-1-100010",
+    "k": "link",
+    "r": [
+     265,
+     835,
+     330,
+     853
+    ]
+   },
+   {
+    "all": [
+     [
+      265,
+      868,
+      330,
+      886
+     ]
+    ],
+    "t": "11 → 12",
+    "p": "data-table-shot-row-label-1-100011",
+    "k": "link",
+    "r": [
+     265,
+     868,
+     330,
+     886
+    ]
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "table-shots-spur",
+  "file": "table-shots-spur-light-1440.png",
+  "rects": [
+   {
+    "all": [
+     [
+      1340,
+      205,
+      1428,
+      228
+     ]
+    ],
+    "t": "Blue Spur",
+    "p": "line-5-link",
+    "k": "link",
+    "r": [
+     1340,
+     205,
+     1428,
+     228
+    ]
+   },
+   {
+    "all": [
+     [
+      1359,
+      373,
+      1428,
+      396
+     ]
+    ],
+    "t": "5 (Lemon Squeeze Crawlway past the Second Restriction) → 1",
+    "p": "shot-5-1-link",
+    "k": "link",
+    "r": [
+     1359,
+     373,
+     1428,
+     396
+    ]
+   },
+   {
+    "all": [
+     [
+      1362,
+      400,
+      1428,
+      423
+     ]
+    ],
+    "t": "1 → 2",
+    "p": "shot-5-2-link",
+    "k": "link",
+    "r": [
+     1362,
+     400,
+     1428,
+     423
+    ]
+   },
+   {
+    "all": [
+     [
+      648,
+      439,
+      742,
+      459
+     ]
+    ],
+    "t": "Blue Spur",
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     648,
+     439,
+     742,
+     459
+    ]
+   },
+   {
+    "all": [
+     [
+      270,
+      505,
+      325,
+      523
+     ]
+    ],
+    "t": "5 (Lemon Squeeze Crawlway past the Second Restriction) → 1",
+    "p": "data-table-shot-row-label-5-500000",
+    "k": "link",
+    "r": [
+     270,
+     505,
+     325,
+     523
+    ]
+   },
+   {
+    "all": [
+     [
+      271,
+      538,
+      324,
+      556
+     ]
+    ],
+    "t": "1 → 2",
+    "p": "data-table-shot-row-label-5-500001",
+    "k": "link",
+    "r": [
+     271,
+     538,
+     324,
+     556
+    ]
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "table-shots-grey",
+  "file": "table-shots-grey-light-1440.png",
+  "rects": [
+   {
+    "all": [
+     [
+      1296,
+      205,
+      1428,
+      228
+     ]
+    ],
+    "t": "Grey Side Tunnel",
+    "p": "line-6-link",
+    "k": "link",
+    "r": [
+     1296,
+     205,
+     1428,
+     228
+    ]
+   },
+   {
+    "all": [
+     [
+      1359,
+      373,
+      1428,
+      396
+     ]
+    ],
+    "t": "8 (Main Passage of the Northern Sump System) → 1",
+    "p": "shot-6-1-link",
+    "k": "link",
+    "r": [
+     1359,
+     373,
+     1428,
+     396
+    ]
+   },
+   {
+    "all": [
+     [
+      1362,
+      400,
+      1428,
+      423
+     ]
+    ],
+    "t": "1 → 2",
+    "p": "shot-6-2-link",
+    "k": "link",
+    "r": [
+     1362,
+     400,
+     1428,
+     423
+    ]
+   },
+   {
+    "all": [
+     [
+      630,
+      439,
+      760,
+      459
+     ]
+    ],
+    "t": "Grey Side Tunnel",
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     630,
+     439,
+     760,
+     459
+    ]
+   },
+   {
+    "all": [
+     [
+      270,
+      505,
+      325,
+      523
+     ]
+    ],
+    "t": "8 (Main Passage of the Northern Sump System) → 1",
+    "p": "data-table-shot-row-label-6-600000",
+    "k": "link",
+    "r": [
+     270,
+     505,
+     325,
+     523
+    ]
+   },
+   {
+    "all": [
+     [
+      271,
+      538,
+      324,
+      556
+     ]
+    ],
+    "t": "1 → 2",
+    "p": "data-table-shot-row-label-6-600001",
+    "k": "link",
+    "r": [
+     271,
+     538,
+     324,
+     556
+    ]
+   },
+   {
+    "all": [
+     [
+      271,
+      571,
+      324,
+      589
+     ]
+    ],
+    "t": "2 → 3",
+    "p": "data-table-shot-row-label-6-600002",
+    "k": "link",
+    "r": [
+     271,
+     571,
+     324,
+     589
+    ]
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "table-stations-blue",
+  "file": "table-stations-blue-light-1440.png",
+  "rects": [
+   {
+    "all": [
+     [
+      1331,
+      152,
+      1388,
+      168
+     ],
+     [
+      1160,
+      172,
+      1409,
+      188
+     ],
+     [
+      1160,
+      192,
+      1190,
+      208
+     ]
+    ],
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3#32",
+    "p": "station-detail-loop-end-shown",
+    "k": "prose",
+    "r": [
+     1331,
+     152,
+     1388,
+     168
+    ]
+   },
+   {
+    "all": [
+     [
+      1239,
+      214,
+      1263,
+      227
+     ]
+    ],
+    "t": "1",
+    "p": "station-detail-loop-end-own",
+    "k": "prose",
+    "r": [
+     1239,
+     214,
+     1263,
+     227
+    ]
+   },
+   {
+    "all": [
+     [
+      1343,
+      327,
+      1428,
+      350
+     ]
+    ],
+    "t": "Blue Link",
+    "p": "line-3-link",
+    "k": "link",
+    "r": [
+     1343,
+     327,
+     1428,
+     350
+    ]
+   },
+   {
+    "all": [
+     [
+      1152,
+      539,
+      1398,
+      562
+     ]
+    ],
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3 #32",
+    "p": "station-2-3-link",
+    "k": "link",
+    "r": [
+     1152,
+     539,
+     1398,
+     562
+    ]
+   },
+   {
+    "all": [
+     [
+      1151,
+      589,
+      1235,
+      602
+     ]
+    ],
+    "t": "Blue Link: 1#36",
+    "p": "closure-archive-1",
+    "k": "prose",
+    "r": [
+     1151,
+     589,
+     1235,
+     602
+    ]
+   },
+   {
+    "all": [
+     [
+      1374,
+      589,
+      1424,
+      602
+     ],
+     [
+      1152,
+      605,
+      1383,
+      618
+     ]
+    ],
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3#32",
+    "p": "closure-archive-1",
+    "k": "prose",
+    "r": [
+     1374,
+     589,
+     1424,
+     602
+    ]
+   },
+   {
+    "all": [
+     [
+      1359,
+      683,
+      1428,
+      706
+     ]
+    ],
+    "t": "4 (Main Passage of the Northern Sump System) → 3 (Lemon Squeeze Crawlway past th",
+    "p": "shot-3-1-link",
+    "k": "link",
+    "r": [
+     1359,
+     683,
+     1428,
+     706
+    ]
+   },
+   {
+    "all": [
+     [
+      649,
+      439,
+      741,
+      459
+     ]
+    ],
+    "t": "Blue Link",
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     649,
+     439,
+     741,
+     459
+    ]
+   },
+   {
+    "all": [
+     [
+      276,
+      505,
+      319,
+      523
+     ]
+    ],
+    "t": "4 (Main Passage of the Northern Sump System) Station ID #4",
+    "p": "data-table-station-pill-3-0",
+    "k": "link",
+    "r": [
+     276,
+     505,
+     319,
+     523
+    ]
+   },
+   {
+    "all": [
+     [
+      274,
+      538,
+      321,
+      556
+     ]
+    ],
+    "t": "3 (Lemon Squeeze Crawlway past the Second Restriction) loop end Station ID #32",
+    "p": "data-table-station-pill-3-1",
+    "k": "link",
+    "r": [
+     274,
+     538,
+     321,
+     556
+    ]
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "table-shots-lemon",
+  "file": "table-shots-lemon-light-1440.png",
+  "rects": [
+   {
+    "all": [
+     [
+      1188,
+      205,
+      1428,
+      228
+     ]
+    ],
+    "t": "Lemon Squeeze Crawlway past the Second Restriction",
+    "p": "line-2-link",
+    "k": "link",
+    "r": [
+     1188,
+     205,
+     1428,
+     228
+    ]
+   },
+   {
+    "all": [
+     [
+      1359,
+      373,
+      1428,
+      396
+     ]
+    ],
+    "t": "5 (Upper Branch towards the Dry Chamber) → 1",
+    "p": "shot-2-1-link",
+    "k": "link",
+    "r": [
+     1359,
+     373,
+     1428,
+     396
+    ]
+   },
+   {
+    "all": [
+     [
+      1362,
+      400,
+      1428,
+      423
+     ]
+    ],
+    "t": "1 → 2",
+    "p": "shot-2-2-link",
+    "k": "link",
+    "r": [
+     1362,
+     400,
+     1428,
+     423
+    ]
+   },
+   {
+    "all": [
+     [
+      533,
+      439,
+      857,
+      459
+     ]
+    ],
+    "t": "Lemon Squeeze Crawlway past the Second Restriction",
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     533,
+     439,
+     857,
+     459
+    ]
+   },
+   {
+    "all": [
+     [
+      270,
+      505,
+      325,
+      523
+     ]
+    ],
+    "t": "5 (Upper Branch towards the Dry Chamber) → 1",
+    "p": "data-table-shot-row-label-2-200000",
+    "k": "link",
+    "r": [
+     270,
+     505,
+     325,
+     523
+    ]
+   },
+   {
+    "all": [
+     [
+      271,
+      538,
+      324,
+      556
+     ]
+    ],
+    "t": "1 → 2",
+    "p": "data-table-shot-row-label-2-200001",
+    "k": "link",
+    "r": [
+     271,
+     538,
+     324,
+     556
+    ]
+   },
+   {
+    "all": [
+     [
+      271,
+      571,
+      324,
+      589
+     ]
+    ],
+    "t": "2 → 3",
+    "p": "data-table-shot-row-label-2-200002",
+    "k": "link",
+    "r": [
+     271,
+     571,
+     324,
+     589
+    ]
+   },
+   {
+    "all": [
+     [
+      271,
+      604,
+      324,
+      622
+     ]
+    ],
+    "t": "3 → 4",
+    "p": "data-table-shot-row-label-2-200003",
+    "k": "link",
+    "r": [
+     271,
+     604,
+     324,
+     622
+    ]
+   },
+   {
+    "all": [
+     [
+      271,
+      637,
+      324,
+      655
+     ]
+    ],
+    "t": "4 → 5",
+    "p": "data-table-shot-row-label-2-200004",
+    "k": "link",
+    "r": [
+     271,
+     637,
+     324,
+     655
+    ]
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "table-stations-lemon",
+  "file": "table-stations-lemon-light-1440.png",
+  "rects": [
+   {
+    "all": [
+     [
+      1188,
+      205,
+      1428,
+      228
+     ]
+    ],
+    "t": "Lemon Squeeze Crawlway past the Second Restriction",
+    "p": "line-2-link",
+    "k": "link",
+    "r": [
+     1188,
+     205,
+     1428,
+     228
+    ]
+   },
+   {
+    "all": [
+     [
+      1359,
+      373,
+      1428,
+      396
+     ]
+    ],
+    "t": "5 (Upper Branch towards the Dry Chamber) → 1",
+    "p": "shot-2-1-link",
+    "k": "link",
+    "r": [
+     1359,
+     373,
+     1428,
+     396
+    ]
+   },
+   {
+    "all": [
+     [
+      1362,
+      400,
+      1428,
+      423
+     ]
+    ],
+    "t": "1 → 2",
+    "p": "shot-2-2-link",
+    "k": "link",
+    "r": [
+     1362,
+     400,
+     1428,
+     423
+    ]
+   },
+   {
+    "all": [
+     [
+      533,
+      439,
+      857,
+      459
+     ]
+    ],
+    "t": "Lemon Squeeze Crawlway past the Second Restriction",
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     533,
+     439,
+     857,
+     459
+    ]
+   },
+   {
+    "all": [
+     [
+      274,
+      505,
+      321,
+      523
+     ]
+    ],
+    "t": "5 (Upper Branch towards the Dry Chamber) Station ID #20",
+    "p": "data-table-station-pill-2-0",
+    "k": "link",
+    "r": [
+     274,
+     505,
+     321,
+     523
+    ]
+   },
+   {
+    "all": [
+     [
+      275,
+      538,
+      320,
+      556
+     ]
+    ],
+    "t": "1 Station ID #30",
+    "p": "data-table-station-pill-2-1",
+    "k": "link",
+    "r": [
+     275,
+     538,
+     320,
+     556
+    ]
+   },
+   {
+    "all": [
+     [
+      275,
+      571,
+      320,
+      589
+     ]
+    ],
+    "t": "2 Station ID #31",
+    "p": "data-table-station-pill-2-2",
+    "k": "link",
+    "r": [
+     275,
+     571,
+     320,
+     589
+    ]
+   },
+   {
+    "all": [
+     [
+      275,
+      604,
+      320,
+      622
+     ]
+    ],
+    "t": "3 Station ID #32",
+    "p": "data-table-station-pill-2-3",
+    "k": "link",
+    "r": [
+     275,
+     604,
+     320,
+     622
+    ]
+   },
+   {
+    "all": [
+     [
+      275,
+      637,
+      320,
+      655
+     ]
+    ],
+    "t": "4 Station ID #33",
+    "p": "data-table-station-pill-2-4",
+    "k": "link",
+    "r": [
+     275,
+     637,
+     320,
+     655
+    ]
+   },
+   {
+    "all": [
+     [
+      275,
+      670,
+      320,
+      688
+     ]
+    ],
+    "t": "5 Station ID #34",
+    "p": "data-table-station-pill-2-5",
+    "k": "link",
+    "r": [
+     275,
+     670,
+     320,
+     688
+    ]
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "details-foreign",
+  "file": "details-foreign-light-1440.png",
+  "rects": [
+   {
+    "all": [
+     [
+      1151,
+      176,
+      1200,
+      189
+     ]
+    ],
+    "t": "12#12",
+    "p": "station-detail-belongs",
+    "k": "prose",
+    "r": [
+     1151,
+     176,
+     1200,
+     189
+    ]
+   },
+   {
+    "all": [
+     [
+      1260,
+      176,
+      1383,
+      189
+     ],
+     [
+      1152,
+      192,
+      1277,
+      205
+     ]
+    ],
+    "t": "Main Passage of the Northern Sump System",
+    "p": "station-detail-belongs",
+    "k": "prose",
+    "r": [
+     1260,
+     176,
+     1383,
+     189
+    ]
+   },
+   {
+    "all": [
+     [
+      1188,
+      249,
+      1428,
+      272
+     ]
+    ],
+    "t": "Upper Branch towards the Dry Chamber",
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1188,
+     249,
+     1428,
+     272
+    ]
+   },
+   {
+    "all": [
+     [
+      1152,
+      486,
+      1398,
+      509
+     ]
+    ],
+    "t": "Main Passage of the Northern Sump System",
+    "p": "station-0-12-link",
+    "k": "link",
+    "r": [
+     1152,
+     486,
+     1398,
+     509
+    ]
+   },
+   {
+    "all": [
+     [
+      1151,
+      562,
+      1180,
+      577
+     ]
+    ],
+    "t": "0",
+    "p": "station-detail-record-15-text",
+    "k": "prose",
+    "r": [
+     1151,
+     562,
+     1180,
+     577
+    ]
+   },
+   {
+    "all": [
+     [
+      1276,
+      562,
+      1381,
+      577
+     ],
+     [
+      1152,
+      582,
+      1316,
+      597
+     ]
+    ],
+    "t": "Upper Branch towards the Dry Chamber",
+    "p": "station-detail-record-15-text",
+    "k": "prose",
+    "r": [
+     1276,
+     562,
+     1381,
+     577
+    ]
+   },
+   {
+    "all": [
+     [
+      1351,
+      663,
+      1428,
+      686
+     ]
+    ],
+    "t": "12 (Main Passage of the Northern Sump System) → 1",
+    "p": "shot-1-1-link",
+    "k": "link",
+    "r": [
+     1351,
+     663,
+     1428,
+     686
+    ]
+   },
+   {
+    "all": [
+     [
+      1174,
+      694,
+      1465,
+      709
+     ]
+    ],
+    "t": "Main Passage of the Northern Sump System",
+    "p": "station-detail-other-shot-0-11-label",
+    "k": "prose",
+    "r": [
+     1174,
+     694,
+     1465,
+     709
+    ]
+   },
+   {
+    "all": [
+     [
+      1368,
+      690,
+      1428,
+      713
+     ]
+    ],
+    "t": "11 → 12",
+    "p": "shot-0-12-link",
+    "k": "link",
+    "r": [
+     1368,
+     690,
+     1428,
+     713
+    ]
+   },
+   {
+    "all": [
+     [
+      1174,
+      721,
+      1465,
+      736
+     ]
+    ],
+    "t": "Main Passage of the Northern Sump System",
+    "p": "station-detail-other-shot-0-12-label",
+    "k": "prose",
+    "r": [
+     1174,
+     721,
+     1465,
+     736
+    ]
+   },
+   {
+    "all": [
+     [
+      1368,
+      717,
+      1428,
+      740
+     ]
+    ],
+    "t": "12 → 13",
+    "p": "shot-0-13-link",
+    "k": "link",
+    "r": [
+     1368,
+     717,
+     1428,
+     740
+    ]
+   },
+   {
+    "all": [
+     [
+      569,
+      439,
+      821,
+      459
+     ]
+    ],
+    "t": "Upper Branch towards the Dry Chamber",
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     569,
+     439,
+     821,
+     459
+    ]
+   },
+   {
+    "all": [
+     [
+      271,
+      505,
+      324,
+      523
+     ]
+    ],
+    "t": "12 (Main Passage of the Northern Sump System) Station ID #12",
+    "p": "data-table-station-pill-1-0",
+    "k": "link",
+    "r": [
+     271,
+     505,
+     324,
+     523
+    ]
+   },
+   {
+    "all": [
+     [
+      275,
+      538,
+      320,
+      556
+     ]
+    ],
+    "t": "1 Station ID #16",
+    "p": "data-table-station-pill-1-1",
+    "k": "link",
+    "r": [
+     275,
+     538,
+     320,
+     556
+    ]
+   },
+   {
+    "all": [
+     [
+      275,
+      571,
+      320,
+      589
+     ]
+    ],
+    "t": "2 Station ID #17",
+    "p": "data-table-station-pill-1-2",
+    "k": "link",
+    "r": [
+     275,
+     571,
+     320,
+     589
+    ]
+   },
+   {
+    "all": [
+     [
+      275,
+      604,
+      320,
+      622
+     ]
+    ],
+    "t": "3 Station ID #18",
+    "p": "data-table-station-pill-1-3",
+    "k": "link",
+    "r": [
+     275,
+     604,
+     320,
+     622
+    ]
+   },
+   {
+    "all": [
+     [
+      275,
+      637,
+      320,
+      655
+     ]
+    ],
+    "t": "4 Station ID #19",
+    "p": "data-table-station-pill-1-4",
+    "k": "link",
+    "r": [
+     275,
+     637,
+     320,
+     655
+    ]
+   },
+   {
+    "all": [
+     [
+      275,
+      670,
+      320,
+      688
+     ]
+    ],
+    "t": "5 Station ID #20",
+    "p": "data-table-station-pill-1-5",
+    "k": "link",
+    "r": [
+     275,
+     670,
+     320,
+     688
+    ]
+   },
+   {
+    "all": [
+     [
+      275,
+      703,
+      320,
+      721
+     ]
+    ],
+    "t": "6 Station ID #21",
+    "p": "data-table-station-pill-1-6",
+    "k": "link",
+    "r": [
+     275,
+     703,
+     320,
+     721
+    ]
+   },
+   {
+    "all": [
+     [
+      275,
+      736,
+      320,
+      754
+     ]
+    ],
+    "t": "7 Station ID #22",
+    "p": "data-table-station-pill-1-7",
+    "k": "link",
+    "r": [
+     275,
+     736,
+     320,
+     754
+    ]
+   },
+   {
+    "all": [
+     [
+      275,
+      769,
+      320,
+      787
+     ]
+    ],
+    "t": "8 Station ID #23",
+    "p": "data-table-station-pill-1-8",
+    "k": "link",
+    "r": [
+     275,
+     769,
+     320,
+     787
+    ]
+   },
+   {
+    "all": [
+     [
+      275,
+      802,
+      320,
+      820
+     ]
+    ],
+    "t": "9 Station ID #24",
+    "p": "data-table-station-pill-1-9",
+    "k": "link",
+    "r": [
+     275,
+     802,
+     320,
+     820
+    ]
+   },
+   {
+    "all": [
+     [
+      272,
+      835,
+      323,
+      853
+     ]
+    ],
+    "t": "10 Station ID #25",
+    "p": "data-table-station-pill-1-10",
+    "k": "link",
+    "r": [
+     272,
+     835,
+     323,
+     853
+    ]
+   },
+   {
+    "all": [
+     [
+      273,
+      868,
+      322,
+      886
+     ]
+    ],
+    "t": "11 Station ID #26",
+    "p": "data-table-station-pill-1-11",
+    "k": "link",
+    "r": [
+     273,
+     868,
+     322,
+     886
+    ]
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "details-loop-end",
+  "file": "details-loop-end-light-1440.png",
+  "rects": [
+   {
+    "all": [
+     [
+      1331,
+      152,
+      1388,
+      168
+     ],
+     [
+      1160,
+      172,
+      1409,
+      188
+     ],
+     [
+      1160,
+      192,
+      1190,
+      208
+     ]
+    ],
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3#32",
+    "p": "station-detail-loop-end-shown",
+    "k": "prose",
+    "r": [
+     1331,
+     152,
+     1388,
+     168
+    ]
+   },
+   {
+    "all": [
+     [
+      1239,
+      214,
+      1263,
+      227
+     ]
+    ],
+    "t": "1",
+    "p": "station-detail-loop-end-own",
+    "k": "prose",
+    "r": [
+     1239,
+     214,
+     1263,
+     227
+    ]
+   },
+   {
+    "all": [
+     [
+      1343,
+      327,
+      1428,
+      350
+     ]
+    ],
+    "t": "Blue Link",
+    "p": "line-3-link",
+    "k": "link",
+    "r": [
+     1343,
+     327,
+     1428,
+     350
+    ]
+   },
+   {
+    "all": [
+     [
+      1152,
+      539,
+      1398,
+      562
+     ]
+    ],
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3 #32",
+    "p": "station-2-3-link",
+    "k": "link",
+    "r": [
+     1152,
+     539,
+     1398,
+     562
+    ]
+   },
+   {
+    "all": [
+     [
+      1151,
+      589,
+      1235,
+      602
+     ]
+    ],
+    "t": "Blue Link: 1#36",
+    "p": "closure-archive-1",
+    "k": "prose",
+    "r": [
+     1151,
+     589,
+     1235,
+     602
+    ]
+   },
+   {
+    "all": [
+     [
+      1374,
+      589,
+      1424,
+      602
+     ],
+     [
+      1152,
+      605,
+      1383,
+      618
+     ]
+    ],
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3#32",
+    "p": "closure-archive-1",
+    "k": "prose",
+    "r": [
+     1374,
+     589,
+     1424,
+     602
+    ]
+   },
+   {
+    "all": [
+     [
+      1359,
+      683,
+      1428,
+      706
+     ]
+    ],
+    "t": "4 (Main Passage of the Northern Sump System) → 3 (Lemon Squeeze Crawlway past th",
+    "p": "shot-3-1-link",
+    "k": "link",
+    "r": [
+     1359,
+     683,
+     1428,
+     706
+    ]
+   },
+   {
+    "all": [
+     [
+      649,
+      439,
+      741,
+      459
+     ]
+    ],
+    "t": "Blue Link",
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     649,
+     439,
+     741,
+     459
+    ]
+   },
+   {
+    "all": [
+     [
+      276,
+      505,
+      319,
+      523
+     ]
+    ],
+    "t": "4 (Main Passage of the Northern Sump System) Station ID #4",
+    "p": "data-table-station-pill-3-0",
+    "k": "link",
+    "r": [
+     276,
+     505,
+     319,
+     523
+    ]
+   },
+   {
+    "all": [
+     [
+      274,
+      538,
+      321,
+      556
+     ]
+    ],
+    "t": "3 (Lemon Squeeze Crawlway past the Second Restriction) loop end Station ID #32",
+    "p": "data-table-station-pill-3-1",
+    "k": "link",
+    "r": [
+     274,
+     538,
+     321,
+     556
+    ]
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "merge-foreign",
+  "file": "merge-foreign-light-1440.png",
+  "rects": [
+   {
+    "all": [
+     [
+      649,
+      439,
+      741,
+      459
+     ]
+    ],
+    "t": "Blue Link",
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     649,
+     439,
+     741,
+     459
+    ]
+   },
+   {
+    "all": [
+     [
+      276,
+      505,
+      319,
+      523
+     ]
+    ],
+    "t": "4 (Main Passage of the Northern Sump System) Station ID #4",
+    "p": "data-table-station-pill-3-0",
+    "k": "link",
+    "r": [
+     276,
+     505,
+     319,
+     523
+    ]
+   },
+   {
+    "all": [
+     [
+      274,
+      538,
+      321,
+      556
+     ]
+    ],
+    "t": "3 (Lemon Squeeze Crawlway past the Second Restriction) loop end Station ID #32",
+    "p": "data-table-station-pill-3-1",
+    "k": "link",
+    "r": [
+     274,
+     538,
+     321,
+     556
+    ]
+   },
+   {
+    "all": [
+     [
+      511,
+      241,
+      752,
+      264
+     ]
+    ],
+    "t": "Annex beyond the Terminal Sump: 0 Station ID #37",
+    "p": "merge-keep-37-pill",
+    "k": "link",
+    "r": [
+     511,
+     241,
+     752,
+     264
+    ]
+   },
+   {
+    "all": [
+     [
+      511,
+      276,
+      817,
+      299
+     ]
+    ],
+    "t": "Main Passage of the Northern Sump System: 12 (on Upper Branch towards the Dry Ch",
+    "p": "merge-keep-12-pill",
+    "k": "link",
+    "r": [
+     511,
+     276,
+     817,
+     299
+    ]
+   },
+   {
+    "all": [
+     [
+      480,
+      322,
+      706,
+      338
+     ]
+    ],
+    "t": "Annex beyond the Terminal Sump",
+    "p": "merge-renamed-lines",
+    "k": "prose",
+    "r": [
+     480,
+     322,
+     706,
+     338
+    ]
+   },
+   {
+    "all": [
+     [
+      766,
+      322,
+      944,
+      338
+     ],
+     [
+      481,
+      342,
+      596,
+      358
+     ]
+    ],
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "p": "merge-renamed-lines",
+    "k": "prose",
+    "r": [
+     766,
+     322,
+     944,
+     338
+    ]
+   },
+   {
+    "all": [
+     [
+      480,
+      366,
+      710,
+      382
+     ]
+    ],
+    "t": "Annex beyond the Terminal Sump: 0#37",
+    "p": "merge-hidden",
+    "k": "prose",
+    "r": [
+     480,
+     366,
+     710,
+     382
+    ]
+   },
+   {
+    "all": [
+     [
+      648,
+      390,
+      842,
+      403
+     ]
+    ],
+    "t": "Annex beyond the Terminal Sump: 0#37",
+    "p": "merge-hidden-back",
+    "k": "prose",
+    "r": [
+     648,
+     390,
+     842,
+     403
+    ]
+   },
+   {
+    "all": [
+     [
+      488,
+      430,
+      784,
+      446
+     ]
+    ],
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "p": "merge-preview-junction-1-0",
+    "k": "prose",
+    "r": [
+     488,
+     430,
+     784,
+     446
+    ]
+   },
+   {
+    "all": [
+     [
+      887,
+      430,
+      946,
+      446
+     ],
+     [
+      489,
+      450,
+      699,
+      466
+     ]
+    ],
+    "t": "Upper Branch towards the Dry Chamber",
+    "p": "merge-preview-junction-1-0",
+    "k": "prose",
+    "r": [
+     887,
+     430,
+     946,
+     446
+    ]
+   },
+   {
+    "all": [
+     [
+      727,
+      450,
+      932,
+      466
+     ],
+     [
+      489,
+      470,
+      576,
+      486
+     ]
+    ],
+    "t": "Main Passage of the Northern Sump System",
+    "p": "merge-preview-junction-1-0",
+    "k": "prose",
+    "r": [
+     727,
+     450,
+     932,
+     466
+    ]
+   },
+   {
+    "all": [
+     [
+      488,
+      514,
+      714,
+      530
+     ]
+    ],
+    "t": "Annex beyond the Terminal Sump",
+    "p": "merge-preview-move",
+    "k": "prose",
+    "r": [
+     488,
+     514,
+     714,
+     530
+    ]
+   },
+   {
+    "all": [
+     [
+      742,
+      514,
+      873,
+      530
+     ]
+    ],
+    "t": "Stub at the Annex",
+    "p": "merge-preview-move",
+    "k": "prose",
+    "r": [
+     742,
+     514,
+     873,
+     530
+    ]
+   },
+   {
+    "all": [
+     [
+      521,
+      534,
+      817,
+      550
+     ]
+    ],
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "p": "merge-preview-move",
+    "k": "prose",
+    "r": [
+     521,
+     534,
+     817,
+     550
+    ]
+   },
+   {
+    "all": [
+     [
+      579,
+      578,
+      805,
+      594
+     ]
+    ],
+    "t": "Annex beyond the Terminal Sump",
+    "p": "merge-preview-depths",
+    "k": "prose",
+    "r": [
+     579,
+     578,
+     805,
+     594
+    ]
+   },
+   {
+    "all": [
+     [
+      856,
+      578,
+      915,
+      594
+     ],
+     [
+      489,
+      598,
+      699,
+      614
+     ]
+    ],
+    "t": "Upper Branch towards the Dry Chamber",
+    "p": "merge-preview-depths",
+    "k": "prose",
+    "r": [
+     856,
+     578,
+     915,
+     594
+    ]
+   },
+   {
+    "all": [
+     [
+      758,
+      598,
+      902,
+      614
+     ],
+     [
+      489,
+      618,
+      637,
+      634
+     ]
+    ],
+    "t": "Main Passage of the Northern Sump System",
+    "p": "merge-preview-depths",
+    "k": "prose",
+    "r": [
+     758,
+     598,
+     902,
+     614
+    ]
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "delete-shot-blue-both-ends",
+  "file": "delete-shot-blue-both-ends-light-1440.png",
+  "rects": [
+   {
+    "all": [
+     [
+      649,
+      439,
+      741,
+      459
+     ]
+    ],
+    "t": "Blue Link",
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     649,
+     439,
+     741,
+     459
+    ]
+   },
+   {
+    "all": [
+     [
+      276,
+      505,
+      319,
+      523
+     ]
+    ],
+    "t": "4 (Main Passage of the Northern Sump System) Station ID #4",
+    "p": "data-table-station-pill-3-0",
+    "k": "link",
+    "r": [
+     276,
+     505,
+     319,
+     523
+    ]
+   },
+   {
+    "all": [
+     [
+      274,
+      538,
+      321,
+      556
+     ]
+    ],
+    "t": "3 (Lemon Squeeze Crawlway past the Second Restriction) loop end Station ID #32",
+    "p": "data-table-station-pill-3-1",
+    "k": "link",
+    "r": [
+     274,
+     538,
+     321,
+     556
+    ]
+   },
+   {
+    "all": [
+     [
+      549,
+      322,
+      672,
+      343
+     ]
+    ],
+    "t": "Blue Link: 4 → 3",
+    "p": "delete-shot-choice-lead",
+    "k": "prose",
+    "r": [
+     549,
+     322,
+     672,
+     343
+    ]
+   },
+   {
+    "all": [
+     [
+      541,
+      446,
+      652,
+      469
+     ]
+    ],
+    "t": "Blue Link: 4 (Main Passage of the Northern Sump System) Station ID #4",
+    "p": "delete-shot-choice-dialog-body",
+    "k": "link",
+    "r": [
+     541,
+     446,
+     652,
+     469
+    ]
+   },
+   {
+    "all": [
+     [
+      526,
+      469,
+      815,
+      493
+     ]
+    ],
+    "t": "Main Passage of the Northern Sump System: 4 Station ID #4",
+    "p": "delete-shot-choice-dialog-body",
+    "k": "link",
+    "r": [
+     526,
+     469,
+     815,
+     493
+    ]
+   },
+   {
+    "all": [
+     [
+      541,
+      521,
+      657,
+      544
+     ]
+    ],
+    "t": "Blue Link: 3 (Lemon Squeeze Crawlway past the Second Restriction) loop end Stati",
+    "p": "delete-shot-choice-dialog-body",
+    "k": "link",
+    "r": [
+     541,
+     521,
+     657,
+     544
+    ]
+   },
+   {
+    "all": [
+     [
+      526,
+      544,
+      871,
+      567
+     ]
+    ],
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3 Station ID #32",
+    "p": "delete-shot-choice-dialog-body",
+    "k": "link",
+    "r": [
+     526,
+     544,
+     871,
+     567
+    ]
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "history",
+  "file": "history-light-1440.png",
+  "rects": [
+   {
+    "all": [
+     [
+      257,
+      87,
+      404,
+      103
+     ]
+    ],
+    "t": "Stub at the Annex: 0#50",
+    "p": "toolbar-undo-button-description-0",
+    "k": "prose",
+    "r": [
+     257,
+     87,
+     404,
+     103
+    ]
+   },
+   {
+    "all": [
+     [
+      213,
+      107,
+      414,
+      123
+     ],
+     [
+      214,
+      127,
+      245,
+      143
+     ]
+    ],
+    "t": "Annex beyond the Terminal Sump: 2#39",
+    "p": "toolbar-undo-button-description-0",
+    "k": "prose",
+    "r": [
+     213,
+     107,
+     414,
+     123
+    ]
+   },
+   {
+    "all": [
+     [
+      257,
+      175,
+      420,
+      191
+     ]
+    ],
+    "t": "Stub at the Blue Spur: 0#48",
+    "p": "toolbar-undo-button-description-1",
+    "k": "prose",
+    "r": [
+     257,
+     175,
+     420,
+     191
+    ]
+   },
+   {
+    "all": [
+     [
+      241,
+      195,
+      345,
+      211
+     ]
+    ],
+    "t": "Blue Spur: 2#43",
+    "p": "toolbar-undo-button-description-1",
+    "k": "prose",
+    "r": [
+     241,
+     195,
+     345,
+     211
+    ]
+   },
+   {
+    "all": [
+     [
+      294,
+      336,
+      404,
+      355
+     ]
+    ],
+    "t": "Blue Link: 4 → 3",
+    "p": "toolbar-undo-button-description-4",
+    "k": "prose",
+    "r": [
+     294,
+     336,
+     404,
+     355
+    ]
+   },
+   {
+    "all": [
+     [
+      364,
+      387,
+      412,
+      403
+     ],
+     [
+      214,
+      407,
+      422,
+      423
+     ],
+     [
+      214,
+      427,
+      258,
+      443
+     ]
+    ],
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "p": "toolbar-undo-button-description-5",
+    "k": "prose",
+    "r": [
+     364,
+     387,
+     412,
+     403
+    ]
+   },
+   {
+    "all": [
+     [
+      257,
+      475,
+      397,
+      491
+     ]
+    ],
+    "t": "Grey Side Tunnel: 0#44",
+    "p": "toolbar-undo-button-description-6",
+    "k": "prose",
+    "r": [
+     257,
+     475,
+     397,
+     491
+    ]
+   },
+   {
+    "all": [
+     [
+      213,
+      495,
+      424,
+      511
+     ],
+     [
+      214,
+      515,
+      283,
+      531
+     ]
+    ],
+    "t": "Main Passage of the Northern Sump System: 8#8",
+    "p": "toolbar-undo-button-description-6",
+    "k": "prose",
+    "r": [
+     213,
+     495,
+     424,
+     511
+    ]
+   },
+   {
+    "all": [
+     [
+      257,
+      563,
+      361,
+      579
+     ]
+    ],
+    "t": "Blue Spur: 0#41",
+    "p": "toolbar-undo-button-description-7",
+    "k": "prose",
+    "r": [
+     257,
+     563,
+     361,
+     579
+    ]
+   },
+   {
+    "all": [
+     [
+      213,
+      583,
+      414,
+      599
+     ],
+     [
+      214,
+      603,
+      349,
+      619
+     ]
+    ],
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 5#34",
+    "p": "toolbar-undo-button-description-7",
+    "k": "prose",
+    "r": [
+     213,
+     583,
+     414,
+     599
+    ]
+   },
+   {
+    "all": [
+     [
+      338,
+      747,
+      439,
+      763
+     ]
+    ],
+    "t": "Blue Link: 1#36",
+    "p": "toolbar-undo-button-description-10",
+    "k": "prose",
+    "r": [
+     338,
+     747,
+     439,
+     763
+    ]
+   },
+   {
+    "all": [
+     [
+      274,
+      767,
+      430,
+      783
+     ],
+     [
+      214,
+      787,
+      394,
+      803
+     ]
+    ],
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3#32",
+    "p": "toolbar-undo-button-description-10",
+    "k": "prose",
+    "r": [
+     274,
+     767,
+     430,
+     783
+    ]
+   },
+   {
+    "all": [
+     [
+      257,
+      835,
+      359,
+      851
+     ]
+    ],
+    "t": "Blue Link: 0#35",
+    "p": "toolbar-undo-button-description-11",
+    "k": "prose",
+    "r": [
+     257,
+     835,
+     359,
+     851
+    ]
+   },
+   {
+    "all": [
+     [
+      388,
+      835,
+      436,
+      851
+     ],
+     [
+      214,
+      855,
+      422,
+      871
+     ],
+     [
+      214,
+      875,
+      240,
+      891
+     ]
+    ],
+    "t": "Main Passage of the Northern Sump System: 4#4",
+    "p": "toolbar-undo-button-description-11",
+    "k": "prose",
+    "r": [
+     388,
+     835,
+     436,
+     851
+    ]
+   },
+   {
+    "all": [
+     [
+      649,
+      439,
+      741,
+      459
+     ]
+    ],
+    "t": "Blue Link",
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     649,
+     439,
+     741,
+     459
+    ]
+   },
+   {
+    "all": [
+     [
+      276,
+      505,
+      319,
+      523
+     ]
+    ],
+    "t": "4 (Main Passage of the Northern Sump System) Station ID #4",
+    "p": "data-table-station-pill-3-0",
+    "k": "link",
+    "r": [
+     276,
+     505,
+     319,
+     523
+    ]
+   },
+   {
+    "all": [
+     [
+      274,
+      538,
+      321,
+      556
+     ]
+    ],
+    "t": "3 (Lemon Squeeze Crawlway past the Second Restriction) loop end Station ID #32",
+    "p": "data-table-station-pill-3-1",
+    "k": "link",
+    "r": [
+     274,
+     538,
+     321,
+     556
+    ]
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "table-shots-stub-blue",
+  "file": "table-shots-stub-blue-light-1440.png",
+  "rects": [
+   {
+    "all": [
+     [
+      1268,
+      205,
+      1428,
+      228
+     ]
+    ],
+    "t": "Stub at the Blue Spur",
+    "p": "line-7-link",
+    "k": "link",
+    "r": [
+     1268,
+     205,
+     1428,
+     228
+    ]
+   },
+   {
+    "all": [
+     [
+      1359,
+      373,
+      1428,
+      396
+     ]
+    ],
+    "t": "2 (Blue Spur) → 1",
+    "p": "shot-7-1-link",
+    "k": "link",
+    "r": [
+     1359,
+     373,
+     1428,
+     396
+    ]
+   },
+   {
+    "all": [
+     [
+      618,
+      439,
+      772,
+      459
+     ]
+    ],
+    "t": "Stub at the Blue Spur",
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     618,
+     439,
+     772,
+     459
+    ]
+   },
+   {
+    "all": [
+     [
+      270,
+      505,
+      325,
+      523
+     ]
+    ],
+    "t": "2 (Blue Spur) → 1",
+    "p": "data-table-shot-row-label-7-700000",
+    "k": "link",
+    "r": [
+     270,
+     505,
+     325,
+     523
+    ]
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "table-stations-stub-blue",
+  "file": "table-stations-stub-blue-light-1440.png",
+  "rects": [
+   {
+    "all": [
+     [
+      1268,
+      205,
+      1428,
+      228
+     ]
+    ],
+    "t": "Stub at the Blue Spur",
+    "p": "line-7-link",
+    "k": "link",
+    "r": [
+     1268,
+     205,
+     1428,
+     228
+    ]
+   },
+   {
+    "all": [
+     [
+      1359,
+      373,
+      1428,
+      396
+     ]
+    ],
+    "t": "2 (Blue Spur) → 1",
+    "p": "shot-7-1-link",
+    "k": "link",
+    "r": [
+     1359,
+     373,
+     1428,
+     396
+    ]
+   },
+   {
+    "all": [
+     [
+      618,
+      439,
+      772,
+      459
+     ]
+    ],
+    "t": "Stub at the Blue Spur",
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     618,
+     439,
+     772,
+     459
+    ]
+   },
+   {
+    "all": [
+     [
+      274,
+      505,
+      321,
+      523
+     ]
+    ],
+    "t": "2 (Blue Spur) Station ID #43",
+    "p": "data-table-station-pill-7-0",
+    "k": "link",
+    "r": [
+     274,
+     505,
+     321,
+     523
+    ]
+   },
+   {
+    "all": [
+     [
+      275,
+      538,
+      320,
+      556
+     ]
+    ],
+    "t": "1 Station ID #49",
+    "p": "data-table-station-pill-7-1",
+    "k": "link",
+    "r": [
+     275,
+     538,
+     320,
+     556
+    ]
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "table-shots-stub-magenta",
+  "file": "table-shots-stub-magenta-light-1440.png",
+  "rects": [
+   {
+    "all": [
+     [
+      1288,
+      205,
+      1428,
+      228
+     ]
+    ],
+    "t": "Stub at the Annex",
+    "p": "line-8-link",
+    "k": "link",
+    "r": [
+     1288,
+     205,
+     1428,
+     228
+    ]
+   },
+   {
+    "all": [
+     [
+      1359,
+      373,
+      1428,
+      396
+     ]
+    ],
+    "t": "2 (Annex beyond the Terminal Sump) → 1",
+    "p": "shot-8-1-link",
+    "k": "link",
+    "r": [
+     1359,
+     373,
+     1428,
+     396
+    ]
+   },
+   {
+    "all": [
+     [
+      626,
+      439,
+      764,
+      459
+     ]
+    ],
+    "t": "Stub at the Annex",
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     626,
+     439,
+     764,
+     459
+    ]
+   },
+   {
+    "all": [
+     [
+      270,
+      505,
+      325,
+      523
+     ]
+    ],
+    "t": "2 (Annex beyond the Terminal Sump) → 1",
+    "p": "data-table-shot-row-label-8-800000",
+    "k": "link",
+    "r": [
+     270,
+     505,
+     325,
+     523
+    ]
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "table-stations-stub-magenta",
+  "file": "table-stations-stub-magenta-light-1440.png",
+  "rects": [
+   {
+    "all": [
+     [
+      1288,
+      205,
+      1428,
+      228
+     ]
+    ],
+    "t": "Stub at the Annex",
+    "p": "line-8-link",
+    "k": "link",
+    "r": [
+     1288,
+     205,
+     1428,
+     228
+    ]
+   },
+   {
+    "all": [
+     [
+      1359,
+      373,
+      1428,
+      396
+     ]
+    ],
+    "t": "2 (Annex beyond the Terminal Sump) → 1",
+    "p": "shot-8-1-link",
+    "k": "link",
+    "r": [
+     1359,
+     373,
+     1428,
+     396
+    ]
+   },
+   {
+    "all": [
+     [
+      626,
+      439,
+      764,
+      459
+     ]
+    ],
+    "t": "Stub at the Annex",
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     626,
+     439,
+     764,
+     459
+    ]
+   },
+   {
+    "all": [
+     [
+      274,
+      505,
+      321,
+      523
+     ]
+    ],
+    "t": "2 (Annex beyond the Terminal Sump) Station ID #39",
+    "p": "data-table-station-pill-8-0",
+    "k": "link",
+    "r": [
+     274,
+     505,
+     321,
+     523
+    ]
+   },
+   {
+    "all": [
+     [
+      275,
+      538,
+      320,
+      556
+     ]
+    ],
+    "t": "1 Station ID #51",
+    "p": "data-table-station-pill-8-1",
+    "k": "link",
+    "r": [
+     275,
+     538,
+     320,
+     556
+    ]
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "details-stub-blue",
+  "file": "details-stub-blue-light-1440.png",
+  "rects": [
+   {
+    "all": [
+     [
+      1151,
+      176,
+      1194,
+      189
+     ]
+    ],
+    "t": "2#43",
+    "p": "station-detail-belongs",
+    "k": "prose",
+    "r": [
+     1151,
+     176,
+     1194,
+     189
+    ]
+   },
+   {
+    "all": [
+     [
+      1254,
+      176,
+      1322,
+      189
+     ]
+    ],
+    "t": "Blue Spur",
+    "p": "station-detail-belongs",
+    "k": "prose",
+    "r": [
+     1254,
+     176,
+     1322,
+     189
+    ]
+   },
+   {
+    "all": [
+     [
+      1268,
+      233,
+      1428,
+      256
+     ]
+    ],
+    "t": "Stub at the Blue Spur",
+    "p": "line-7-link",
+    "k": "link",
+    "r": [
+     1268,
+     233,
+     1428,
+     256
+    ]
+   },
+   {
+    "all": [
+     [
+      1152,
+      401,
+      1240,
+      424
+     ]
+    ],
+    "t": "Blue Spur",
+    "p": "station-5-2-link",
+    "k": "link",
+    "r": [
+     1152,
+     401,
+     1240,
+     424
+    ]
+   },
+   {
+    "all": [
+     [
+      1151,
+      477,
+      1180,
+      492
+     ]
+    ],
+    "t": "0",
+    "p": "station-detail-record-48-text",
+    "k": "prose",
+    "r": [
+     1151,
+     477,
+     1180,
+     492
+    ]
+   },
+   {
+    "all": [
+     [
+      1276,
+      477,
+      1395,
+      492
+     ],
+     [
+      1152,
+      497,
+      1185,
+      512
+     ]
+    ],
+    "t": "Stub at the Blue Spur",
+    "p": "station-detail-record-48-text",
+    "k": "prose",
+    "r": [
+     1276,
+     477,
+     1395,
+     492
+    ]
+   },
+   {
+    "all": [
+     [
+      1359,
+      562,
+      1428,
+      585
+     ]
+    ],
+    "t": "2 (Blue Spur) → 1",
+    "p": "shot-7-1-link",
+    "k": "link",
+    "r": [
+     1359,
+     562,
+     1428,
+     585
+    ]
+   },
+   {
+    "all": [
+     [
+      1174,
+      593,
+      1253,
+      608
+     ]
+    ],
+    "t": "Blue Spur",
+    "p": "station-detail-other-shot-5-1-label",
+    "k": "prose",
+    "r": [
+     1174,
+     593,
+     1253,
+     608
+    ]
+   },
+   {
+    "all": [
+     [
+      1362,
+      589,
+      1428,
+      612
+     ]
+    ],
+    "t": "1 → 2",
+    "p": "shot-5-2-link",
+    "k": "link",
+    "r": [
+     1362,
+     589,
+     1428,
+     612
+    ]
+   },
+   {
+    "all": [
+     [
+      618,
+      439,
+      772,
+      459
+     ]
+    ],
+    "t": "Stub at the Blue Spur",
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     618,
+     439,
+     772,
+     459
+    ]
+   },
+   {
+    "all": [
+     [
+      274,
+      505,
+      321,
+      523
+     ]
+    ],
+    "t": "2 (Blue Spur) Station ID #43",
+    "p": "data-table-station-pill-7-0",
+    "k": "link",
+    "r": [
+     274,
+     505,
+     321,
+     523
+    ]
+   },
+   {
+    "all": [
+     [
+      275,
+      538,
+      320,
+      556
+     ]
+    ],
+    "t": "1 Station ID #49",
+    "p": "data-table-station-pill-7-1",
+    "k": "link",
+    "r": [
+     275,
+     538,
+     320,
+     556
+    ]
+   }
+  ],
+  "err": false
+ }
+]
