@@ -22,8 +22,14 @@ function randomNonce(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-/** This page load's nonce: only tokens carrying it are the app's own. */
-export const NONCE = randomNonce();
+/**
+ * This page load's nonce: only tokens carrying it are the app's own. Kept on
+ * `globalThis`, minted once per page, so a module reload (Vite HMR in dev)
+ * keeps it and the tokens already in the stores still read (delta fix 7).
+ */
+const NONCE_KEY = '__stalagmightProseNonce';
+export const NONCE: string = ((globalThis as Record<string, unknown>)[NONCE_KEY] as string | undefined) ??
+  ((globalThis as Record<string, unknown>)[NONCE_KEY] = randomNonce()) as string;
 
 /** Anything between the markers (the nonce is checked by the caller). */
 export const TOKEN = new RegExp(`${OPEN}([^${OPEN}${CLOSE}]*)${CLOSE}`, 'g');
