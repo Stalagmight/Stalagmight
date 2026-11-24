@@ -92,7 +92,7 @@ export function blendBackdrops(own: PillColors, near: Neighbours, panel?: string
 }
 
 /** The sRGB point halfway between two colours: what a gradient paints between two stops. */
-export function srgbMidHex(a: string, b: string): string {
+function srgbMidHex(a: string, b: string): string {
   const [x, y] = [rgbOfHex(a), rgbOfHex(b)];
   return hexOfRgb((x[0] + y[0]) / 2, (x[1] + y[1]) / 2, (x[2] + y[2]) / 2);
 }
