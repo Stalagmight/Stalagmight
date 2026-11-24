@@ -11,8 +11,11 @@ import { setupMockedPage, createProject, seedProjectWithLines, waitForMapReady, 
  * consecutive lines are compared, with pills (Full highlighting) and as plain
  * text (highlighting off), on the Bulk Delete dialog's summary and on a
  * Warnings tab message holding a two-tone shot (RS-OWNERSHIP: an end of
- * another line). Every gap must equal the line-height within 0.5 px. Every
- * pill leads with its line's dot (RS-LEADDOT), measured with them.
+ * another line) and a station of another line. Every gap must equal the
+ * line-height within 0.5 px. Every pill leads with its line's dot
+ * (RS-LEADDOT), and a foreign station or shot end has its superscript home
+ * dot after its name (RS-LEADDOT), measured with them; the home dot takes no
+ * room, stays with its name and clears the Station ID after it.
  */
 
 const LONG_LINE = 'Main Passage of the Northern Sump System';
@@ -127,6 +130,20 @@ async function showWarning(page: Page): Promise<Locator> {
     const parts = [
       { kind: 'text', text: 'The depth readings at ' },
       station(2, '2'),
+      { kind: 'text', text: ' (shown as ' },
+      // A station of Side Passage shown on the long line: Side's colour and
+      // name (RS-OWNERSHIP), its home dot before its Station ID (RS-LEADDOT).
+      {
+        kind: 'station',
+        text: `${lineName} / 0 (${side.name})`,
+        line_id: line.id,
+        context: side.name,
+        name: '0',
+        home_line: side.id,
+        station_id: 900,
+        slot: { line_id: line.id, station_index: 0 },
+      },
+      { kind: 'text', text: ')' },
       { kind: 'text', text: ', where 2 lines meet, differ by 4.0 m; the shots from ' },
       station(1, '1'),
       { kind: 'text', text: ' and ' },
@@ -333,9 +350,111 @@ test.describe('Prose pills keep the line pitch', () => {
       }
       return { pills: pills.length, dots, bad, breaksBefore };
     });
-    expect(report.pills).toBe(5);
+    expect(report.pills).toBe(6);
     expect(report.dots).toBe(1);
     expect(report.breaksBefore).toBeGreaterThan(0);
+    expect(report.bad.slice(0, 10)).toEqual([]);
+  });
+
+  // RS-LEADDOT: "a small color dot in superscript right after the station
+  // name, it doesnt need to take any space horizontally". Injections: a home
+  // dot with its advance (no negative margin) fails "takes no room"; one
+  // without the Station ID's offset fails "clears the Station ID".
+  test('a foreign station\'s home dot is superscript right after its name, takes no room and clears the Station ID (RS-LEADDOT)', async ({ page }) => {
+    const message = await showWarning(page);
+    const report = await message.evaluate((root) => {
+      const homes = () => [...root.querySelectorAll('[data-prose-home-dot]')] as HTMLElement[];
+      const mid = (r: { top: number; bottom: number }) => (r.top + r.bottom) / 2;
+      /** The painted circle: centred in the box's padding, `--home-r` in em of its font. */
+      const circle = (dot: HTMLElement) => {
+        const box = dot.getBoundingClientRect();
+        const cs = getComputedStyle(dot);
+        const fs = parseFloat(cs.fontSize);
+        const r = parseFloat(cs.getPropertyValue('--home-r')) * fs;
+        const cx = box.left + parseFloat(cs.paddingLeft);
+        const cy = mid(box);
+        return { left: cx - r, right: cx + r, top: cy - r, bottom: cy + r, fs };
+      };
+      /** The last visible letter before the dot, and its baseline (a zero-size probe after it). */
+      const before = (dot: HTMLElement) => {
+        const pill = dot.closest('.sh-ppill')!;
+        const w = document.createTreeWalker(pill, NodeFilter.SHOW_TEXT);
+        let last: Text | null = null;
+        for (let n = w.nextNode(); n; n = w.nextNode()) {
+          if (dot.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING) break;
+          if ((n as Text).parentElement!.closest('.sr-only')) continue;
+          if (/\S/.test((n as Text).data)) last = n as Text;
+        }
+        const r = document.createRange();
+        r.setStart(last!, last!.data.length - 1);
+        r.setEnd(last!, last!.data.length);
+        const probe = document.createElement('span');
+        probe.style.cssText = 'display:inline-block;width:0;height:0';
+        last!.parentNode!.insertBefore(probe, last!.nextSibling);
+        const baseline = probe.getBoundingClientRect().bottom;
+        probe.remove();
+        return { glyph: r.getClientRects()[0]!, baseline };
+      };
+      const glyphs = () => {
+        const out: number[] = [];
+        const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let n = w.nextNode(); n; n = w.nextNode()) {
+          if (!(n as Text).data.trim()) continue;
+          const r = document.createRange();
+          r.selectNodeContents(n);
+          for (const x of r.getClientRects()) out.push(x.left, x.top);
+        }
+        return out;
+      };
+      const bad: string[] = [];
+      let count = 0;
+      let sids = 0;
+      let moved = 0;
+      for (let width = 60; width <= 420; width += 8) {
+        (root as HTMLElement).style.width = `${width}px`;
+        const dots = homes();
+        count = Math.max(count, dots.length);
+        for (const dot of dots) {
+          const c = circle(dot);
+          const { glyph, baseline } = before(dot);
+          const where = `${width}px ${dot.closest('.sh-ppill')!.textContent}`;
+          const size = (c.right - c.left) / c.fs;
+          if (size < 0.35 || size > 0.45) bad.push(`${where}: ${size.toFixed(2)}em`);
+          // Right after the name, on its line.
+          const gap = c.left - glyph.right;
+          if (gap < -0.5 || gap > 0.1 * c.fs) bad.push(`${where}: ${gap.toFixed(2)}px after the name`);
+          if (Math.abs(mid(glyph) - mid(c)) > glyph.height / 2) bad.push(`${where}: off its name's line`);
+          // Superscript: its middle well above the baseline, its bottom too.
+          const up = (baseline - mid(c)) / c.fs;
+          if (up < 0.5 || up > 0.75) bad.push(`${where}: middle ${up.toFixed(2)}em up`);
+          // Clear of the Station ID after it.
+          const next = dot.nextElementSibling;
+          if (next?.hasAttribute('data-prose-sid')) {
+            sids += 1;
+            const t = next.firstChild as Text;
+            const r = document.createRange();
+            r.setStart(t, 0);
+            r.setEnd(t, 1);
+            const hash = r.getClientRects()[0]!;
+            if (!(hash.left - c.right >= 0.12 * c.fs)) bad.push(`${where}: ${(hash.left - c.right).toFixed(2)}px to the Station ID`);
+          }
+        }
+        // Takes no room: hiding every home dot moves no glyph.
+        const shown = glyphs();
+        for (const dot of dots) dot.style.display = 'none';
+        const hidden = glyphs();
+        for (const dot of dots) dot.style.display = '';
+        if (shown.length !== hidden.length || shown.some((v, i) => Math.abs(v - hidden[i]!) > 0.1)) {
+          moved += 1;
+          bad.push(`${width}px: hiding the home dots moved text`);
+        }
+      }
+      return { count, sids, moved, bad };
+    });
+    // The foreign station and the two-tone shot's foreign from end.
+    expect(report.count).toBe(2);
+    expect(report.sids).toBeGreaterThan(0);
+    expect(report.moved).toBe(0);
     expect(report.bad.slice(0, 10)).toEqual([]);
   });
 });
