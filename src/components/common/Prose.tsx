@@ -40,7 +40,7 @@ import { withoutControls } from '../../utils/proseTokenCore';
 import i18n from '../../i18n';
 import type { ProseShotEnd } from '../../types/ipc/ProseShotEnd';
 import {
-  LoopGlyph,
+  LOOP_GLYPH_URL,
   markOf,
   markOver,
   prosePillStyle,
@@ -54,6 +54,9 @@ import {
 import { useSegmentTints } from './useSegmentTints';
 
 type NamePart = Exclude<ProsePart, { kind: 'text' }>;
+
+/** The arrow between a shot's ends, with no-break spaces: no line break on either side of it (RS-ARROW). */
+const ARROW_GLUED = `\u00a0${SHOT_ARROW}\u00a0`;
 
 /** A home-line dot after a name, with its tooltip ("Belongs to Main"). */
 function ProseMark({ mark }: { mark: HomeMark }) {
@@ -69,10 +72,17 @@ function ProseMark({ mark }: { mark: HomeMark }) {
 }
 
 function ProseLoop() {
+  // An empty inline box with the glyph as a mask, not an inline SVG: an
+  // atomic inline after the from end's name let WebKit break before the
+  // arrow (RS-ARROW).
   return (
-    <span className="sh-ppill-loop" data-prose-mark="loop" title={i18n.t('identity.loopEndMarkTitle')}>
-      <LoopGlyph />
-    </span>
+    <span
+      className="sh-ppill-loop"
+      data-prose-mark="loop"
+      data-glyph="loop"
+      title={i18n.t('identity.loopEndMarkTitle')}
+      style={{ '--loop-glyph': LOOP_GLYPH_URL } as CSSProperties}
+    />
   );
 }
 
@@ -198,10 +208,12 @@ function Drawing({
     );
   }
   if (part.kind === 'shot') {
-    // A break never falls on either side of the arrow (RS-ARROW): the from
-    // end's last word, the arrow and the to end's first word are joined
-    // (`.sh-ppill-join`, nowrap), while each name still wraps between its
-    // own words.
+    // A break never falls on either side of the arrow (RS-ARROW): its
+    // spaces are no-break spaces, so the from end's last word, the arrow and
+    // the to end's first word stay on one line (`.sh-ppill-join` holds the
+    // three), while each name still wraps between its own words. Not
+    // white-space: both WebKit and Chromium broke at the space before the
+    // arrow inside a nowrap span when the from end's own box allowed wraps.
     if (!tone) {
       return (
         <>
@@ -210,7 +222,7 @@ function Drawing({
             <span className="sh-ppill-end">
               <Glued before={dot} text={part.from.name} after={marksOf(pill, endDot(part.from), part.from.loop_end)} />
             </span>
-            {` ${SHOT_ARROW} `}
+            {ARROW_GLUED}
             <span className="sh-ppill-end">
               <Glued text={part.to.name} after={marksOf(pill, endDot(part.to), part.to.loop_end)} />
             </span>
@@ -240,7 +252,7 @@ function Drawing({
             />
           </span>
           <span className="sh-ppill-seg sh-ppill-seg--arrow" style={{ ...tone.arrow, ...tints?.arrow }} data-prose-seg="arrow">
-            {` ${SHOT_ARROW} `}
+            {ARROW_GLUED}
           </span>
           <span className="sh-ppill-seg sh-ppill-seg--from-arrow" style={{ ...tone.to, ...tints?.to }} data-prose-seg="to">
             <Glued text={part.to.name} after={marksOf(pill, endDot(part.to), part.to.loop_end, undefined, tone.toOn)} />

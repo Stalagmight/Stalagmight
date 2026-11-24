@@ -1943,22 +1943,10 @@ button.sh-apill {
 .sh-ppill-seg.sh-ppill-seg--arrow {
   padding: 0;
 }
-/* A wrap never separates the arrow from either end (RS-ARROW): the join is
-   nowrap, so no break falls at its spaces or between its parts, while each
-   end's own words (`.sh-ppill-end`, a half) still wrap between them. */
-.sh-ppill-join {
-  white-space: nowrap;
-}
-.sh-ppill-join > .sh-ppill-end,
-.sh-ppill-join > .sh-ppill-seg--to-arrow,
-.sh-ppill-join > .sh-ppill-seg--from-arrow {
-  white-space: normal;
-}
 .sh-ppill-nw {
   white-space: nowrap;
 }
-.sh-ppill-dot,
-.sh-ppill-mark {
+.sh-ppill-dot {
   display: inline-block;
   border-radius: 9999px;
 }
@@ -1974,27 +1962,31 @@ button.sh-apill {
   font-size: 0.857em;
   color: var(--pill-muted);
 }
+/* The marks after a name are empty inline boxes, not inline-blocks
+   (RS-ARROW): WebKit allows a line break after an atomic inline even where
+   white-space forbids one, and that break separated a from end's dot from
+   the arrow. The home-line dot (0.42em, its 1px ring outside) is a radial
+   gradient in the box's padding; the loop mark is its glyph as a mask over
+   the muted colour (`--loop-glyph`, LinePill.tsx). Both are centred on the
+   x-height, and an inline box adds no height to the line. */
 .sh-ppill-mark {
-  width: 0.42em;
-  height: 0.42em;
-  margin: -0.42em 0 0 0.14em;
-  vertical-align: 0.2em;
-  background: var(--mark-dot);
-  box-shadow: 0 0 0 1px var(--mark-ring, transparent);
+  margin-left: 0.14em;
+  padding: 0 calc(0.21em + 1px);
+  vertical-align: 0.06em;
+  background: radial-gradient(
+    circle closest-side,
+    var(--mark-dot) calc(100% - 1.25px),
+    var(--mark-ring, transparent) calc(100% - 0.75px),
+    var(--mark-ring, transparent) calc(100% - 0.25px),
+    transparent 100%
+  );
 }
 .sh-ppill-loop {
-  display: inline-block;
-  width: 0.8em;
-  height: 0.8em;
-  margin: -0.8em 0 0 0.1em;
-  overflow: hidden;
-  vertical-align: -0.04em;
-  color: var(--pill-muted);
-}
-.sh-ppill-loop svg {
-  display: block;
-  width: 100%;
-  height: 100%;
+  margin-left: 0.1em;
+  padding: 0 0.4em;
+  background-color: var(--pill-muted);
+  -webkit-mask: var(--loop-glyph) center / 0.8em 0.8em no-repeat;
+  mask: var(--loop-glyph) center / 0.8em 0.8em no-repeat;
 }
 .sh-ppill-sid {
   position: relative;

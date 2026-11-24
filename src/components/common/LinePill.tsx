@@ -350,16 +350,18 @@ export function LoopEndMark({ label, testId }: { label?: string | undefined; tes
 export function LoopGlyph() {
   return (
     <svg viewBox="0 0 12 12" width="1em" height="1em" aria-hidden="true" focusable="false" data-glyph="loop">
-      <path
-        d="M1.2 4.9C2.5 8.4 4.5 8.4 6 6C7.5 3.6 9.5 3.6 10.8 7.1"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-      />
+      <path d={LOOP_GLYPH_PATH} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
 }
+
+/** The loop glyph's stroke in a 12-unit square: a reversed tilde. */
+export const LOOP_GLYPH_PATH = 'M1.2 4.9C2.5 8.4 4.5 8.4 6 6C7.5 3.6 9.5 3.6 10.8 7.1';
+
+/** {@link LoopGlyph} as an image `url()`, for a mask where an inline SVG would be an atomic inline (a prose pill). */
+export const LOOP_GLYPH_URL = `url("data:image/svg+xml,${encodeURIComponent(
+  `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='${LOOP_GLYPH_PATH}' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'/></svg>`,
+)}")`;
 
 /** A shot's two station names, each with its home-line mark and its loop
  *  mark when it has one (the foreign end's dot stays, RS-OWNERSHIP). */
