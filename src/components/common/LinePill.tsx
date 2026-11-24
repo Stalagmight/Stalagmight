@@ -24,6 +24,7 @@ import {
   missingPillColorsOf,
   pillColorsOf,
   pillMarkOf,
+  prosePillColorsOf,
   type MissingPillColors,
   type PillColors,
   type PillDot,
@@ -78,6 +79,30 @@ export function usePillColors(lineId: number | null | undefined): ResolvedPill {
   const colorOf = useLineColorOf();
   const lineNameOf = useLineNameOf();
   return { colors: pillColorsOf(colorOf(lineId), theme), theme, colorOf, lineNameOf };
+}
+
+/** The colours of the prose pill of line `lineId` on the current theme (RS-PROSE, `prosePillColors`). */
+export function useProsePillColors(lineId: number | null | undefined): ResolvedPill {
+  const theme = useUIStore((s) => s.resolvedTheme);
+  const colorOf = useLineColorOf();
+  const lineNameOf = useLineNameOf();
+  return { colors: prosePillColorsOf(colorOf(lineId), theme), theme, colorOf, lineNameOf };
+}
+
+/**
+ * A prose pill's colours as the custom properties the `.sh-ppill` rules read:
+ * the tint's centre, the same colour fully transparent (what the radial tint
+ * fades to, so no grey fringe), and the text, muted part, dot and ring.
+ */
+export function prosePillStyle(colors: PillColors): CSSProperties {
+  return {
+    '--pill-tint': colors.bg,
+    '--pill-tint-clear': `${colors.bg}00`,
+    '--pill-text': colors.text,
+    '--pill-muted': colors.muted,
+    '--pill-dot': colors.dot,
+    '--pill-ring': colors.ring ?? 'transparent',
+  } as CSSProperties;
 }
 
 /** A home-line mark: its dot, and the name of the line it stands for. */

@@ -1780,32 +1780,39 @@ button.sh-apill {
 }
 
 /* Prose pill (ProsePill, src/components/common/Prose.tsx; RS-PROSE): a line
-   pill inline in running text, with the link pill's colours (the same custom
-   properties from pillColors.ts), dot, context, marks and Station ID. It
-   must leave the paragraph's line pitch exactly as plain text has it:
+   pill inline in running text, with the link pill's dot, context, marks and
+   Station ID, but no pill shape: a soft radial tint in the line's colour
+   (`--pill-tint`, prosePillColors in pillColors.ts) that fades to nothing at
+   each fragment's edges. A bordered fill stood 0 to 1 px from the fill of
+   the line above on most stacked pairs (the fill covers the font's whole
+   content area), so two lines of pills read as one block; a tint with no
+   hard edge cannot collide. It must leave the paragraph's line pitch exactly
+   as plain text has it:
    - the painted part (`.sh-ppill-vis`) is `display: inline` with no vertical
-     padding and its border an inset shadow: an inline box's background,
-     border and padding never take part in the line box's height (CSS 2.1
-     10.8.1), so the fill covers the text's own content area and nothing
-     grows;
+     padding: an inline box's background and padding never take part in the
+     line box's height (CSS 2.1 10.8.1);
    - every text part inside has line-height 0 (a smaller font with the
      paragraph's line-height would sit lower and push the line box down);
    - the dots and the loop mark are inline-blocks whose negative top margin
      cancels their height, so their margin box is zero tall;
-   - the Station ID is lifted by a relative offset, never `vertical-align`.
+   - the Station ID is lifted by a relative offset, never `vertical-align`,
+     and stays inside the text's own height.
    `box-decoration-break: clone` gives each line's fragment of a wrapped pill
-   its own rounded ends and padding; `.sh-ppill-nw` keeps the dot with the
-   first word, the arrow with the shot's far end and the marks with the last
-   word. `.sh-ppill` itself paints nothing: it holds the colours and the
-   sr-only words, which a copy and a screen reader take. */
+   its own tint and padding; `.sh-ppill-nw` keeps the dot with the first
+   word, the arrow with the shot's far end and the marks with the last word.
+   `.sh-ppill` itself paints nothing: it holds the colours and the sr-only
+   words, which a copy and a screen reader take. */
 .sh-ppill {
   color: var(--pill-text);
 }
 .sh-ppill-vis {
-  padding: 0 0.34em 0 0.3em;
-  border-radius: 0.6em;
-  background: var(--pill-bg);
-  box-shadow: inset 0 0 0 1px var(--pill-border);
+  padding: 0 0.42em 0 0.36em;
+  background: radial-gradient(
+    farthest-side,
+    var(--pill-tint) 0%,
+    var(--pill-tint) 45%,
+    var(--pill-tint-clear) 100%
+  );
   line-height: 0;
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
@@ -1859,7 +1866,7 @@ button.sh-apill {
 }
 .sh-ppill-sid {
   position: relative;
-  top: -0.62em;
+  top: -0.45em;
   margin-left: 0.14em;
   font-size: 0.7em;
   color: var(--pill-muted);

@@ -1,16 +1,22 @@
 /**
- * Prose pills (RS-PROSE): the line pill inline in running text. A sentence
+ * Prose pills (RS-PROSE): a line pill inline in running text. A sentence
  * that names a station, a shot or a line ("Side / 0 is archived with its
  * comment") draws each name as a `ProsePill`: the line's colour dot, the
  * muted context (`Side:`), the bare name, the home-line dot of a foreign
  * slot, the loop mark of a loop end and the muted superscript Station ID,
- * in the colours of `theme/pillColors.ts`, as the link pills (`LinePill.tsx`).
+ * as the link pills (`LinePill.tsx`) draw them.
+ *
+ * It paints no pill shape: a bordered fill on every line of a wrapped
+ * sentence stood 0 to 1 px from the one above (measured in the real app on
+ * 78% of stacked pairs), so the prose pill is a soft radial tint in the
+ * line's colour that fades to the panel at its edges (`prosePillColors`
+ * holds its text, muted parts and dots on both).
  *
  * It never changes the paragraph's line pitch (the `.sh-ppill` rules in
  * index.css): it is an inline box with no vertical padding, every part inside
  * has a zero line-height or a zero-height margin box, and the superscript is
  * lifted by a relative offset. It wraps across lines with each fragment
- * rounded (`box-decoration-break: clone`).
+ * tinted on its own (`box-decoration-break: clone`).
  *
  * The pill's drawing is `aria-hidden` and not selectable; beside it an
  * `sr-only` span carries the part's plain words (`Side / 0`), so a screen
@@ -28,7 +34,7 @@ import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { SHOT_ARROW } from '../../utils/formatters';
 import { isNamePart, proseParts, type ProsePart } from '../../utils/prose';
 import i18n from '../../i18n';
-import { LoopGlyph, markOf, pillStyle, usePillColors, type HomeMark, type ResolvedPill } from './LinePill';
+import { LoopGlyph, markOf, prosePillStyle, useProsePillColors, type HomeMark, type ResolvedPill } from './LinePill';
 
 type NamePart = Exclude<ProsePart, { kind: 'text' }>;
 
@@ -175,10 +181,10 @@ function Drawing({ part, pill }: { part: NamePart; pill: ResolvedPill }) {
  */
 export function ProsePill({ part, testId }: { part: NamePart; testId?: string | undefined }) {
   const level = useUIStore((s) => s.syntacticLevel);
-  const pill = usePillColors(part.line_id ?? null);
+  const pill = useProsePillColors(part.line_id ?? null);
   if (!syntacticLevelAtLeast(level, 'full')) return <>{part.text}</>;
   return (
-    <span className="sh-ppill" style={pillStyle(pill.colors)} data-prose-kind={part.kind} data-testid={testId}>
+    <span className="sh-ppill" style={prosePillStyle(pill.colors)} data-prose-kind={part.kind} data-testid={testId}>
       <span className="sh-ppill-vis" aria-hidden="true">
         <Drawing part={part} pill={pill} />
       </span>

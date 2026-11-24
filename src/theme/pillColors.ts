@@ -276,6 +276,41 @@ export function missingPillColors(theme: PillTheme): MissingPillColors {
   return { bg, border, text: theme.text, muted: theme.muted, warning };
 }
 
+/**
+ * A prose pill's colours (RS-PROSE): the pill inline in running text paints
+ * no fill and no border but a soft radial tint of the line's hue, strongest
+ * at its centre (the hover band's tint, `hoverBg`) and fading to nothing at
+ * its edges, where the bare panel shows. So everything on it is held on both
+ * ends of the fade: main text 7:1, the muted context and Station ID 4.5:1, the
+ * dot or its ring and the home-line dot 3:1, on the tint and on the panel.
+ * `bg` is the tint's centre and `hoverBg` the panel (what {@link pillMarkOf}
+ * checks a home-line dot against); there is no hover, and `border` is the
+ * resting pill's, unused. Text is the theme's own unless a floor needs it
+ * nudged, as for the link pill.
+ */
+export function prosePillColors(lineColor: string | null | undefined, theme: PillTheme): PillColors {
+  const pill = pillColors(lineColor, theme);
+  const on = [pill.hoverBg, theme.panel];
+  const reaches = (min: number) => (c: string) => on.every((bg) => contrastOfHex(c, bg) >= min);
+  const text = pushUntil(pill.text, theme.dark, reaches(TEXT_TARGET));
+  const muted = pushUntil(pill.muted, theme.dark, reaches(MUTED_TARGET));
+  const { dot, ring } = pillDot(lineHex(lineColor, theme.panel) ?? muted, on, theme);
+  return { ...pill, bg: pill.hoverBg, hoverBg: theme.panel, text, muted, dot, ring };
+}
+
+const proseCache = new Map<string, PillColors>();
+
+/** {@link prosePillColors} for a named app theme, cached per (theme, colour). */
+export function prosePillColorsOf(lineColor: string | null | undefined, themeName: string): PillColors {
+  const key = `${themeName}\u0000${lineColor ?? ''}`;
+  const cached = proseCache.get(key);
+  if (cached) return cached;
+  const colors = prosePillColors(lineColor, pillThemeOf(themeName));
+  if (proseCache.size > 2048) proseCache.clear();
+  proseCache.set(key, colors);
+  return colors;
+}
+
 /** {@link pillTheme} of a named app theme (`resolvedTheme`); an unknown name is the dark theme. */
 export function pillThemeOf(themeName: string): PillTheme {
   const cached = themeCache.get(themeName);
