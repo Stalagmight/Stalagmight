@@ -32,9 +32,11 @@ export function StatCard({ label, value, hint, testId }: { label: string; value:
 
 export function DetailRow({ label, value, testId }: { label: string; value: React.ReactNode; testId?: string }) {
   return (
-    <div className="flex justify-between text-sm" data-testid={testId}>
-      <span className="text-text-secondary">{label}:</span>
-      <span>{value}</span>
+    <div className="flex justify-between gap-2 text-sm" data-testid={testId}>
+      <span className="shrink-0 text-text-secondary">{label}:</span>
+      {/* min-w-0: a long pill (a line name) ellipsizes inside the panel
+          instead of running past its edge (RS-OWNERSHIP). */}
+      <span className="min-w-0 text-right">{value}</span>
     </div>
   );
 }

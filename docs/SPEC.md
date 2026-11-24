@@ -488,9 +488,12 @@ to a derived id (see [ariane-export.md](ariane-export.md#shot-uuids)).
 of it names is a **native line** of the station, and a slot there whose station
 no closure archives is a **native slot**: the line shows its own station. On a
 **foreign slot** (an archived station names the line: the line's own station
-was not kept) the line shows the kept station with a dot in the colour of that
-station's **home line**, its first native line in line order; a loop end shows
-the kept end with a loop mark. Plain text names them `Side / 12 (Main)` and
+was not kept) the line shows the kept station in the colour of that
+station's **home line**, its first native line in line order: its pill takes
+that line's colour and names it ("Main: 12", RS-OWNERSHIP); a loop end shows
+the kept end with a loop mark, in its kept end's home-line colour. A shot
+with such an end is two-tone, split at the arrow: the half holding that end
+in its home line's colour, with that line's dot after the end's name. Plain text names them `Side / 12 (Main)` and
 `Main / 12 (loop end on Side)`. Split Line Here keeps the split station native
 on both halves, or, when an archived station names the line there, that
 station names the second half too.
@@ -499,7 +502,7 @@ station names the second half too.
 the project; every station has a Station ID. On each line, the native slots
 show different stations by different names (invariant N8). Foreign slots and
 loop ends count toward no uniqueness: with Main / 12 kept at Branch's start,
-Branch shows the dotted `12` there and keeps its own station `12` further along
+Branch shows Main's `12` there (a Main-coloured pill) and keeps its own station `12` further along
 (CSV and JSON exports tell them apart by Station ID). **Rule K** picks the
 station kept where no one chooses, and is the dialogs' default (after Merge's
 preference for the one station holding a datum): the one on the longest line
@@ -803,7 +806,7 @@ and loop ends section 11 of the kept-stations plan:
   stations makes one; the Merge dialog asks which is kept. The other is
   archived with its own name, Station ID and comment (no comment is joined),
   and Detach Line from Station brings it back; the lines that showed it show
-  the kept station with the kept station's home-line dot, and may keep a
+  the kept station in the kept station's home-line colour, and may keep a
   station of their own by the same name (4.2). A migrated file keeps at each
   junction the station on its longest line, and the conversion notice lists
   what each line shows differently. Renaming a junction renames it on every
@@ -1129,7 +1132,9 @@ the test ids) but are never shown:
 - Line: its name (`Unnamed line` only for a line that somehow has none).
 - At the default `full` syntactic-highlighting level a link renders as a line
   pill (`LinePill.tsx`), coloured by the line it belongs to (a line its own, a
-  station or shot the line of its context): a dot in the line's colour, then
+  station the line its shown station belongs to, which may be another than
+  its slot's, RS-OWNERSHIP; a shot its line, two-tone when an end belongs to
+  another line): a dot in the line's colour, then
   (for a station or shot on another line) the line name, smaller and muted,
   with a colon, then the label at the surrounding text size, and for a station
   its Station ID as a muted superscript with a `#` (`Main Line: 17` with a raised `#42`; the `#` is not read aloud). The aria-label
@@ -1143,8 +1148,9 @@ the test ids) but are never shown:
 - Running text (dialog sentences, the Station details' sentences, Warnings
   tab messages, undo and redo history rows, the conversion notice, toasts)
   names a station, shot or line with a **prose pill** (RS-PROSE,
-  `ProsePill`): the same dot, muted context, bare name, home-line dot, loop
-  mark and superscript Station ID inline in the sentence, on a soft radial
+  `ProsePill`): the same dot, muted context, bare name, loop mark and
+  superscript Station ID inline in the sentence (a station of another line
+  in that line's colour, a two-tone shot as two tints), on a soft radial
   tint of the line's colour that fades to the surface (no border, no pill
   shape, so wrapped lines never meet), never as `Main / 12`. The paragraph's
   line pitch is the same as with plain text. A screen reader reads the
@@ -1202,7 +1208,7 @@ the slot shows (RS 6) and say each fact once (demo finding N-3), the slot's
 own line too (V-8): the Line row names the slot's line (a link to it), and
 "Connected" does not repeat it. On a line whose own station a merge archived
 (a foreign slot) a line under the Name says whose station it is: "12 belongs
-to Main Line"; its pills carry a small dot in that line's colour. "Also on"
+to Main Line"; its pills are in that line's colour (RS-OWNERSHIP). "Also on"
 lists the other lines through it, one row each, the same for every junction
 however it was made (a merge, Split Line Here, a line started there, an
 import; I-9): the line by name (a link to its slot), never a name of its own.
@@ -2073,8 +2079,8 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
    pieces the first pick's) lands on the other. The station chosen under
    **Keep** is shown on every line through it; the other is archived in it
    with its own Station ID, name and comment (nothing is joined), and the
-   lines whose own station it was show the kept station with the kept
-   station's home-line dot. Which station is kept moves nothing
+   lines whose own station it was show the kept station in the kept
+   station's home-line colour. Which station is kept moves nothing
 5. Picking another slot of the same station clears the pick, as clicking the
    same slot does: they are already one station
 

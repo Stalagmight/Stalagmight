@@ -2,9 +2,11 @@
  * Prose pills (RS-PROSE): a line pill inline in running text. A sentence
  * that names a station, a shot or a line ("Side / 0 is archived with its
  * comment") draws each name as a `ProsePill`: the line's colour dot, the
- * muted context (`Side:`), the bare name, the home-line dot of a foreign
- * slot, the loop mark of a loop end and the muted superscript Station ID,
- * as the link pills (`LinePill.tsx`) draw them.
+ * muted context (`Side:`), the bare name, the loop mark of a loop end and
+ * the muted superscript Station ID, as the link pills (`LinePill.tsx`) draw
+ * them. A station of another line takes that line's tint and name
+ * (RS-OWNERSHIP); a shot with an end of another line is two tints, split
+ * before the arrow, the foreign end keeping its home-line dot.
  *
  * It paints no pill shape: a bordered fill on every line of a wrapped
  * sentence stood 0 to 1 px from the one above (measured in the real app on
@@ -158,9 +160,9 @@ function Head({ context }: { context?: string | undefined }) {
   );
 }
 
-/** The dot after a shot end: a foreign end's home-line dot (a loop end has its loop mark instead). */
+/** The dot after a shot end of another line: its home-line dot (a loop end has its loop mark too), as on a link pill. */
 function endDot(end: ProseShotEnd): number | undefined {
-  return end.loop_end ? undefined : end.home_line;
+  return end.home_line;
 }
 
 /** What the pill draws for `part` (aria-hidden: the sr-only words say it). */

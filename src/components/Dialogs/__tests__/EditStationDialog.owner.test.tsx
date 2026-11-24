@@ -135,14 +135,16 @@ describe('Edit Station asks whose station it is (RS 5.4)', () => {
     expect(said(screen.getByTestId('shown-identity-prompt-detach'))).toContain(
       'Detach Side to get back its own station 0',
     );
-    // RS-PROSE: the lead draws the slot (its bare name, the home-line dot)
+    // RS-PROSE: the lead draws the slot (its bare name, in its owner's colour)
     // and the home line as pills and reads as plain text wrote it; the
     // buttons are controls and stay plain.
     const lead = screen.getByTestId('shown-identity-prompt-lead');
     expect(accessibleText(lead)).toBe('12 belongs to Main.');
     expect(pillKinds(lead)).toEqual(['station', 'line']);
     expect(pillDrawings(lead)).toEqual(['12#11', 'Main']);
-    expect(lead.querySelector('[data-prose-mark="home"]')).not.toBeNull();
+    // RS-OWNERSHIP: the slot's pill is in Main's colour, no second dot.
+    expect(lead.querySelector('[data-prose-mark="home"]')).toBeNull();
+    expect(lead.querySelector('.sh-ppill')!.getAttribute('data-owner-line')).toBe(String(MAIN));
     expect(pillKinds(screen.getByTestId('shown-identity-prompt-proceed'))).toEqual([]);
     expect(pillKinds(screen.getByTestId('shown-identity-prompt-detach'))).toEqual([]);
     await act(async () => {

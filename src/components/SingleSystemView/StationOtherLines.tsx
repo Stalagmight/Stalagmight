@@ -75,7 +75,7 @@ export function StationOtherLines({ station }: { station: Station }) {
           const line = labels.lineName(ref.line_id);
           return (
             <li key={key} className="text-sm flex items-center justify-between gap-2">
-              <span className="shrink-0 whitespace-nowrap">
+              <span className="min-w-0 whitespace-nowrap">
                 <DetailLink
                   type="station"
                   target={{ lineId: ref.line_id, position: ref.station_index }}

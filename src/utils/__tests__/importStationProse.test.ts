@@ -46,14 +46,20 @@ describe('import connection prose', () => {
     expect('line_id' in part).toBe(false);
   });
 
-  it('names an existing target slot by its pill, a foreign one with its home-line dot', () => {
+  it('names an existing target slot by its pill, a foreign one by the line it belongs to (RS-OWNERSHIP)', () => {
     for (const index of [1, 2]) {
       const token = suggestionTargetStationProse(prose, existing, index);
       expect(proseToPlain(token)).toBe(suggestionTargetStationLabel(labels, existing, index));
       const [part] = proseParts(token);
-      expect(part).toMatchObject({ kind: 'station', line_id: 5, context: 'Main Line' });
+      expect(part).toMatchObject({ kind: 'station', line_id: 5 });
     }
-    expect(proseParts(suggestionTargetStationProse(prose, existing, 2))[0]).toMatchObject({ name: '12', home_line: 6 });
+    expect(proseParts(suggestionTargetStationProse(prose, existing, 1))[0]).toMatchObject({ context: 'Main Line' });
+    // The foreign slot's pill is coloured and named by the line its station belongs to.
+    expect(proseParts(suggestionTargetStationProse(prose, existing, 2))[0]).toMatchObject({
+      name: '12',
+      home_line: 6,
+      context: 'Upstream',
+    });
   });
 
   it("names an incoming target by the user's rename in the wizard, the file's name until then", () => {

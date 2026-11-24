@@ -366,9 +366,10 @@ export function stationLabelOf(src: IdentitySource, ref: StationRef, withLine = 
 }
 
 /**
- * A slot's bare name for a pill's main part (`12`), where the pill draws the
- * home-line dot of a foreign slot and the loop mark of a loop end: the dot
- * and the mark say what {@link stationLabelOf}'s qualifier says in text.
+ * A slot's bare name for a pill's main part (`12`), where the pill takes the
+ * colour of the line a foreign slot's station belongs to (RS-OWNERSHIP) and
+ * draws a loop end's loop mark: the colour and the mark say what
+ * {@link stationLabelOf}'s qualifier says in text.
  */
 export function stationPillLabelOf(src: IdentitySource, ref: StationRef): string {
   return formatStationLabel(stationNameOf(src, ref));
@@ -414,7 +415,8 @@ export function shotLabelAt(src: IdentitySource, lineId: number, shotIndex: numb
 
 /**
  * A shot pill's main part, `12 → 13`: each end's bare name, where the pill
- * draws each end's dot and loop mark ({@link stationPillLabelOf}).
+ * draws each foreign end's dot and loop mark and colours an end of another
+ * line's half by that line ({@link stationPillLabelOf}).
  */
 export function shotPillLabelAt(src: IdentitySource, lineId: number, shotIndex: number): string {
   return formatShotLabel(

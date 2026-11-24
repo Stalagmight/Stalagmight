@@ -26,6 +26,7 @@ import {
   stationPartOf,
 } from '../../../utils/prose';
 import { identityLabels } from '../../../utils/stationIdentity';
+import { prosePillColorsOf } from '../../../theme/pillColors';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { surveyDataFromLegacy } from '../../../types/survey-data';
@@ -109,20 +110,33 @@ describe('prose pills (RS-PROSE)', () => {
     const pills = p.querySelectorAll('.sh-ppill');
     expect([...pills].map((el) => el.getAttribute('data-prose-kind'))).toEqual(['line', 'station', 'station', 'shot']);
     expect(accessibleText(p)).toBe(plain);
-    // The drawing: the foreign slot's context, bare name, home dot and Station ID.
-    const foreign = pills[1]!;
+    // The drawing: the foreign slot in the colour of the line it belongs to
+    // (RS-OWNERSHIP), named by it, bare name and Station ID, no second dot.
+    const foreign = pills[1]! as HTMLElement;
     const drawing = foreign.querySelector('[aria-hidden="true"]')!;
-    expect(drawing.textContent).toBe('Side: 12#11');
-    expect(foreign.querySelector('[data-prose-mark="home"]')).not.toBeNull();
-    expect(foreign.querySelector('[data-prose-mark="home"]')!.getAttribute('title')).toBe('Belongs to Main');
-    // The loop end: its loop mark and the Station ID it shows.
-    const loopEnd = pills[2]!;
+    expect(drawing.textContent).toBe('Main: 12#11');
+    expect(foreign.querySelector('[data-prose-mark="home"]')).toBeNull();
+    expect(foreign.getAttribute('title')).toBe('Belongs to Main');
+    expect(foreign.getAttribute('data-owner-line')).toBe(String(MAIN));
+    expect(foreign.style.getPropertyValue('--pill-dot')).toBe(prosePillColorsOf('#ffff00', 'dark').dot);
+    // The loop end: its loop mark, the Station ID it shows, its kept end's (Main's) colour.
+    const loopEnd = pills[2]! as HTMLElement;
     expect(loopEnd.querySelector('[data-prose-mark="loop"]')).not.toBeNull();
     expect(loopEnd.querySelector('[aria-hidden="true"]')!.textContent).toBe('3#3');
-    // The shot: each end's marks, no Station ID.
+    expect(loopEnd.style.getPropertyValue('--pill-dot')).toBe(prosePillColorsOf('#ffff00', 'dark').dot);
+    // The shot: two tints, the foreign from end's half in Main's after a
+    // head in Side's, the end's dot kept; no Station ID.
     const shotPill = pills[3]!;
     expect(shotPill.querySelector('[aria-hidden="true"]')!.textContent).toBe('Side: 12 → 1');
     expect(shotPill.querySelectorAll('[data-prose-mark="home"]')).toHaveLength(1);
+    const seg = (name: string) => shotPill.querySelector(`[data-prose-seg="${name}"]`) as HTMLElement;
+    expect(seg('head').textContent).toBe('Side: ');
+    expect(seg('from').textContent).toBe('12');
+    expect(seg('to').textContent).toBe('→ 1');
+    const tint = (el: HTMLElement) => el.style.getPropertyValue('--pill-tint');
+    expect(tint(seg('from'))).not.toBe(tint(seg('to')));
+    expect(tint(seg('head'))).toBe(tint(seg('to')));
+    expect(seg('from')).toContainElement(shotPill.querySelector('[data-prose-mark="home"]') as HTMLElement);
     expect(shotPill.querySelector('[data-prose-sid]')).toBeNull();
     // Colours come from the line (custom properties of pillColors.ts).
     expect((foreign as HTMLElement).style.getPropertyValue('--pill-dot')).not.toBe('');

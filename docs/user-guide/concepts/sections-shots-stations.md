@@ -104,8 +104,8 @@ afterwards:
   file (an [MNemo import](../workflows/importing-from-mnemo.md) uses the MNemo
   station numbers) and names any others by the rules above. A name the line
   already has gets a letter: a second `5` becomes `5a`, a second `Sump`
-  becomes `Sump-a`. A station a line shows with another line's coloured dot
-  (a merged station kept on its own line) or with the loop mark (a loop
+  becomes `Sump-a`. A station a line shows in another line's colour (a
+  merged station kept on its own line) or with the loop mark (a loop
   closure end) does not take up its name on that line: the line may have a
   station of its own with that name too.
 
@@ -114,9 +114,11 @@ afterwards:
 A merged station is one station: the one the merge kept, with its name and
 Station ID on every line through it. Where a side line was merged onto
 station `Junction` of the main line and `Junction` was kept, the side line
-shows `Junction` too, with a dot in the main line's colour that says the
-station belongs to another line (hover the dot: "Belongs to Main"; the data
-table's Name column reads `Junction (Main)`). The side line's own `0` is archived: it is
+shows `Junction` too, its pill in the main line's colour and named by it
+("Main: Junction"), which says the station belongs to another line (hover
+it: "Belongs to Main"; the data table's Name column reads `Junction (Main)`).
+A shot from that station is drawn in two colours, split at the arrow: the
+half with `Junction` in the main line's colour, the rest in the side line's. The side line's own `0` is archived: it is
 listed under **Archived here** in the station's **Details**, its name is free
 to use again on the side line, and **Detach Line from Station** brings it
 back. The **Station IDs** and **Station names** labels draw the kept station

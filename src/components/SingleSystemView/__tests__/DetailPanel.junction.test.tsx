@@ -116,12 +116,13 @@ describe('a junction that shows its kept station on every line', () => {
     expect(screen.getByTestId('station-detail-name')).toHaveTextContent(/^Name:3a$/);
     const belongs = screen.getByTestId('station-detail-belongs');
     expect(accessibleText(belongs)).toBe('3a belongs to Main.');
-    // The slot's pill (Side's colour, the bare name, Main's dot, its Station
-    // ID), then Main's.
+    // The slot's pill (Main's colour, RS-OWNERSHIP: the bare name and its
+    // Station ID, no second dot), then Main's.
     expect(pillKinds(belongs)).toEqual(['station', 'line']);
     const slotPill = belongs.querySelector('.sh-ppill')!;
     expect(slotPill.querySelector('[aria-hidden="true"]')!.textContent).toBe('3a#11');
-    expect(slotPill.querySelector('[data-prose-mark="home"]')).not.toBeNull();
+    expect(slotPill.querySelector('[data-prose-mark="home"]')).toBeNull();
+    expect(slotPill.getAttribute('data-owner-line')).toBe(String(MAIN));
     expect(screen.getByTestId('station-detail-line')).toHaveTextContent(/^Line:Side$/);
     expect(screen.getByTestId('station-detail-id')).toHaveTextContent('11');
     const record = screen.getByTestId('station-detail-record-20-text');

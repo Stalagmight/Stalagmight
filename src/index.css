@@ -1776,6 +1776,13 @@ button.sh-apill {
   background: var(--pill-bg);
   color: var(--pill-text);
 }
+/* A zero-width strut in the pill's own font: every segment, even one holding
+   only the dot (the head), has the text's baseline and height, so the
+   halves line up and are one height. The gap after it is taken back. */
+.sh-lpill-seg::before {
+  content: '\200b';
+  margin-right: -0.3em;
+}
 .sh-lpill-seg:first-child {
   flex: 0 1000 auto;
   padding-left: 0.5em;

@@ -1327,7 +1327,7 @@
       "archivedWithComment": "{{station}} is archived with its comment.",
       "archivedInside": "{{station}} (Station ID {{id}}), archived inside {{hidden}} by an earlier merge, stays inside it: a second Detach brings it back.",
       "detachBringsBack": "Detach Line from Station brings {{station}} back.",
-      "repeat": "{{line}} already has a station {{name}} (Station ID {{id}}); it keeps its name, and {{line}} shows {{name}} twice, the junction with {{home}}'s dot.",
+      "repeat": "{{line}} already has a station {{name}} (Station ID {{id}}); it keeps its name, and {{line}} shows {{name}} twice, the junction in {{home}}'s colour.",
       "repeatLoopEnd": "{{line}} already has a station {{name}} (Station ID {{id}}); it keeps its name, and {{line}} shows {{name}} twice, once at a loop end with the loop mark.",
       "loopEndShown": "It was the hidden end of a loop closure: the closure stays, and {{station}} is shown at that end too.",
       "cancel": "Cancel",

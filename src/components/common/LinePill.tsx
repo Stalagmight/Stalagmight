@@ -213,10 +213,11 @@ export function markOf(pill: ResolvedPill, homeLineId: number | null | undefined
 }
 
 /**
- * The second dot after a station name (see the module doc). With the home
+ * The dot after a foreign shot end's name (see the module doc; a station
+ * pill takes its owner's colour instead since RS-OWNERSHIP). With the home
  * line's name it says it in words too: a tooltip, "Belongs to Main", and
- * for a screen reader " (Main)", so the name reads "12 (Main)" as plain text
- * writes it (RS 6; RS-FX6, P2-5). Before, the 5 px dot was the only sign.
+ * for a screen reader " (Main)", so the end reads "12 (Main)" as plain text
+ * writes it (RS 6; RS-FX6, P2-5).
  */
 export function HomeLineMark({ mark, testId }: { mark: HomeMark; testId?: string | undefined }) {
   const style = { '--mark-dot': mark.dot, '--mark-ring': mark.ring ?? 'transparent' } as CSSProperties;

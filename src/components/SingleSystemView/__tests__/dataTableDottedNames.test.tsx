@@ -126,16 +126,19 @@ const cell = (index: number, key: string) => screen.getByTestId(`station-cell-${
 const pill = (index: number) => `data-table-station-pill-${BRANCH}-${index}`;
 
 describe('two "12"s on one line, one of them dotted (RS-FX5)', () => {
-  it('shows both 12s: the Name cells, the dot on the foreign slot only, two Station IDs', () => {
+  it("shows both 12s: the Name cells, Main's colour on the foreign slot only, two Station IDs", () => {
     openBranchStations();
     expect(cell(0, 'name')).toHaveTextContent(/^12 \(Main\)$/);
     expect(cell(12, 'name')).toHaveTextContent(/^12$/);
 
-    // The gutter pills name both bare; the foreign slot's carries Main's dot.
+    // The gutter pills name both bare; the foreign slot's is in Main's colour
+    // (RS-OWNERSHIP, where it once carried Main's dot), and says so in words.
     expect(screen.getByTestId(pill(0))).toHaveTextContent(/^12\s*\(Main\)\s*Station ID\s*#112$/);
     expect(screen.getByTestId(pill(12))).toHaveTextContent(/^12\s*Station ID\s*#312$/);
-    expect(screen.getByTestId(`${pill(0)}-home-dot`)).toBeInTheDocument();
-    expect(screen.queryByTestId(`${pill(12)}-home-dot`)).toBeNull();
+    expect(screen.getByTestId(pill(0))).toHaveAttribute('data-owner-line', String(MAIN));
+    expect(screen.getByTestId(pill(0))).toHaveAttribute('title', expect.stringMatching(/^Belongs to /));
+    expect(screen.getByTestId(pill(12))).not.toHaveAttribute('data-owner-line');
+    expect(screen.queryByTestId(`${pill(0)}-home-dot`)).toBeNull();
 
     // The Station ID column reads each slot's shown Station ID.
     expect(cell(0, '_stationId')).toHaveTextContent(/^112$/);

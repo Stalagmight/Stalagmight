@@ -1,14 +1,16 @@
 /**
  * RS 6: pills show the identity a slot shows. A station pill on a foreign
  * slot (its line knew another station there; the junction shows the kept
- * one) ends with the shown Station ID and carries the home line's dot; a loop
- * end carries the loop mark, even with no dot. Shot pills carry each foreign
- * end's dot and each loop end's loop mark, after the end's bare name (RS-FX5:
- * the marks stand for the plain-text qualifier). The plain text below Full
- * says whose station it is, with or without the line.
+ * one) ends with the shown Station ID and takes the colour of the line its
+ * shown station belongs to (RS-OWNERSHIP, where it once carried a second
+ * dot); a loop end carries the loop mark and its kept end's colour. Shot
+ * pills carry each foreign end's dot and each loop end's loop mark, after the
+ * end's bare name (RS-FX5: the marks stand for the plain-text qualifier), and
+ * are two-tone when an end belongs to another line. The plain text below
+ * Full says whose station it is, with or without the line.
  * Injections: reading the node id for the superscript fails "ends with the
- * shown Station ID"; dropping the default home mark fails "carries the home
- * line's dot"; the qualified label in the pill fails "names the station bare".
+ * shown Station ID"; dropping the default owner fails "takes the home line's
+ * colour"; the qualified label in the pill fails "names the station bare".
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -22,6 +24,7 @@ import { shotEndMarks } from '../shotEndMarks';
 import { identityLabels } from '../../../utils/stationIdentity';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
+import { pillColorsOf } from '../../../theme/pillColors';
 import { surveyDataFromLegacy } from '../../../types/survey-data';
 import type { Line, Project, Shot } from '../../../types/project';
 import type { Station } from '../../../types/ipc/Station';
@@ -69,16 +72,26 @@ beforeEach(() => {
 });
 
 describe('station pills of foreign slots and loop ends (RS 6)', () => {
-  it("carries the home line's dot on a foreign slot, none on a native one", () => {
+  it("takes the home line's colour on a foreign slot, its own line's on a native one, and no dot", () => {
     render(
       <>
         <StationBlob station={{ line_id: SIDE, station_index: 0 }} testId="foreign" />
         <StationBlob station={{ line_id: MAIN, station_index: 1 }} testId="native" />
       </>,
     );
-    expect(screen.getByTestId('foreign-home-dot')).toBeInTheDocument();
-    expect(screen.queryByTestId('native-home-dot')).toBeNull();
+    const bg = (id: string) => screen.getByTestId(id).style.getPropertyValue('--pill-bg');
+    expect(bg('foreign')).toBe(pillColorsOf('#ffff00', 'dark').bg);
+    expect(bg('native')).toBe(pillColorsOf('#ffff00', 'dark').bg);
+    expect(screen.getByTestId('foreign')).toHaveAttribute('title', 'Belongs to Main');
+    expect(screen.getByTestId('native')).not.toHaveAttribute('title');
+    expect(screen.queryByTestId('foreign-home-dot')).toBeNull();
     expect(screen.getByTestId('foreign-station-id')).toHaveTextContent('#11');
+  });
+
+  it('with its line, a foreign slot names the line it belongs to and says the slot\'s line in words', () => {
+    render(<StationBlob station={{ line_id: SIDE, station_index: 0 }} withLine testId="foreign" />);
+    expect(screen.getByTestId('foreign-id')).toHaveTextContent('Main:');
+    expect(screen.getByTestId('foreign-owner').textContent).toBe(' (on Side)');
   });
 
   it('names the station bare in the pill: the dot and the loop mark say whose', () => {
@@ -98,12 +111,15 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     expect(screen.getByTestId('loop-station-id')).toHaveTextContent(/#3$/);
     expect(screen.getByTestId('loop-station-id')).not.toHaveTextContent('22');
     expect(screen.getByTestId('loop-loop-end')).toHaveTextContent('loop end');
-    expect(screen.getByTestId('loop-home-dot')).toBeInTheDocument();
+    // The kept end is Main's: the loop end takes Main's colour, no dot.
+    expect(screen.queryByTestId('loop-home-dot')).toBeNull();
+    expect(screen.getByTestId('loop').style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('#ffff00', 'dark').bg);
   });
 
-  it('lets a caller say no dot', () => {
+  it("lets a caller keep the slot's colour", () => {
     render(<StationBlob station={{ line_id: SIDE, station_index: 0 }} homeLineId={null} testId="none" />);
-    expect(screen.queryByTestId('none-home-dot')).toBeNull();
+    expect(screen.getByTestId('none').style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('navy', 'dark').bg);
+    expect(screen.getByTestId('none')).not.toHaveAttribute('title');
   });
 
   it('says whose station it is in plain text below Full, with or without the line (U-P3-8, RS-FX5)', () => {
@@ -122,7 +138,7 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     expect(screen.getByTestId('bare-loop')).toHaveTextContent(/^3 \(loop end on Side\)$/);
   });
 
-  it('gives a station link the same: shown ID, dot, loop mark, and a spoken whose', () => {
+  it("gives a station link the same: shown ID, the owner's colour, loop mark, and a spoken whose", () => {
     render(
       <DetailLink
         type="station"
@@ -135,7 +151,9 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     const id = `station-${SIDE}-2-link`;
     expect(screen.getByTestId(`${id}-station-id`)).toHaveTextContent(/#3$/);
     expect(screen.getByTestId(`${id}-loop-end`)).toBeInTheDocument();
-    expect(screen.getByTestId(`${id}-home-dot`)).toBeInTheDocument();
+    expect(screen.queryByTestId(`${id}-home-dot`)).toBeNull();
+    expect(screen.getByTestId(id).style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('#ffff00', 'dark').bg);
+    expect(screen.getByTestId(id)).toHaveAttribute('title', 'Belongs to Main');
     expect(screen.getByTestId(id)).toHaveAccessibleName('Select station Main / 3 (loop end on Side), Station ID 3');
   });
 
@@ -148,6 +166,11 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     expect(screen.getByTestId(`${id}-from-home-dot`)).toBeInTheDocument();
     expect(screen.queryByTestId(`${id}-to-home-dot`)).toBeNull();
     expect(screen.queryByTestId(`${id}-from-loop-end`)).toBeNull();
+    // Two-tone: the foreign from end's half in Main's colour, after a head in Side's.
+    expect(screen.getByTestId(id)).toHaveClass('sh-lpill--split');
+    expect(screen.getByTestId(`${id}-from`).style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('#ffff00', 'dark').bg);
+    expect(screen.getByTestId(`${id}-head`).style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('navy', 'dark').bg);
+    expect(screen.getByTestId(`${id}-to`).style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('navy', 'dark').bg);
     expect(screen.getByTestId(id)).toHaveTextContent(/^12\s*\(Main\)\s*→\s*1$/);
     expect(screen.getByTestId(id)).toHaveAccessibleName('Select shot 12 (Main) → 1');
   });
@@ -183,6 +206,8 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
       toHomeLineId: MAIN,
       fromLoopEnd: false,
       toLoopEnd: true,
+      fromOwnerLineId: null,
+      toOwnerLineId: MAIN,
     });
     // A shot with no dotted end draws no marks.
     expect(shotEndMarks(labels, MAIN, 0)).toBeNull();
@@ -193,5 +218,8 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     );
     expect(screen.getByTestId('shot-pill-to-loop-end')).toBeInTheDocument();
     expect(screen.getByTestId('shot-pill-to-home-dot')).toBeInTheDocument();
+    // The loop end's half takes its kept end's (Main's) colour.
+    expect(screen.getByTestId('shot-pill-to').style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('#ffff00', 'dark').bg);
+    expect(screen.getByTestId('shot-pill-from').style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('navy', 'dark').bg);
   });
 });
