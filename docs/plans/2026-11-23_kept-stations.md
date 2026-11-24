@@ -2277,7 +2277,8 @@ and RS-FX6's home-line mark on station pills.
   fractional seam, and a zero-width strut in the pill's font gives every
   segment, even a head holding only the dot, the text's baseline and
   height (without it the head came out 15 px tall against 23 px). Prose
-  pills: one radial tint per segment, fading as one pill does.
+  pills: one radial tint per segment, fading as one pill does. (RS-BLEND
+  below replaces the hard seam and the two tints with blends.)
 - **The border tracks the line's lightness.** The fills of a near-white and
   a near-black line differ by about 0.03 in OKLCH lightness (the band keeps
   text legible), so in the first capture a near-white half read as a dark
@@ -2308,3 +2309,71 @@ and RS-FX6's home-line mark on station pills.
   deviation), with 6 to 10 two-tone prose pills on screen; no two tint
   fragments on adjacent lines overlap (44 and 61 pairs); the Playwright
   line-pitch spec now includes a two-tone prose shot.
+
+## Deviations (package RS-BLEND)
+
+The user's request (2026-11-24): "for the multi-color pills, can you blend
+the color transition". Decisions this package took, each with its reason;
+they amend RS-OWNERSHIP's two-tone bullet.
+
+- **A link pill's seam is a cross-fade, not a step.** Each segment's fill
+  and border fade from its own colour to the midpoint with its neighbour
+  over the last `SEAM_EM` (0.4em) at a seam, so the two meet in one colour
+  across a 0.8em cross-fade centred on the seam, just before the arrow; a
+  head, from half and to half blend at both seams. The fill is a gradient
+  on the padding box and the border a gradient on the border box under a
+  transparent border, so the border blends with the fill and the rounded
+  ends stay; hover swaps in the hover gradients. Each half keeps its line's
+  colour away from the seam, so the shot still reads as two lines' pill.
+  The 1px overlap of RS-OWNERSHIP stays (both segments are the midpoint
+  there), so no hairline shows at a fractional seam.
+- **Mixed in OKLab, in code, not by the browser.** The midpoint is the
+  OKLab mean (`mixHex`), with a stop at three quarters so the browser's
+  sRGB interpolation between stops stays near the OKLab path: yellow and
+  blue meet in a clean grey-green, not sRGB's flat grey (a test holds
+  OKLab's chroma above sRGB's), near-white and near-black in a mid grey.
+  The colours are computed rather than left to CSS gradient interpolation
+  spaces so they are the same in every webview (WebKitGTK, WKWebView and
+  WebView2 differ in support) and so the contrast sweep tests exactly what
+  is painted.
+- **A prose pill's segments draw one tint.** Each segment's background is
+  an SVG (`img-src data:` is allowed by the CSP): a horizontal colour
+  gradient of overlays (each stop the overlay that gives its colour over
+  the panel, `proseOverlayOf`) shifting to the midpoint at a seam, masked
+  by the tint's fade centred on the seam (a radial fade at a one-seam
+  segment, top and bottom only between two seams), so the alpha is equal on
+  both sides of the seam: no dip, fading only at the outer ends and top
+  and bottom. CSS alone cannot multiply a colour gradient by a 2D alpha
+  fade in one background, and `mask-image` on the segment would fade its
+  text too. The space before the arrow moved into the to half, so the two
+  tints meet with no gap.
+- **Per line when it wraps.** A tint that blends is solid at the seam, so
+  a line break at the seam or inside a segment (a long context in a narrow
+  panel: "Upper Branch towards the Dry | Chamber: 12 -> 1" at 860 px)
+  ended a line in a hard edge in the first capture. Once laid out
+  (`useSegmentTints`), each line's fragment of a segment gets its own
+  background layer (`box-decoration-break: slice`, each layer sized and
+  placed over its fragment), blended only where its neighbour shares the
+  line and fading at every other edge, as a one-colour pill's fragments
+  do. It measures after a render from outside and when the block around
+  the pill resizes, never after a render its own tints caused: the first
+  build measured after every render, and while the Details panel slid
+  open every measure differed until React gave up (#185, the panel's
+  error card in the real app); a test holds that.
+- **Text and dots read on every colour of the blend.** The leading dot and
+  a foreign end's dot get their ring against the segment's fill, hover
+  fill and the blend toward each neighbour sampled at 50, 62.5, 75 and
+  87.5% own colour (and the panel, for prose). `twoTonePills.test.ts`
+  sweeps the ordered hard-colour pairs and three-colour shots (each pair
+  with near-white, near-black, yellow or blue) on every theme for both
+  variants: text 7:1, muted 4.5:1, dots 3:1 on every sample and on the
+  sRGB points between gradient stops. No colour floor or band changed.
+- **Measured in the real app** (this worktree's build, the RS-OWNERSHIP
+  survey plus a blue spur leaving a yellow line, so a shot whose head, from
+  half and to half are blue, yellow, blue; 14 surfaces in dark and light at
+  1440x900 and 860x900): prose line pitch equal to plain text's in every
+  compared block (21 blocks, 83 and 104 line gaps, 0 px deviation) with 11
+  two-tone prose pills on screen per combination; no two tint fragments
+  on adjacent lines overlap (48 and 67 pairs; RS-OWNERSHIP's run: 0 of 44
+  and 61). Across a link pill's seam the fill changes by at most 14 (sum of
+  the RGB steps) between neighbouring pixels: no seam line.
