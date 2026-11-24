@@ -13,6 +13,7 @@ import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useProse } from '../../hooks/useProse';
 import { Prose } from '../common/Prose';
+import { proseValue } from '../../utils/prose';
 
 /** `"Upstream Side" and its 2 shots (13.0 m)`: the line a delete removes, by
  *  name, with what goes with it (demo finding I-9: the dialog said "this
@@ -232,7 +233,8 @@ export default function ConfirmDialog() {
     <DialogWrapper title={getTitle()} onClose={closeDialog} size="md" data-testid="confirm-dialog">
       <div className="space-y-4">
         <p className="text-text-secondary" data-testid="confirm-dialog-message">
-          <Prose text={message ?? getDefaultMessage()} />
+          {/* A caller's message is raw text: no marker in it may become a pill (RS-PROSE fix 1). */}
+          <Prose text={message !== undefined ? proseValue(message) : getDefaultMessage()} />
         </p>
 
         {type === 'station' && (

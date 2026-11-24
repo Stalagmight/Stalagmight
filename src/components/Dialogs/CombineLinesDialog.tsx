@@ -22,6 +22,7 @@ import { useProse } from '../../hooks/useProse';
 import type { ProsePart } from '../../utils/prose';
 import { Button } from '../common/Button';
 import { Prose } from '../common/Prose';
+import { proseValue } from '../../utils/prose';
 import { DialogWrapper } from './DialogWrapper';
 import { CombinePlanNotes } from './CombinePlanNotes';
 
@@ -74,7 +75,9 @@ function CombinedCreditSummary({ shots }: { shots: Array<Pick<Shot, 'credit'>> }
  * names)`.
  */
 function lineRenameText(lineName: string, renames: CombineLineRenames, suffixed: number): string {
-  const span = (first: string, last: string) => (renames.count > 1 ? `${first}..${last}` : first);
+  // Station names from the file go into a prose sentence raw: made safe (RS-PROSE fix 1).
+  const span = (first: string, last: string) =>
+    renames.count > 1 ? `${proseValue(first)}..${proseValue(last)}` : proseValue(first);
   const text = `${lineName} ${span(renames.first_from, renames.last_from)} \u2192 ${span(renames.first_to, renames.last_to)}`;
   if (renames.unchanged === 0 && suffixed === 0) return text;
   if (renames.unchanged === 0) return `${text} (${renames.count} renamed)`;
@@ -87,7 +90,7 @@ const SUFFIXED_SHOWN = 3;
 
 /** The other line's names made unique by a letter: `Side Sump → Sump-a`. */
 function suffixedRenameText(lineName: string, suffixed: readonly CombineStationRename[]): string {
-  const shown = suffixed.slice(0, SUFFIXED_SHOWN).map((r) => `${r.from} \u2192 ${r.to}`);
+  const shown = suffixed.slice(0, SUFFIXED_SHOWN).map((r) => `${proseValue(r.from)} \u2192 ${proseValue(r.to)}`);
   const more = suffixed.length - shown.length;
   return `${lineName} ${shown.join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
 }

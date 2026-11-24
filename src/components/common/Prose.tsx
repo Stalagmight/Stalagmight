@@ -33,8 +33,9 @@
 import { Fragment, useMemo, type CSSProperties, type ReactNode } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
-import { SHOT_ARROW } from '../../utils/formatters';
-import { isNamePart, proseParts, type ProsePart } from '../../utils/prose';
+import { displayStationName, SHOT_ARROW } from '../../utils/formatters';
+import { isNamePart, partOf, proseParts, type ProsePart } from '../../utils/prose';
+import { withoutControls } from '../../utils/proseTokenCore';
 import i18n from '../../i18n';
 import type { ProseShotEnd } from '../../types/ipc/ProseShotEnd';
 import {
@@ -241,14 +242,23 @@ function Drawing({
  * as the context (RS-OWNERSHIP); a shot with an end of another line is
  * two-tone.
  */
-export function ProsePill({ part, testId }: { part: NamePart; testId?: string | undefined }) {
+export function ProsePill({ part: given, testId }: { part: NamePart; testId?: string | undefined }) {
   const level = useUIStore((s) => s.syntacticLevel);
   const resolve = useResolvePill('prose');
-  if (!syntacticLevelAtLeast(level, 'full')) return <>{part.text}</>;
+  // A part that lacks a field the pill draws (a hand-built or decoded part
+  // gone wrong) renders its plain words, never a crash (RS-PROSE fix 1).
+  const checked = partOf(given);
+  const words = withoutControls(typeof given?.text === 'string' ? given.text : '');
+  if (!syntacticLevelAtLeast(level, 'full') || checked === null || checked.kind === 'text') return <>{words}</>;
+  const part = shown(checked);
   const owner = part.kind === 'station' && part.home_line !== undefined && part.home_line !== part.line_id ? part.home_line : null;
   const pill = resolve(owner ?? part.line_id ?? null);
-  const ownerName = owner !== null ? (pill.lineNameOf?.(owner) ?? null) : null;
-  const context = part.kind === 'line' ? undefined : owner !== null && part.context ? (ownerName ?? part.context) : part.context;
+  // The words drawn are the part's as it was worded: a history row keeps the
+  // line names it was recorded with, and the live line only gives the colour
+  // (RS-PROSE fix 2). The tooltip names the owner by the same words when the
+  // part has them, else by the live line.
+  const context = part.kind === 'line' ? undefined : part.context || undefined;
+  const ownerName = owner === null ? null : context ?? (pill.lineNameOf?.(owner) || null);
   const tone =
     part.kind === 'shot'
       ? shotToneOf(resolve, part.line_id ?? null, part.from.home_line, part.to.home_line, (p) =>
@@ -265,11 +275,32 @@ export function ProsePill({ part, testId }: { part: NamePart; testId?: string | 
       title={ownerName !== null ? i18n.t('identity.homeMarkTitle', { line: ownerName }) : undefined}
     >
       <span className={tone ? 'sh-ppill-vis sh-ppill-vis--split' : 'sh-ppill-vis'} aria-hidden="true">
-        <Drawing part={part} pill={pill} context={context ?? undefined} tone={tone} resolve={resolve} />
+        <Drawing part={part} pill={pill} context={context} tone={tone} resolve={resolve} />
       </span>
-      <span className="sr-only">{part.text}</span>
+      <span className="sr-only">{withoutControls(part.text)}</span>
     </span>
   );
+}
+
+/**
+ * `part` with what it draws sanitised (RS-PROSE fix 5): names and contexts
+ * lose control, bidi and other invisible characters, as every displayed name
+ * does (`displayStationName`), so a persisted or decoded part cannot reorder
+ * or hide its own words.
+ */
+function shown(part: NamePart): NamePart {
+  const clean = (v: string) => displayStationName(v);
+  const ctx = 'context' in part && part.context !== undefined ? { context: clean(part.context) } : {};
+  if (part.kind === 'shot') {
+    return {
+      ...part,
+      ...ctx,
+      from: { ...part.from, name: clean(part.from.name) },
+      to: { ...part.to, name: clean(part.to.name) },
+    };
+  }
+  if (part.kind === 'station') return { ...part, ...ctx, name: clean(part.name) };
+  return { ...part, name: clean(part.name) };
 }
 
 /** A parts list: words as text, every name as a {@link ProsePill}. */

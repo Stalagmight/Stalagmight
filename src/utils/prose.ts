@@ -10,8 +10,12 @@
  * context, the bare name, the home-line dot, the loop mark, the Station ID).
  *
  * A sentence the frontend words through i18n puts a **token** where the name
- * goes: the part, URI-encoded JSON between U+0001 and U+0002, which no
- * displayed name holds (`displayStationName` drops C0 controls). A token is a
+ * goes: the part, URI-encoded JSON between U+0001 and U+0002, after this page
+ * load's random nonce (`proseTokenCore.ts`). A value a user or a file
+ * controls can neither know the nonce nor hold a marker: every `t()`
+ * interpolation and every value a sentence is built from by hand goes
+ * through `proseValue`, which drops the markers and other C0 controls, and a
+ * token is only read when it has a part's full shape (`partOf`). A token is a
  * plain string, so it passes through `t()` interpolation, `listNames` and the
  * toast store unchanged, and `<Prose text=...>` splits the result back into
  * words and pills. Plain-text contexts (aria-labels, tooltips, clipboard,
@@ -20,6 +24,8 @@
  */
 import type { ProsePart } from '../types/ipc/ProsePart';
 import type { ProseStation } from '../types/ipc/ProseStation';
+import type { ProseShotEnd } from '../types/ipc/ProseShotEnd';
+import { CLOSE, NONCE, OPEN, TOKEN, ownPayload, proseValue, withoutControls } from './proseTokenCore';
 import type { StationIdentity } from '../types/ipc/StationIdentity';
 import type { StationRef } from '../types/project';
 import { displayStationName, formatStationLabel } from './formatters';
@@ -37,13 +43,7 @@ import {
 } from './stationIdentity';
 
 export type { ProsePart };
-
-const OPEN = '\u0001';
-const CLOSE = '\u0002';
-/** One token: the opening marker, the encoded part, the closing marker. */
-const TOKEN = new RegExp(`${OPEN}([^${OPEN}${CLOSE}]*)${CLOSE}`, 'g');
-/** A marker left over from a cut token. */
-const STRAY = new RegExp(`[${OPEN}${CLOSE}]`, 'g');
+export { proseValue };
 
 /** A part's plain words. */
 export function partText(part: ProsePart): string {
@@ -57,16 +57,71 @@ export function isNamePart(part: ProsePart): boolean {
 
 /** `part` as a token for an i18n sentence (see the module doc). */
 export function proseToken(part: ProsePart): string {
-  if (part.kind === 'text') return part.text;
-  return `${OPEN}${encodeURIComponent(JSON.stringify(part))}${CLOSE}`;
+  if (part.kind === 'text') return proseValue(part.text);
+  return `${OPEN}${NONCE}:${encodeURIComponent(JSON.stringify(part))}${CLOSE}`;
+}
+
+const isString = (v: unknown): v is string => typeof v === 'string';
+const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v);
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** The optional fields of a part, copied only when they have their type. */
+function optional(src: Record<string, unknown>, keys: Record<string, (v: unknown) => boolean>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, ok] of Object.entries(keys)) if (src[key] !== undefined && ok(src[key])) out[key] = src[key];
+  return out;
+}
+
+function shotEnd(v: unknown): ProseShotEnd | null {
+  if (!isObject(v) || !isString(v.name)) return null;
+  return { name: v.name, ...optional(v, { home_line: isInt, loop_end: (x) => typeof x === 'boolean' }) } as ProseShotEnd;
+}
+
+/**
+ * `value` as a part when it has a part's full shape (RS-PROSE fix 1): its
+ * kind, its words, and per kind the fields the pill draws (a station's and a
+ * line's name, a shot's two ends with their names), each of its type; the
+ * known optional fields are kept only when they have theirs. Anything else
+ * (a missing name, an unknown kind) is null, and the token reads as words.
+ */
+export function partOf(value: unknown): ProsePart | null {
+  if (!isObject(value) || !isString(value.text)) return null;
+  const text = value.text;
+  switch (value.kind) {
+    case 'text':
+      return { kind: 'text', text };
+    case 'station': {
+      if (!isString(value.name)) return null;
+      const slot = isObject(value.slot) && isInt(value.slot.line_id) && isInt(value.slot.station_index)
+        ? { slot: { line_id: value.slot.line_id, station_index: value.slot.station_index } }
+        : {};
+      return {
+        kind: 'station',
+        text,
+        name: value.name,
+        ...optional(value, { line_id: isInt, context: isString, home_line: isInt, loop_end: (x) => typeof x === 'boolean', station_id: isInt }),
+        ...slot,
+      } as ProsePart;
+    }
+    case 'shot': {
+      const from = shotEnd(value.from);
+      const to = shotEnd(value.to);
+      if (!from || !to) return null;
+      return { kind: 'shot', text, from, to, ...optional(value, { line_id: isInt, context: isString }) } as ProsePart;
+    }
+    case 'line':
+      if (!isString(value.name)) return null;
+      return { kind: 'line', text, name: value.name, ...optional(value, { line_id: isInt }) } as ProsePart;
+    default:
+      return null;
+  }
 }
 
 function decode(payload: string): ProsePart | null {
+  const own = ownPayload(payload);
+  if (own === null) return null;
   try {
-    const part = JSON.parse(decodeURIComponent(payload)) as ProsePart;
-    return part && typeof part === 'object' && typeof part.text === 'string' && typeof part.kind === 'string'
-      ? part
-      : null;
+    return partOf(JSON.parse(decodeURIComponent(own)));
   } catch {
     return null;
   }
@@ -85,7 +140,11 @@ export function proseParts(text: string): ProsePart[] {
     words += text.slice(last, match.index);
     last = match.index + match[0].length;
     const part = decode(match[1] ?? '');
-    if (part === null) continue;
+    // Not one of this page's tokens, or not a part's shape: its words, never a pill.
+    if (part === null) {
+      words += ownPayload(match[1] ?? '') === null ? (match[1] ?? '') : '';
+      continue;
+    }
     if (part.kind === 'text') {
       words += part.text;
       continue;
@@ -95,8 +154,8 @@ export function proseParts(text: string): ProsePart[] {
     parts.push(part);
   }
   words += text.slice(last);
-  // A stray marker (a cut token) never reaches the screen.
-  words = words.replace(STRAY, '');
+  // A stray marker (a cut token) or another control never reaches the screen.
+  words = withoutControls(words);
   if (words !== '') parts.push({ kind: 'text', text: words });
   return parts;
 }
@@ -108,7 +167,7 @@ export function hasProse(text: string): boolean {
 
 /** The plain string of a string that may hold tokens: each token by its words. */
 export function proseToPlain(text: string): string {
-  if (!hasProse(text)) return text;
+  if (!hasProse(text)) return withoutControls(text);
   return proseParts(text).map(partText).join('');
 }
 
@@ -127,7 +186,7 @@ export function partsToPlain(parts: readonly ProsePart[]): string {
  * fields; the parts carry the same words), else the plain string.
  */
 export function backendProse(plain: string, parts: readonly ProsePart[] | null | undefined): string {
-  return parts && parts.some(isNamePart) ? partsToProse(parts) : plain;
+  return parts && parts.some(isNamePart) ? partsToProse(parts) : proseValue(plain);
 }
 
 // ----- parts the frontend words ------------------------------------------------
