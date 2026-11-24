@@ -136,7 +136,7 @@ describe('ConversionNoticeBanner', () => {
       );
     });
 
-    it('capitalises a sentence that opens with words, never a name', () => {
+    it('capitalises the sentence as the plain one does; an opening name is drawn as it is', () => {
       const { unmount } = render(
         <ConversionNoticeBanner
           notice={notice({ changes: [partsToPlain(hidden)], change_parts: [hidden] })}
@@ -152,8 +152,11 @@ describe('ConversionNoticeBanner', () => {
           onDismiss={() => {}}
         />,
       );
-      // The name is the line's own; the sentence opens with its pill.
-      expect(accessibleText(screen.getByTestId('conversion-notice-text'))).toBe('annex / 2 is now shown as 2a.');
+      // RS-PROSE fix 7: the words read capitalised, as the plain sentence
+      // (changesSentence) writes them; the pill draws the line's own name.
+      const text = screen.getByTestId('conversion-notice-text');
+      expect(accessibleText(text)).toBe('Annex / 2 is now shown as 2a.');
+      expect(text.querySelector('.sh-ppill [aria-hidden="true"]')!.textContent).toMatch(/^annex: 2/);
     });
 
     it('draws the names of each detail, and a clause without parts as its words', async () => {
