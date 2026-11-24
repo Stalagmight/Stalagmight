@@ -37,6 +37,7 @@ import {
   type PillDot,
 } from '../../theme/pillColors';
 import { SHOT_ARROW } from '../../utils/formatters';
+import { lineDisplayName } from '../../utils/stationIdentity';
 import i18n from '../../i18n';
 
 /** The colour of line `lineId` (any CSS colour), or null when there is no such line. */
@@ -55,7 +56,11 @@ export function useLineColorOf(): (lineId: number | null | undefined) => string 
   );
 }
 
-/** The name of line `lineId`, or null when there is no such line. */
+/**
+ * The display name of line `lineId` (`lineDisplayName`: bidi and control
+ * characters dropped, "Unnamed line" for none, RS-PROSE fix 6), or null when
+ * there is no such line.
+ */
 export function useLineNameOf(): (lineId: number | null | undefined) => string | null {
   const { projectLines, dataLines } = useProjectStore(
     useShallow((s) => ({ projectLines: s.project?.lines, dataLines: s.surveyData?.lines })),
@@ -63,9 +68,8 @@ export function useLineNameOf(): (lineId: number | null | undefined) => string |
   return useCallback(
     (lineId) => {
       if (lineId === null || lineId === undefined) return null;
-      return (
-        projectLines?.find((l) => l.id === lineId)?.name ?? dataLines?.find((l) => l.id === lineId)?.name ?? null
-      );
+      const line = projectLines?.find((l) => l.id === lineId) ?? dataLines?.find((l) => l.id === lineId);
+      return line === undefined ? null : lineDisplayName(line.name);
     },
     [projectLines, dataLines],
   );
