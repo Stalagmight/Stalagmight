@@ -18,7 +18,8 @@
  * index.css): it is an inline box with no vertical padding, every part inside
  * has a zero line-height or a zero-height margin box, and the superscript is
  * lifted by a relative offset. It wraps across lines with each fragment
- * tinted on its own (`box-decoration-break: clone`).
+ * tinted on its own (`box-decoration-break: clone`; a two-tone shot's
+ * segments tint each line's fragment once laid out, `useSegmentTints`).
  *
  * The pill's drawing is `aria-hidden` and not selectable; beside it an
  * `sr-only` span carries the part's plain words (`Side / 0`), so a screen
@@ -30,7 +31,7 @@
  * - `<ProseParts parts>`: a parts list as the backend sends it;
  * - `<BackendProse text parts>`: a backend text with its optional parts.
  */
-import { Fragment, useMemo, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, useMemo, useRef, type CSSProperties, type ReactNode } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { displayStationName, SHOT_ARROW } from '../../utils/formatters';
@@ -41,13 +42,16 @@ import type { ProseShotEnd } from '../../types/ipc/ProseShotEnd';
 import {
   LoopGlyph,
   markOf,
+  markOver,
   prosePillStyle,
   shotToneOf,
   useResolvePill,
   type HomeMark,
   type ResolvedPill,
+  type SegmentKey,
   type ShotTone,
 } from './LinePill';
+import { useSegmentTints } from './useSegmentTints';
 
 type NamePart = Exclude<ProsePart, { kind: 'text' }>;
 
@@ -133,8 +137,10 @@ function marksOf(
   homeLine: number | undefined,
   loopEnd: boolean | undefined,
   stationId?: number | undefined,
+  /** A two-tone segment's colours and blends, for its end's dot (RS-BLEND). */
+  over?: readonly string[] | undefined,
 ): ReactNode {
-  const mark = markOf(pill, homeLine);
+  const mark = over ? markOver(pill, homeLine, over) : markOf(pill, homeLine);
   if (!mark && !loopEnd && stationId === undefined) return null;
   return (
     <>
@@ -172,13 +178,13 @@ function Drawing({
   pill,
   context,
   tone,
-  resolve,
+  tints,
 }: {
   part: NamePart;
   pill: ResolvedPill;
   context: string | undefined;
   tone: ShotTone | null;
-  resolve: (lineId: number | null | undefined) => ResolvedPill;
+  tints: Partial<Record<SegmentKey, CSSProperties>> | null;
 }) {
   const dot = part.kind !== 'line' && context ? null : DOT;
   if (part.kind === 'station') {
@@ -204,27 +210,29 @@ function Drawing({
     }
     // Two tints (RS-OWNERSHIP): the half holding an end of another line in
     // that line's tint, split before the arrow; the head stays the shot's.
-    const endPill = (owner: number | undefined) => (owner !== undefined && owner !== part.line_id ? resolve(owner) : pill);
+    // The tints blend at each seam into one (RS-BLEND): the space before the
+    // arrow is inside the to half, so no gap opens between them.
     return (
       <>
         {tone.head && (
-          <span className="sh-ppill-seg" style={tone.head} data-prose-seg="head">
+          <span className="sh-ppill-seg" style={{ ...tone.head, ...tints?.head }} data-prose-seg="head">
             {context ? <Head context={context} /> : DOT}
           </span>
         )}
-        <span className="sh-ppill-seg" style={tone.from} data-prose-seg="from">
+        <span className="sh-ppill-seg" style={{ ...tone.from, ...tints?.from }} data-prose-seg="from">
           {!tone.head && <Head context={context} />}
           <Glued
             before={tone.head ? null : dot}
             text={part.from.name}
-            after={marksOf(endPill(part.from.home_line), endDot(part.from), part.from.loop_end)}
+            after={marksOf(pill, endDot(part.from), part.from.loop_end, undefined, tone.fromOn)}
           />
-        </span>{' '}
-        <span className="sh-ppill-seg" style={tone.to} data-prose-seg="to">
+        </span>
+        <span className="sh-ppill-seg" style={{ ...tone.to, ...tints?.to }} data-prose-seg="to">
+          {' '}
           <Glued
             before={`${SHOT_ARROW} `}
             text={part.to.name}
-            after={marksOf(endPill(part.to.home_line), endDot(part.to), part.to.loop_end)}
+            after={marksOf(pill, endDot(part.to), part.to.loop_end, undefined, tone.toOn)}
           />
         </span>
       </>
@@ -244,13 +252,17 @@ function Drawing({
  */
 export function ProsePill({ part: given, testId }: { part: NamePart; testId?: string | undefined }) {
   const level = useUIStore((s) => s.syntacticLevel);
-  const resolve = useResolvePill('prose');
   // A part that lacks a field the pill draws (a hand-built or decoded part
   // gone wrong) renders its plain words, never a crash (RS-PROSE fix 1).
   const checked = partOf(given);
   const words = withoutControls(typeof given?.text === 'string' ? given.text : '');
   if (!syntacticLevelAtLeast(level, 'full') || checked === null || checked.kind === 'text') return <>{words}</>;
-  const part = shown(checked);
+  return <DrawnPill part={shown(checked)} testId={testId} />;
+}
+
+/** A {@link ProsePill} that draws its part (already checked and sanitised). */
+function DrawnPill({ part, testId }: { part: NamePart; testId: string | undefined }) {
+  const resolve = useResolvePill('prose');
   const owner = part.kind === 'station' && part.home_line !== undefined && part.home_line !== part.line_id ? part.home_line : null;
   const pill = resolve(owner ?? part.line_id ?? null);
   // The words drawn are the part's as it was worded: a history row keeps the
@@ -261,10 +273,15 @@ export function ProsePill({ part: given, testId }: { part: NamePart; testId?: st
   const ownerName = owner === null ? null : context ?? (pill.lineNameOf?.(owner) || null);
   const tone =
     part.kind === 'shot'
-      ? shotToneOf(resolve, part.line_id ?? null, part.from.home_line, part.to.home_line, (p) =>
-          prosePillStyle(p.colors, p.theme),
-        )
+      ? shotToneOf(resolve, part.line_id ?? null, part.from.home_line, part.to.home_line, 'prose', {
+          head: context ? `${context}:` : '',
+          from: part.from.name,
+          to: `${SHOT_ARROW} ${part.to.name}`,
+        })
       : null;
+  // Each line's fragment of a two-tone shot tinted on its own (RS-BLEND).
+  const vis = useRef<HTMLSpanElement>(null);
+  const tints = useSegmentTints(vis, tone);
   return (
     <span
       className="sh-ppill"
@@ -274,8 +291,8 @@ export function ProsePill({ part: given, testId }: { part: NamePart; testId?: st
       data-testid={testId}
       title={ownerName !== null ? i18n.t('identity.homeMarkTitle', { line: ownerName }) : undefined}
     >
-      <span className={tone ? 'sh-ppill-vis sh-ppill-vis--split' : 'sh-ppill-vis'} aria-hidden="true">
-        <Drawing part={part} pill={pill} context={context} tone={tone} resolve={resolve} />
+      <span ref={vis} className={tone ? 'sh-ppill-vis sh-ppill-vis--split' : 'sh-ppill-vis'} aria-hidden="true">
+        <Drawing part={part} pill={pill} context={context} tone={tone} tints={tints} />
       </span>
       <span className="sr-only">{withoutControls(part.text)}</span>
     </span>

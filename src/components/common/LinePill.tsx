@@ -29,6 +29,7 @@ import {
   missingPillColorsOf,
   pillColorsOf,
   pillMarkOf,
+  pillMarkOver,
   pillThemeOf,
   prosePillColorsOf,
   proseTintOf,
@@ -37,6 +38,7 @@ import {
   type PillDot,
 } from '../../theme/pillColors';
 import { SHOT_ARROW } from '../../utils/formatters';
+import { blendBackdrops, linkSegmentStyle, proseSegmentStyle } from '../../theme/pillBlend';
 import { lineDisplayName } from '../../utils/stationIdentity';
 import i18n from '../../i18n';
 
@@ -138,8 +140,9 @@ export function useResolvePill(variant: 'link' | 'prose' = 'link'): (lineId: num
 }
 
 /**
- * The styles of a two-tone shot pill's segments (RS-OWNERSHIP), or null for
- * a one-colour shot (neither end belongs to another line).
+ * The styles of a two-tone shot pill's segments (RS-OWNERSHIP), blended at
+ * each seam (RS-BLEND, `theme/pillBlend.ts`), or null for a one-colour shot
+ * (neither end belongs to another line).
  */
 export interface ShotTone {
   /** The leading dot and the context, in the shot's colour, on their own:
@@ -149,28 +152,85 @@ export interface ShotTone {
   from: CSSProperties;
   /** The to end's half, from the arrow on: its owner's colour, or the shot's. */
   to: CSSProperties;
+  /** What the from end's dot can sit on (its half's colours and blends). */
+  fromOn: string[];
+  /** What the to end's dot can sit on. */
+  toOn: string[];
+  /** The segments in order, with their colours: a prose pill tints each
+   *  line's fragment of them once laid out (`useSegmentTints`). */
+  segments: Array<{ key: SegmentKey; colors: PillColors }>;
+  /** The panel the pill sits on (a prose tint is an overlay on it). */
+  panel: string;
 }
+
+/** A two-tone shot pill's segments: the head (when the from half is another line's), the from half, the to half. */
+export type SegmentKey = 'head' | 'from' | 'to';
+
+/** The words of a two-tone shot's segments, for a prose tint's seam width. */
+export interface ShotWords {
+  head: string;
+  from: string;
+  to: string;
+}
+
+/** About how wide `words` are in em (a pill's average glyph, its padding and a dot). */
+const widthEmOf = (words: string) => words.length * 0.56 + 0.9;
 
 /**
  * {@link ShotTone} of a shot of line `lineId` whose ends belong to
- * `fromOwner` / `toOwner` (null: the shot's own line), each segment styled by
- * `style` from its line's resolved pill.
+ * `fromOwner` / `toOwner` (null: the shot's own line), each segment's
+ * colours from `resolve` (a link or a prose pill's) and blended with its
+ * neighbours: a link pill's fill and border gradients, a prose pill's tint
+ * (`words` sizes its seam fade).
  */
 export function shotToneOf(
   resolve: (lineId: number | null | undefined) => ResolvedPill,
   lineId: number | null,
   fromOwner: number | null | undefined,
   toOwner: number | null | undefined,
-  style: (pill: ResolvedPill) => CSSProperties,
+  variant: 'link' | 'prose' = 'link',
+  words?: ShotWords,
 ): ShotTone | null {
   const foreign = (owner: number | null | undefined) => owner !== null && owner !== undefined && owner !== lineId;
   if (!foreign(fromOwner) && !foreign(toOwner)) return null;
-  const own = style(resolve(lineId));
+  const shot = resolve(lineId);
+  const lines = [
+    ...(foreign(fromOwner) ? [{ key: 'head' as const, pill: shot }] : []),
+    { key: 'from' as const, pill: foreign(fromOwner) ? resolve(fromOwner) : shot },
+    { key: 'to' as const, pill: foreign(toOwner) ? resolve(toOwner) : shot },
+  ];
+  const panel = pillThemeOf(shot.theme).panel;
+  const styles: Partial<Record<SegmentKey, CSSProperties>> = {};
+  const on: Partial<Record<'from' | 'to', string[]>> = {};
+  lines.forEach((seg, i) => {
+    const near = { left: lines[i - 1]?.pill.colors ?? null, right: lines[i + 1]?.pill.colors ?? null };
+    styles[seg.key] =
+      variant === 'link'
+        ? linkSegmentStyle(seg.pill.colors, near, seg.pill.theme)
+        : proseSegmentStyle(seg.pill.colors, near, seg.pill.theme, widthEmOf(words?.[seg.key] ?? ''));
+    if (seg.key !== 'head') {
+      on[seg.key] = blendBackdrops(seg.pill.colors, near, variant === 'prose' ? panel : undefined);
+    }
+  });
   return {
-    head: foreign(fromOwner) ? own : null,
-    from: foreign(fromOwner) ? style(resolve(fromOwner)) : own,
-    to: foreign(toOwner) ? style(resolve(toOwner)) : own,
+    head: styles.head ?? null,
+    from: styles.from!,
+    to: styles.to!,
+    fromOn: on.from ?? [],
+    toOn: on.to ?? [],
+    segments: lines.map((seg) => ({ key: seg.key, colors: seg.pill.colors })),
+    panel,
   };
+}
+
+/**
+ * The home-line mark of line `homeLineId` drawn over `backdrops` (a
+ * two-tone segment's colours and blends, {@link ShotTone}), or null for none.
+ */
+export function markOver(pill: ResolvedPill, homeLineId: number | null | undefined, backdrops: readonly string[]): HomeMark | null {
+  if (homeLineId === null || homeLineId === undefined) return null;
+  const line = pill.lineNameOf?.(homeLineId) ?? undefined;
+  return { ...pillMarkOver(pill.colorOf(homeLineId), backdrops, pill.theme), line };
 }
 
 /** A home-line mark: its dot, and the name of the line it stands for. */

@@ -16,7 +16,7 @@ import { useUIStore } from '../../store/uiStore';
 import type { BlobEntity } from '../../theme/syntacticPalette';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import type { StationRef } from '../../types/project';
-import { markOf, PillParts, pillStyle, shotToneOf, useResolvePill } from './LinePill';
+import { markOf, markOver, PillParts, pillStyle, shotToneOf, useResolvePill } from './LinePill';
 import type { ShotEndMarks } from './shotEndMarks';
 
 export interface EntityBlobProps {
@@ -88,12 +88,11 @@ export function EntityBlob({
   }
 
   const tone =
-    entity === 'shot' && shotEnds
-      ? shotToneOf(resolve, lineId, shotEnds.fromOwnerLineId, shotEnds.toOwnerLineId, (p) => pillStyle(p.colors))
-      : null;
-  // A foreign end's dot sits in its own half, so it is checked against that half's colours.
-  const endPill = (end: number | null | undefined) =>
-    tone && end !== null && end !== undefined && end !== lineId ? resolve(end) : pill;
+    entity === 'shot' && shotEnds ? shotToneOf(resolve, lineId, shotEnds.fromOwnerLineId, shotEnds.toOwnerLineId, 'link') : null;
+  // A foreign end's dot sits in its own half, near a blended seam: it is
+  // checked against that half's colours and the blends (RS-BLEND).
+  const endMark = (home: number | null | undefined, on: readonly string[] | undefined) =>
+    tone && on ? markOver(pill, home, on) : markOf(pill, home);
   return (
     <span
       className={`sh-lpill${tone ? ' sh-lpill--split' : ''} ${className}`}
@@ -112,8 +111,8 @@ export function EntityBlob({
             ? {
                 from: shotEnds.from,
                 to: shotEnds.to,
-                fromMark: markOf(endPill(shotEnds.fromOwnerLineId), shotEnds.fromHomeLineId),
-                toMark: markOf(endPill(shotEnds.toOwnerLineId), shotEnds.toHomeLineId),
+                fromMark: endMark(shotEnds.fromHomeLineId, tone?.fromOn),
+                toMark: endMark(shotEnds.toHomeLineId, tone?.toOn),
                 fromLoopEnd: shotEnds.fromLoopEnd,
                 toLoopEnd: shotEnds.toLoopEnd,
               }

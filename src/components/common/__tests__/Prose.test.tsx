@@ -132,14 +132,45 @@ describe('prose pills (RS-PROSE)', () => {
     const seg = (name: string) => shotPill.querySelector(`[data-prose-seg="${name}"]`) as HTMLElement;
     expect(seg('head').textContent).toBe('Side: ');
     expect(seg('from').textContent).toBe('12');
-    expect(seg('to').textContent).toBe('→ 1');
-    const tint = (el: HTMLElement) => el.style.getPropertyValue('--pill-tint');
+    // RS-BLEND: the space before the arrow is inside the to half, so the
+    // tints meet with no gap; each half's tint blends toward its neighbour.
+    expect(seg('to').textContent).toBe(' → 1');
+    const tint = (el: HTMLElement) => el.style.getPropertyValue('--seg-tint');
+    for (const name of ['head', 'from', 'to']) expect(tint(seg(name))).toMatch(/^url\("data:image\/svg\+xml,/);
     expect(tint(seg('from'))).not.toBe(tint(seg('to')));
-    expect(tint(seg('head'))).toBe(tint(seg('to')));
     expect(seg('from')).toContainElement(shotPill.querySelector('[data-prose-mark="home"]') as HTMLElement);
     expect(shotPill.querySelector('[data-prose-sid]')).toBeNull();
     // Colours come from the line (custom properties of pillColors.ts).
     expect((foreign as HTMLElement).style.getPropertyValue('--pill-dot')).not.toBe('');
+  });
+
+  it('tints a two-tone shot per line once laid out, and a moving layout never loops the update (RS-BLEND)', () => {
+    // Every measure sees another box, as while a panel slides open: a hook
+    // that measured on every render would never settle (React #185).
+    let calls = 0;
+    const rects = vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(function (this: HTMLElement) {
+      calls += 1;
+      const width = 20 + (calls % 2) * 10;
+      const rect = { top: 0, bottom: 16, left: 0, right: width, width, height: 16, x: 0, y: 0, toJSON: () => ({}) };
+      return Object.assign([rect], { item: (i: number) => (i === 0 ? rect : null) }) as unknown as DOMRectList;
+    });
+    try {
+      const { rerender } = render(
+        <p data-testid="p">
+          <Prose text={sentence(true)} />
+        </p>,
+      );
+      rerender(
+        <p data-testid="p">
+          <Prose text={sentence(true)} />
+        </p>,
+      );
+      const seg = screen.getByTestId('p').querySelector('[data-prose-seg="from"]') as HTMLElement;
+      // Laid out: one layer per line, placed over its fragment.
+      expect(seg.style.getPropertyValue('--seg-tint-size')).toBe('100.0000% 100%');
+    } finally {
+      rects.mockRestore();
+    }
   });
 
   it('is the plain sentence below Full', () => {

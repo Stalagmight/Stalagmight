@@ -320,6 +320,14 @@ export function prosePillColors(lineColor: string | null | undefined, theme: Pil
  * fully transparent (what the radial tint fades to, so no grey fringe).
  */
 export function proseTintOf(target: string, panel: string): { tint: string; clear: string } {
+  const o = proseOverlayOf(target, panel);
+  if (o.alpha === 0) return { tint: 'rgba(0, 0, 0, 0)', clear: 'rgba(0, 0, 0, 0)' };
+  const rgb = `${o.rgb[0]}, ${o.rgb[1]}, ${o.rgb[2]}`;
+  return { tint: `rgba(${rgb}, ${o.alpha.toFixed(4)})`, clear: `rgba(${rgb}, 0)` };
+}
+
+/** {@link proseTintOf} as numbers: the overlay's 8-bit channels and its alpha (0 for none). */
+export function proseOverlayOf(target: string, panel: string): { rgb: [number, number, number]; alpha: number } {
   const t = rgbOfHex(target.toLowerCase());
   const p = rgbOfHex(panel.toLowerCase());
   let alpha = 0;
@@ -328,11 +336,10 @@ export function proseTintOf(target: string, panel: string): { tint: string; clea
     if (d > 0) alpha = Math.max(alpha, d / (1 - p[i]!));
     else if (d < 0) alpha = Math.max(alpha, -d / p[i]!);
   }
-  if (alpha === 0) return { tint: 'rgba(0, 0, 0, 0)', clear: 'rgba(0, 0, 0, 0)' };
+  if (alpha === 0) return { rgb: [0, 0, 0], alpha: 0 };
   alpha = Math.min(1, alpha);
   const channel = (i: number) => Math.round(clamp(p[i]! + (t[i]! - p[i]!) / alpha, 0, 1) * 255);
-  const rgb = `${channel(0)}, ${channel(1)}, ${channel(2)}`;
-  return { tint: `rgba(${rgb}, ${alpha.toFixed(4)})`, clear: `rgba(${rgb}, 0)` };
+  return { rgb: [channel(0), channel(1), channel(2)], alpha };
 }
 
 const proseCache = new Map<string, PillColors>();
@@ -398,6 +405,17 @@ const missingCache = new Map<string, MissingPillColors>();
 export function panelDotOf(lineColor: string | null | undefined, themeName: string): PillDot {
   const theme = pillThemeOf(themeName);
   return pillDot(lineHex(lineColor, theme.panel) ?? theme.muted, [theme.panel], theme);
+}
+
+/**
+ * A dot in `markColor` drawn over `backgrounds` (a two-tone pill's own fill,
+ * its hover fill and the blends toward its neighbours, RS-BLEND), with the
+ * ring {@link pillDot} gives it when the colour alone does not reach 3:1 on
+ * every one of them.
+ */
+export function pillMarkOver(markColor: string | null | undefined, backgrounds: readonly string[], themeName: string): PillDot {
+  const theme = pillThemeOf(themeName);
+  return pillDot(lineHex(markColor, theme.panel) ?? theme.muted, backgrounds, theme);
 }
 
 /** The second dot (a station's home line) on a pill already coloured `on`. */
