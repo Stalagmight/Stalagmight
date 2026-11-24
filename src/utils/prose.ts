@@ -117,11 +117,20 @@ export function partOf(value: unknown): ProsePart | null {
   }
 }
 
+/**
+ * One of this page's tokens as a part: the part when it has a part's full
+ * shape, else its words alone (a `text` part) when it has words, so a
+ * refused name still says what it said (delta fix 2); null when it is no
+ * token of this page's, or says nothing.
+ */
 function decode(payload: string): ProsePart | null {
   const own = ownPayload(payload);
   if (own === null) return null;
   try {
-    return partOf(JSON.parse(decodeURIComponent(own)));
+    const value: unknown = JSON.parse(decodeURIComponent(own));
+    const part = partOf(value);
+    if (part !== null) return part;
+    return isObject(value) && isString(value.text) ? { kind: 'text', text: value.text } : null;
   } catch {
     return null;
   }
@@ -140,7 +149,8 @@ export function proseParts(text: string): ProsePart[] {
     words += text.slice(last, match.index);
     last = match.index + match[0].length;
     const part = decode(match[1] ?? '');
-    // Not one of this page's tokens, or not a part's shape: its words, never a pill.
+    // Not one of this page's tokens: its raw payload as words (the controls
+    // go below), never a pill. One of ours that says nothing: nothing.
     if (part === null) {
       words += ownPayload(match[1] ?? '') === null ? (match[1] ?? '') : '';
       continue;

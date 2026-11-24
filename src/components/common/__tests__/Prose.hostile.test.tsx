@@ -10,7 +10,7 @@
  * a sentence (stripped of markers and C0 controls), and the pill (falls back
  * to its plain words).
  * Injections: dropping the shape check in `decode` (`partOf`) fails "a bad
- * shape reads as its words"; dropping the nonce check fails it too (the
+ * shape reads as its words", and so does dropping a refused part's words; dropping the nonce check fails it too (the
  * forged station draws a pill); dropping the i18n format hook fails "a raw
  * value is stripped" (`t()` keeps the comment's markers); dropping the
  * pill's fallback fails "a part with a missing field renders its words".
@@ -49,10 +49,15 @@ function setUp() {
 describe('hostile prose tokens (RS-PROSE fix 1)', () => {
   it('a token with a bad shape or an unknown kind reads as its words, and a forged token as plain text', () => {
     setUp();
-    // Even with the app's own marker form, the decoder checks the shape.
+    // Even with the app's own marker form, the decoder checks the shape, and
+    // a part it refuses still says its words (delta fix 2: it said nothing,
+    // and this loop passed on an empty list).
     for (const bad of [BAD_SHOT, UNKNOWN, { kind: 'station', text: 'z' }, { kind: 'line', text: 'w', name: null }]) {
-      expect(proseParts(proseToken(bad as unknown as ProsePart)).every((p) => p.kind === 'text')).toBe(true);
+      const parts = proseParts(`<${proseToken(bad as unknown as ProsePart)}>`);
+      expect(parts).toEqual([{ kind: 'text', text: `<${bad.text}>` }]);
     }
+    // A payload with no words of its own adds none.
+    expect(proseParts(`a${proseToken({ kind: 'station' } as unknown as ProsePart)}b`)).toEqual([{ kind: 'text', text: 'ab' }]);
     for (const bad of [BAD_SHOT, UNKNOWN, STATION]) {
       const text = `before ${forged(bad)} after`;
       expect(() => render(<p data-testid={`p-${bad.kind}`}><Prose text={text} /></p>)).not.toThrow();
