@@ -6,6 +6,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { Button } from '../common/Button';
 import { ChevronLeftIcon, CenterMapIcon } from '../common/icons';
+import { BackendProse } from '../common/Prose';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useActiveStations } from '../../hooks/useActiveStations';
@@ -870,9 +871,10 @@ export function WarningResolution({
 
       {/* The warning + current values */}
       <div className="px-1 mb-3">
-        {/* The backend names the shot (`Shot Main Line: 4 → 5 ...`). */}
+        {/* The backend names the shot (`Shot Main Line: 4 → 5 ...`), and each
+            name it says is a prose pill (RS-PROSE, `messageParts`). */}
         <div className="text-sm text-text-primary" data-testid="warning-resolution-message">
-          {warning.message}
+          <BackendProse text={warning.message} parts={warning.messageParts} />
         </div>
         {shot && (warning.code === 'AZIMUTH_DEVIATION' || warning.code === 'INVALID_AZIMUTH') && (
           <div className="text-xs text-text-secondary mt-1">

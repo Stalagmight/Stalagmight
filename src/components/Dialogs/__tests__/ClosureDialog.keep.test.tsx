@@ -27,6 +27,8 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import ClosureDialog, { defaultClosureChoice } from '../ClosureDialog';
+import { accessibleText } from '../../../test/accessibleText';
+import { pillDrawings, pillKinds } from './proseSentence';
 
 const MAIN = 1;
 const SIDE = 2;
@@ -113,6 +115,21 @@ describe('Create Loop Closure: both ends show one station (RS 5.2)', () => {
     );
     // A loop end repeats no name (RS-FX5): no collision rows.
     expect(screen.queryByTestId('closure-collisions')).toBeNull();
+  });
+
+  // RS-PROSE: the outcome draws the hidden end and the lines as prose
+  // pills and reads as plain text wrote it. Injection: render the plain
+  // string fails the pill lists.
+  it('draws the hidden end and the lines that show the kept station as pills', async () => {
+    open(naming());
+    const hidden = await screen.findByTestId('closure-hidden');
+    expect(accessibleText(hidden)).toBe(
+      'Side / 17 and its comment are hidden: its point stays on the map, without a label. Remove Closure brings them back.',
+    );
+    expect(pillDrawings(hidden)).toEqual(['Side: 17#17']);
+    const renamed = screen.getByTestId('closure-renamed-lines');
+    expect(accessibleText(renamed)).toBe('Side will show the kept station there.');
+    expect(pillKinds(renamed)).toEqual(['line']);
   });
 
   it('creates keeping the chosen end, with no renames', async () => {

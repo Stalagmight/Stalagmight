@@ -166,9 +166,15 @@ demand).
 stack whose last element is the next step:
 
 ```text
-{"v":1,"t":"2026-11-20T12:59:00.000000000Z","k":"update_shot","label":"...",
+{"v":3,"t":"2026-11-20T12:59:00.000000000Z","k":"update_shot","label":"...","label_parts":[...],
  "refs":{...},"preview":{...},"ops":{...}}
 ```
+
+`label_parts` (history format version 3, RS-PROSE) carries the label's
+words as prose parts, so the undo and redo rows draw the stations, shots and
+lines a label names as prose pills (`UndoHistoryItem.descriptionParts`); the
+row's tooltip and the plain `label` stay as they were. A version 2 entry has
+none and reads plain. See [survey-model.md](survey-model.md#history-entries-plan-83).
 
 `encode_entry` writes it (already in the format's canonical form;
 `RawJson::parse` leaves it unchanged); `decode_entry` reads it as untrusted

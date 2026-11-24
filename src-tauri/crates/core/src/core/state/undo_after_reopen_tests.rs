@@ -480,12 +480,22 @@ fn open(path: &Path) -> AppState {
     state
 }
 
-/// The entry text with its version swapped for `version`.
+/// The entry text with its version swapped for `version`. An entry is
+/// version 2 without label parts and version 3 with them (RS-PROSE fix 4).
 fn with_version(entry: &RawJson, version: u32) -> RawJson {
-    let current = format!(
-        "{{\"v\":{},",
-        crate::models::survey::changeset::HISTORY_FORMAT_VERSION
+    use crate::models::survey::changeset::{HISTORY_FORMAT_VERSION, OLDEST_HISTORY_FORMAT_VERSION};
+    let current = [OLDEST_HISTORY_FORMAT_VERSION, HISTORY_FORMAT_VERSION]
+        .map(|v| format!("{{\"v\":{v},"))
+        .into_iter()
+        .find(|v| entry.as_str().starts_with(v.as_str()));
+    // Fail loudly: an entry of neither version is a broken setup, and an
+    // empty prefix would insert the version at the start (delta fix 6).
+    assert!(
+        current.is_some(),
+        "setup: the entry starts with version 2 or 3: {}",
+        entry.as_str()
     );
+    let current = current.unwrap();
     let text = entry
         .as_str()
         .replacen(&current, &format!("{{\"v\":{version},"), 1);
@@ -506,6 +516,42 @@ fn a_readable_history_opens_without_the_banner() {
     assert!(!state.history_discarded_from_earlier_version());
     assert_eq!(state.get_undo_stack().len(), 1);
     assert_eq!(state.get_redo_stack().len(), 1);
+}
+
+/// A version 2 entry (no label parts, RS-PROSE) still reads: no banner, its
+/// label plain; the version 3 entries beside it keep their parts.
+#[test]
+fn a_version_2_entry_still_opens_with_a_plain_label() {
+    let dir = TempDir::new().unwrap();
+    let (path, _) = file_with_history(&dir);
+    let before = open(&path).get_redo_stack();
+    assert_eq!(before[0].description, "Create shot in line \"Main\"");
+    assert!(
+        before[0].description_parts.is_some(),
+        "a version 3 entry names its line"
+    );
+    rewrite_history(&path, |history| {
+        let redo = history.redo.pop().unwrap();
+        // Version 2's layout: the same entry without `label_parts`.
+        let text = redo.as_str();
+        let start = text.find(",\"label_parts\":").unwrap();
+        let end = start
+            + ["refs", "preview", "ops"]
+                .iter()
+                .filter_map(|key| text[start..].find(&format!(",\"{key}\":")))
+                .min()
+                .unwrap();
+        let v2 = format!("{}{}", &text[..start], &text[end..]);
+        history
+            .redo
+            .push(with_version(&RawJson::parse(&v2).unwrap(), 2));
+    });
+    let state = open(&path);
+    assert!(!state.history_discarded(), "a version 2 entry reads");
+    let redo = state.get_redo_stack();
+    assert_eq!(redo[0].description, before[0].description);
+    assert_eq!(redo[0].description_parts, None, "its label reads plain");
+    assert!(state.redo().success, "and it steps");
 }
 
 /// One entry of an earlier history format (the redo entry here) drops BOTH
@@ -556,13 +602,8 @@ fn an_unreadable_entry_drops_the_whole_history_with_the_banner() {
                     RawJson::parse(&text).unwrap()
                 }
                 _ => {
-                    let current = format!(
-                        "{{\"v\":{},",
-                        crate::models::survey::changeset::HISTORY_FORMAT_VERSION
-                    );
-                    let text = undo
-                        .as_str()
-                        .replacen(&current, &format!("{current}\"zz\":0,"), 1);
+                    // The entry's own version (2 without label parts, RS-PROSE fix 4).
+                    let text = undo.as_str().replacen(",\"t\":", ",\"zz\":0,\"t\":", 1);
                     RawJson::parse(&text).unwrap()
                 }
             };

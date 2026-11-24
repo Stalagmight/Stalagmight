@@ -154,15 +154,11 @@ pub(super) fn create_free_line(
     Ok((id, warnings))
 }
 
-/// A shot as the user reads it after the edit: `Line: from -> to`, each
-/// station by the name that line shows it by (I-3), a dotted slot or a loop
-/// end qualified ([`Project::shot_text`], RS-FX5).
-fn shot_label(project: &Project, line: LineId, index: usize) -> String {
-    project.shot_text(line, index)
-}
-
 /// Every shot of `line` checked against the project's thresholds, labelled
-/// as the user reads it now.
+/// as the user reads it after the edit: `Line: from -> to`, each station by
+/// the name that line shows it by (I-3), a dotted slot or a loop end
+/// qualified ([`Project::shot_text`], RS-FX5), the shot as its part
+/// ([`Project::shot_marked`], RS-PROSE).
 fn line_warnings(project: &Project, line: LineId) -> Vec<ValidationWarning> {
     let Some(l) = project.line(line) else {
         return Vec::new();
@@ -172,14 +168,16 @@ fn line_warnings(project: &Project, line: LineId) -> Vec<ValidationWarning> {
         .enumerate()
         .flat_map(|(i, shot)| {
             Validator::validate_shot(&shot.to_shot_data(), &project.settings.validation, || {
-                shot_label(project, line, i)
+                project.shot_marked(line, i)
             })
         })
         .collect()
 }
 
 /// The closures on the project, each named by its ends as the user reads
-/// them now (`Line / station`), for warnings about closures an edit removes.
+/// them now (`Line / station`), for warnings about closures an edit removes;
+/// marked ([`Project::station_marked`], RS-PROSE), so a warning built from
+/// them splits into its message and its parts.
 fn closure_labels(project: &Project) -> BTreeMap<ClosureId, (String, String)> {
     project
         .closures
@@ -188,8 +186,8 @@ fn closure_labels(project: &Project) -> BTreeMap<ClosureId, (String, String)> {
             (
                 c.id,
                 (
-                    project.station_text(c.a, c.a_via),
-                    project.station_text(c.b, c.b_via),
+                    project.station_marked(c.a, c.a_via),
+                    project.station_marked(c.b, c.b_via),
                 ),
             )
         })
@@ -212,14 +210,14 @@ fn swept_closure_warnings(
                 .get(&closure.id)
                 .cloned()
                 .unwrap_or_else(|| ("a station".to_string(), "a station".to_string()));
-            ValidationWarning {
-                code: CLOSURE_REMOVED_MERGED_ENDS.to_string(),
-                message: format!(
+            ValidationWarning::marked_before_edit(
+                CLOSURE_REMOVED_MERGED_ENDS,
+                &format!(
                     "Removed loop closure {a} to {b}: another loop closure became a merge, \
                      which made its two stations one point."
                 ),
-                severity: WarningSeverity::Warning,
-            }
+                WarningSeverity::Warning,
+            )
         })
         .collect()
 }

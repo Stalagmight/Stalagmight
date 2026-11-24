@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage, invokeIpc } from '../../utils/ipc';
@@ -11,6 +12,8 @@ import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { listNames } from '../../utils/listNames';
 import { EntityBlob } from '../common/EntityBlob';
+import { Prose } from '../common/Prose';
+import { proseToPlain } from '../../utils/prose';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
@@ -25,8 +28,8 @@ import {
   recordIdentity,
   StickyDialogFooter,
   useCollisionAnswers,
-  useIdentityLabel,
 } from './keptStationParts';
+import { useKeptProse, type KeptProse } from './keptStationProse';
 
 /** A station's name as a detach shows it: after the chosen answers. */
 type NameOf = (id: number, fallback: string) => string;
@@ -246,6 +249,7 @@ export default function UnmergeStationsDialog() {
   const { closeDialog, dialogData } = useUIStore();
   const { stations, unmergeStations, unmergeStationPair } = useProjectStore();
   const labels = useIdentityLabels();
+  const prose = useKeptProse();
   const editingBlocked = useEditingBlocked();
 
   const stationRef = dialogData.stationRef as StationRef | undefined;
@@ -373,20 +377,34 @@ export default function UnmergeStationsDialog() {
   // a choice to show at all.
   const waiting = slots.length === 2 && !previewsSettled;
   const target = same ? same.off : selected;
+  // The other lines as prose tokens, for the sentences that name them.
   const otherLines = selected
-    ? slots.filter((ref) => ref.line_id !== selected.line_id).map((ref) => labels.lineName(ref.line_id))
+    ? slots.filter((ref) => ref.line_id !== selected.line_id).map((ref) => prose.line(ref.line_id))
     : [];
-  /** A row's label: the line (a line pill), or for a line that keeps the
-   *  junction the lines that then come off together, as a sentence (V-1). */
-  const rowLabel = (ref: StationRef, clicked: boolean): ReactNode => {
-    const line = labels.lineName(ref.line_id);
-    if (previews.get(ref.line_id)?.kept) {
-      const others = listNames(
-        slots.filter((o) => o.line_id !== ref.line_id).map((o) => labels.lineName(o.line_id)),
-        t,
+  /** A row's sentence, for a line that keeps the junction: the lines that
+   *  then come off together (V-1), as prose tokens; null for another line. */
+  const rowSentence = (ref: StationRef, clicked: boolean): string | null => {
+    if (!previews.get(ref.line_id)?.kept) return null;
+    const others = listNames(
+      slots.filter((o) => o.line_id !== ref.line_id).map((o) => prose.line(o.line_id)),
+      t,
+    );
+    return t(clicked ? 'dialogs.detachLine.togetherClicked' : 'dialogs.detachLine.together', {
+      line: prose.line(ref.line_id),
+      others,
+    });
+  };
+  /** A row's label: the line (a line pill), or its sentence with the lines
+   *  as pills (the radio is named by the plain sentence, see `CollisionRows`). */
+  const rowLabel = (ref: StationRef, clicked: boolean, sentence: string | null): ReactNode => {
+    if (sentence !== null) {
+      return (
+        <span>
+          <Prose text={sentence} />
+        </span>
       );
-      return t(clicked ? 'dialogs.detachLine.togetherClicked' : 'dialogs.detachLine.together', { line, others });
     }
+    const line = labels.lineName(ref.line_id);
     return <EntityBlob entity="line" lineId={ref.line_id}>{clicked ? t('dialogs.detachLine.thisLine', { line }) : line}</EntityBlob>;
   };
 
@@ -479,16 +497,19 @@ export default function UnmergeStationsDialog() {
         ) : (
           <>
             <p className="text-sm text-text-secondary" data-testid="unmerge-stations-lead">
-              {t(waiting ? 'dialogs.detachLine.leadWaiting' : 'dialogs.detachLine.lead', {
-                station: labels.station(stationRef),
-                count: slots.length,
-              })}
+              <Prose
+                text={t(waiting ? 'dialogs.detachLine.leadWaiting' : 'dialogs.detachLine.lead', {
+                  station: prose.station(stationRef),
+                  count: slots.length,
+                })}
+              />
             </p>
 
             {!waiting && (
               <div className="space-y-2 max-h-56 overflow-y-auto border border-border rounded p-2">
                 {slots.map((ref, i) => {
                   const key = stationRefKey(ref);
+                  const sentence = rowSentence(ref, i === 0);
                   return (
                     <label key={key} className="flex items-center gap-2 text-sm p-1 rounded hover:bg-background-50">
                       <input
@@ -504,9 +525,10 @@ export default function UnmergeStationsDialog() {
                           setRestKeep(undefined);
                           setPickFailed(false);
                         }}
+                        {...(sentence !== null ? { 'aria-label': proseToPlain(sentence) } : {})}
                         data-testid={`unmerge-station-option-${ref.line_id}-${ref.station_index}`}
                       />
-                      {rowLabel(ref, i === 0)}
+                      {rowLabel(ref, i === 0, sentence)}
                     </label>
                   );
                 })}
@@ -515,15 +537,19 @@ export default function UnmergeStationsDialog() {
 
             {naming && selected && (
               <p className="text-sm text-text-primary" data-testid="unmerge-stations-naming">
-                {naming.kept
-                  ? t('dialogs.detachLine.keeps', {
-                      line: labels.lineName(selected.line_id),
-                      others: listNames(otherLines, t),
-                      count: otherLines.length,
-                    })
-                  : t(naming.restored ? 'dialogs.detachLine.restores' : 'dialogs.detachLine.copies', {
-                      line: labels.lineName(selected.line_id),
-                    })}
+                <Prose
+                  text={
+                    naming.kept
+                      ? t('dialogs.detachLine.keeps', {
+                          line: prose.line(selected.line_id),
+                          others: listNames(otherLines, t),
+                          count: otherLines.length,
+                        })
+                      : t(naming.restored ? 'dialogs.detachLine.restores' : 'dialogs.detachLine.copies', {
+                          line: prose.line(selected.line_id),
+                        })
+                  }
+                />
               </p>
             )}
 
@@ -565,12 +591,16 @@ export default function UnmergeStationsDialog() {
 
             {!waiting && (
               <p className="text-xs text-text-secondary" data-testid="unmerge-stations-explain">
-                {naming?.kept && selected
-                  ? t('dialogs.detachLine.explainKeeps', {
-                      line: labels.lineName(selected.line_id),
-                      others: listNames(otherLines, t),
-                    })
-                  : t('dialogs.detachLine.explain')}
+                <Prose
+                  text={
+                    naming?.kept && selected
+                      ? t('dialogs.detachLine.explainKeeps', {
+                          line: prose.line(selected.line_id),
+                          others: listNames(otherLines, t),
+                        })
+                      : t('dialogs.detachLine.explain')
+                  }
+                />
               </p>
             )}
           </>
@@ -618,17 +648,19 @@ export default function UnmergeStationsDialog() {
  *  `ComesBack`'s, the collision rows `CollisionRows`' (RS 7). */
 function DetachResults({ preview, nameOf }: { preview: DetachLinePreview; nameOf: NameOf }) {
   const { t } = useTranslation();
-  const labels = useIdentityLabels();
+  const prose = useKeptProse();
   return (
     <div className="text-sm text-text-primary" data-testid="unmerge-stations-results">
       <p className="text-text-secondary">{t('dialogs.detachLine.results')}</p>
       <ul className="mt-1 space-y-1 list-disc pl-5">
         {orderedResults(preview).map((r) => {
           const params = {
-            line: labels.lineName(r.line_id),
+            line: prose.line(r.line_id),
+            // The name the line shows afterwards, said with its Station ID:
+            // text (no slot shows it yet).
             name: displayStationName(nameOf(r.station_id, r.name)),
             id: r.station_id,
-            joined: listNames(r.joined_with.map(labels.lineName), t),
+            joined: listNames(r.joined_with.map((id) => prose.line(id)), t),
           };
           const key = !r.comes_off
             ? 'dialogs.detachLine.resultStays'
@@ -639,7 +671,7 @@ function DetachResults({ preview, nameOf }: { preview: DetachLinePreview; nameOf
                 : 'dialogs.detachLine.resultOffNew';
           return (
             <li key={r.line_id} data-testid={`unmerge-stations-result-${r.line_id}`}>
-              {t(key, params)}
+              <Prose text={t(key, params)} />
             </li>
           );
         })}
@@ -656,8 +688,7 @@ function DetachResults({ preview, nameOf }: { preview: DetachLinePreview; nameOf
  */
 function ShownElsewhere({ preview }: { preview: DetachLinePreview }) {
   const { t } = useTranslation();
-  const labels = useIdentityLabels();
-  const label = useIdentityLabel();
+  const prose = useKeptProse();
   const entries = preview.shown_elsewhere ?? [];
   if (entries.length === 0) return null;
   return (
@@ -669,16 +700,36 @@ function ShownElsewhere({ preview }: { preview: DetachLinePreview }) {
             key={`${e.station.line_id}:${e.station.station_index}`}
             data-testid={`unmerge-stations-shown-elsewhere-${e.station.line_id}-${e.station.station_index}`}
           >
-            {t('dialogs.detachLine.shownElsewhere', {
-              line: labels.lineName(e.station.line_id),
-              before: label(e.before),
-              after: label(e.after),
-            })}
+            <Prose
+              text={t('dialogs.detachLine.shownElsewhere', {
+                line: prose.line(e.station.line_id),
+                before: prose.identity(e.before),
+                after: prose.identity(e.after),
+              })}
+            />
           </li>
         ))}
       </ul>
     </div>
   );
+}
+
+/** A station that stays inside the one that comes back, with the stations
+ *  nested in it, each by its home line (its Station ID said in words), and
+ *  the line to detach again to get it back. */
+function insideText(t: TFunction, prose: KeptProse, record: ArchivedStation, inner: readonly ArchivedStation[]): string {
+  const line = prose.line(record.lines[0]!);
+  const station = prose.identityNoId(recordIdentity(record));
+  if (inner.length === 0) return t('dialogs.detachLine.staysInside', { station, id: record.id, line });
+  return t('dialogs.detachLine.staysInsideWith', {
+    station,
+    id: record.id,
+    inner: listNames(
+      inner.map((r) => t('dialogs.detachLine.insideStation', { station: prose.identityNoId(recordIdentity(r)), id: r.id })),
+      t,
+    ),
+    line,
+  });
 }
 
 /**
@@ -706,8 +757,7 @@ function ComesBack({
   inside: readonly InsideRow[];
 }) {
   const { t } = useTranslation();
-  const labels = useIdentityLabels();
-  const label = useIdentityLabel();
+  const prose = useKeptProse();
   const comment = (preview.comment ?? '').trim();
   const lineResult = preview.lines.find((r) => r.line_id === line);
   const shownAfter = lineResult ? nameOf(lineResult.station_id, lineResult.name) : nameOf(preview.station_id, preview.name);
@@ -716,6 +766,7 @@ function ComesBack({
       {preview.restored && (
         <div className="text-sm text-text-primary" data-testid="unmerge-stations-comes-back">
           <p>
+            {/* The name a station archived now comes back by: text. */}
             {t('dialogs.detachLine.comesBack', {
               name: displayStationName(nameOf(preview.station_id, preview.name)),
               id: preview.station_id,
@@ -729,41 +780,31 @@ function ComesBack({
           )}
           {inside.map(({ record, inner }) => (
             <p key={record.id} className="text-text-secondary" data-testid={`unmerge-stations-inside-${record.id}`}>
-              {inner.length === 0
-                ? t('dialogs.detachLine.staysInside', {
-                    station: label(recordIdentity(record)),
-                    id: record.id,
-                    line: labels.lineName(record.lines[0]!),
-                  })
-                : t('dialogs.detachLine.staysInsideWith', {
-                    station: label(recordIdentity(record)),
-                    id: record.id,
-                    inner: listNames(
-                      inner.map((r) => t('dialogs.detachLine.insideStation', { station: label(recordIdentity(r)), id: r.id })),
-                      t,
-                    ),
-                    line: labels.lineName(record.lines[0]!),
-                  })}
+              <Prose text={insideText(t, prose, record, inner)} />
             </p>
           ))}
         </div>
       )}
       {(preview.together ?? []).length > 0 && (
         <p className="text-sm text-text-primary" data-testid="unmerge-stations-together">
-          {t('dialogs.detachLine.offTogether', {
-            count: (preview.together ?? []).length,
-            lines: listNames((preview.together ?? []).map(labels.lineName), t),
-            line: labels.lineName(line),
-          })}
+          <Prose
+            text={t('dialogs.detachLine.offTogether', {
+              count: (preview.together ?? []).length,
+              lines: listNames((preview.together ?? []).map((id) => prose.line(id)), t),
+              line: prose.line(line),
+            })}
+          />
         </p>
       )}
       {preview.shown_before && (
         <p className="text-sm text-text-secondary" data-testid="unmerge-stations-shown-before">
-          {t('dialogs.detachLine.shownBefore', {
-            line: labels.lineName(line),
-            station: label(preview.shown_before),
-            name: displayStationName(shownAfter),
-          })}
+          <Prose
+            text={t('dialogs.detachLine.shownBefore', {
+              line: prose.line(line),
+              station: prose.identity(preview.shown_before),
+              name: displayStationName(shownAfter),
+            })}
+          />
         </p>
       )}
     </>
@@ -811,20 +852,21 @@ function RestPicker({
  *  keeps the station. */
 function SameResultBody({ same: { off, keeper, preview }, nameOf }: { same: SameDetachResult; nameOf: NameOf }) {
   const { t } = useTranslation();
-  const labels = useIdentityLabels();
-  const line = labels.lineName(off.line_id);
-  const keeperLine = labels.lineName(keeper.line_id);
+  const prose = useKeptProse();
+  const line = prose.line(off.line_id);
   const comment = (preview.comment ?? '').trim();
   return (
     <>
       <p className="text-sm text-text-primary" data-testid="unmerge-stations-naming">
-        {t('dialogs.detachLine.comesOff', {
-          line,
-          name: displayStationName(nameOf(preview.station_id, preview.name)),
-          id: preview.station_id,
-          keeper: keeperLine,
-          station: labels.station(keeper),
-        })}
+        <Prose
+          text={t('dialogs.detachLine.comesOff', {
+            line,
+            name: displayStationName(nameOf(preview.station_id, preview.name)),
+            id: preview.station_id,
+            keeper: prose.line(keeper.line_id),
+            station: prose.station(keeper),
+          })}
+        />
       </p>
       {comment !== '' && (
         <p className="text-sm text-text-secondary" data-testid="unmerge-stations-comes-back-comment">
@@ -832,7 +874,7 @@ function SameResultBody({ same: { off, keeper, preview }, nameOf }: { same: Same
         </p>
       )}
       <p className="text-xs text-text-secondary" data-testid="unmerge-stations-explain">
-        {t('dialogs.detachLine.explainComesOff', { line })}
+        <Prose text={t('dialogs.detachLine.explainComesOff', { line })} />
       </p>
     </>
   );

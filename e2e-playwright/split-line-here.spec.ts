@@ -6,6 +6,7 @@ import {
   waitForMapReady,
   waitForNoDialogs,
 } from './helpers/app';
+import { expectSpoken, prosePillKinds } from './helpers/proseText';
 
 type LineView = { id: number; name: string; shots: Array<{ id: number }> };
 
@@ -132,6 +133,11 @@ test.describe('Split Line Here (#335)', () => {
     await page.getByRole('button', { name: 'Split Line Here' }).click();
     const dialog = page.getByTestId('split-line-here-dialog');
     await expect(dialog).toBeVisible();
+    // The line and the split station are prose pills (RS-PROSE); the summary
+    // reads as plain text wrote it.
+    const summary = page.getByTestId('split-here-summary');
+    await expectSpoken(summary, /^Splitting Main at station \S+$/);
+    expect(await prosePillKinds(summary)).toEqual(['line', 'station']);
 
     await expect(page.getByTestId('split-here-shared-station-hint')).toContainText(
       'The two halves stay joined: the split station becomes one station on both lines'

@@ -11,15 +11,20 @@ import { SplitNameFields, useSplitNames } from './SplitNameFields';
 import { lineDisplayName } from '../../utils/stationIdentity';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { useProse } from '../../hooks/useProse';
+import { Prose } from '../common/Prose';
+import { proseValue } from '../../utils/prose';
 
 /** `"Upstream Side" and its 2 shots (13.0 m)`: the line a delete removes, by
  *  name, with what goes with it (demo finding I-9: the dialog said "this
- *  line"). Only the name when the line has no shots. */
+ *  line"). Only the name when the line has no shots. `name` is the quoted
+ *  name as the sentence shows it: a prose token of the line pill (RS-PROSE),
+ *  or by default the plain quoted name. */
 export function describeLineForDelete(
   line: { name: string | null; shots: ReadonlyArray<{ length: number }> },
   lengthDecimals: number,
+  name = `"${lineDisplayName(line.name)}"`,
 ): string {
-  const name = `"${lineDisplayName(line.name)}"`;
   const count = line.shots.length;
   if (count === 0) return name;
   const length = line.shots.reduce((sum, shot) => sum + shot.length, 0);
@@ -31,9 +36,12 @@ export default function ConfirmDialog() {
   const { closeDialog, dialogData, clearSelection, setSelection } = useUIStore();
   const { deleteShot, deleteLine, deleteLastShotAndLine, deleteShotAndSplit } = useProjectStore();
   const precision = useDecimalPrecision();
+  // The line the default message names, as a line pill (RS-PROSE).
+  const prose = useProse();
 
   const type = dialogData.type as 'station' | 'shot' | 'line' | 'last-shot' | undefined;
-  const message = dialogData.message as string | undefined;
+  // A caller may pass null for "no message of mine": the default then.
+  const message = dialogData.message as string | null | undefined;
   const lineId = dialogData.lineId as number | undefined;
   const line = useProjectStore((s) => (lineId === undefined ? undefined : s.project?.lines.find((l) => l.id === lineId)));
   const shotId = dialogData.shotId as number | undefined;
@@ -203,11 +211,11 @@ export default function ConfirmDialog() {
         return 'Are you sure you want to delete this shot?';
       case 'last-shot':
         return line
-          ? `Deleting the last shot will remove the entire line "${lineDisplayName(line.name)}". Continue?`
+          ? `Deleting the last shot will remove the entire line ${prose.line(line.id, true)}. Continue?`
           : 'Deleting the last shot will remove the entire line. Continue?';
       case 'line':
         return line
-          ? `Delete the line ${describeLineForDelete(line, precision.length)}?`
+          ? `Delete the line ${describeLineForDelete(line, precision.length, prose.line(line.id, true))}?`
           : 'Are you sure you want to delete this line and all its shots?';
       default:
         return 'Are you sure?';
@@ -225,7 +233,10 @@ export default function ConfirmDialog() {
   return (
     <DialogWrapper title={getTitle()} onClose={closeDialog} size="md" data-testid="confirm-dialog">
       <div className="space-y-4">
-        <p className="text-text-secondary" data-testid="confirm-dialog-message">{message ?? getDefaultMessage()}</p>
+        <p className="text-text-secondary" data-testid="confirm-dialog-message">
+          {/* A caller's message is raw text: no marker in it may become a pill (RS-PROSE fix 1). */}
+          <Prose text={typeof message === 'string' ? proseValue(message) : getDefaultMessage()} />
+        </p>
 
         {type === 'station' && (
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">

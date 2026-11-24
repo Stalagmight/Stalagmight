@@ -74,8 +74,9 @@ use stalagmight_lib::models::{
 use stalagmight_lib::models::{
     ArchivedStationWire, ClosureArchive, ClosureEndWire, ClosureKeepPreview, IdentityNotice,
     KeepCandidate, KeepRefusalReason, LetteredStationWire, LoopClosureNaming, MergeKeepPreview,
-    NameCollisionWire, NameRepeatWire, RemoveClosureNaming, RenameSuggestion, RestoredIdentityWire,
-    ShownElsewhereWire, ShownSlot, StationIdentity, StationOwner, StationRename,
+    NameCollisionWire, NameRepeatWire, ProseLine, ProsePart, ProseShot, ProseShotEnd, ProseStation,
+    RemoveClosureNaming, RenameSuggestion, RestoredIdentityWire, ShownElsewhereWire, ShownSlot,
+    StationIdentity, StationOwner, StationRename,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -332,6 +333,12 @@ fn main() {
     export::<LetteredStationWire>(&out_dir);
     export::<RestoredIdentityWire>(&out_dir);
     export::<IdentityNotice>(&out_dir);
+    // Prose that names stations, shots and lines (RS-PROSE).
+    export::<ProsePart>(&out_dir);
+    export::<ProseStation>(&out_dir);
+    export::<ProseShot>(&out_dir);
+    export::<ProseShotEnd>(&out_dir);
+    export::<ProseLine>(&out_dir);
     export::<ShownElsewhereWire>(&out_dir);
     export::<StationRef>(&out_dir);
     export::<StationMergeWire>(&out_dir);
@@ -686,6 +693,11 @@ fn main() {
         "LetteredStation",
         "RestoredIdentity",
         "IdentityNotice",
+        "ProsePart",
+        "ProseStation",
+        "ProseShot",
+        "ProseShotEnd",
+        "ProseLine",
         "ShownElsewhere",
         "StationRef",
         "StationMerge",

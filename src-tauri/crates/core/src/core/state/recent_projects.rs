@@ -518,6 +518,7 @@ impl AppState {
                             code: "delete_project_persist_failed".to_string(),
                             message: format!("Project deleted, but the recent-projects list could not be saved: {e}"),
                             severity: WarningSeverity::Warning,
+                            parts: None,
                         });
                     }
                 }
@@ -564,6 +565,7 @@ impl AppState {
                         e.user_reason()
                     ),
                     severity: WarningSeverity::Warning,
+                    parts: None,
                 });
             }
         }

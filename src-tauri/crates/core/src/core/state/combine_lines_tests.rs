@@ -1002,6 +1002,17 @@ fn a_removed_former_snap_is_named_as_the_loop_closure_left_from_a_snap() {
              lines left its two stations at the two ends of one shot.",
         ]
     );
+    // RS-PROSE: a station the plan names is a part, words and all, with no
+    // slot (it names the state before the combine); one it cannot name stays
+    // words.
+    let named = warnings[0].parts.as_deref().unwrap();
+    assert_eq!(crate::models::prose::plain(named), warnings[0].message);
+    assert_eq!(named.iter().filter(|p| p.is_name()).count(), 2);
+    assert!(named.iter().all(|p| match p {
+        crate::models::ProsePart::Station(s) => s.slot.is_none(),
+        _ => true,
+    }));
+    assert!(warnings[1].parts.is_none());
 }
 
 /// A datum on each of two side-by-side join stations (two pieces, each

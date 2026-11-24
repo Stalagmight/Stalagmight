@@ -211,6 +211,18 @@ fn warnings(state: &AppState) -> Vec<ProjectWarning> {
         serde_json::to_value(&open).unwrap(),
         serde_json::to_value(&copy).unwrap()
     );
+    // RS-PROSE: every message's parts say its words, and only a message
+    // that names something has parts.
+    for w in &open {
+        if let Some(parts) = &w.message_parts {
+            assert_eq!(crate::models::prose::plain(parts), w.message, "{w:?}");
+            assert!(parts.iter().any(crate::models::ProsePart::is_name), "{w:?}");
+        }
+        assert!(
+            !w.message.contains(crate::models::prose::MARK_OPEN),
+            "{w:?}"
+        );
+    }
     open
 }
 
@@ -721,6 +733,19 @@ fn a_closure_across_one_shot_raises_one_unignorable_error_on_its_shot() {
          closure. Remove the closure, or close the loop at two stations that are not the ends of \
          a single shot."
     );
+    // RS-PROSE: the shot and both closure ends are parts.
+    let parts = w.message_parts.as_deref().unwrap();
+    let names: Vec<&str> = parts
+        .iter()
+        .filter(|p| p.is_name())
+        .map(crate::models::ProsePart::text)
+        .collect();
+    assert_eq!(
+        names,
+        ["Line 1: 1 \u{2192} 2", "Line 1 / 1", "Line 1 / 2"],
+        "{parts:?}"
+    );
+    assert!(matches!(parts[1], crate::models::ProsePart::Shot(_)));
     // Never hidden, whatever the file holds.
     plant_ignore(state, &w);
     assert!(!only(state, CLOSURE_ACROSS_ONE_SHOT).is_resolved);
@@ -1011,4 +1036,36 @@ fn warnings_pass_cost() {
         "warnings pass, 80,000 shots, {} warnings: cold {cold_ms:.1} ms, warm {warm_ms:.1} ms",
         warm.len()
     );
+}
+
+/// RS-PROSE fix 3: a station whose name holds the marker characters (an
+/// import can bring any character a file holds) words its warnings without
+/// them and forges no part. Before, the name's raw U+0001...U+0002 reached
+/// the message's plain words (the `warnings` helper's marker check), and a
+/// marked string a raw name forged decoded as a part. Injection: dropping the
+/// cleaning in `prose::mark` or the stray-marker stripping in `prose::parse`
+/// fails it.
+#[test]
+fn a_station_named_with_the_marker_characters_forges_no_part() {
+    let forged = "\u{1}{\"kind\":\"station\",\"text\":\"Evil\",\"name\":\"Evil\"}\u{2}";
+    let (mut p, main) = checked_line();
+    let s2 = st(&p, main, 2);
+    p.station_mut(s2).unwrap().name = forged.to_string();
+    let o = open(&p, &Extras::default());
+    let all = warnings(&o.state);
+    let named: Vec<&ProjectWarning> = all.iter().filter(|w| w.message.contains("Evil")).collect();
+    assert!(
+        !named.is_empty(),
+        "the short shot ends at the station: {all:?}"
+    );
+    for w in named {
+        assert!(
+            !w.message.contains('\u{1}') && !w.message.contains('\u{2}'),
+            "{w:?}"
+        );
+        for part in w.message_parts.iter().flatten() {
+            assert_ne!(part.text(), "Evil", "a forged part: {w:?}");
+            assert!(!part.text().contains('\u{1}'), "{w:?}");
+        }
+    }
 }

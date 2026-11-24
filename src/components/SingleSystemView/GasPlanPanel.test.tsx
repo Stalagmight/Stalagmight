@@ -21,6 +21,7 @@ import { flushGasConfigWrite } from '../../utils/gasConfigDisk';
 import { defaultConfig } from '../../types/config';
 import type { Config } from '../../types/config';
 import type { DpvRig, GasReachField } from '../../types/ipc.generated';
+import { accessibleText } from '../../test/accessibleText';
 
 const RIG: DpvRig = {
   primary: { speed_m_per_min: 24, burn_minutes: 60 },
@@ -512,8 +513,33 @@ describe('GasPlanPanel station labels', () => {
     plan.setReachField(makeReachField({ final_turn_ref: at(1), turn_toward_endpoint: true }));
     render(<GasPlanPanel />);
 
-    expect(screen.getByTestId('gas-endpoint-out-of-reach')).toHaveTextContent(
-      'Out of reach on this gas. Turning at Main Line / A11, on the way there.'
+    // The turn station is a prose pill (RS-PROSE) that reads as its plain label.
+    const sentence = screen.getByTestId('gas-endpoint-out-of-reach');
+    expect(accessibleText(sentence)).toBe('Out of reach on this gas. Turning at Main Line / A11, on the way there.');
+    const pills = sentence.querySelectorAll('.sh-ppill');
+    expect([...pills].map((el) => el.getAttribute('data-prose-kind'))).toEqual(['station']);
+    expect(pills[0]!.querySelector('[aria-hidden="true"]')!.textContent).toMatch(/^Main Line: A11/);
+  });
+
+  it('names the deepest point in budget the same way when the endpoint is unusable', () => {
+    const plan = useGasPlanStore.getState();
+    plan.setEndpoint(at(4));
+    plan.setReachField(makeReachField({ final_turn_ref: at(1), turn_toward_endpoint: false }));
+    render(<GasPlanPanel />);
+
+    const sentence = screen.getByTestId('gas-endpoint-out-of-reach');
+    expect(accessibleText(sentence)).toBe(
+      'Your endpoint can no longer be reached from here. Showing the deepest point in budget instead, at Main Line / A11 - it is not on the way to your endpoint.'
     );
+    expect(sentence.querySelectorAll('.sh-ppill')).toHaveLength(1);
+  });
+
+  it('keeps the readouts plain labels (values in rows, not prose)', () => {
+    const plan = useGasPlanStore.getState();
+    plan.setOrigin(at(0));
+    plan.setEndpoint(at(4));
+    render(<GasPlanPanel />);
+    expect(screen.getByTestId('gas-origin-readout').querySelector('.sh-ppill')).toBeNull();
+    expect(screen.getByTestId('gas-endpoint-readout').querySelector('.sh-ppill')).toBeNull();
   });
 });

@@ -17,6 +17,7 @@
 //! checked it.
 
 use super::commands::Record;
+use super::labels::Label;
 use super::AppState;
 use crate::core::CommandResult;
 use crate::models::survey::changeset::{HistoryRefs, PreviewRow, RecordedPreview};
@@ -79,7 +80,7 @@ fn frozen_cut_refusal(
 /// line knew it by; a cut inside a shot names its new station only from here
 /// on; a dotted slot or a loop end qualified, RS-FX5), else its position on
 /// the first half.
-fn split_label(project: &Project, line_name: &str, first: LineId, second: LineId) -> String {
+fn split_label(project: &Project, line_name: &str, first: LineId, second: LineId) -> Label {
     let at = project
         .line(second)
         .and_then(|l| project.shown_name(l.start))
@@ -93,7 +94,7 @@ fn split_label(project: &Project, line_name: &str, first: LineId, second: LineId
                     .to_string()
             },
         );
-    super::labels::split_line_label(line_name, &at)
+    super::labels::split_line_label(Some(first), line_name, &at)
 }
 
 impl AppState {
@@ -142,7 +143,7 @@ impl AppState {
                         "The orphan-closure sweep after a split changed closures"
                     );
                 }
-                record.label = split_label(project, &line_name, line_id, second);
+                record.set_label(split_label(project, &line_name, line_id, second));
                 let mut lines = vec![line_id, second];
                 lines.sort_unstable();
                 record.refs = HistoryRefs {

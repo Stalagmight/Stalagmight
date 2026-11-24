@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConversionNoticeView } from '../types/ipc/ConversionNoticeView';
+import { isNamePart, type ProsePart } from '../utils/prose';
+import { BackendProse, ProseParts } from './common/Prose';
 
 /** The banner's sentence on saving, by the file's state (`ConversionFile`). */
 const SAVE_SENTENCE = {
@@ -24,6 +26,36 @@ function changesSentence(changes: readonly string[]): string {
 }
 
 /**
+ * {@link changesSentence} as prose parts (RS-PROSE): each clause by its parts
+ * when the backend sends some (`change_parts`, index-aligned), else its words,
+ * joined by '; ' and ended with '.'. The first letter is capitalised as the
+ * plain sentence's is: opening words, or an opening name's spoken words (its
+ * drawing keeps the name as it is). `null` when no clause names anything
+ * (the plain sentence then).
+ */
+function changesSentenceParts(
+  changes: readonly string[],
+  parts: readonly (readonly ProsePart[])[] | undefined,
+): ProsePart[] | null {
+  if (!parts?.some((clause) => clause.some(isNamePart))) return null;
+  const out: ProsePart[] = [];
+  changes.forEach((clause, i) => {
+    if (i > 0) out.push({ kind: 'text', text: '; ' });
+    const named = parts[i];
+    if (named?.some(isNamePart)) out.push(...named);
+    else out.push({ kind: 'text', text: clause });
+  });
+  out.push({ kind: 'text', text: '.' });
+  // The first letter is capitalised as the plain sentence capitalises it:
+  // opening words, or an opening name's words (what a screen reader reads;
+  // the pill draws the name as it is), so the sentence reads the same with
+  // pills as plain (RS-PROSE fix 7).
+  const first = out[0];
+  if (first) out[0] = { ...first, text: `${first.text.charAt(0).toUpperCase()}${first.text.slice(1)}` };
+  return out;
+}
+
+/**
  * The conversion notice (plan 7.2.10, demo issue I-5; kept stations, plan
  * 2026-11-23 RS 8.2 and 8.3): an old-format (SQLite) file, or a version 2
  * file an earlier build wrote, whose conversion changed something a line
@@ -35,7 +67,9 @@ function changesSentence(changes: readonly string[]): string {
  * the next save writes the new format; after it (the store follows
  * `CommandResult.legacy_converted`) it says it was saved; a file open
  * read-only is never saved, so it says the file stays as it is. A long list sits
- * behind Details, grouped by line. Stays until dismissed.
+ * behind Details, grouped by line. Stays until dismissed. A station or a line a
+ * clause names is drawn as a prose pill (RS-PROSE: `change_parts`,
+ * `detail_parts`); a screen reader reads the clause's plain words.
  */
 export function ConversionNoticeBanner({
   notice,
@@ -47,6 +81,7 @@ export function ConversionNoticeBanner({
   const { t } = useTranslation();
   const [showDetails, setShowDetails] = useState(false);
   const hasDetails = notice.details.length > 0;
+  const sentence = changesSentenceParts(notice.changes, notice.change_parts);
   return (
     <div
       className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-start gap-3 text-sm"
@@ -58,7 +93,7 @@ export function ConversionNoticeBanner({
           {t(LEAD[notice.source])}
         </span>{' '}
         <span className="text-text-secondary" data-testid="conversion-notice-text">
-          {changesSentence(notice.changes)}
+          {sentence ? <ProseParts parts={sentence} /> : changesSentence(notice.changes)}
         </span>{' '}
         {notice.brings_back && (
           <>
@@ -73,7 +108,9 @@ export function ConversionNoticeBanner({
         {hasDetails && showDetails && (
           <ul className="mt-1 max-h-32 overflow-y-auto text-xs text-text-secondary list-disc pl-5" data-testid="conversion-notice-details">
             {notice.details.map((line, i) => (
-              <li key={`${i}:${line}`}>{line}</li>
+              <li key={`${i}:${line}`}>
+                <BackendProse text={line} parts={notice.detail_parts?.[i]} />
+              </li>
             ))}
           </ul>
         )}

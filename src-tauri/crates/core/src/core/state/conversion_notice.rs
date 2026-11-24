@@ -16,12 +16,19 @@
 //! (`CommandResult::legacy_converted`), so the banner never promises a save
 //! that already happened. A long list goes behind a Details disclosure
 //! ([`ConversionNoticeView::details`]), grouped by line.
+//!
+//! A clause that names stations or lines carries the same words as prose
+//! parts too ([`ConversionNoticeView::change_parts`],
+//! [`ConversionNoticeView::detail_parts`], RS-PROSE): each clause is worded
+//! with marked names (`prose::mark`, the parts' words bounded by the same
+//! `text()` as the plain clause) and split when the view is built.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::core::command::MAX_FILE_NAME_LEN;
-use crate::models::sanitize_display_text;
+use crate::models::prose::{self, ProsePart, ProseStation};
+use crate::models::{sanitize_display_text, LineId, StationId};
 use crate::persistence::migrate::{IdentityChanges, MigrationReport, NameChange, Verification};
 use crate::persistence::stalx_v2::UpgradeReport;
 
@@ -87,6 +94,17 @@ pub struct ConversionNoticeView {
     /// than `changes` spells out (it then counts them), for a Details
     /// disclosure; empty otherwise.
     pub details: Vec<String>,
+    /// `changes` as prose parts (RS-PROSE), index-aligned: entry `i` holds
+    /// the parts of `changes[i]`, its words with each station and line it
+    /// names as a part the banner draws as a pill (`prose::plain` of them is
+    /// `changes[i]`, byte for byte), or is empty when that clause names
+    /// nothing (a count, a move). The parts name the converted project by
+    /// stable ids (line ids, Station IDs), never a slot.
+    #[serde(default)]
+    pub change_parts: Vec<Vec<ProsePart>>,
+    /// `details` as prose parts, index-aligned the same way.
+    #[serde(default)]
+    pub detail_parts: Vec<Vec<ProsePart>>,
     /// Whether the banner says that Detach Line from Station or Remove
     /// Closure brings back each station now shown under another station's
     /// name and each hidden comment.
@@ -167,19 +185,59 @@ fn text(s: &str) -> String {
     sanitize_display_text(s, MAX_FILE_NAME_LEN)
 }
 
+/// A station the notice names, marked (RS-PROSE): `line / name` when
+/// `line` is given, else `name`, words already bounded ([`text`]), coloured
+/// by `line_id`, with its Station ID.
+fn station_marked(
+    line_id: Option<LineId>,
+    line: Option<String>,
+    name: String,
+    identity: StationId,
+) -> String {
+    prose::mark(&ProsePart::Station(ProseStation {
+        text: match &line {
+            Some(line) => format!("{line} / {name}"),
+            None => name.clone(),
+        },
+        line_id,
+        context: line,
+        name,
+        home_line: None,
+        loop_end: None,
+        station_id: Some(identity),
+        slot: None,
+    }))
+}
+
 /// "Side / 0 is now shown as Main / 12" (the slot shows another station, the
 /// line it belongs to named first), "Side / 2 is now shown as 2a" (a letter):
 /// the line as the converted project names it, the name the file showed
-/// there, the name it shows now.
+/// there, the name it shows now. Marked: both stations are parts.
 fn rename_clause(change: &NameChange) -> String {
     let to = match (&change.kept_line, change.lettered) {
-        (Some(line), false) => format!("{} / {}", text(line), text(&change.to)),
-        _ => text(&change.to),
+        (Some(line), false) => station_marked(
+            change.kept_line_id,
+            Some(text(line)),
+            text(&change.to),
+            change.to_identity,
+        ),
+        // A letter: the same station on the slot's line.
+        (_, true) => station_marked(
+            Some(change.line_id),
+            None,
+            text(&change.to),
+            change.to_identity,
+        ),
+        _ => station_marked(None, None, text(&change.to), change.to_identity),
     };
     format!(
-        "{} / {} is now shown as {to}",
-        text(&change.line),
-        text(&change.from)
+        "{} is now shown as {to}",
+        station_marked(
+            Some(change.line_id),
+            Some(text(&change.line)),
+            text(&change.from),
+            change.from_identity,
+        )
     )
 }
 
@@ -196,25 +254,27 @@ fn and_list(items: &[String]) -> String {
 /// (RS-FX6: one station on two lines hides one comment, said once).
 struct HiddenByIdentity<'a> {
     station: &'a str,
-    lines: Vec<&'a str>,
+    identity: StationId,
+    lines: Vec<(LineId, &'a str)>,
 }
 
 /// The hidden comments of `changes` by identity, in order of first
 /// appearance (line order, then chain order).
 fn hidden_by_identity(changes: &IdentityChanges) -> Vec<HiddenByIdentity<'_>> {
-    let mut out: Vec<(crate::models::StationId, HiddenByIdentity<'_>)> = Vec::new();
+    let mut out: Vec<(StationId, HiddenByIdentity<'_>)> = Vec::new();
     for c in &changes.comments_hidden {
         match out.iter_mut().find(|(id, _)| *id == c.identity) {
             Some((_, entry)) => {
-                if !entry.lines.contains(&c.line.as_str()) {
-                    entry.lines.push(&c.line);
+                if !entry.lines.iter().any(|(_, l)| *l == c.line.as_str()) {
+                    entry.lines.push((c.line_id, &c.line));
                 }
             }
             None => out.push((
                 c.identity,
                 HiddenByIdentity {
                     station: &c.station,
-                    lines: vec![&c.line],
+                    identity: c.identity,
+                    lines: vec![(c.line_id, &c.line)],
                 },
             )),
         }
@@ -223,25 +283,55 @@ fn hidden_by_identity(changes: &IdentityChanges) -> Vec<HiddenByIdentity<'_>> {
 }
 
 /// "the comment of Side / 0 is hidden", or for a station shown on several
-/// lines "the comment of M4 on Main and Annex is hidden".
+/// lines "the comment of M4 on Main and Annex is hidden". Marked: the
+/// station and the lines are parts.
 fn hidden_clause(hidden: &HiddenByIdentity<'_>) -> String {
     match hidden.lines.as_slice() {
-        [line] => format!(
-            "the comment of {} / {} is hidden",
-            text(line),
-            text(hidden.station)
+        [(line_id, line)] => format!(
+            "the comment of {} is hidden",
+            station_marked(
+                Some(*line_id),
+                Some(text(line)),
+                text(hidden.station),
+                hidden.identity,
+            )
         ),
         lines => format!(
             "the comment of {} on {} is hidden",
-            text(hidden.station),
-            and_list(&lines.iter().map(|l| text(l)).collect::<Vec<_>>())
+            station_marked(None, None, text(hidden.station), hidden.identity),
+            and_list(
+                &lines
+                    .iter()
+                    .map(|(id, l)| prose::mark(&prose::line_part(Some(*id), &text(l), false)))
+                    .collect::<Vec<_>>()
+            )
         ),
+    }
+}
+
+/// A closure end as the notice names it: its words bounded ([`text`]), its
+/// parts when they say exactly those words.
+fn closure_end(words: &str, parts: &[ProsePart]) -> String {
+    let bounded = text(words);
+    if bounded == words && prose::plain(parts) == words && parts.iter().any(ProsePart::is_name) {
+        parts
+            .iter()
+            .map(|part| {
+                if part.is_name() {
+                    prose::mark(part)
+                } else {
+                    part.text().to_owned()
+                }
+            })
+            .collect()
+    } else {
+        bounded
     }
 }
 
 /// Every entry of `changes` worded, grouped by line (its names, then the
 /// hidden comments first seen on it), then the closures that keep both
-/// names.
+/// names. Marked (RS-PROSE): [`ConversionNotice::view`] splits them.
 fn identity_entries(changes: &IdentityChanges) -> Vec<String> {
     let mut out = Vec::new();
     let hidden = hidden_by_identity(changes);
@@ -256,15 +346,15 @@ fn identity_entries(changes: &IdentityChanges) -> Vec<String> {
         out.extend(
             hidden
                 .iter()
-                .filter(|h| h.lines.first() == Some(&line.as_str()))
+                .filter(|h| h.lines.first().map(|(_, l)| *l) == Some(line.as_str()))
                 .map(hidden_clause),
         );
     }
     out.extend(changes.closures_keep_both.iter().map(|c| {
         format!(
             "the loop closure between {} and {} keeps both names",
-            text(&c.a),
-            text(&c.b)
+            closure_end(&c.a, &c.a_parts),
+            closure_end(&c.b, &c.b_parts)
         )
     }));
     out
@@ -435,12 +525,22 @@ impl ConversionNotice {
             (ConversionOriginal::LocalFile, false) => ConversionFile::NotYetSaved,
             (ConversionOriginal::LocalFile, true) => ConversionFile::Saved,
         };
+        let (changes, change_parts) = split_clauses(&changes);
+        let (details, detail_parts) = split_clauses(&details);
         ConversionNoticeView {
             source: self.source,
             changes,
             details,
+            change_parts,
+            detail_parts,
             brings_back: identity.shown_as_other() > 0 || !identity.comments_hidden.is_empty(),
             file,
         }
     }
+}
+
+/// Each (possibly marked) clause split into its plain words and its parts,
+/// index-aligned; a clause that names nothing has none.
+fn split_clauses(clauses: &[String]) -> (Vec<String>, Vec<Vec<ProsePart>>) {
+    clauses.iter().map(|clause| prose::split(clause)).unzip()
 }

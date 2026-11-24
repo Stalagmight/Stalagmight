@@ -19,6 +19,7 @@ import { useUIStore } from '../../../store/uiStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import type { Project, Station } from '../../../types/project';
+import { accessibleText } from '../../../test/accessibleText';
 
 const MUTATIONS = new Set(['set_station_name', 'set_station_comment', 'set_zero_datum', 'remove_zero_datum']);
 const mutations = () =>
@@ -106,6 +107,13 @@ describe('Edit Station name', () => {
     expect(screen.getByTestId('station-name-error')).toHaveTextContent(
       'Main Line already has a station named "6". Station names must be unique within their line.',
     );
+    // RS-PROSE: the line is a pill; the field's description and the Save
+    // tooltip read the plain sentence.
+    const taken = 'Main Line already has a station named "6". Station names must be unique within their line.';
+    expect(accessibleText(screen.getByTestId('station-name-error'))).toBe(taken);
+    expect(screen.getByTestId('station-name-error').querySelector('.sh-ppill')?.getAttribute('data-prose-kind')).toBe('line');
+    expect(nameInput()).toHaveAccessibleDescription(taken);
+    expect(saveButton()).toHaveAttribute('title', taken);
     expect(saveButton()).toBeDisabled();
     await save();
     expect(mutations()).toEqual([]);

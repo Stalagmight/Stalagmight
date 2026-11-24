@@ -870,6 +870,7 @@ impl AppState {
                      still there, and the project stays reserved for you on SpeleoDB."
                 ),
                 severity: WarningSeverity::Warning,
+                parts: None,
             }])
             .with_session_closed(true)
     }

@@ -29,6 +29,12 @@
 //! helpers below, from the project before or after their edit as each one
 //! says.
 //!
+//! Every label is a [`Label`] (RS-PROSE): worded twice, with plain names
+//! and with marked ones ([`NameBook::marked`]), so the entry keeps the plain
+//! words it always had and, beside them, the same words as prose parts the
+//! history list draws as pills (`HistoryEntry::label_parts`). Preview rows
+//! stay plain: they are key-value rows, not prose.
+//!
 //! Ported from 0.6.0's `undo/history_names.rs`, `history_batch.rs`,
 //! `history_credit.rs`, `history_cave_section.rs` and the record half of
 //! `history_view.rs` (the C0 base) onto the station graph.
@@ -38,6 +44,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use crate::core::command::lines_label;
 use crate::core::undo::history_item::truncate_with_ellipsis;
 use crate::core::{Command, CommentHolder};
+use crate::models::prose::{self, ProsePart};
 use crate::models::survey::changeset::{EntryLimits, HistoryRefs, PreviewRow, RecordedPreview};
 use crate::models::survey::Project;
 use crate::models::{
@@ -68,6 +75,56 @@ fn bounded(s: String) -> String {
     }
 }
 
+/// A history label (RS-PROSE): its plain words, the entry's persisted
+/// `label`, and the same words as prose parts, the entry's `label_parts`
+/// (`HistoryEntry::label_parts`): each station, shot or line it names a
+/// part the history list draws as a pill. Worded twice, with plain names
+/// and with marked ones ([`NameBook::marked`]): `text` is the label as it
+/// always read, and the parts are kept only when they say exactly its words
+/// (`prose::plain(&parts) == text`). No parts when the label names nothing
+/// or had to be cut ([`bounded`]); never a slot (a session handle the entry
+/// outlives).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Label {
+    pub(crate) text: String,
+    pub(crate) parts: Vec<ProsePart>,
+}
+
+impl Label {
+    /// Words taken as they are (a batch's own label, a recipe's
+    /// placeholder, a label that names nothing): never read for marks.
+    pub(crate) fn plain(text: String) -> Self {
+        Self {
+            text: bounded(prose::clean(&text)),
+            parts: Vec::new(),
+        }
+    }
+
+    /// The label `plain`, with the parts of `marked` (the same label worded
+    /// with marked names) when they say its words, bounded.
+    fn of(plain: String, marked: &str) -> Self {
+        // A raw name may hold the marker characters; the label goes without
+        // them, as the marked words do (RS-PROSE fix 3).
+        let text = bounded(prose::clean(&plain));
+        let (words, parts) = prose::split(marked);
+        let parts = if words == text {
+            prose::without_slots(parts)
+        } else {
+            Vec::new()
+        };
+        Self { text, parts }
+    }
+}
+
+/// The label `word` words on `project`, once with plain names and once with
+/// marked ones ([`Label::of`]).
+fn worded(project: &Project, word: impl Fn(&NameBook<'_>) -> String) -> Label {
+    Label::of(
+        word(&NameBook::of(project)),
+        &word(&NameBook::marked(project)),
+    )
+}
+
 fn quoted(name: &str) -> String {
     format!("\"{name}\"")
 }
@@ -96,14 +153,56 @@ fn listed(names: &[String]) -> String {
     }
 }
 
-/// The names a label reads, off the project as it is now.
+/// The names a label reads, off the project as it is now: plain, or marked
+/// (RS-PROSE: each station, shot or line as its part, `prose::mark`, with
+/// the plain words; [`Label`] splits them out).
 pub(crate) struct NameBook<'p> {
     project: &'p Project,
+    marked: bool,
 }
 
 impl<'p> NameBook<'p> {
+    /// The plain names: what preview rows and refusals read.
     pub(crate) fn of(project: &'p Project) -> Self {
-        Self { project }
+        Self {
+            project,
+            marked: false,
+        }
+    }
+
+    /// The marked names, for a label's parts.
+    pub(crate) fn marked(project: &'p Project) -> Self {
+        Self {
+            project,
+            marked: true,
+        }
+    }
+
+    /// `"Name"` for a line, quoted (marked: its part, the pill without the
+    /// quotes), or `None` when the project does not hold it.
+    pub(crate) fn quoted_line(&self, line_id: LineId) -> Option<String> {
+        let name = self.line(line_id)?;
+        Some(if self.marked {
+            prose::mark(&prose::line_part(Some(line_id), &name, true))
+        } else {
+            quoted(&name)
+        })
+    }
+
+    /// [`Self::quoted_line`], or `a line` when the project does not hold it.
+    fn line_or_a_line(&self, line_id: LineId) -> String {
+        self.quoted_line(line_id)
+            .unwrap_or_else(|| "a line".to_string())
+    }
+
+    /// `Line name / station name` of `station` on `line` (else its first
+    /// slot; `Project::station_text`), marked in a marked book.
+    fn station_on(&self, station: StationId, line: Option<LineId>) -> String {
+        if self.marked {
+            self.project.station_marked(station, line)
+        } else {
+            self.project.station_text(station, line)
+        }
     }
 
     /// A line's name (`unnamed line` when it has none), if the line exists.
@@ -149,9 +248,17 @@ impl<'p> NameBook<'p> {
     /// `Line name / station name` of the station at a slot, a dotted slot or
     /// a loop end qualified (`Side / 12 (Main)`, `Main / 12 (loop end on
     /// Side)`; `Project::slot_text`, RS-FX5).
+    ///
+    /// In a marked book, the slot's part (`Project::slot_part`) where it says
+    /// these words.
     pub(crate) fn station(&self, slot: StationRef) -> Option<String> {
         self.line(slot.line_id)?;
-        self.project.slot_text(slot)
+        let text = self.project.slot_text(slot)?;
+        Some(if self.marked {
+            prose::mark_as(&text, self.project.slot_part(slot, true))
+        } else {
+            text
+        })
     }
 
     /// The slots of the lines a detach at `slot` takes off the station
@@ -234,7 +341,8 @@ impl<'p> NameBook<'p> {
         self.station(self.project.closure_end_slot(station, via)?)
     }
 
-    /// `Line name: from -> to` of the shot with session id `shot_id`.
+    /// `Line name: from -> to` of the shot with session id `shot_id`
+    /// (marked: its part, `Project::shot_marked`).
     pub(crate) fn shot(&self, line_id: LineId, shot_id: ShotId) -> Option<String> {
         let index = self
             .project
@@ -245,7 +353,11 @@ impl<'p> NameBook<'p> {
         let at = u32::try_from(index).ok()?;
         self.station_name(StationRef::new(line_id, at))?;
         self.station_name(StationRef::new(line_id, at.checked_add(1)?))?;
-        Some(self.project.shot_text(line_id, index))
+        Some(if self.marked {
+            self.project.shot_marked(line_id, index)
+        } else {
+            self.project.shot_text(line_id, index)
+        })
     }
 
     /// The name of Section `id`, or `#id`.
@@ -267,9 +379,9 @@ fn kind_word(kind: ShotKind) -> &'static str {
     }
 }
 
-/// `"Name"` for a line, quoted, or `None`.
+/// `"Name"` for a line, quoted, or `None` ([`NameBook::quoted_line`]).
 fn quoted_line(names: &NameBook<'_>, line_id: LineId) -> Option<String> {
-    names.line(line_id).map(|n| quoted(&n))
+    names.quoted_line(line_id)
 }
 
 fn holder(names: &NameBook<'_>, holder: &CommentHolder) -> String {
@@ -493,45 +605,55 @@ fn describe(cmd: &Command, names: &NameBook<'_>) -> String {
 ///   Main: 2 -> 3`, `Delete shot Main: 2 -> 3`);
 /// - a credit edit counts the shots it changes (`Edit surveyors (12 shots)`);
 /// - a Section command names its Section (`Rename section "A" to "B"`).
-pub(crate) fn entry_label(project: &Project, cmd: &Command) -> String {
-    let names = NameBook::of(project);
-    let label = match cmd {
+///
+/// With its parts ([`Label`]); a batch's own label and the labels that name
+/// no station, shot or line are plain.
+pub(crate) fn entry_label(project: &Project, cmd: &Command) -> Label {
+    let plain = NameBook::of(project);
+    match cmd {
         Command::Batch {
             label: Some(label), ..
-        } => label.clone(),
-        Command::Batch {
-            commands,
-            label: None,
-        } => summarize(commands, &names),
+        } => Label::plain(label.clone()),
+        Command::EditShotCredit { targets, edit } => {
+            let n = credit_changes(project, targets, edit);
+            Label::plain(format!(
+                "{} ({n} shot{})",
+                edit.label(),
+                if n == 1 { "" } else { "s" }
+            ))
+        }
+        _ => match section_label(cmd, &plain) {
+            Some(label) => Label::plain(label),
+            None => worded(project, |names| entry_text(cmd, names)),
+        },
+    }
+}
+
+/// The words of [`entry_label`] for a command whose label may name
+/// stations, shots or lines, with `names`.
+fn entry_text(cmd: &Command, names: &NameBook<'_>) -> String {
+    match cmd {
+        Command::Batch { commands, .. } => summarize(commands, names),
         Command::UpdateShot {
             line_id, shot_id, ..
         } => names
             .shot(*line_id, *shot_id)
-            .map_or_else(|| describe(cmd, &names), |s| format!("Update shot {s}")),
+            .map_or_else(|| describe(cmd, names), |s| format!("Update shot {s}")),
         // Named by its stations like an update (demo finding I-9: "Delete
         // shot in line ..." left the user to guess which shot went).
         Command::DeleteShot { line_id, shot_id } => names
             .shot(*line_id, *shot_id)
-            .map_or_else(|| describe(cmd, &names), |s| format!("Delete shot {s}")),
+            .map_or_else(|| describe(cmd, names), |s| format!("Delete shot {s}")),
         Command::SetShotKind {
             line_id,
             shot_id,
             kind,
         } => names.shot(*line_id, *shot_id).map_or_else(
-            || describe(cmd, &names),
+            || describe(cmd, names),
             |s| format!("Mark shot {s} as {}", kind_word(*kind)),
         ),
-        Command::EditShotCredit { targets, edit } => {
-            let n = credit_changes(project, targets, edit);
-            format!(
-                "{} ({n} shot{})",
-                edit.label(),
-                if n == 1 { "" } else { "s" }
-            )
-        }
-        _ => section_label(cmd, &names).unwrap_or_else(|| describe(cmd, &names)),
-    };
-    bounded(label)
+        _ => describe(cmd, names),
+    }
 }
 
 /// How many shots `edit` changes on `targets` (0.6.0 counted the changed
@@ -676,7 +798,7 @@ fn line_names(cmds: &[&Command], names: &NameBook<'_>) -> Option<Vec<String>> {
             _ => return None,
         };
         if seen.insert(id) {
-            out.push(quoted(&names.line(id)?));
+            out.push(names.quoted_line(id)?);
         }
     }
     Some(out)
@@ -704,8 +826,8 @@ fn shots_of(cmds: &[&Command]) -> (usize, BTreeSet<LineId>) {
 fn in_lines(lines: &BTreeSet<LineId>, names: &NameBook<'_>) -> String {
     match lines.iter().next() {
         Some(&only) if lines.len() == 1 => names
-            .line(only)
-            .map_or_else(String::new, |n| format!(" in line {}", quoted(&n))),
+            .quoted_line(only)
+            .map_or_else(String::new, |n| format!(" in line {n}")),
         _ => format!(" in {}", plural(lines.len(), "line", "lines")),
     }
 }
@@ -779,7 +901,12 @@ fn summarize_kind(kind: &str, cmds: &[&Command], names: &NameBook<'_>) -> String
         "create_loop_closure" => format!("Create {n} loop closures"),
         _ => {
             let first = describe(cmds[0], names);
-            if cmds.iter().all(|c| describe(c, names) == first) {
+            // By their words, so a marked book says what a plain one does.
+            let words = prose::unmark(&first);
+            if cmds
+                .iter()
+                .all(|c| prose::unmark(&describe(c, names)) == words)
+            {
                 format!("{first} ({n} times)")
             } else {
                 format!(
@@ -842,27 +969,18 @@ pub(crate) fn insert_station_label(
     project: &Project,
     line_id: LineId,
     station: StationId,
-) -> String {
-    let label = if project.line(line_id).is_some() && project.stations.contains_key(&station) {
-        format!(
-            "Insert station {}",
-            project.station_text(station, Some(line_id))
-        )
-    } else {
-        format!(
-            "Insert station in line {}",
-            line_or_a_line(project, line_id)
-        )
-    };
-    bounded(label)
-}
-
-/// `"Main Line"`, or `a line` when the project does not hold it.
-fn line_or_a_line(project: &Project, line_id: LineId) -> String {
-    match project.line(line_id) {
-        Some(_) => quoted(&project.line_label_of(line_id)),
-        None => "a line".to_string(),
-    }
+) -> Label {
+    let made = project.line(line_id).is_some() && project.stations.contains_key(&station);
+    worded(project, |names| {
+        if made {
+            format!(
+                "Insert station {}",
+                names.station_on(station, Some(line_id))
+            )
+        } else {
+            format!("Insert station in line {}", names.line_or_a_line(line_id))
+        }
+    })
 }
 
 /// `Combine lines "Main Line" and "Downstream"`, with ` into "Name"` when
@@ -872,20 +990,23 @@ pub(crate) fn combine_lines_label(
     kept: LineId,
     other: LineId,
     combined: &str,
-) -> String {
+) -> Label {
     let combined = combined.trim();
-    let label = format!(
-        "Combine lines {} and {}",
-        line_or_a_line(project, kept),
-        line_or_a_line(project, other)
-    );
     let taken = [kept, other]
         .iter()
         .any(|&id| project.line(id).is_some() && project.line_label_of(id) == combined);
-    bounded(if combined.is_empty() || taken {
-        label
-    } else {
-        format!("{label} into {}", quoted(combined))
+    worded(project, |names| {
+        let label = format!(
+            "Combine lines {} and {}",
+            names.line_or_a_line(kept),
+            names.line_or_a_line(other)
+        );
+        // The combined name is a new name, no line yet: plain.
+        if combined.is_empty() || taken {
+            label
+        } else {
+            format!("{label} into {}", quoted(combined))
+        }
     })
 }
 
@@ -895,20 +1016,26 @@ pub(crate) fn create_line_at_label(
     project: &Project,
     line_id: LineId,
     target: StationRef,
-) -> String {
-    let at = NameBook::of(project)
-        .station(target)
-        .unwrap_or_else(|| UNKNOWN_STATION.to_string());
-    bounded(format!(
-        "Create line {} at {at}",
-        line_or_a_line(project, line_id)
-    ))
+) -> Label {
+    worded(project, |names| {
+        let at = names
+            .station(target)
+            .unwrap_or_else(|| UNKNOWN_STATION.to_string());
+        format!("Create line {} at {at}", names.line_or_a_line(line_id))
+    })
 }
 
 /// `Split line "Main Line" at 5`: Split Line Here. `line_name` is the line's
-/// name before the cut; `at` is the name of the station it was cut at.
-pub(crate) fn split_line_label(line_name: &str, at: &str) -> String {
-    bounded(format!("Split line {} at {at}", quoted(line_name)))
+/// name before the cut, the line `line` (the first half keeps its id: the
+/// part, when given); `at` is the name of the station it was cut at.
+pub(crate) fn split_line_label(line: Option<LineId>, line_name: &str, at: &str) -> Label {
+    Label::of(
+        format!("Split line {} at {at}", quoted(line_name)),
+        &format!(
+            "Split line {} at {at}",
+            prose::mark(&prose::line_part(line, line_name, true))
+        ),
+    )
 }
 
 /// What a range delete does with the line besides deleting the shots.
@@ -934,43 +1061,50 @@ pub(crate) fn delete_shots_label(
     first: usize,
     last: usize,
     then: ShotsDeleted,
-) -> String {
-    let line = line_or_a_line(project, line_id);
+) -> Label {
     if then == ShotsDeleted::LastOfLine {
-        return bounded(format!("Delete line {line} with its last shot"));
+        return worded(project, |names| {
+            format!(
+                "Delete line {} with its last shot",
+                names.line_or_a_line(line_id)
+            )
+        });
     }
-    let names = NameBook::of(project);
+    let plain = NameBook::of(project);
     let station = |index: usize| {
         u32::try_from(index)
             .ok()
-            .and_then(|i| names.station_name_text(StationRef::new(line_id, i)))
+            .and_then(|i| plain.station_name_text(StationRef::new(line_id, i)))
             .unwrap_or_else(|| index.to_string())
     };
     let count = last.saturating_sub(first) + 1;
+    // The span names the stations by their bare names, no line: plain.
     let span = format!("{} \u{2192} {}", station(first), station(last + 1));
     let shots = if count == 1 {
         format!("shot {span}")
     } else {
         format!("{count} shots ({span})")
     };
-    bounded(match then {
-        ShotsDeleted::Split => format!("Delete {shots} and split line {line}"),
-        _ => format!("Delete {shots} from line {line}"),
+    worded(project, |names| {
+        let line = names.line_or_a_line(line_id);
+        match then {
+            ShotsDeleted::Split => format!("Delete {shots} and split line {line}"),
+            _ => format!("Delete {shots} from line {line}"),
+        }
     })
 }
 
 /// `Import line "Main"`, `Import lines "A" and "B"`, `Import 5 lines ("A",
 /// "B", "C" and 2 more)`: the lines one import made, worded AFTER it.
-pub(crate) fn import_lines_label(project: &Project, line_ids: &[LineId]) -> String {
-    let names: Vec<String> = line_ids
-        .iter()
-        .map(|&id| line_or_a_line(project, id))
-        .collect();
-    bounded(match names.len() {
-        0 => "Import".to_string(),
-        1 => format!("Import line {}", listed(&names)),
-        n if n <= NAMES_LISTED => format!("Import lines {}", listed(&names)),
-        n => format!("Import {n} lines ({})", listed(&names)),
+pub(crate) fn import_lines_label(project: &Project, line_ids: &[LineId]) -> Label {
+    worded(project, |book| {
+        let names: Vec<String> = line_ids.iter().map(|&id| book.line_or_a_line(id)).collect();
+        match names.len() {
+            0 => "Import".to_string(),
+            1 => format!("Import line {}", listed(&names)),
+            n if n <= NAMES_LISTED => format!("Import lines {}", listed(&names)),
+            n => format!("Import {n} lines ({})", listed(&names)),
+        }
     })
 }
 

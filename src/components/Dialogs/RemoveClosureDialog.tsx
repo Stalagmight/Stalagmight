@@ -8,8 +8,8 @@ import type { RemoveClosureNaming } from '../../types/ipc/RemoveClosureNaming';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { listNames } from '../../utils/listNames';
-import { displayStationName } from '../../utils/formatters';
 import { StationBlob } from '../common/EntityBlob';
+import { Prose } from '../common/Prose';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
@@ -20,8 +20,8 @@ import {
   renamesProblem,
   StickyDialogFooter,
   useCollisionAnswers,
-  useIdentityLabel,
 } from './keptStationParts';
+import { useKeptProse } from './keptStationProse';
 
 interface ClosureChoice {
   closureId: bigint;
@@ -52,7 +52,7 @@ export default function RemoveClosureDialog() {
   const { closeDialog, dialogData } = useUIStore();
   const { stations, removeLoopClosure, project } = useProjectStore();
   const labels = useIdentityLabels();
-  const identityLabel = useIdentityLabel();
+  const prose = useKeptProse();
   const editingBlocked = useEditingBlocked();
 
   const anchorStation = dialogData.anchorStation as StationRef | undefined;
@@ -140,12 +140,13 @@ export default function RemoveClosureDialog() {
     : undefined;
 
   /** The station a closure hides, by closure id (the rows' "17 comes back"):
-   *  for the closure chosen, under the name the answers give it. */
+   *  for the closure chosen, under the name the answers give it. Its bare
+   *  name as a prose token, the pill coloured by its home line. */
   const hiddenOf = (closureId: bigint): string | null => {
     const archive = project?.loop_closures?.find((c) => sameClosureId(c.id, closureId))?.archived;
     if (!archive) return null;
     const answered = comesBack && sameClosureId(naming?.closure_id, closureId) && comesBack.id === archive.station.id;
-    return displayStationName(answered ? comesBack.name : archive.station.name);
+    return prose.identity({ ...archive.station, name: answered ? comesBack.name : archive.station.name }, false);
   };
 
   // The ends of the chosen closure that another closure shows as another
@@ -159,8 +160,8 @@ export default function RemoveClosureDialog() {
     if (by !== undefined && !sameClosureId(by, chosen?.id) && archive) {
       staysShown.push(
         t('dialogs.closure.staysShownAs', {
-          station: identityLabel(archive.station),
-          shown: identityLabel(archive.shown_as),
+          station: prose.identity(archive.station),
+          shown: prose.identity(archive.shown_as),
         }),
       );
     }
@@ -231,6 +232,7 @@ export default function RemoveClosureDialog() {
         <div className="space-y-2 max-h-56 overflow-y-auto border border-border rounded p-2">
           {closures.map((closure) => {
             const closureIdKey = closure.closureId.toString();
+            const hidden = hiddenOf(closure.closureId);
             return (
               <label key={closureIdKey} className="flex items-center gap-2 text-sm p-1 rounded hover:bg-background-50">
                 <input
@@ -244,9 +246,9 @@ export default function RemoveClosureDialog() {
                 <span>
                   #{closureIdKey} - {getStationDisplayLabel(closure.stationRef)}
                 </span>
-                {hiddenOf(closure.closureId) !== null && (
+                {hidden !== null && (
                   <span className="text-text-secondary" data-testid={`remove-closure-option-${closureIdKey}-back`}>
-                    {t('dialogs.removeClosure.rowComesBack', { name: hiddenOf(closure.closureId) })}
+                    <Prose text={t('dialogs.removeClosure.rowComesBack', { name: hidden })} />
                   </span>
                 )}
               </label>
@@ -262,12 +264,19 @@ export default function RemoveClosureDialog() {
         {naming && comesBack && (
           <div className="space-y-1 text-sm" data-testid="remove-closure-comes-back">
             <p className="text-text-primary">
-              {t(naming.renamed_lines.length > 0 && naming.shown_as ? 'dialogs.removeClosure.comesBack' : 'dialogs.removeClosure.comesBackPlain', {
-                station: identityLabel(comesBack),
-                shown: naming.shown_as ? identityLabel(naming.shown_as) : '',
-                count: naming.renamed_lines.length,
-                lines: listNames(naming.renamed_lines.map(labels.lineName), t),
-              })}
+              <Prose
+                text={t(
+                  naming.renamed_lines.length > 0 && naming.shown_as
+                    ? 'dialogs.removeClosure.comesBack'
+                    : 'dialogs.removeClosure.comesBackPlain',
+                  {
+                    station: prose.identity(comesBack),
+                    shown: naming.shown_as ? prose.identity(naming.shown_as) : '',
+                    count: naming.renamed_lines.length,
+                    lines: listNames(naming.renamed_lines.map((id) => prose.line(id)), t),
+                  },
+                )}
+              />
             </p>
             {(comesBack.comment ?? '').trim() !== '' && (
               <p className="text-text-secondary" data-testid="remove-closure-comes-back-comment">
@@ -278,9 +287,13 @@ export default function RemoveClosureDialog() {
         )}
         {naming && naming.comes_back === undefined && (
           <p className="text-sm text-text-secondary" data-testid="remove-closure-nothing-back">
-            {staysShown.length === 0
-              ? t('dialogs.removeClosure.nothingBack')
-              : [t('dialogs.removeClosure.nothingBackShown'), ...staysShown].join(' ')}
+            <Prose
+              text={
+                staysShown.length === 0
+                  ? t('dialogs.removeClosure.nothingBack')
+                  : [t('dialogs.removeClosure.nothingBackShown'), ...staysShown].join(' ')
+              }
+            />
           </p>
         )}
         {naming && (

@@ -5,6 +5,8 @@ import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
+import { EntityBlob } from '../common/EntityBlob';
+import { Prose } from '../common/Prose';
 import { DialogWrapper } from './DialogWrapper';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -22,6 +24,7 @@ import type { GpsCoordinates } from '../../types/project';
 import type { StationRef } from '../../types/project';
 import type { DatumGap } from '../../types/ipc/DatumGap';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useProse } from '../../hooks/useProse';
 import { stationRenameProblem, stationNameProblemMessage } from '../../utils/nameValidation';
 import { editNeedsOwnerPrompt, ShownIdentityPrompt } from './ShownIdentityPrompt';
 
@@ -38,6 +41,7 @@ export default function EditStationDialog() {
   const { closeDialog, dialogData } = useUIStore();
   const { stations, project, setZeroDatum, removeZeroDatum, updateStationComment, setStationName } = useProjectStore();
   const labels = useIdentityLabels();
+  const prose = useProse();
   // Every save path here mutates; the Closures Computed View and Plan/Export
   // have no server backstop, so the gate lives in the UI (useEditingBlocked).
   const editingBlocked = useEditingBlocked();
@@ -96,6 +100,12 @@ export default function EditStationDialog() {
   const nameProblem = stationRef && nameChanged ? stationRenameProblem(name, nameTakenOn) : null;
   const nameError = nameProblem
     ? stationNameProblemMessage(nameProblem, nameTakenOn !== null ? labels.lineName(nameTakenOn) : lineName, name)
+    : nameRefusal;
+  // The same message as the field shows it: the line it names as a pill (the
+  // Save button's tooltip and the field's description read the plain words).
+  const takenLine = nameTakenOn ?? stationRef?.line_id;
+  const nameErrorProse = nameProblem
+    ? stationNameProblemMessage(nameProblem, takenLine === undefined ? '' : prose.line(takenLine), name)
     : nameRefusal;
 
   // What this datum would do, as soon as valid GPS is entered (#741).
@@ -367,7 +377,7 @@ export default function EditStationDialog() {
           />
           {nameError ? (
             <p id="station-name-error" className="text-xs text-error" data-testid="station-name-error">
-              {nameError}
+              <Prose text={nameErrorProse ?? nameError} />
             </p>
           ) : (
             <p className="text-xs text-text-secondary">{t('dialogs.editStation.nameHint')}</p>
@@ -394,9 +404,13 @@ export default function EditStationDialog() {
                 other lines are named, not their names for it. */}
             <span className="text-sm text-text-secondary">{t('detailPanel.station.alsoOn')}:</span>
             <ul className="mt-1" data-testid="edit-station-also-on">
+              {/* A list of names, not a sentence: each a line pill, as the
+                  detail panel's Also on list draws them. */}
               {station.merged_with.map((ref, i) => (
                 <li key={i} className="text-sm">
-                  {labels.lineName(ref.line_id)}
+                  <EntityBlob entity="line" lineId={ref.line_id}>
+                    {labels.lineName(ref.line_id)}
+                  </EntityBlob>
                 </li>
               ))}
             </ul>
@@ -507,7 +521,7 @@ export default function EditStationDialog() {
               )}
               {shownSlot?.loop_end && (
                 <p className="text-xs text-text-secondary pt-1" data-testid="station-datum-loop-end">
-                  {t('dialogs.editStation.loopEndDatum', { station: labels.station(stationRef, true) })}
+                  <Prose text={t('dialogs.editStation.loopEndDatum', { station: prose.station(stationRef, true) })} />
                 </p>
               )}
               {storedDatum && (

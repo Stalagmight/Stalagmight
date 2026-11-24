@@ -1,6 +1,10 @@
 import { useTranslation } from 'react-i18next';
 import { displayStationName } from '../../utils/formatters';
 import type { ArchivedStation } from '../../types/ipc/ArchivedStation';
+import { useProse } from '../../hooks/useProse';
+import { proseToken } from '../../utils/prose';
+import { ownStationPart } from '../../utils/proseNameParts';
+import { Prose } from '../common/Prose';
 
 /**
  * The records of a node grouped by the station each was archived under
@@ -50,30 +54,37 @@ export function recordTree(
  * in is listed under that station (RS-FX4): Detach brings the two back
  * together, the one still inside the other. Nothing is rendered when the
  * station has none.
+ *
+ * Each record's sentence draws its name and the lines it names as prose
+ * pills (RS-PROSE): the name coloured by the record's first line (its home,
+ * as `recordIdentity` reads it), without the superscript Station ID the
+ * sentence states itself.
  */
-export function StationRecords({
-  records,
-  lineName,
-}: {
-  records: ReadonlyArray<ArchivedStation> | undefined;
-  lineName: (lineId: number) => string;
-}) {
+export function StationRecords({ records }: { records: ReadonlyArray<ArchivedStation> | undefined }) {
   const { t } = useTranslation();
+  const prose = useProse();
   if (!records || records.length === 0) return null;
   const { top, under } = recordTree(records);
   const item = (record: ArchivedStation, depth: number) => {
     const name = record.name !== '' ? displayStationName(record.name) : String(record.id);
     const comment = (record.comment ?? '').trim();
     const inside = under.get(record.id) ?? [];
+    const namePill = proseToken(ownStationPart(name, record.lines[0]));
     return (
       <li key={record.id} data-testid={`station-detail-record-${record.id}`}>
-        {record.lines.length > 0
-          ? t('detailPanel.station.recordOfLines', {
-              name,
-              id: record.id,
-              lines: record.lines.map(lineName).join(', '),
-            })
-          : t('detailPanel.station.recordHistory', { name, id: record.id })}
+        <span data-testid={`station-detail-record-${record.id}-text`}>
+          <Prose
+            text={
+              record.lines.length > 0
+                ? t('detailPanel.station.recordOfLines', {
+                    name: namePill,
+                    id: record.id,
+                    lines: record.lines.map((lineId) => prose.line(lineId)).join(', '),
+                  })
+                : t('detailPanel.station.recordHistory', { name: namePill, id: record.id })
+            }
+          />
+        </span>
         {comment !== '' && (
           <span className="block text-xs text-text-secondary" data-testid={`station-detail-record-${record.id}-comment`}>
             {t('detailPanel.station.recordComment', { comment })}

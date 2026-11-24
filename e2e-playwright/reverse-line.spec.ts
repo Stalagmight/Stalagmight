@@ -13,6 +13,7 @@ import {
   waitForMapReady,
   waitForNoDialogs,
 } from './helpers/app';
+import { expectSpoken, prosePillKinds } from './helpers/proseText';
 
 type StationRef = { line_id: number; station_index: number };
 
@@ -491,8 +492,10 @@ test.describe('Reverse Line', () => {
     // And it reverses only the line that was right-clicked.
     await page.getByRole('button', { name: 'Reverse Line', exact: true }).click();
     await expect(page.getByTestId('reverse-line-list').locator('li')).toHaveCount(1);
-    // The line by its name, and where it will run by its station names.
-    await expect(page.getByTestId('reverse-line-list')).toContainText('Line 3 (will run from 3 to 0)');
+    // The line by its name, and where it will run by its station names: prose pills
+    // that read as plain text wrote them.
+    await expectSpoken(page.getByTestId('reverse-line-list'), 'Line 3 (will run from 3 to 0)');
+    expect(await prosePillKinds(page.getByTestId('reverse-line-list'))).toEqual(['line', 'station', 'station']);
   });
 
   test('counts a repeated line in the selection once', async ({ page }) => {

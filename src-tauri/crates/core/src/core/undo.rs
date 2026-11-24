@@ -65,7 +65,10 @@ impl HistoryDropped {
     fn of(error: &EntryError) -> Self {
         match error {
             EntryError::Version(found)
-                if *found < u64::from(crate::models::survey::changeset::HISTORY_FORMAT_VERSION) =>
+                if *found
+                    < u64::from(
+                        crate::models::survey::changeset::OLDEST_HISTORY_FORMAT_VERSION,
+                    ) =>
             {
                 Self::EarlierVersion
             }

@@ -7,9 +7,9 @@ import { notifyRemovedClosures } from '../../utils/closureRemovalToast';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { StationBlob } from '../common/EntityBlob';
+import { Prose } from '../common/Prose';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef } from '../../types/project';
-import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { listNames } from '../../utils/listNames';
 import type { BatchCommand } from '../../types/commands';
 import type { MergeDatumShift } from '../../types/ipc/MergeDatumShift';
@@ -34,8 +34,8 @@ import {
   recordIdentity,
   StickyDialogFooter,
   useCollisionAnswers,
-  useIdentityLabel,
 } from './keptStationParts';
+import { useKeptProse } from './keptStationProse';
 
 /** A move shorter than this (metres) is not worth a sentence: the two
  *  stations already sit on one point, as after a snap. */
@@ -285,7 +285,7 @@ function KeepPicker({
   disabled: boolean;
 }) {
   const { t } = useTranslation();
-  const label = useIdentityLabel();
+  const prose = useKeptProse();
   const offered = new Set(keeps.map((k) => k.keep));
   return (
     <fieldset className="space-y-1" data-testid="merge-keep">
@@ -314,7 +314,7 @@ function KeepPicker({
             )}
             {candidate.shown_as && (
               <span className="text-text-secondary" data-testid={`merge-keep-${id}-shown-as`}>
-                {t('dialogs.keptStations.shownAsThroughClosure', { station: label(candidate.shown_as) })}
+                <Prose text={t('dialogs.keptStations.shownAsThroughClosure', { station: prose.identity(candidate.shown_as) })} />
               </span>
             )}
           </label>
@@ -354,45 +354,50 @@ function KeepOutcome({
   inside: readonly ArchivedStation[];
 }) {
   const { t } = useTranslation();
-  const labels = useIdentityLabels();
-  const label = useIdentityLabel();
+  const prose = useKeptProse();
   const shownKept = kept ? (kept.shown_as ?? kept.identity) : null;
-  const keptName = shownKept ? label({ ...shownKept, name: nameOf(shownKept.id, shownKept.name) }) : null;
+  const keptName = shownKept ? prose.identity({ ...shownKept, name: nameOf(shownKept.id, shownKept.name) }) : null;
   const hasComment = (preview.hidden.comment ?? '').trim() !== '';
   return (
     <div className="space-y-1 text-sm">
       {preview.renamed_lines.length > 0 && keptName !== null && (
         <p className="text-text-primary" data-testid="merge-renamed-lines">
-          {t('dialogs.mergeStations.renamedLines', {
-            count: preview.renamed_lines.length,
-            lines: listNames(preview.renamed_lines.map(labels.lineName), t),
-            station: keptName,
-          })}
+          <Prose
+            text={t('dialogs.mergeStations.renamedLines', {
+              count: preview.renamed_lines.length,
+              lines: listNames(preview.renamed_lines.map((id) => prose.line(id)), t),
+              station: keptName,
+            })}
+          />
         </p>
       )}
       <p className="text-text-primary" data-testid="merge-hidden">
-        {t(hasComment ? 'dialogs.mergeStations.archivedWithComment' : 'dialogs.mergeStations.archived', {
-          station: label(preview.hidden),
-        })}
+        <Prose
+          text={t(hasComment ? 'dialogs.mergeStations.archivedWithComment' : 'dialogs.mergeStations.archived', {
+            station: prose.identity(preview.hidden),
+          })}
+        />
       </p>
       {/* Detach names the station it brings back, right after the one that
           is archived, then what travels inside it (RS-FX8, N4: placed after
           the inside sentence, "brings it back" read as that station). */}
       <p className="text-xs text-text-secondary" data-testid="merge-hidden-back">
-        {t('dialogs.mergeStations.detachBringsBack', { station: label(preview.hidden) })}
+        <Prose text={t('dialogs.mergeStations.detachBringsBack', { station: prose.identity(preview.hidden) })} />
       </p>
       {inside.map((record) => (
         <p key={record.id} className="text-text-secondary" data-testid={`merge-hidden-inside-${record.id}`}>
-          {t('dialogs.mergeStations.archivedInside', {
-            station: label(recordIdentity(record)),
-            id: record.id,
-            hidden: label(preview.hidden),
-          })}
+          <Prose
+            text={t('dialogs.mergeStations.archivedInside', {
+              station: prose.identityNoId(recordIdentity(record)),
+              id: record.id,
+              hidden: prose.identity(preview.hidden),
+            })}
+          />
         </p>
       ))}
       {preview.unarchived !== undefined && keptName !== null && (
         <p className="text-xs text-text-secondary" data-testid="merge-loop-end-shown">
-          {t('dialogs.mergeStations.loopEndShown', { station: keptName })}
+          <Prose text={t('dialogs.mergeStations.loopEndShown', { station: keptName })} />
         </p>
       )}
       <NameRepeats repeats={preview.repeats ?? []} />
@@ -410,7 +415,7 @@ function KeepOutcome({
  */
 function NameRepeats({ repeats }: { repeats: readonly NameRepeat[] }) {
   const { t } = useTranslation();
-  const labels = useIdentityLabels();
+  const prose = useKeptProse();
   if (repeats.length === 0) return null;
   return (
     <ul className="space-y-0.5 text-text-secondary" data-testid="merge-repeats">
@@ -419,12 +424,16 @@ function NameRepeats({ repeats }: { repeats: readonly NameRepeat[] }) {
           key={`${repeat.line_id}:${repeat.station.id}:${repeat.shown.id}`}
           data-testid={`merge-repeat-${repeat.line_id}-${repeat.station.id}`}
         >
-          {t(repeat.loop_end ? 'dialogs.mergeStations.repeatLoopEnd' : 'dialogs.mergeStations.repeat', {
-            line: labels.lineName(repeat.line_id),
-            name: displayStationName(repeat.name),
-            id: repeat.station.id,
-            home: repeat.shown.home_line === undefined ? '' : labels.lineName(repeat.shown.home_line),
-          })}
+          <Prose
+            text={t(repeat.loop_end ? 'dialogs.mergeStations.repeatLoopEnd' : 'dialogs.mergeStations.repeat', {
+              line: prose.line(repeat.line_id),
+              // The name the line shows twice, said as a name (both of its
+              // uses in the sentence): text, not one station's pill.
+              name: displayStationName(repeat.name),
+              id: repeat.station.id,
+              home: repeat.shown.home_line === undefined ? '' : prose.line(repeat.shown.home_line),
+            })}
+          />
         </li>
       ))}
     </ul>
@@ -440,10 +449,10 @@ function NameRepeats({ repeats }: { repeats: readonly NameRepeat[] }) {
  *  V-2: "4.0 m and 12.5 m become 9.7 m" counted 12.5 m twice). */
 function MergePreviewNotice({ preview, sayMove }: { preview: MergePreview; sayMove: boolean }) {
   const { t } = useTranslation();
-  const labels = useIdentityLabels();
+  const prose = useKeptProse();
   const precision = useDecimalPrecision();
   const depth = (v: number) => `${formatFixed(v, undefined, precision.depth)} ${t('common.units.meters')}`;
-  const piece = listNames(preview.moving_line_ids.map(labels.lineName), t);
+  const piece = listNames(preview.moving_line_ids.map((id) => prose.line(id)), t);
   const moves = sayMove && preview.shift_m >= MOVE_SAID_FROM_M && preview.moving_line_ids.length > 0;
   if (!moves && !preview.depths && preview.junctions.length === 0) return null;
   return (
@@ -454,40 +463,46 @@ function MergePreviewNotice({ preview, sayMove }: { preview: MergePreview; sayMo
           className="p-2 rounded bg-accent-10 text-text-primary"
           data-testid={`merge-preview-junction-${junction.station.line_id}-${junction.station.station_index}`}
         >
-          {t('dialogs.mergeStations.alreadyJoined', {
-            station: labels.station(junction.station, true),
-            lines: listNames(junction.line_ids.map(labels.lineName), t),
-          })}
+          <Prose
+            text={t('dialogs.mergeStations.alreadyJoined', {
+              station: prose.station(junction.station, true),
+              lines: listNames(junction.line_ids.map((id) => prose.line(id)), t),
+            })}
+          />
         </p>
       ))}
       {moves && (
         <p className="p-2 rounded bg-accent-10 text-text-primary" data-testid="merge-preview-move">
-          {t('dialogs.mergeStations.moves', {
-            // The verb agrees with the piece: "Upstream moves", "Upstream and
-            // Upstream Side move" (the lines named, up to three, N-13).
-            count: preview.moving_line_ids.length,
-            piece,
-            distance: formatDatumMetres(preview.shift_m),
-            station: labels.station(preview.joins, true),
-          })}
+          <Prose
+            text={t('dialogs.mergeStations.moves', {
+              // The verb agrees with the piece: "Upstream moves", "Upstream and
+              // Upstream Side move" (the lines named, up to three, N-13).
+              count: preview.moving_line_ids.length,
+              piece,
+              distance: formatDatumMetres(preview.shift_m),
+              station: prose.station(preview.joins, true),
+            })}
+          />
         </p>
       )}
       {preview.depths && (
         <p className="p-2 rounded bg-warning-10 text-warning-text" data-testid="merge-preview-depths">
-          {t('dialogs.mergeStations.depths', {
-            // Every reading, by line, none counted away: a list that stopped
-            // at three would hide what the mean takes.
-            readings: groupDepthReadings(preview.depths.readings, depth)
-              .map((r) =>
-                t(r.count > 1 ? 'dialogs.mergeStations.depthReadings' : 'dialogs.mergeStations.depthReading', {
-                  depth: r.depth,
-                  line: labels.lineName(r.line_id),
-                  count: r.count,
-                }),
-              )
-              .join(', '),
-            joined: depth(preview.depths.joined_m),
-          })}
+          <Prose
+            text={t('dialogs.mergeStations.depths', {
+              // Every reading, by line, none counted away: a list that stopped
+              // at three would hide what the mean takes.
+              readings: groupDepthReadings(preview.depths.readings, depth)
+                .map((r) =>
+                  t(r.count > 1 ? 'dialogs.mergeStations.depthReadings' : 'dialogs.mergeStations.depthReading', {
+                    depth: r.depth,
+                    line: prose.line(r.line_id),
+                    count: r.count,
+                  }),
+                )
+                .join(', '),
+              joined: depth(preview.depths.joined_m),
+            })}
+          />
         </p>
       )}
     </div>
@@ -498,16 +513,20 @@ function MergePreviewNotice({ preview, sayMove }: { preview: MergePreview; sayMo
  *  which piece moves, how far, and that its datum becomes a GPS fix. */
 function DatumShiftNotice({ shift, afterMove }: { shift: MergeDatumShift; afterMove: boolean }) {
   const { t } = useTranslation();
-  const labels = useIdentityLabels();
-  const piece = listNames(shift.moving_line_ids.map(labels.lineName), t);
-  const station = labels.station(shift.datum_station, true);
+  const prose = useKeptProse();
+  const piece = listNames(shift.moving_line_ids.map((id) => prose.line(id)), t);
+  const station = prose.station(shift.datum_station, true);
   // The verb agrees with the lines named: "is placed", "are placed".
   const count = shift.moving_line_ids.length;
   return (
     <p className="p-2 rounded bg-warning-10 text-warning-text text-sm" data-testid="merge-datum-shift">
-      {afterMove
-        ? t('dialogs.mergeStations.datumShiftAfterMove', { piece, station, count })
-        : t('dialogs.mergeStations.datumShift', { piece, station, count, distance: formatDatumMetres(shift.shift_m) })}
+      <Prose
+        text={
+          afterMove
+            ? t('dialogs.mergeStations.datumShiftAfterMove', { piece, station, count })
+            : t('dialogs.mergeStations.datumShift', { piece, station, count, distance: formatDatumMetres(shift.shift_m) })
+        }
+      />
     </p>
   );
 }

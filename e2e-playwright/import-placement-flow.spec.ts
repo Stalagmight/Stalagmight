@@ -4,6 +4,7 @@ import {
   createProject,
   createLineViaStore,
 } from './helpers/app';
+import { expectProse } from './helpers/proseSentence';
 
 type MockSuggestion = {
   existingStationIndex: number;
@@ -271,6 +272,10 @@ test.describe('Import Placement Flow', () => {
     await openDmpWizard(page);
 
     await expect(page.getByTestId('wizard-connection-description')).toBeVisible();
+    // Both ends are prose pills (RS-PROSE): the project's Anchor Line slot,
+    // and the incoming line's station (neutral: not in the project yet).
+    await expectProse(page.getByTestId('wizard-connection-from'), /^Anchor Candidate \/ \S+$/, ['station']);
+    await expectProse(page.getByTestId('wizard-connection-to'), /^Anchor Line \/ \S+$/, ['station']);
     await expect(page.getByTestId('wizard-confidence')).toBeVisible();
     await expect(page.getByTestId('confirm-button')).toBeVisible();
     await expect(page.getByTestId('skip-button')).toBeVisible();

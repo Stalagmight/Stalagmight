@@ -26,6 +26,7 @@ import { useSpeleoStore } from '../../../store/speleoStore';
 import { surveyDataFromLegacy } from '../../../types/survey-data';
 import type { Project, Line, Shot } from '../../../types/project';
 import type { Station } from '../../../types/ipc/Station';
+import { accessibleText } from '../../../test/accessibleText';
 
 function shot(id: number): Shot {
   return {
@@ -124,9 +125,15 @@ describe('the Station details entry points (RS 7)', () => {
       closure_id: 5n, comes_back: { id: 12, name: '4', home_line: MAIN }, renamed_lines: [MAIN], collisions: [],
     });
     render(<DetailPanel />);
-    expect(screen.getByTestId('closure-archive-5')).toHaveTextContent(
+    // Both stations as prose pills (RS-PROSE), read as plain text wrote them.
+    const archive = screen.getByTestId('closure-archive-5');
+    expect(accessibleText(archive)).toBe(
       'Main / 4, the loop end, is shown as Main / 3a. Removing the closure brings it back.',
     );
+    expect([...archive.querySelectorAll('.sh-ppill')].map((el) => el.getAttribute('data-prose-kind'))).toEqual([
+      'station',
+      'station',
+    ]);
     await act(async () => {
       fireEvent.click(screen.getByTestId('detail-remove-closure-5'));
     });

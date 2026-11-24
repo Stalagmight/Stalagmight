@@ -478,6 +478,7 @@ impl AppState {
                                  SpeleoDB website."
                             ),
                             severity: WarningSeverity::Warning,
+                            parts: None,
                         });
                         result.with_warnings(warnings)
                     }
@@ -852,6 +853,7 @@ impl AppState {
                         "The copy was removed, but some of its files could not be ({e})."
                     ),
                     severity: WarningSeverity::Warning,
+                    parts: None,
                 });
                 result.with_warnings(warnings)
             }

@@ -18,6 +18,7 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { MIN_SPLIT_CHILD_LENGTH_M } from '../../utils/shotSplit';
 import type { Project, LineId, ShotId } from '../../types/project';
 import type { CommandResult } from '../../types/commands';
+import { accessibleText } from '../../test/accessibleText';
 
 const LINE_ID = 1 as LineId;
 const SHOT_ID = 2 as ShotId;
@@ -72,10 +73,13 @@ beforeEach(() => {
 describe('InsertStationDialog identity', () => {
   it('names the line in the title and the shot it splits by its station names', () => {
     render(<InsertStationDialog />);
+    // The title is plain text; the shot in the lead is a prose pill (RS-PROSE).
     expect(screen.getByText('Insert Station in Main Passage')).toBeInTheDocument();
-    expect(
-      screen.getByText('Splits the shot 4 \u2192 5 into two, adding a station at the given distance from its start.')
-    ).toBeInTheDocument();
+    const lead = screen.getByTestId('insert-station-lead');
+    expect(lead.querySelector('.sh-ppill[data-prose-kind="shot"]')).not.toBeNull();
+    expect(accessibleText(lead)).toBe(
+      'Splits the shot 4 \u2192 5 into two, adding a station at the given distance from its start.'
+    );
   });
 });
 

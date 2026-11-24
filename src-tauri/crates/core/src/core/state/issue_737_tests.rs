@@ -14,7 +14,7 @@
 
 use std::collections::HashSet;
 
-use super::command_shot::{closure_removed_message, ClosureNames};
+use super::command_shot::{closure_removed_marked, ClosureNames};
 use super::AppState;
 use crate::core::{Command, CommandResult, WarningSeverity};
 use crate::models::survey::{ClosureId, ClosureStrategy, LineMeta, Project, StartAt, ZeroDatum};
@@ -347,7 +347,11 @@ fn the_range_preview_lists_the_closure_the_gap_close_removes_by_its_stations() {
     assert_removed(&result, &["Line 1 / 1 to Line 1 / 5"]);
     assert_eq!(
         result.warnings[0].message,
-        closure_removed_message(&ClosureNames::of(&before), &before, &predicted[0])
+        crate::models::prose::unmark(&closure_removed_marked(
+            &ClosureNames::of(&before),
+            &before,
+            &predicted[0]
+        ))
     );
     assert!(project(&state).closures.is_empty());
     // Undo puts it back as C:1-C:5.
@@ -583,7 +587,9 @@ fn delete_fuzz(seed0: u64, cases: usize, snaps: bool) -> DeleteFuzz {
             let names = ClosureNames::of(&before);
             let shown: Vec<String> = predicted
                 .iter()
-                .map(|closure| closure_removed_message(&names, &before, closure))
+                .map(|closure| {
+                    crate::models::prose::unmark(&closure_removed_marked(&names, &before, closure))
+                })
                 .collect();
             let removed: Vec<String> = result
                 .warnings

@@ -3,7 +3,7 @@
 //! (`survey::Project::split_shot_at_distance` on `run_recorded`).
 
 use super::command_delete_split::recipe_record;
-use super::labels::insert_station_label;
+use super::labels::{insert_station_label, Label};
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::survey::changeset::PreviewRow;
@@ -67,12 +67,13 @@ impl AppState {
         );
         let result = self.run_recorded(
             |project| {
+                // A placeholder: the label is worded after the split.
                 recipe_record(
                     project,
-                    format!(
+                    Label::plain(format!(
                         "Insert station in line \"{}\"",
                         project.line_label_of(line_id)
-                    ),
+                    )),
                     line_id,
                 )
             },
@@ -90,7 +91,7 @@ impl AppState {
                     .split_shot_at_distance(line_id, shot_id, distance, None)
                     .map_err(|e| e.to_string())?
                     .value;
-                record.label = insert_station_label(project, line_id, made.station);
+                record.set_label(insert_station_label(project, line_id, made.station));
                 record.refs.stations.push(made.station);
                 record.refs.shots.push(made.head_uuid.clone());
                 if let Some(tail) = project

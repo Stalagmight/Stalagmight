@@ -216,6 +216,7 @@ mod closure_archive_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod dotted_names_tests;

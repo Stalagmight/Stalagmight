@@ -8,6 +8,8 @@ import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { useProse } from '../../hooks/useProse';
+import { Prose } from '../common/Prose';
 
 /** Clamp a 0..1 fraction; `projectParamOnSegment` already clamps, this is belt
  *  and braces against a NaN or an out-of-range value reaching the arithmetic. */
@@ -32,13 +34,14 @@ export default function InsertStationDialog() {
   const { closeDialog, dialogData, setSelection } = useUIStore();
   const { splitShotAtDistance } = useProjectStore();
   const labels = useIdentityLabels();
+  const prose = useProse();
 
   const lineId = dialogData.lineId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;
   const shotLength = (dialogData.shotLength as number | undefined) ?? 0;
   const lineName = lineId !== undefined ? labels.lineName(lineId) : undefined;
-  // `4 → 5`: the line is in the title.
-  const shotLabel = lineId !== undefined && shotId !== undefined ? labels.shot(lineId, shotId) : null;
+  // `4 → 5` as a prose pill (RS-PROSE): the line is in the (plain) title.
+  const shotLabel = lineId !== undefined && shotId !== undefined ? prose.shot(lineId, shotId) : null;
   /**
    * Where along the shot the map right-click landed, 0..1 from the from-station.
    * Only present for a map context menu; the data-table menu has no position on
@@ -166,10 +169,14 @@ export default function InsertStationDialog() {
       data-testid="insert-station-dialog"
     >
       <div className="space-y-4">
-        <p className="text-text-secondary">
-          {shotLabel
-            ? `Splits the shot ${shotLabel} into two, adding a station at the given distance from its start.`
-            : 'Splits the shot into two, adding a station at the given distance from its start.'}
+        <p className="text-text-secondary" data-testid="insert-station-lead">
+          <Prose
+            text={
+              shotLabel
+                ? `Splits the shot ${shotLabel} into two, adding a station at the given distance from its start.`
+                : 'Splits the shot into two, adding a station at the given distance from its start.'
+            }
+          />
         </p>
 
         {error && (

@@ -344,12 +344,13 @@ Paths without a dialog: rule L, reported.
   the loop mark on loop ends; editing a name or comment there goes through the
   prompt of 5.4.
 - **Pills**: station and shot pills pass `homeLineId` on foreign slots
-  (`rs/P-pills`); plain-text contexts (warnings, toasts, search results,
-  history rows, aria, tooltips, closure texts, Plan lists) write "12 (Main)"
+  (`rs/P-pills`); plain-text contexts (search results, aria, tooltips,
+  Plan lists) and the words of a prose pill (running text: warnings, toasts,
+  history rows, closure texts, dialog sentences, RS-PROSE) write "12 (Main)"
   and "Side / 12 (Main)" for a foreign slot and "12 (loop end on Side)" and
   "Main / 12 (loop end on Side)" for a loop end (U-P3-8, RS-FX5), so two
   "12"s on one line read apart; one helper on each side words it.
-- **History rows** name the kept station: "Merge Side / 0 into Main / 12 (keeps
+- **History rows** (prose pills since RS-PROSE) name the kept station: "Merge Side / 0 into Main / 12 (keeps
   12)", "Create loop closure: Side / 17 shown as Main / 3" (U-P3-6).
 - **Plan mode**: routes, the ruler path and turn or drop lists collapse
   consecutive nodes that share a shown identity across a closure edge (keeping
@@ -2089,3 +2090,221 @@ its reason.
   new name changes it on every line it is on." is left out whenever the
   go-on button names the lines (every case but a rename with no new name
   to say).
+
+## Deviations (package RS-PROSE)
+
+The user's request (2026-11-24): prose should still use pills, not "Main /
+12"; the pills should not affect the line spacing; check how it looks before
+submitting; if pills overlap frequently, drop the pill background for
+something like a radial gradient that fades towards the edges. Decisions
+this package took, each with its reason; they supersede section 6's
+"plain-text contexts write" for running text (its words stay the same).
+
+- **Running text names with prose pills.** Every visible sentence that
+  names a station, shot or line (the Merge, Create Loop Closure, Detach,
+  Remove Closure, shown-identity, Delete Shot, Delete Shots, Delete Line,
+  Split Line Here, Combine, Reverse, Swap Comments and Insert Station
+  dialogs, the Station details sentences, the Warnings tab, the undo and
+  redo rows, the conversion notice, the identity and removed-closure toasts,
+  the map legends' "from" lines, the far-GPS-fix notice, the Plan endpoint
+  sentences and the import wizards' connection lines) draws each name as a
+  `ProsePill`: the link pill's dot, muted context, bare name, home-line dot,
+  loop mark and superscript Station ID, inline. A screen reader reads the
+  sentence exactly as plain text wrote it (the drawing is aria-hidden, the
+  plain words sit beside it as sr-only text), and below the Full level the
+  pill is that plain text. Plain-text contexts keep the plain label:
+  aria-labels, tooltips, native dialogs, the clipboard, exports, files, logs,
+  telemetry, option labels, dialog titles, button labels and backend error
+  strings (`CommandResult.error` also feeds logs and the catch-all toast).
+- **One token form for frontend sentences.** `useProse()` mirrors the
+  plain labels (`prose.station(ref, true)` for `labels.station(ref, true)`)
+  and gives a token: the part as URI-encoded JSON between U+0001 and U+0002.
+  A token is a string, so it passes through `t()` interpolation, `listNames`
+  and the toast store, and `<Prose text>` splits it back; en.json is
+  unchanged and no node is concatenated. `proseToPlain` gives the plain words
+  for a plain sink.
+- **Structured parts from the backend, beside the plain string.** A
+  backend text that names something carries `Vec<ProsePart>`
+  (`models::prose`): `ProjectWarning.messageParts`, `ValidationWarning.parts`
+  (removed closures, per-shot checks after Reverse Line and Create Shot),
+  `UndoHistoryItem.descriptionParts`, `ConversionNoticeView.change_parts` and
+  `detail_parts`. Builders mark names in their `format!`
+  (`Project::slot_marked`, `shot_marked`, `station_marked`, `line_marked`)
+  and split at the boundary, so the plain string is byte-identical to before
+  and is the parts' words concatenated (tested per producer). A marked string
+  never reaches a plain sink. Left plain: Create Line and import validation
+  warnings (they name a chain position on a line that does not exist yet),
+  the "(keeps 12)" and delete-span names inside history labels, the history
+  preview popup's key-value rows, the closure refusal sentence (its dialog
+  data comes from the opener) and every command error.
+- **History format version 3, only where it is needed.** A history label is
+  persisted, so its parts are too: `label_parts` beside `label`, without
+  slots (stable ids only). An entry is written as version 3 only when it has
+  parts; one whose label names nothing keeps version 2's layout, which the
+  previous build reads (pre-PR fix 4). That only helps a history whose
+  labels all name nothing: one version 3 entry makes the previous build drop
+  the whole history, and most labels name something (all 16 of the measured
+  mix below), so in practice a downgrade loses the history, as any version
+  bump does. Version 2 entries are still read and
+  render plain; parts that do not fit (a cut label, words that differ, a part
+  drawing a name or context its own words do not hold, an unknown kind) are
+  dropped on read, never the entry (fix 5). The older build drops such a
+  history with its banner.
+- **What the parts cost the history budget** (measured, pre-PR item 9;
+  `history_labels_tests::label_parts_cost_a_measured_share_of_the_history_budget`):
+  a typical mix of 16 steps (9 shot cell edits, 2 renames, a comment, an
+  appended shot, a merge, a move, a delete and a reverse) on a small survey
+  encodes to 8881 bytes with parts and 6214 without, +42.9%: about 160 bytes
+  per entry (122 to 185; a merge, naming two stations, 300). Mean entry 555
+  bytes against 388, so the 4 MiB Full-mode budget (`UNDO_BYTE_BUDGET_BYTES`)
+  holds about 7556 such steps instead of 10799: 3243 fewer, 30%. The cost is
+  per entry and does not grow with the survey, so larger changesets pay a
+  smaller share; local projects keep a count window (20 by default), which
+  the parts do not change. Accepted: thousands of steps still fit, and the
+  pills are the point. If it ever matters, a part's `text` (the label's own
+  words) is what could be left to be re-derived.
+- **No value can forge or crash a pill** (pre-PR fixes 1 and 3). A comment, a
+  name or a file name interpolated into a sentence could hold U+0001...U+0002.
+  Frontend: a token carries the page load's random nonce and is read only
+  with a part's full shape (`partOf`); every `t()` interpolation (the i18n
+  `format` hook, run for every value before i18next measures it: an
+  `escape` hook that shortened a value made i18next skip the next
+  placeholder) and every raw value a sentence is built from by hand goes
+  through `proseValue`, which drops the markers and other C0 controls; a pill
+  whose part lacks a field draws its plain words. Backend: marks carry the
+  process's random nonce, `parse` drops every other marker character (the
+  one place raw interpolated text is cleaned), `mark` cleans a part's own
+  fields, and `split` keeps parts only when their words are the text's (the
+  check `Label::of` makes). Loaders and importers keep a name as its file has
+  it (a typed name already refuses control characters); text is cleaned
+  where it is worded and drawn, not by rewriting stored data.
+- **A pill draws its words as recorded** (fix 2): a history row keeps the
+  line names it was recorded with; the live line only colours it. Pills name
+  lines by their display names (fix 6), and what a pill draws from a part is
+  sanitised as displayed names are (fix 5). The conversion banner's sentence
+  reads capitalised with pills as plain (fix 7); the prose types are
+  generated into `src-tauri/bindings` (fix 8).
+- **No pill shape: a soft radial tint.** Measured in the real app (this
+  worktree's debug build through the agent harness, a synthetic survey of
+  seven lines in near-white, near-black, yellow, blue, grey, magenta and
+  green with long line and station names, four foreign junction slots and a
+  loop end; 19 surfaces) with the first design, a bordered fill: an inline
+  fill covers the font's whole content area, 19 px in a 20 px line at 14 px
+  and 16 px in a 16 px line at 12 px, so of 69 pairs of pills stacked on
+  adjacent lines 54 (78%) stood 1 px or less apart and 2 touched (0 px), and
+  77 of 94 superscript Station IDs rose up to 2.06 px above the fill. Two
+  lines of pills read as one block, so per the user's instruction the prose
+  pill paints no fill shape and no border: a `radial-gradient(farthest-side)`
+  of the line's tint per line fragment (`box-decoration-break: clone`), solid
+  to 45% of the radius and transparent at the fragment's edge. Its half-alpha
+  band is 13.8 px of a 19 px fragment and 11.6 px of a 16 px one, so the
+  tints of two stacked lines stay 6.2 px (20 px lines) and 4.4 px (16 px
+  lines) apart and never form an edge. The superscript now sits inside the
+  text's height (at most 0.41 px above the content box, inside the
+  half-leading).
+- **The tint is a translucent overlay.** An opaque tint computed for the
+  panel read as a dark smudge on the lighter accent and warning boxes; the
+  overlay (`proseTintOf`) composites to exactly the swept tint over the
+  panel and moves any other surface the same way. Its centre is the link
+  pill's hover tint, and since it fades to the bare surface,
+  `prosePillColors` holds text at 7:1, muted parts at 4.5:1 and the dot (or
+  its ring) and the home-line dot at 3:1 on both the tint and the panel, on
+  every theme over the link pill's colour sweep.
+- **Line pitch, measured.** In the running app every pill-bearing block was
+  measured with pills and again as plain text (highlighting off, same
+  element): line tops from the text's client rects, clustered into lines.
+  Dark and light themes at 1440x900 and 860x900: 103 blocks, 141 pills;
+  the 38 (1440) and 37 (860) blocks that wrap and were the same element both
+  ways gave 114 and 124 line gaps, every one equal to the block's
+  line-height (largest deviation 0 px); the identity toast keeps 20 px. The
+  blocks React rebuilt on the level change (9 and 10) were not paired.
+  `e2e-playwright/prose-line-pitch.spec.ts` repeats the measurement on the
+  Bulk Delete summary and a Warnings tab message (within 0.5 px); a
+  superscript given `vertical-align: super` fails it (1.66 px).
+- **Wrapping.** A pill wraps between its words, each line's fragment tinted
+  on its own; the dot stays with the first word, a shot's arrow with its far
+  end and the marks and Station ID with the last word, so no fragment is a
+  lone dot or arrow. The outer span paints nothing, so the sr-only words
+  never open an empty painted fragment.
+- **Accessible names of labels.** Chromium puts spaces around an absolutely
+  positioned sr-only span in an accessible name computed from content
+  ("Keep Side / 2 , Station ID 9"); an inline technique that avoided it
+  (`font-size: 0`) risks screen readers skipping the words. The sr-only
+  span stays, and the radios whose label is a prose sentence (collision
+  answers, Detach's lines that come off together) carry the plain sentence
+  as their `aria-label`.
+
+## Deviations (package RS-OWNERSHIP)
+
+The user's request (2026-11-24): stations need no disambiguation dot, the
+whole pill takes the colour of the line the station actually belongs to;
+the dot is only needed in shots, and a shot pill is half one colour, half
+the other. Decisions this package took, each with its reason; they
+supersede section 6's "Pills" bullet (pills pass `homeLineId` for a dot)
+and RS-FX6's home-line mark on station pills.
+
+- **A station pill is its owner's pill.** The owner is the home line of
+  the identity the slot shows, when it is not the slot's line
+  (`ownerLineOf`: a foreign slot, or a loop end whose kept end lives on
+  another line). The link pill's fill, border, hover and leading dot, or
+  the prose pill's tint and dot, are that line's, and a shown context names
+  it ("Main: 12" on Side), so no pill reads one line's name in another's
+  colour. The second dot is gone. The tooltip says "Belongs to Main"; a
+  button pill's aria-label keeps the plain words, a span pill reads "(Main)"
+  after the name, or "(on Side)" when its context already names Main, so
+  the slot's line is not lost to a screen reader. A loop end keeps its loop
+  mark and takes its kept end's colour. The data table's Name column keeps
+  "(Main)": its words tell the two 12s apart.
+- **Parts carry the owner for loop ends too.** `ProseStation.home_line` and
+  `ProseShotEnd.home_line` are now the owner line (a loop end's kept end's
+  home line included), and a station part's context names it. History
+  entries written by RS-PROSE builds before this package carried the slot's
+  line as context and no home line for a loop end: a foreign station in them
+  still renders in its owner's colour and name (the renderer names the
+  owner line itself), a loop end in its slot's colour. That only affects
+  unreleased development files, so the format version stays 3.
+- **A two-tone shot pill, split before the arrow.** A shot with an end of
+  another line paints segments instead of one pill: the from end's half and
+  the to end's half (the arrow opens the second), each in its owner's
+  colours or the shot's. The foreign end keeps its home-line dot, checked
+  against its own half (it is that line's own pill dot). When the from end
+  is the foreign one, the leading dot and the context (the shot's line)
+  form a head segment in the shot's colour, so the shot's name is never
+  printed on another line's colour; with both ends foreign the head, the
+  from half and the to half are three colours. Link pills: the halves are
+  `inline-flex` segments with no border between them, the later one
+  overlapping the earlier by 1px so no hairline of the panel shows at a
+  fractional seam, and a zero-width strut in the pill's font gives every
+  segment, even a head holding only the dot, the text's baseline and
+  height (without it the head came out 15 px tall against 23 px). Prose
+  pills: one radial tint per segment, fading as one pill does.
+- **The border tracks the line's lightness.** The fills of a near-white and
+  a near-black line differ by about 0.03 in OKLCH lightness (the band keeps
+  text legible), so in the first capture a near-white half read as a dark
+  gap. The border now goes `BORDER_TRACK` (0.22) further for a line toward
+  the theme's text pole: on the dark theme a near-white line's border is
+  #9d9d9d against a near-black one's #626262, on the light theme #bcbcbc
+  against #7e7e7e. The fill band and every text floor are unchanged;
+  `twoTonePills.test.ts` sweeps ordered pairs of hard colours (near-white
+  and near-black, yellow and blue, greys, primaries, a hue sweep) on every
+  theme for both variants: text 7:1, muted 4.5:1, the leading dot and the
+  foreign end's dot 3:1, each on its own half, at rest and on hover, and on
+  the tint and the panel for prose.
+- **Lists of slots keep the slot's line.** A delete's "no longer shared"
+  and "loop closures that join" pairs name two slots of one station; in
+  the owner's colour both read "Main: 12". They use `StationBlob`'s
+  `bySlot`, the slot's own colour and name, as the "Also on" rows name a
+  line, and still say whose station in a tooltip and in words.
+- **The narrow-panel truncation.** A link pill's context shrinks first
+  (`flex: 0 1000 auto`, ellipsized), so the station's name and Station ID
+  stay in the pill; a details row's value and the "Also on" row can shrink,
+  so a long line pill ellipsizes inside the panel instead of running past
+  its edge.
+- **Measured in the real app** (this worktree's build, a synthetic survey of
+  near-white, near-black, yellow, blue and magenta lines, two 12s on one
+  line, three junctions and a loop end; 13 surfaces in dark and light at
+  1440x900 and 860x900): prose line pitch equal to plain text's in every
+  compared block (18 to 20 blocks, 66 to 97 line gaps per combination, 0 px
+  deviation), with 6 to 10 two-tone prose pills on screen; no two tint
+  fragments on adjacent lines overlap (44 and 61 pairs); the Playwright
+  line-pitch spec now includes a two-tone prose shot.

@@ -8,6 +8,7 @@ import { getErrorMessage } from '../../utils/ipc';
 import { setSource } from '../../utils/telemetry';
 import { showBlockedNotice } from '../../utils/blockedNotice';
 import { DisabledReason } from '../common/DisabledReason';
+import { BackendProse } from '../common/Prose';
 import { formatDate, formatRelativeTime, formatNumber } from '../../i18n/format';
 import type { CommandResult, UndoHistoryItem, PreviewData } from '../../types/commands';
 import {
@@ -1098,12 +1099,14 @@ export default function UndoHistoryDropdown({
 
                     {/* Description and timestamp */}
                     <div className="flex-1 min-w-0">
+                      {/* The names the label says are prose pills (RS-PROSE,
+                          `descriptionParts`); the tooltip stays plain. */}
                       <div
                         className={HISTORY_ROW_CLASS}
                         title={item.description}
                         data-testid={`${testId}-description-${item.index}`}
                       >
-                        {item.description}
+                        <BackendProse text={item.description} parts={item.descriptionParts} />
                       </div>
                       <div className="text-xs text-text-secondary">
                         {formatTimestamp(item.timestamp, t)}

@@ -6,6 +6,7 @@ import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { StationBlob } from '../common/EntityBlob';
+import { Prose } from '../common/Prose';
 import { DialogWrapper } from './DialogWrapper';
 import { getErrorColor } from '../../utils/colors';
 import { formatFixed, formatPercent } from '../../i18n/format';
@@ -15,10 +16,10 @@ import type { ClosurePreview, BatchCommand } from '../../types/commands';
 import type { LoopClosureNaming } from '../../types/ipc/LoopClosureNaming';
 import type { ClosureKeepPreview } from '../../types/ipc/ClosureKeepPreview';
 import type { KeepCandidate } from '../../types/ipc/KeepCandidate';
-import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { listNames } from '../../utils/listNames';
-import { IdentityPill, StickyDialogFooter, useIdentityLabel } from './keptStationParts';
+import { IdentityPill, StickyDialogFooter } from './keptStationParts';
+import { useKeptProse } from './keptStationProse';
 
 /** "Keep both names" in the keep choice (no end archived). */
 const BOTH = 'both';
@@ -268,7 +269,7 @@ function ClosureKeepChoice({
   disabled: boolean;
 }) {
   const { t } = useTranslation();
-  const label = useIdentityLabel();
+  const prose = useKeptProse();
   return (
     <fieldset className="space-y-1" data-testid="closure-keep">
       <legend className="text-sm text-text-primary">{t('dialogs.closure.keepLead')}</legend>
@@ -289,7 +290,7 @@ function ClosureKeepChoice({
             <IdentityPill slot={end.station} identity={end.identity} testId={`closure-keep-${id}-pill`} />
             {end.shown_as && (
               <span className="text-text-secondary" data-testid={`closure-keep-${id}-shown-as`}>
-                {t('dialogs.keptStations.shownAsThroughClosure', { station: label(end.shown_as) })}
+                <Prose text={t('dialogs.keptStations.shownAsThroughClosure', { station: prose.identity(end.shown_as) })} />
               </span>
             )}
           </label>
@@ -320,7 +321,7 @@ function ClosureKeepChoice({
  */
 function RuleKRefusal({ naming }: { naming: LoopClosureNaming }) {
   const { t } = useTranslation();
-  const label = useIdentityLabel();
+  const prose = useKeptProse();
   if (naming.rule_k === undefined || naming.allowed.includes(naming.rule_k)) return null;
   const keep = naming.ends.find((e) => e.identity.id === naming.rule_k);
   const other = naming.ends.find((e) => e.identity.id !== naming.rule_k);
@@ -328,16 +329,16 @@ function RuleKRefusal({ naming }: { naming: LoopClosureNaming }) {
   const text =
     naming.rule_k_refused === 'other_end_archived' && other?.shown_as
       ? t('dialogs.closure.ruleKOtherEndArchived', {
-          keep: label(keep.identity),
-          other: label(other.identity),
-          shown: label(other.shown_as),
+          keep: prose.identity(keep.identity),
+          other: prose.identity(other.identity),
+          shown: prose.identity(other.shown_as),
         })
       : naming.rule_k_refused === 'kept_shows_other_end' && other
-        ? t('dialogs.closure.ruleKShowsOtherEnd', { keep: label(keep.identity), other: label(other.identity) })
-        : t('dialogs.closure.ruleKNotAllowed', { keep: label(keep.identity) });
+        ? t('dialogs.closure.ruleKShowsOtherEnd', { keep: prose.identity(keep.identity), other: prose.identity(other.identity) })
+        : t('dialogs.closure.ruleKNotAllowed', { keep: prose.identity(keep.identity) });
   return (
     <p className="text-xs text-text-secondary" data-testid="closure-keep-not-allowed">
-      {text}
+      <Prose text={text} />
     </p>
   );
 }
@@ -349,20 +350,26 @@ function RuleKRefusal({ naming }: { naming: LoopClosureNaming }) {
  *  keeps its own name" is said only when neither is. */
 function ClosureChoiceOutcome({ option, ends }: { option: ClosureKeepPreview; ends: KeepCandidate[] }) {
   const { t } = useTranslation();
-  const labels = useIdentityLabels();
-  const label = useIdentityLabel();
+  const prose = useKeptProse();
   if (!option.hidden) {
     const shownAs = ends.filter((e) => e.shown_as !== undefined);
     return (
       <p className="text-sm text-text-secondary" data-testid="closure-keep-outcome">
-        {shownAs.length === 0
-          ? t('dialogs.closure.keepsBoth')
-          : [
-              t('dialogs.closure.keepsBothShown'),
-              ...shownAs.map((e) =>
-                t('dialogs.closure.staysShownAs', { station: label(e.identity), shown: label(e.shown_as!) }),
-              ),
-            ].join(' ')}
+        <Prose
+          text={
+            shownAs.length === 0
+              ? t('dialogs.closure.keepsBoth')
+              : [
+                  t('dialogs.closure.keepsBothShown'),
+                  ...shownAs.map((e) =>
+                    t('dialogs.closure.staysShownAs', {
+                      station: prose.identity(e.identity),
+                      shown: prose.identity(e.shown_as!),
+                    }),
+                  ),
+                ].join(' ')
+          }
+        />
       </p>
     );
   }
@@ -370,14 +377,20 @@ function ClosureChoiceOutcome({ option, ends }: { option: ClosureKeepPreview; en
   return (
     <div className="space-y-1 text-sm" data-testid="closure-keep-outcome">
       <p className="text-text-primary" data-testid="closure-hidden">
-        {t(hasComment ? 'dialogs.closure.hiddenWithComment' : 'dialogs.closure.hidden', { station: label(option.hidden) })}
+        <Prose
+          text={t(hasComment ? 'dialogs.closure.hiddenWithComment' : 'dialogs.closure.hidden', {
+            station: prose.identity(option.hidden),
+          })}
+        />
       </p>
       {option.renamed_lines.length > 0 && (
         <p className="text-text-secondary" data-testid="closure-renamed-lines">
-          {t('dialogs.closure.renamedLines', {
-            count: option.renamed_lines.length,
-            lines: listNames(option.renamed_lines.map(labels.lineName), t),
-          })}
+          <Prose
+            text={t('dialogs.closure.renamedLines', {
+              count: option.renamed_lines.length,
+              lines: listNames(option.renamed_lines.map((id) => prose.line(id)), t),
+            })}
+          />
         </p>
       )}
     </div>

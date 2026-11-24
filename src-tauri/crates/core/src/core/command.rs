@@ -690,6 +690,52 @@ pub struct ValidationWarning {
     pub code: String,
     pub message: String,
     pub severity: WarningSeverity,
+    /// `message` as prose parts (RS-PROSE, `models::prose`): the same words,
+    /// each shot, station or line the message names as a part the frontend
+    /// draws as a pill (the removed-closure toast, the create-time shot
+    /// warnings). `prose::plain` of the parts is `message`, byte for byte.
+    /// Absent when the message names nothing. A name worded before the edit
+    /// carries no `slot` (the slot may name another station after it); one
+    /// worded after it may (a session handle, never persisted). Plain-text
+    /// sinks (logs, the catch-all) read `message`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parts: Option<Vec<crate::models::ProsePart>>,
+}
+
+impl ValidationWarning {
+    /// A warning whose message names nothing.
+    pub fn plain(code: &str, message: String, severity: WarningSeverity) -> Self {
+        Self {
+            code: code.to_string(),
+            message,
+            severity,
+            parts: None,
+        }
+    }
+
+    /// A warning worded with marked names (`prose::mark`): split at this
+    /// boundary into its plain message and its parts, so the marked string
+    /// never leaves the backend.
+    pub fn marked(code: &str, marked: &str, severity: WarningSeverity) -> Self {
+        let (message, parts) = crate::models::prose::split(marked);
+        Self {
+            code: code.to_string(),
+            message,
+            severity,
+            parts: crate::models::prose::named(parts),
+        }
+    }
+
+    /// [`Self::marked`] for a message worded before the edit it reports:
+    /// its parts lose their slots, which may name other stations after it.
+    pub fn marked_before_edit(code: &str, marked: &str, severity: WarningSeverity) -> Self {
+        let warning = Self::marked(code, marked, severity);
+        Self {
+            parts: warning.parts.map(crate::models::prose::without_slots),
+            ..warning
+        }
+    }
 }
 
 pub use crate::models::warning::WarningSeverity;
@@ -838,11 +884,11 @@ impl CommandResult {
 
     /// Attach a single warning message to this result.
     pub fn with_warning(mut self, message: &str) -> Self {
-        self.warnings.push(ValidationWarning {
-            code: "SYSTEM".to_string(),
-            message: message.to_string(),
-            severity: WarningSeverity::Warning,
-        });
+        self.warnings.push(ValidationWarning::plain(
+            "SYSTEM",
+            message.to_string(),
+            WarningSeverity::Warning,
+        ));
         self
     }
 }
@@ -1608,11 +1654,8 @@ mod tests {
 
     #[test]
     fn command_result_builder_sets_fields() {
-        let warning = ValidationWarning {
-            code: "test".to_string(),
-            message: "warn".to_string(),
-            severity: WarningSeverity::Warning,
-        };
+        let warning =
+            ValidationWarning::plain("test", "warn".to_string(), WarningSeverity::Warning);
 
         let success = CommandResult::success();
         assert!(success.success);

@@ -655,6 +655,17 @@ fn an_unconnected_line_is_listed_in_the_warnings() {
         "Line \"Unmerged\" is not connected to the rest of the survey and has no zero datum, \
          so nothing places it: merge a station onto the survey or give it a zero datum"
     );
+    // RS-PROSE: the line is a part, its words the quoted name.
+    let parts = w
+        .message_parts
+        .as_deref()
+        .expect("the message names its line");
+    assert_eq!(crate::models::prose::plain(parts), w.message);
+    assert!(parts.iter().any(|part| matches!(
+        part,
+        crate::models::ProsePart::Line(l)
+            if l.line_id == Some(unmerged) && l.name == "Unmerged" && l.text == "\"Unmerged\""
+    )));
     // The open-project entry point (the IPC's) lists it too.
     assert_eq!(
         state

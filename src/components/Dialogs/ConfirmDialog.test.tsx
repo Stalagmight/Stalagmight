@@ -11,7 +11,7 @@
  * `SplitLineDialog`'s failure handling (result-check + try/catch + in-flight guard).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 vi.mock('../../utils/telemetry', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../utils/telemetry')>()),
@@ -22,6 +22,7 @@ import ConfirmDialog from './ConfirmDialog';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { CommandResult } from '../../types/commands';
+import { accessibleText } from '../../test/accessibleText';
 
 const LINE_ID = 1;
 const SHOT_ID = 2;
@@ -163,6 +164,12 @@ describe('ConfirmDialog non-split delete refusal (#241)', () => {
  */
 describe('ConfirmDialog names the line it deletes (I-9)', () => {
   const shot = (length: number) => ({ id: length, length });
+  /** The message as a screen reader reads it, after checking the line is a pill (RS-PROSE). */
+  const message = () => {
+    const el = screen.getByTestId('confirm-dialog-message');
+    expect(el.querySelector('.sh-ppill[data-prose-kind="line"]')).not.toBeNull();
+    return accessibleText(el);
+  };
   beforeEach(() => {
     useProjectStore.setState({
       project: {
@@ -178,28 +185,41 @@ describe('ConfirmDialog names the line it deletes (I-9)', () => {
   it('says which line, how many shots and how long', () => {
     useUIStore.setState({ dialogData: { type: 'line', lineId: 4 } });
     render(<ConfirmDialog />);
-    expect(screen.getByTestId('confirm-dialog-message')).toHaveTextContent(
-      'Delete the line "Upstream Side" and its 2 shots (13.0 m)?',
+    expect(message()).toBe('Delete the line "Upstream Side" and its 2 shots (13.0 m)?');
+    // The pill draws the bare name; the quotes are the plain words'.
+    expect(screen.getByTestId('confirm-dialog-message').querySelector('[aria-hidden="true"]')!.textContent).toBe(
+      'Upstream Side',
     );
   });
 
   it('counts one shot as one, and names a line with no shots alone', () => {
     useUIStore.setState({ dialogData: { type: 'line', lineId: 5 } });
     const { unmount } = render(<ConfirmDialog />);
-    expect(screen.getByTestId('confirm-dialog-message')).toHaveTextContent(
-      'Delete the line "Sump Tail" and its 1 shot (3.0 m)?',
-    );
+    expect(message()).toBe('Delete the line "Sump Tail" and its 1 shot (3.0 m)?');
     unmount();
     useUIStore.setState({ dialogData: { type: 'line', lineId: 6 } });
     render(<ConfirmDialog />);
-    expect(screen.getByTestId('confirm-dialog-message')).toHaveTextContent(/^Delete the line ".+"\?$/);
+    expect(message()).toMatch(/^Delete the line ".+"\?$/);
   });
 
   it('names the line the last shot takes with it', () => {
     useUIStore.setState({ dialogData: { type: 'last-shot', lineId: 5, shotId: 5 } });
     render(<ConfirmDialog />);
-    expect(screen.getByTestId('confirm-dialog-message')).toHaveTextContent(
-      'Deleting the last shot will remove the entire line "Sump Tail". Continue?',
-    );
+    expect(message()).toBe('Deleting the last shot will remove the entire line "Sump Tail". Continue?');
+  });
+});
+
+describe('a caller message of null (RS-PROSE delta fix 6)', () => {
+  // A caller may pass `message: null` for "no message of mine": the default
+  // is shown, as before the prose change. Since 597213295 null reached
+  // proseValue and <Prose>, which threw. Injection: test `!== undefined` again.
+  it('shows the default message, and a message of its own is cleaned of markers', () => {
+    useUIStore.setState({ dialogData: { type: 'shot', lineId: LINE_ID, shotId: SHOT_ID, message: null } });
+    expect(() => render(<ConfirmDialog />)).not.toThrow();
+    expect(screen.getByTestId('confirm-dialog-message').textContent).not.toBe('');
+    cleanup();
+    useUIStore.setState({ dialogData: { type: 'shot', lineId: LINE_ID, shotId: SHOT_ID, message: 'Delete \u0001x\u0002 now?' } });
+    render(<ConfirmDialog />);
+    expect(screen.getByTestId('confirm-dialog-message').textContent).toBe('Delete x now?');
   });
 });

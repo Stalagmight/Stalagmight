@@ -293,3 +293,98 @@ fn plain_text_tells_the_two_12s_on_a_line_apart() {
     assert_eq!(p.slot_name_text(slot(br, 99)), "99", "no such slot");
     assert_eq!(p.slot_text(slot(br, 99)), None);
 }
+
+/// RS-PROSE: each plain form has a part form with the same words, and the
+/// part says what the pill draws: the slot's line (its colour), the line as
+/// context when the text names it, the bare name, a foreign slot's home
+/// line (the dot), a loop end (the loop mark), the Station ID it shows and
+/// the slot. A marked text splits into the plain string and its parts.
+#[test]
+fn prose_parts_word_a_slot_as_its_plain_text_does() {
+    use crate::prose::{self, ProsePart};
+
+    let (mut p, main, br) = main_and_branch();
+    let (m12, b0) = (at(&p, main, 12), at(&p, br, 0));
+    ok(p.merge_stations(b0, m12, m12, &[]));
+    let b6 = at(&p, br, 6);
+    ok(p.create_closure(b6, Some(br), m12, Some(main), BATCH, Some(m12), &[]));
+    let slot = |line, i| StationRef::new(line, i);
+    let (main_label, br_label) = (p.line_label_of(main), p.line_label_of(br));
+    let station = |part: Option<ProsePart>| match part {
+        Some(ProsePart::Station(s)) => s,
+        other => panic!("a station part, not {other:?}"),
+    };
+    for (s, with_line) in [
+        (slot(br, 12), false),
+        (slot(br, 0), false),
+        (slot(br, 6), false),
+        (slot(br, 12), true),
+        (slot(br, 0), true),
+        (slot(br, 6), true),
+    ] {
+        let part = station(p.slot_part(s, with_line));
+        let words = if with_line {
+            p.slot_text(s).unwrap()
+        } else {
+            p.slot_name_text(s)
+        };
+        assert_eq!(part.text, words, "{s:?} {with_line}");
+        assert_eq!(part.name, "12");
+        assert_eq!(part.line_id, Some(br));
+        assert_eq!(part.slot, Some(s));
+        assert_eq!(part.context.is_some(), with_line);
+    }
+    let foreign = station(p.slot_part(slot(br, 0), true));
+    assert_eq!(foreign.home_line, Some(main));
+    assert_eq!(foreign.station_id, Some(m12));
+    assert_eq!(foreign.loop_end, None);
+    // RS-OWNERSHIP: the pill is coloured and named by the line its station
+    // belongs to, so the context is Main's; the words keep Branch's.
+    assert_eq!(foreign.context.as_deref(), Some(main_label.as_str()));
+    assert!(foreign.text.starts_with(&br_label));
+    let loop_end = station(p.slot_part(slot(br, 6), false));
+    assert_eq!(loop_end.loop_end, Some(true));
+    assert_eq!(loop_end.home_line, Some(main), "its kept end's home line");
+    assert_eq!(loop_end.station_id, Some(m12), "it shows Main's 12");
+    let native = station(p.slot_part(slot(br, 12), true));
+    assert_eq!(
+        (native.home_line, native.context.as_deref()),
+        (None, Some(br_label.as_str()))
+    );
+    assert_eq!(p.slot_part(slot(br, 99), true), None);
+
+    let ProsePart::Shot(shot) = p.shot_part(br, 0) else {
+        panic!("a shot part");
+    };
+    assert_eq!(shot.text, p.shot_text(br, 0));
+    assert_eq!(shot.from.home_line, Some(main));
+    assert_eq!(
+        (shot.from.name.as_str(), shot.to.name.as_str()),
+        ("12", "1")
+    );
+    assert_eq!(shot.context, Some(p.line_label_of(br)));
+
+    let marked = format!(
+        "Detach line {} from {} at {}",
+        p.line_marked(br, true),
+        p.station_marked(m12, Some(br)),
+        p.shot_marked(br, 0)
+    );
+    let (text, parts) = prose::split(&marked);
+    assert_eq!(
+        text,
+        format!(
+            "Detach line \"{}\" from {} at {}",
+            p.line_label_of(br),
+            p.station_text(m12, Some(br)),
+            p.shot_text(br, 0)
+        )
+    );
+    assert_eq!(parts.iter().filter(|part| part.is_name()).count(), 3);
+    let mut texts = super::SlotTexts::new(&p);
+    assert_eq!(
+        texts.station_marked(m12, Some(br)),
+        p.station_marked(m12, Some(br))
+    );
+    assert_eq!(texts.shot_marked(br, 0), p.shot_marked(br, 0));
+}

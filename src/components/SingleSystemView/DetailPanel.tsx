@@ -19,6 +19,8 @@ import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import type { Station, Shot, Line, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure, StationRef } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
 import { warningMessageBody } from '../../utils/stationIdentity';
+import { messageBodyParts } from '../../utils/warningProse';
+import { BackendProse } from '../common/Prose';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { findStation } from '../../utils/findStation';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
@@ -36,7 +38,8 @@ import { StationDatumDetail } from './StationDatumDetail';
 import { StationRecords } from './StationRecords';
 import { StationOtherLines } from './StationOtherLines';
 import { StationNameRows } from './StationNames';
-import { useIdentityLabel } from '../Dialogs/keptStationParts';
+import { useProse } from '../../hooks/useProse';
+import { Prose } from '../common/Prose';
 import { removeClosureAsking } from '../../utils/keptStationActions';
 import { StationOtherLineShots } from './StationOtherLineShots';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
@@ -546,9 +549,11 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                 {(() => {
                   // Survey messages open with the shot named by its line and
                   // stations (`Shot Main Line: 4 → 5 ...`); at the Full level
-                  // that shot becomes a pill and the rest follows it.
+                  // that shot becomes a pill and the rest follows it, each
+                  // name in it a prose pill (RS-PROSE, `messageParts`).
                   const body = warningMessageBody(labels, warning);
-                  if (!showPills || body === warning.message) return warning.message;
+                  if (!showPills) return warning.message;
+                  if (body === warning.message) return <BackendProse text={body} parts={warning.messageParts} />;
                   return (
                     <>
                       {/* The shot pill navigates to Details (select + switch tab),
@@ -577,7 +582,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                         </EntityBlob>
                       </button>
                       {' '}
-                      {body}
+                      <BackendProse text={body} parts={messageBodyParts(warning.message, warning.messageParts, body)} />
                     </>
                   );
                 })()}
@@ -779,7 +784,7 @@ function StationDetail({ station }: { station: Station }) {
 
           <StationOtherLines station={station} />
 
-          <StationRecords records={station.archived} lineName={labels.lineName} />
+          <StationRecords records={station.archived} />
 
           {station.closures_with && station.closures_with.length > 0 && (
             <ClosuresSection
@@ -1496,7 +1501,7 @@ function ClosuresSection({
 }: ClosuresSectionProps) {
   const { t } = useTranslation();
   const labels = useIdentityLabels();
-  const identityLabel = useIdentityLabel();
+  const prose = useProse();
   const editingBlocked = useEditingBlocked();
   const precision = useDecimalPrecision();
   const [expanded, setExpanded] = useState(true);
@@ -1682,10 +1687,12 @@ function ClosuresSection({
                 )}
                 {closure?.archived && (
                   <div className="text-xs text-text-secondary" data-testid={`closure-archive-${closureIdLabel}`}>
-                    {t('detailPanel.closures.archives', {
-                      hidden: identityLabel(closure.archived.station),
-                      shown: identityLabel(closure.archived.shown_as),
-                    })}
+                    <Prose
+                      text={t('detailPanel.closures.archives', {
+                        hidden: prose.identity(closure.archived.station),
+                        shown: prose.identity(closure.archived.shown_as),
+                      })}
+                    />
                   </div>
                 )}
               </div>

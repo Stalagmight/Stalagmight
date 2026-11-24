@@ -6,8 +6,8 @@ import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import { useIdentityLabels } from '../../hooks/useIdentityLabels';
-import { lineDisplayName } from '../../utils/stationIdentity';
+import { useProse } from '../../hooks/useProse';
+import { Prose } from '../common/Prose';
 
 
 /**
@@ -22,7 +22,8 @@ import { lineDisplayName } from '../../utils/stationIdentity';
 export default function ReverseLineDialog() {
   const { closeDialog, dialogData } = useUIStore();
   const { reverseLine, executeBatch, project } = useProjectStore();
-  const labels = useIdentityLabels();
+  // Each line and the stations it will run between, as prose pills (RS-PROSE).
+  const prose = useProse();
 
   const lineIds = (dialogData.lineIds as number[] | undefined) ?? [];
   const [swapLeftRight, setSwapLeftRight] = useState(false);
@@ -134,12 +135,13 @@ export default function ReverseLineDialog() {
           >
             {lines.map((s) => (
               <li key={s.id}>
-                {lineDisplayName(s.name)}
+                <Prose text={prose.line(s.id)} />
                 {s.shots.length > 0 && (
                   <span className="text-text-tertiary">
                     {' '}
-                    (will run from {labels.station({ line_id: s.id, station_index: s.shots.length })} to{' '}
-                    {labels.station({ line_id: s.id, station_index: 0 })})
+                    <Prose
+                      text={`(will run from ${prose.station({ line_id: s.id, station_index: s.shots.length })} to ${prose.station({ line_id: s.id, station_index: 0 })})`}
+                    />
                   </span>
                 )}
               </li>

@@ -259,6 +259,46 @@ test.describe('.stalx v2 file status', () => {
     await expect(page.locator('[data-toast-key="legacy-converted"]')).toBeVisible();
   });
 
+  // RS-PROSE: a clause that names stations carries them as parts, which the
+  // banner draws as prose pills; the sentence's words (the sr-only text beside
+  // each drawing) read as plain text wrote them.
+  test('the stations a clause names are prose pills', async ({ page }) => {
+    await page.evaluate(() =>
+      (window as unknown as MockWindow).__MOCK_SET_CONVERSION_NOTICE__({
+        source: 'earlier_version_2',
+        changes: ['Main / M2 is now shown as Side / S0'],
+        change_parts: [
+          [
+            { kind: 'station', text: 'Main / M2', context: 'Main', name: 'M2', station_id: 12 },
+            { kind: 'text', text: ' is now shown as ' },
+            { kind: 'station', text: 'Side / S0', context: 'Side', name: 'S0', station_id: 20 },
+          ],
+        ],
+        details: [],
+        brings_back: true,
+        file: 'not_yet_saved',
+      })
+    );
+    await createProject(page, 'Prose Notice');
+
+    const text = page.getByTestId('conversion-notice-text');
+    const pills = text.locator('.sh-ppill');
+    await expect(pills).toHaveCount(2);
+    await expect(pills.first().locator('[aria-hidden="true"]')).toHaveText('Main: M2#12');
+    await expect(pills.first().locator('.sr-only')).toHaveText('Main / M2');
+    const words = await text.evaluate((el) => {
+      let out = '';
+      const walk = (node: Node) => {
+        if (node instanceof Element && node.getAttribute('aria-hidden') === 'true') return;
+        if (node.nodeType === Node.TEXT_NODE) out += node.textContent ?? '';
+        node.childNodes.forEach(walk);
+      };
+      walk(el);
+      return out;
+    });
+    expect(words).toBe('Main / M2 is now shown as Side / S0.');
+  });
+
   test('a long list of stations shown under another name sits behind Details', async ({ page }) => {
     const details = Array.from({ length: 30 }, (_, i) => `Branch ${i + 1} / 0 is now shown as Main / ${(i + 1) * 19}`);
     await page.evaluate(

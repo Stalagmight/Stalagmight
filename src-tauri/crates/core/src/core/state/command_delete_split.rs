@@ -14,7 +14,7 @@
 
 use super::command_shot::{any_shot_frozen, closure_warnings, ClosureNames};
 use super::commands::Record;
-use super::labels::{delete_shots_label, ShotsDeleted};
+use super::labels::{delete_shots_label, Label, ShotsDeleted};
 use super::AppState;
 
 /// A recipe's closure warnings and identity notice (RS 7 "Notices").
@@ -31,14 +31,14 @@ use crate::models::{LineId, LineUpdates, ShotId};
 /// frontend maps): its undo entry was a labelled `Command::Batch`.
 const RECIPE_KIND: &str = "batch";
 
-/// A recipe's record before its edit: kind `batch`, `label`, and `line` in
-/// the refs when it exists.
-pub(super) fn recipe_record(project: &Survey, label: String, line: LineId) -> Record {
+/// A recipe's record before its edit: kind `batch`, `label` (with its
+/// parts), and `line` in the refs when it exists.
+pub(super) fn recipe_record(project: &Survey, label: Label, line: LineId) -> Record {
     let mut record = Record {
         kind: RECIPE_KIND.to_string(),
-        label,
         ..Record::default()
     };
+    record.set_label(label);
     if project.line(line).is_some() {
         record.refs.lines.push(line);
     }

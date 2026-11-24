@@ -18,6 +18,7 @@ import {
   waitForMapIdle,
   type LineSeed,
 } from './helpers/app';
+import { expectProse } from './helpers/proseSentence';
 
 /**
  * Test data with multiple lines, shots, and stations.
@@ -718,8 +719,11 @@ test.describe('Detail Panel Links', () => {
       await expect(mergedLink).toHaveText('Side Passage');
       const retiredId = sideLineId * 100_000;
       await expect(page.getByTestId('station-detail-merged-with')).toHaveText('Also on:Side Passage');
-      await expect(page.getByTestId(`station-detail-record-${retiredId}`)).toHaveText(
+      // The record's name and its line are prose pills (RS-PROSE).
+      await expectProse(
+        page.getByTestId(`station-detail-record-${retiredId}-text`),
         `0 (Station ID ${retiredId}), Side Passage's own station`,
+        ['station', 'line'],
       );
       // The line is named once, by the Line row (V-8), not on the Name row too.
       await expect(page.getByTestId('station-detail-name')).toHaveText('Name:3');
@@ -730,12 +734,15 @@ test.describe('Detail Panel Links', () => {
       await expect(page.getByTestId('station-detail-id')).toHaveText(id ?? '');
       await expect(page.getByTestId('station-detail-name')).toHaveText('Name:3');
       // A foreign slot says whose station it shows (RS 6).
-      await expect(page.getByTestId('station-detail-belongs')).toHaveText('3 belongs to Main Tunnel.');
+      await expectProse(page.getByTestId('station-detail-belongs'), '3 belongs to Main Tunnel.', ['station', 'line']);
       await expect(page.getByTestId('station-detail-line')).toHaveText('Line:Side Passage');
       await expect(page.getByTestId(`station-${mainLineId}-3-link`)).toHaveText('Main Tunnel');
       // Side Passage's own station, archived in the junction.
-      await expect(page.getByTestId(`station-detail-record-${retiredId}`)).toHaveText(
+      // The record's name and its line are prose pills (RS-PROSE).
+      await expectProse(
+        page.getByTestId(`station-detail-record-${retiredId}-text`),
         `0 (Station ID ${retiredId}), Side Passage's own station`,
+        ['station', 'line'],
       );
       await expect(page.getByTestId(`detail-unmerge-${mainLineId}-3`)).toHaveAttribute(
         'aria-label',
@@ -1218,7 +1225,7 @@ test.describe('Detail Panel Links', () => {
       // At the Full level the pill ends with the Station ID (the mock's
       // lineId * 100000 + index), which the accessible name reads too.
       await expect(page.getByTestId(`station-${mainLineId}-0-link`).locator('.sh-lpill-main')).toHaveText('7');
-      await expect(page.getByTestId(`station-${mainLineId}-0-link-station-id`)).toHaveText(String(mainLineId * 100_000));
+      await expect(page.getByTestId(`station-${mainLineId}-0-link-station-id`)).toHaveText(`#${mainLineId * 100_000}`);
       await expect(page.getByTestId(`station-${mainLineId}-0-link`)).toHaveAttribute(
         'aria-label',
         `Select station Main Tunnel / 7, Station ID ${mainLineId * 100_000}`,
@@ -1238,8 +1245,10 @@ test.describe('Detail Panel Links', () => {
       await expect(partner).toHaveAttribute('aria-label', 'Select station Side Passage / 8 (Main Tunnel)');
       await expect(partner).toHaveText('Side Passage');
       // Side Passage's own station, archived here, is listed once (N-3).
-      await expect(page.getByTestId(`station-detail-record-${sideLineId * 100_000}`)).toHaveText(
+      await expectProse(
+        page.getByTestId(`station-detail-record-${sideLineId * 100_000}-text`),
         `0 (Station ID ${sideLineId * 100_000}), Side Passage's own station`,
+        ['station', 'line'],
       );
 
       // Every station has a name: one never renamed keeps the one seeded from its index.

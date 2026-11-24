@@ -58,6 +58,7 @@ import OrphanPlacementDialog from './OrphanPlacementDialog';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
+import { accessibleText } from '../../test/accessibleText';
 import type { CommandResult, OrphanPlacementSuggestion } from '../../types/commands';
 import type { Project } from '../../types/ipc/Project';
 import type { Shot } from '../../types/ipc/Shot';
@@ -236,9 +237,19 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
     render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} />);
 
     const suggestion = screen.getByTestId('wizard-suggestion');
-    // Default: the end of the repeat, Orphan station 2 = Mainline station 5.
-    expect(within(suggestion).getByText('Orphan / O2')).toBeTruthy();
-    expect(within(suggestion).getByText('Mainline / M5')).toBeTruthy();
+    // Default: the end of the repeat, Orphan station 2 = Mainline station 5,
+    // each a prose pill in its line's colour (RS-PROSE) that reads as its
+    // plain label; the merge options (a select) stay plain.
+    const from = screen.getByTestId('orphan-connection-from');
+    const to = screen.getByTestId('orphan-connection-to');
+    expect(accessibleText(from)).toBe('Orphan / O2');
+    expect(accessibleText(to)).toBe('Mainline / M5');
+    for (const [el, drawing] of [[from, 'Orphan: O2'], [to, 'Mainline: M5']] as const) {
+      const pill = el.querySelector('.sh-ppill')!;
+      expect(pill.getAttribute('data-prose-kind')).toBe('station');
+      expect(pill.querySelector('[aria-hidden="true"]')!.textContent).toMatch(new RegExp(`^${drawing}`));
+    }
+    expect(screen.getByTestId('merge-station-select').querySelector('.sh-ppill')).toBeNull();
     expect(screen.getByTestId('merge-station-select')).toHaveTextContent('O2 \u2194 Mainline / M5');
     await userEvent.click(screen.getByTestId('merge-station-select'));
     expect(screen.getByTestId('merge-station-select-option-1')).toHaveTextContent('O1 \u2194 Mainline / M4');

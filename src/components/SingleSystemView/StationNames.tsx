@@ -3,7 +3,10 @@ import { displayStationName } from '../../utils/formatters';
 import type { Station } from '../../types/project';
 import type { LoopClosure } from '../../types/ipc/LoopClosure';
 import type { IdentityLabels } from '../../utils/stationIdentity';
-import { identityLabelOf } from '../Dialogs/keptStationParts';
+import { useProse } from '../../hooks/useProse';
+import { proseToken } from '../../utils/prose';
+import { ownStationPart, reworded } from '../../utils/proseNameParts';
+import { Prose } from '../common/Prose';
 import { DetailRow } from './DetailPanelParts';
 
 /**
@@ -15,6 +18,10 @@ import { DetailRow } from './DetailPanelParts';
  * 3" and its own station, hidden until the closure is removed; its position,
  * depth and datum below are its own. The other lines are on the "Also on"
  * rows (`StationOtherLines`), without names of their own.
+ *
+ * Each sentence draws the stations and lines it names as prose pills
+ * (RS-PROSE); the own name of a loop end's sentence, which states its Station
+ * ID, draws none.
  */
 export function StationNameRows({
   station,
@@ -26,6 +33,7 @@ export function StationNameRows({
   closures?: ReadonlyArray<LoopClosure> | undefined;
 }) {
   const { t } = useTranslation();
+  const prose = useProse();
   const ref = station.station_ref;
   const name = displayStationName(labels.stationName(ref));
   const shown = labels.shown(ref);
@@ -38,19 +46,21 @@ export function StationNameRows({
     <>
       {shown?.loop_end && (
         <div className="p-2 rounded bg-accent-10 text-sm space-y-0.5" data-testid="station-detail-loop-end">
-          <p>
-            {t('detailPanel.station.loopEnd', {
-              station: archive
-                ? identityLabelOf(archive.shown_as, labels.lineName)
-                : labels.station(ref, true),
-            })}
+          <p data-testid="station-detail-loop-end-shown">
+            <Prose
+              text={t('detailPanel.station.loopEnd', {
+                station: archive ? prose.identity(archive.shown_as) : prose.station(ref, true),
+              })}
+            />
           </p>
           {archive && (
             <p className="text-xs text-text-secondary" data-testid="station-detail-loop-end-own">
-              {t('detailPanel.station.loopEndOwn', {
-                name: displayStationName(archive.station.name),
-                id: archive.station.id,
-              })}
+              <Prose
+                text={t('detailPanel.station.loopEndOwn', {
+                  name: proseToken(ownStationPart(displayStationName(archive.station.name), archive.station.home_line)),
+                  id: archive.station.id,
+                })}
+              />
             </p>
           )}
         </div>
@@ -58,7 +68,12 @@ export function StationNameRows({
       <DetailRow label={t('detailPanel.labels.name')} value={name} testId="station-detail-name" />
       {shown?.foreign && !shown.loop_end && shown.home_line !== undefined && shown.home_line !== ref.line_id && (
         <p className="text-xs text-text-secondary" data-testid="station-detail-belongs">
-          {t('detailPanel.station.belongsTo', { name, line: labels.lineName(shown.home_line) })}
+          <Prose
+            text={t('detailPanel.station.belongsTo', {
+              name: reworded(prose.station(ref), name),
+              line: prose.line(shown.home_line),
+            })}
+          />
         </p>
       )}
       {shownId !== null && (

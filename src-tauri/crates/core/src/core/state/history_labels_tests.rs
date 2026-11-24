@@ -139,7 +139,54 @@ fn record(state: &AppState, cmd: &Command, op: impl FnOnce(&mut Project) -> Resu
 }
 
 fn top(state: &AppState) -> UndoHistoryItem {
-    state.get_undo_stack().into_iter().next().unwrap()
+    let item = state.get_undo_stack().into_iter().next().unwrap();
+    assert_parts_say_the_words(&item);
+    item
+}
+
+/// RS-PROSE: an item's parts say exactly its description, name something,
+/// and carry no slot (they are persisted).
+fn assert_parts_say_the_words(item: &UndoHistoryItem) {
+    if let Some(parts) = &item.description_parts {
+        assert_eq!(
+            crate::models::prose::plain(parts),
+            item.description,
+            "{parts:?}"
+        );
+        assert!(parts.iter().any(crate::models::ProsePart::is_name));
+        assert!(parts.iter().all(|p| match p {
+            crate::models::ProsePart::Station(s) => s.slot.is_none(),
+            _ => true,
+        }));
+    }
+}
+
+/// The names an item's parts draw as pills, by kind and words.
+fn pills(item: &UndoHistoryItem) -> Vec<(&'static str, String)> {
+    item.description_parts
+        .iter()
+        .flatten()
+        .filter_map(|p| match p {
+            crate::models::ProsePart::Text { .. } => None,
+            crate::models::ProsePart::Station(s) => Some(("station", s.text.clone())),
+            crate::models::ProsePart::Shot(s) => Some(("shot", s.text.clone())),
+            crate::models::ProsePart::Line(l) => Some(("line", l.text.clone())),
+        })
+        .collect()
+}
+
+/// A recipe label's words, after checking that its parts say exactly them
+/// and keep no slot (RS-PROSE).
+fn words(label: labels::Label) -> String {
+    if !label.parts.is_empty() {
+        assert_eq!(crate::models::prose::plain(&label.parts), label.text);
+        assert!(label.parts.iter().any(crate::models::ProsePart::is_name));
+        assert!(label.parts.iter().all(|p| match p {
+            crate::models::ProsePart::Station(s) => s.slot.is_none(),
+            _ => true,
+        }));
+    }
+    label.text
 }
 
 /// `(field, old, new)` of every preview row.
@@ -514,6 +561,14 @@ fn a_merge_names_both_stations_as_they_were() {
     );
     let item = assert_survives(&o);
     assert_eq!(item.description, "Merge Side / 0 into Main / 4 (keeps 4)");
+    // RS-PROSE: both stations are parts, through a save and a reopen.
+    assert_eq!(
+        pills(&item),
+        vec![
+            ("station", "Side / 0".to_string()),
+            ("station", "Main / 4".to_string())
+        ]
+    );
     assert_eq!(
         rows(&item),
         vec![
@@ -1090,6 +1145,7 @@ fn a_batch_with_its_own_label_keeps_it() {
     );
     let item = assert_survives(&o);
     assert_eq!(item.description, "Tidy up");
+    assert_eq!(item.description_parts, None, "its own words, read plain");
     assert_eq!(
         rows(&item),
         vec![
@@ -1391,6 +1447,9 @@ fn a_long_name_never_makes_an_entry_the_next_open_refuses() {
     let item = assert_survives(&o);
     assert!(item.description.chars().count() <= EntryLimits::default().max_text_chars);
     assert!(item.description.starts_with("Delete line \"NNN"));
+    // Cut to fit, it has no parts: they would say other words.
+    assert!(item.description.ends_with('\u{2026}'));
+    assert_eq!(item.description_parts, None);
 }
 
 #[test]
@@ -1451,6 +1510,7 @@ fn a_huge_batch_records_refs_the_next_open_reads() {
         timestamp: chrono::Utc::now(),
         kind: record.kind,
         label: record.label,
+        label_parts: record.label_parts,
         refs: record.refs,
         preview: record.preview,
         changes: crate::models::survey::changeset::capture(&p, &p),
@@ -1488,57 +1548,88 @@ fn an_entry_reads_the_same_from_its_persisted_text() {
 fn recipe_labels_read_as_0_6_0_worded_them() {
     let p = survey();
     assert_eq!(
-        labels::combine_lines_label(&p, MAIN, SIDE, "Main"),
+        words(labels::combine_lines_label(&p, MAIN, SIDE, "Main")),
         "Combine lines \"Main\" and \"Side\""
     );
     assert_eq!(
-        labels::combine_lines_label(&p, MAIN, SIDE, " Big Loop "),
+        words(labels::combine_lines_label(&p, MAIN, SIDE, " Big Loop ")),
         "Combine lines \"Main\" and \"Side\" into \"Big Loop\""
     );
     assert_eq!(
-        labels::create_line_at_label(&p, SIDE, StationRef::new(MAIN, 3)),
+        words(labels::create_line_at_label(
+            &p,
+            SIDE,
+            StationRef::new(MAIN, 3)
+        )),
         "Create line \"Side\" at Main / 3"
     );
     assert_eq!(
-        labels::split_line_label("Main", "2"),
+        words(labels::split_line_label(Some(MAIN), "Main", "2")),
         "Split line \"Main\" at 2"
     );
     assert_eq!(
-        labels::delete_shots_label(&p, MAIN, 2, 2, ShotsDeleted::Split),
+        words(labels::delete_shots_label(
+            &p,
+            MAIN,
+            2,
+            2,
+            ShotsDeleted::Split
+        )),
         "Delete shot 2 \u{2192} 3 and split line \"Main\""
     );
     assert_eq!(
-        labels::delete_shots_label(&p, MAIN, 1, 3, ShotsDeleted::Split),
+        words(labels::delete_shots_label(
+            &p,
+            MAIN,
+            1,
+            3,
+            ShotsDeleted::Split
+        )),
         "Delete 3 shots (1 \u{2192} 4) and split line \"Main\""
     );
     assert_eq!(
-        labels::delete_shots_label(&p, MAIN, 0, 1, ShotsDeleted::CloseUp),
+        words(labels::delete_shots_label(
+            &p,
+            MAIN,
+            0,
+            1,
+            ShotsDeleted::CloseUp
+        )),
         "Delete 2 shots (0 \u{2192} 2) from line \"Main\""
     );
     assert_eq!(
-        labels::delete_shots_label(&p, SIDE, 0, 0, ShotsDeleted::LastOfLine),
+        words(labels::delete_shots_label(
+            &p,
+            SIDE,
+            0,
+            0,
+            ShotsDeleted::LastOfLine
+        )),
         "Delete line \"Side\" with its last shot"
     );
     assert_eq!(
-        labels::import_lines_label(&p, &[MAIN]),
+        words(labels::import_lines_label(&p, &[MAIN])),
         "Import line \"Main\""
     );
     assert_eq!(
-        labels::import_lines_label(&p, &[MAIN, SIDE]),
+        words(labels::import_lines_label(&p, &[MAIN, SIDE])),
         "Import lines \"Main\" and \"Side\""
     );
     assert_eq!(
-        labels::import_lines_label(&p, &[MAIN, BRANCH, SIDE, MAIN, SIDE]),
+        words(labels::import_lines_label(
+            &p,
+            &[MAIN, BRANCH, SIDE, MAIN, SIDE]
+        )),
         "Import 5 lines (\"Main\", \"Branch\", \"Side\" and 2 more)"
     );
-    assert_eq!(labels::import_lines_label(&p, &[]), "Import");
+    assert_eq!(words(labels::import_lines_label(&p, &[])), "Import");
     let station = p.topology().station_at(StationRef::new(MAIN, 3)).unwrap();
     assert_eq!(
-        labels::insert_station_label(&p, MAIN, station),
+        words(labels::insert_station_label(&p, MAIN, station)),
         "Insert station Main / 3"
     );
     assert_eq!(
-        labels::insert_station_label(&p, 99, station),
+        words(labels::insert_station_label(&p, 99, station)),
         "Insert station in line a line"
     );
     assert_eq!(
@@ -1557,7 +1648,7 @@ fn an_insert_station_is_named_after_the_station_the_split_made() {
         .value;
     let name = p.stations[&made.station].name.clone();
     assert_eq!(
-        labels::insert_station_label(&p, MAIN, made.station),
+        words(labels::insert_station_label(&p, MAIN, made.station)),
         format!("Insert station Main / {name}")
     );
 }
@@ -1684,4 +1775,371 @@ fn batch_rows_carry_each_sub_commands_detail() {
         ]
     );
     assert_eq!(preview.more, 0);
+}
+
+// ---- Label parts (RS-PROSE) ---------------------------------------------------
+
+#[test]
+fn entry_labels_name_shots_stations_and_lines_as_parts() {
+    let o = open();
+    let id = shot_id(&o.state, MAIN, 1);
+    exec(
+        &o.state,
+        Command::SetShotKind {
+            line_id: MAIN,
+            shot_id: id,
+            kind: ShotKind::Jump,
+        },
+    );
+    let item = top(&o.state);
+    assert_eq!(
+        pills(&item),
+        vec![("shot", "Main: 1 \u{2192} 2".to_string())]
+    );
+    exec(
+        &o.state,
+        Command::ReverseLine {
+            line_id: SIDE,
+            swap_left_right: false,
+        },
+    );
+    let item = assert_survives(&o);
+    assert_eq!(item.description, "Reverse line \"Side\"");
+    assert_eq!(pills(&item), vec![("line", "\"Side\"".to_string())]);
+    assert!(
+        item.description_parts.iter().flatten().any(|p| matches!(
+            p,
+            crate::models::ProsePart::Line(l) if l.line_id == Some(SIDE) && l.name == "Side"
+        )),
+        "{item:?}"
+    );
+    // A summary names its lines.
+    exec(
+        &o.state,
+        Command::Batch {
+            commands: vec![
+                Command::ReverseLine {
+                    line_id: MAIN,
+                    swap_left_right: false,
+                },
+                Command::ReverseLine {
+                    line_id: BRANCH,
+                    swap_left_right: false,
+                },
+            ],
+            label: None,
+        },
+    );
+    let item = assert_survives(&o);
+    assert_eq!(item.description, "Reverse lines \"Main\" and \"Branch\"");
+    assert_eq!(
+        pills(&item),
+        vec![
+            ("line", "\"Main\"".to_string()),
+            ("line", "\"Branch\"".to_string())
+        ]
+    );
+}
+
+#[test]
+fn a_label_that_names_nothing_has_no_parts() {
+    let o = open();
+    exec(
+        &o.state,
+        Command::CreateLine {
+            name: Some("Annex".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#123456".to_string(),
+            direction: None,
+            shots: vec![shot(4.0, 10.0)],
+            cave_section_id: None,
+        },
+    );
+    let item = top(&o.state);
+    assert_eq!(item.description_parts, None, "{}", item.description);
+}
+
+#[test]
+fn recipe_labels_name_their_lines_and_stations_as_parts() {
+    let p = survey();
+    let kinds = |label: &labels::Label| -> Vec<(String, Option<LineId>)> {
+        label
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                crate::models::ProsePart::Line(l) => Some((l.text.clone(), l.line_id)),
+                crate::models::ProsePart::Station(s) => Some((s.text.clone(), s.line_id)),
+                _ => None,
+            })
+            .collect()
+    };
+    let combine = labels::combine_lines_label(&p, MAIN, SIDE, " Big Loop ");
+    assert_eq!(
+        kinds(&combine),
+        vec![
+            ("\"Main\"".to_string(), Some(MAIN)),
+            ("\"Side\"".to_string(), Some(SIDE))
+        ],
+        "the new name is no line yet: words"
+    );
+    let at = labels::create_line_at_label(&p, SIDE, StationRef::new(MAIN, 3));
+    assert_eq!(
+        kinds(&at),
+        vec![
+            ("\"Side\"".to_string(), Some(SIDE)),
+            ("Main / 3".to_string(), Some(MAIN))
+        ]
+    );
+    let split = labels::split_line_label(Some(MAIN), "Main", "2");
+    assert_eq!(kinds(&split), vec![("\"Main\"".to_string(), Some(MAIN))]);
+    let deleted = labels::delete_shots_label(&p, MAIN, 1, 3, ShotsDeleted::Split);
+    assert_eq!(kinds(&deleted), vec![("\"Main\"".to_string(), Some(MAIN))]);
+    let imported = labels::import_lines_label(&p, &[MAIN, BRANCH, SIDE, MAIN, SIDE]);
+    assert_eq!(kinds(&imported).len(), 3, "the lines it lists");
+    let station = p.topology().station_at(StationRef::new(MAIN, 3)).unwrap();
+    let inserted = labels::insert_station_label(&p, MAIN, station);
+    assert_eq!(kinds(&inserted), vec![("Main / 3".to_string(), Some(MAIN))]);
+    // Every one says its words, without slots.
+    for label in [combine, at, split, deleted, imported, inserted] {
+        assert_eq!(
+            crate::models::prose::plain(&label.parts),
+            words(label.clone())
+        );
+    }
+    // A line the project does not hold is words.
+    assert!(labels::insert_station_label(&p, 99, station)
+        .parts
+        .is_empty());
+}
+
+/// RS-PROSE measurement 9: what `label_parts` costs a persisted history.
+/// A typical edit mix (mostly shot cell edits, with renames, comments, an
+/// appended shot, a merge, a move, a delete and a reverse) is recorded, and
+/// each entry is encoded with its parts and without them. Prints the bytes
+/// and how many such steps fit the Full-mode budget
+/// (`UNDO_BYTE_BUDGET_BYTES`, 4 MiB); asserts only that the parts cost
+/// something and every entry with parts still decodes with them.
+#[test]
+#[expect(
+    clippy::print_stdout,
+    reason = "the measurement prints its numbers (run with --nocapture)"
+)]
+fn label_parts_cost_a_measured_share_of_the_history_budget() {
+    let o = open();
+    let s = &o.state;
+    let len = |l: f64| ShotUpdates {
+        length: Some(l),
+        ..ShotUpdates::default()
+    };
+    let az = |a: f64| ShotUpdates {
+        azimuth_in: Some(a),
+        azimuth_out: Some(a),
+        ..ShotUpdates::default()
+    };
+    let mix: Vec<Command> = vec![
+        Command::UpdateShot {
+            line_id: MAIN,
+            shot_id: shot_id(s, MAIN, 0),
+            updates: len(10.5),
+        },
+        Command::UpdateShot {
+            line_id: MAIN,
+            shot_id: shot_id(s, MAIN, 1),
+            updates: az(47.0),
+        },
+        Command::UpdateShot {
+            line_id: MAIN,
+            shot_id: shot_id(s, MAIN, 2),
+            updates: len(8.2),
+        },
+        Command::UpdateShot {
+            line_id: SIDE,
+            shot_id: shot_id(s, SIDE, 1),
+            updates: len(4.6),
+        },
+        Command::UpdateShot {
+            line_id: BRANCH,
+            shot_id: shot_id(s, BRANCH, 0),
+            updates: az(181.0),
+        },
+        Command::SetStationName {
+            station_ref: StationRef::new(MAIN, 1),
+            name: "A1".to_string(),
+        },
+        Command::SetStationComment {
+            station_ref: StationRef::new(MAIN, 2),
+            comment: Some("Tight squeeze, line tied left".to_string()),
+        },
+        Command::CreateShot {
+            line_id: SIDE,
+            shot: shot(3.0, 40.0),
+            after_shot_id: None,
+            before_shot_id: None,
+        },
+        Command::UpdateShot {
+            line_id: MAIN,
+            shot_id: shot_id(s, MAIN, 3),
+            updates: len(6.4),
+        },
+        Command::MergeStations {
+            station_a: StationRef::new(SIDE, 0),
+            station_b: StationRef::new(MAIN, 4),
+            keep: None,
+            renames: None,
+        },
+        Command::MoveStation {
+            station_ref: StationRef::new(SIDE, 2),
+            offset: Coordinates {
+                x: 0.5,
+                y: 0.0,
+                z: 0.0,
+            },
+        },
+        Command::UpdateShot {
+            line_id: SIDE,
+            shot_id: shot_id(s, SIDE, 2),
+            updates: az(33.0),
+        },
+        Command::SetStationName {
+            station_ref: StationRef::new(SIDE, 2),
+            name: "S2".to_string(),
+        },
+        Command::DeleteShot {
+            line_id: BRANCH,
+            shot_id: shot_id(s, BRANCH, 1),
+        },
+        Command::ReverseLine {
+            line_id: BRANCH,
+            swap_left_right: false,
+        },
+        Command::UpdateShot {
+            line_id: MAIN,
+            shot_id: shot_id(s, MAIN, 0),
+            updates: az(2.0),
+        },
+    ];
+    for cmd in mix {
+        let r = s.execute(cmd);
+        assert!(r.success, "{:?}", r.error);
+    }
+    let stack = s.undo_stack.lock().unwrap();
+    let (mut with, mut without, mut n, mut named) = (0usize, 0usize, 0usize, 0usize);
+    for held in stack.undo_entries() {
+        let entry = held.entry();
+        let a = encode_entry(entry).unwrap().len();
+        let plain = crate::models::survey::HistoryEntry {
+            label_parts: Vec::new(),
+            ..entry.clone()
+        };
+        let b = encode_entry(&plain).unwrap().len();
+        println!("ENTRY {:>5} {:>5} +{:>4} {}", a, b, a - b, entry.label);
+        with += a;
+        without += b;
+        n += 1;
+        if !entry.label_parts.is_empty() {
+            named += 1;
+            let text = encode_entry(entry).unwrap();
+            let back = decode_entry(&text, &EntryLimits::default()).unwrap();
+            assert_eq!(back.label_parts, entry.label_parts, "{}", entry.label);
+        }
+    }
+    let budget = crate::core::undo::UNDO_BYTE_BUDGET_BYTES;
+    let fit = |total: usize| budget * n / total.max(1);
+    println!(
+        "TOTAL entries {n} (with parts {named}) bytes with {with} without {without} (+{:.1}%) mean {:.0} vs {:.0}; steps in 4 MiB: {} vs {} ({} fewer, {:.1}%)",
+        (with as f64 / without as f64 - 1.0) * 100.0,
+        with as f64 / n as f64,
+        without as f64 / n as f64,
+        fit(with),
+        fit(without),
+        fit(without) - fit(with),
+        (1.0 - fit(with) as f64 / fit(without) as f64) * 100.0
+    );
+    assert!(
+        n >= 14 && named >= 10,
+        "the mix records its entries: {n}, {named}"
+    );
+    assert!(with > without);
+}
+
+/// RS-PROSE delta fix 3: the exact-words check on persisted parts accepts
+/// every shape the backend words: a foreign slot named through its line
+/// (`Side / 4 (Main)`, context the owner) and bare (`4 (Main)`), a shot with
+/// a foreign end and one with a loop end. Each entry's parts survive a
+/// write and a read.
+#[test]
+fn real_foreign_and_loop_end_labels_keep_their_parts_through_a_read() {
+    let o = open();
+    let s = &o.state;
+    let survey = |s: &AppState| survey_of(s);
+    exec(
+        s,
+        Command::MergeStations {
+            station_a: StationRef::new(SIDE, 0),
+            station_b: StationRef::new(MAIN, 4),
+            keep: None,
+            renames: None,
+        },
+    );
+    let az = ShotUpdates {
+        azimuth_in: Some(12.0),
+        azimuth_out: Some(12.0),
+        ..ShotUpdates::default()
+    };
+    exec(
+        s,
+        Command::UpdateShot {
+            line_id: SIDE,
+            shot_id: shot_id(s, SIDE, 0),
+            updates: az.clone(),
+        },
+    );
+    exec(
+        s,
+        Command::SetStationName {
+            station_ref: StationRef::new(SIDE, 0),
+            name: "J4".to_string(),
+        },
+    );
+    // A closure from Side's end onto Main's start, Main's kept: Side's end is a loop end.
+    let main_start = survey(s).line(MAIN).unwrap().station(0).unwrap();
+    exec(
+        s,
+        Command::CreateLoopClosure {
+            station_a: StationRef::new(SIDE, 3),
+            station_b: StationRef::new(MAIN, 0),
+            closure_strategy: ClosureStrategy::Batch,
+            keep: Some(main_start),
+            renames: Some(Vec::new()),
+        },
+    );
+    exec(
+        s,
+        Command::UpdateShot {
+            line_id: SIDE,
+            shot_id: shot_id(s, SIDE, 2),
+            updates: az,
+        },
+    );
+    let stack = s.undo_stack.lock().unwrap();
+    let mut seen = Vec::new();
+    for held in stack.undo_entries() {
+        let entry = held.entry();
+        let text = encode_entry(entry).unwrap();
+        let back = decode_entry(&text, &EntryLimits::default()).unwrap();
+        assert_eq!(back.label_parts, entry.label_parts, "{}", entry.label);
+        if !entry.label_parts.is_empty() {
+            seen.push(entry.label.clone());
+        }
+    }
+    let joined = seen.join(" | ");
+    assert!(
+        joined.contains("(Main)"),
+        "a foreign slot's label: {joined}"
+    );
+    assert!(
+        joined.contains("(loop end on"),
+        "a loop end's label: {joined}"
+    );
 }

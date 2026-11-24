@@ -32,13 +32,17 @@ hides (its choice says "shown as ... through a loop closure") keeps showing
 that closure's station when you keep it; when you keep the other station
 instead, the closure stays but stops hiding its end, so the station you kept
 is shown there too, and the dialog says so. The lines that show the kept
-station anew show it with a coloured dot (its own line's colour), and a
-dotted station does not take up its name there: if Side already has a
-station `12` of its own, it keeps it, and Side shows both `12`s, one with
-the dot; the dialog says so before you merge ("Side already has a station 12
-(Station ID 27); it keeps its name, and Side shows 12 twice, the junction
-with Main's dot"). Texts without the dot name the dotted one `12 (Main)`,
-and so does the data table's Name column, in a lighter colour. Only when
+station anew show its pill in its own line's colour (a Main pill on Side,
+named "Main: 12", where a station of Side's own is in Side's colour), and
+such a station does not take up its name there: if Side already has a
+station `12` of its own, it keeps it, and Side shows both `12`s, one in
+Main's colour; the dialog says so before you merge ("Side already has a
+station 12 (Station ID 27); it keeps its name, and Side shows 12 twice, the
+junction in Main's colour"). A shot that starts or ends at such a station
+is drawn in two colours, split at the arrow: the half with that end in
+Main's colour, with Main's dot after its name. Texts without colours name
+the station `12 (Main)`, and so does the data table's Name column, in a
+lighter colour. Only when
 the merge would make a line show one name for two stations of its own (a
 loop closure it changes, for example) does a row ask how to settle it:
 rename the other station (for example `12` to `12a`) or rename the kept

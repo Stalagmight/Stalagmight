@@ -14,6 +14,8 @@ import {
 import { useUIStore } from '../../store/uiStore';
 import { TOAST_KEYS } from '../toastKeys';
 import type { CommandResult } from '../../types/commands';
+import type { ProsePart } from '../../types/ipc/ProsePart';
+import { partsToPlain, proseParts, proseToPlain } from '../prose';
 
 const removed = (message: string) => ({
   code: CLOSURE_REMOVED_ACROSS_ONE_SHOT,
@@ -88,6 +90,31 @@ describe('notifyRemovedClosures', () => {
         'Removed loop closure Main 0:1 to Beyond 2:0: combining the lines left its two stations at the two ends of one shot.',
       TOAST_KEYS.CLOSURE_REMOVED,
       'warning',
+    );
+  });
+
+  it('names the stations a message carries as parts with prose tokens (RS-PROSE)', () => {
+    const parts: ProsePart[] = [
+      { kind: 'text', text: 'Removed loop closure ' },
+      { kind: 'station', text: 'Main / 1', line_id: 1, context: 'Main', name: '1', station_id: 4 },
+      { kind: 'text', text: ' to ' },
+      { kind: 'station', text: 'Main / 5', line_id: 1, context: 'Main', name: '5', station_id: 8 },
+      { kind: 'text', text: ': closing the gap left its two stations at the two ends of one shot.' },
+    ];
+    const message = partsToPlain(parts);
+    const r = result({
+      warnings: [
+        { ...removed(message), parts },
+        removed('Removed loop closure a station to a station: closing the gap left its two stations at the two ends of one shot.'),
+      ],
+    });
+    notifyRemovedClosures(r);
+    expect(showToast).toHaveBeenCalledTimes(1);
+    const shown = showToast.mock.calls[0]![0] as string;
+    // The toast draws the tokens as pills; its words are the messages, joined.
+    expect(proseParts(shown).filter((p) => p.kind === 'station').map((p) => p.text)).toEqual(['Main / 1', 'Main / 5']);
+    expect(proseToPlain(shown)).toBe(
+      `${message} Removed loop closure a station to a station: closing the gap left its two stations at the two ends of one shot.`,
     );
   });
 

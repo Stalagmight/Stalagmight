@@ -101,6 +101,14 @@ const BG_CHROMA = { share: 0.5, max: { dark: 0.05, light: 0.04 } } as const;
 const HOVER_LIFT = 0.02;
 const HOVER_CHROMA = { share: 0.7, max: { dark: 0.07, light: 0.06 } } as const;
 const BORDER_LIFT = { rest: 0.17, hover: 0.26 } as const;
+/**
+ * How much further a border goes for a line far toward the theme's text
+ * pole (a pale line on a dark theme, a dark one on a light theme), on top of
+ * `BORDER_LIFT` (RS-OWNERSHIP). The fills of a near-white and a near-black
+ * line differ by little (the band keeps text legible), so on a two-tone shot
+ * or two pills side by side the border is what tells them apart.
+ */
+const BORDER_TRACK = 0.22;
 const BORDER_CHROMA = { rest: { share: 0.7, max: 0.1 }, hover: { share: 0.85, max: 0.14 } } as const;
 const RING_CHROMA_MAX = 0.12;
 /** Below this chroma a colour is a grey: its hue is noise, so the tints stay neutral. */
@@ -250,13 +258,15 @@ export function pillColors(lineColor: string | null | undefined, theme: PillThem
   // The border leaves from whichever of the panel and the fill is further out,
   // so a pill sunk below the panel still has an edge that reads on the panel.
   const borderBase = edge > 0 ? Math.max(bgL, panelL) : Math.min(bgL, panelL);
+  // A line toward the text pole gets a stronger edge (see BORDER_TRACK).
+  const track = BORDER_TRACK * (theme.dark ? t : 1 - t);
   const border = hexOfOklch({
-    L: clamp(borderBase + edge * BORDER_LIFT.rest, 0, 1),
+    L: clamp(borderBase + edge * (BORDER_LIFT.rest + track), 0, 1),
     C: Math.min(tone.C * BORDER_CHROMA.rest.share, BORDER_CHROMA.rest.max),
     h: tone.h,
   });
   const hoverBorder = hexOfOklch({
-    L: clamp(borderBase + edge * BORDER_LIFT.hover, 0, 1),
+    L: clamp(borderBase + edge * (BORDER_LIFT.hover + track), 0, 1),
     C: Math.min(tone.C * BORDER_CHROMA.hover.share, BORDER_CHROMA.hover.max),
     h: tone.h,
   });
@@ -274,6 +284,68 @@ export function missingPillColors(theme: PillTheme): MissingPillColors {
   const border = hexOfOklch({ L: clamp(base + edge * BORDER_LIFT.hover, 0, 1), C: 0, h: 0 });
   const warning = pushUntil(theme.warning, theme.dark, (c) => contrastOfHex(c, bg) >= DOT_TARGET);
   return { bg, border, text: theme.text, muted: theme.muted, warning };
+}
+
+/**
+ * A prose pill's colours (RS-PROSE): the pill inline in running text paints
+ * no fill and no border but a soft radial tint of the line's hue, strongest
+ * at its centre (the hover band's tint, `hoverBg`) and fading to nothing at
+ * its edges, where the bare panel shows. So everything on it is held on both
+ * ends of the fade: main text 7:1, the muted context and Station ID 4.5:1, the
+ * dot or its ring and the home-line dot 3:1, on the tint and on the panel.
+ * `bg` is the tint's centre and `hoverBg` the panel (what {@link pillMarkOf}
+ * checks a home-line dot against); there is no hover, and `border` is the
+ * resting pill's, unused. Text is the theme's own unless a floor needs it
+ * nudged, as for the link pill.
+ */
+export function prosePillColors(lineColor: string | null | undefined, theme: PillTheme): PillColors {
+  const pill = pillColors(lineColor, theme);
+  const on = [pill.hoverBg, theme.panel];
+  const reaches = (min: number) => (c: string) => on.every((bg) => contrastOfHex(c, bg) >= min);
+  const text = pushUntil(pill.text, theme.dark, reaches(TEXT_TARGET));
+  const muted = pushUntil(pill.muted, theme.dark, reaches(MUTED_TARGET));
+  const { dot, ring } = pillDot(lineHex(lineColor, theme.panel) ?? muted, on, theme);
+  return { ...pill, bg: pill.hoverBg, hoverBg: theme.panel, text, muted, dot, ring };
+}
+
+/**
+ * The prose tint as a translucent overlay (RS-PROSE): a colour and an alpha
+ * that, composited over the panel, give exactly `target` (the tint's centre,
+ * `prosePillColors().bg`). Prose sits on more than the panel (an accent or
+ * warning wash, a toast, a lighter box), and an opaque tint computed for the
+ * panel read there as a dark smudge; the overlay moves whatever is behind it
+ * the same way it moves the panel. The alpha is the least that keeps the
+ * overlay colour inside sRGB, so the overlay is as close to its surroundings
+ * as it can be. Returns CSS `rgba()` strings: the overlay and the same colour
+ * fully transparent (what the radial tint fades to, so no grey fringe).
+ */
+export function proseTintOf(target: string, panel: string): { tint: string; clear: string } {
+  const t = rgbOfHex(target.toLowerCase());
+  const p = rgbOfHex(panel.toLowerCase());
+  let alpha = 0;
+  for (let i = 0; i < 3; i++) {
+    const d = t[i]! - p[i]!;
+    if (d > 0) alpha = Math.max(alpha, d / (1 - p[i]!));
+    else if (d < 0) alpha = Math.max(alpha, -d / p[i]!);
+  }
+  if (alpha === 0) return { tint: 'rgba(0, 0, 0, 0)', clear: 'rgba(0, 0, 0, 0)' };
+  alpha = Math.min(1, alpha);
+  const channel = (i: number) => Math.round(clamp(p[i]! + (t[i]! - p[i]!) / alpha, 0, 1) * 255);
+  const rgb = `${channel(0)}, ${channel(1)}, ${channel(2)}`;
+  return { tint: `rgba(${rgb}, ${alpha.toFixed(4)})`, clear: `rgba(${rgb}, 0)` };
+}
+
+const proseCache = new Map<string, PillColors>();
+
+/** {@link prosePillColors} for a named app theme, cached per (theme, colour). */
+export function prosePillColorsOf(lineColor: string | null | undefined, themeName: string): PillColors {
+  const key = `${themeName}\u0000${lineColor ?? ''}`;
+  const cached = proseCache.get(key);
+  if (cached) return cached;
+  const colors = prosePillColors(lineColor, pillThemeOf(themeName));
+  if (proseCache.size > 2048) proseCache.clear();
+  proseCache.set(key, colors);
+  return colors;
 }
 
 /** {@link pillTheme} of a named app theme (`resolvedTheme`); an unknown name is the dark theme. */

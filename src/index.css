@@ -1732,15 +1732,75 @@ button.sh-apill {
   font-size: 0.85em;
   line-height: 1;
 }
+/* In a narrow place the context gives way first (RS-OWNERSHIP fix): it
+   shrinks to an ellipsis long before the name does, so the station's name
+   and its Station ID stay in the pill. */
 .sh-lpill-ctx {
-  flex: none;
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.857em;
   color: var(--pill-muted);
 }
 .sh-lpill-main {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* A two-tone shot pill (RS-OWNERSHIP): the pill itself paints nothing and
+   each segment is painted in its own line's colours (custom properties set
+   per segment): the half holding an end of another line in that line's,
+   the rest in the shot's. The halves meet before the arrow with no border
+   between them; the later one overlaps the earlier by 1px so no hairline of
+   the panel shows through the seam at a fractional position. */
+.sh-lpill.sh-lpill--split,
+.sh-lpill.sh-lpill--split:hover:not([aria-disabled='true']) {
+  gap: 0;
+  padding: 0;
+  border-color: transparent;
+  border-width: 0;
+  background: transparent;
+}
+.sh-lpill-seg {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3em;
+  min-width: 0;
+  padding: 0.18em 0.3em;
+  border: 1px solid var(--pill-border);
+  border-left-width: 0;
+  border-right-width: 0;
+  background: var(--pill-bg);
+  color: var(--pill-text);
+}
+/* A zero-width strut in the pill's own font: every segment, even one holding
+   only the dot (the head), has the text's baseline and height, so the
+   halves line up and are one height. The gap after it is taken back. */
+.sh-lpill-seg::before {
+  content: '\200b';
+  margin-right: -0.3em;
+}
+.sh-lpill-seg:first-child {
+  flex: 0 1000 auto;
+  padding-left: 0.5em;
+  border-left-width: 1px;
+  border-radius: 9999px 0 0 9999px;
+}
+.sh-lpill-seg:last-child {
+  padding-right: 0.6em;
+  border-right-width: 1px;
+  border-radius: 0 9999px 9999px 0;
+}
+.sh-lpill-seg + .sh-lpill-seg {
+  position: relative;
+  margin-left: -1px;
+}
+.sh-lpill--split:hover:not([aria-disabled='true']) .sh-lpill-seg {
+  background: var(--pill-bg-hover);
+  border-color: var(--pill-border-hover);
 }
 /* A station's home-line mark: a smaller dot right after its name. Inline in a
    shot's two ends, a flex item after a station's name. */
@@ -1774,6 +1834,119 @@ button.sh-apill {
   margin-left: -0.12em;
   font-size: 0.7em;
   line-height: 1;
+  color: var(--pill-muted);
+  font-variant-numeric: tabular-nums;
+  vertical-align: baseline;
+}
+
+/* Prose pill (ProsePill, src/components/common/Prose.tsx; RS-PROSE): a line
+   pill inline in running text, with the link pill's dot, context, marks and
+   Station ID, but no pill shape: a soft radial tint in the line's colour
+   (`--pill-tint`, a translucent overlay: prosePillColors and proseTintOf in
+   pillColors.ts) that fades to nothing at each fragment's edges. A bordered fill stood 0 to 1 px from the fill of
+   the line above on most stacked pairs (the fill covers the font's whole
+   content area), so two lines of pills read as one block; a tint with no
+   hard edge cannot collide. It must leave the paragraph's line pitch exactly
+   as plain text has it:
+   - the painted part (`.sh-ppill-vis`) is `display: inline` with no vertical
+     padding: an inline box's background and padding never take part in the
+     line box's height (CSS 2.1 10.8.1);
+   - every text part inside has line-height 0 (a smaller font with the
+     paragraph's line-height would sit lower and push the line box down);
+   - the dots and the loop mark are inline-blocks whose negative top margin
+     cancels their height, so their margin box is zero tall;
+   - the Station ID is lifted by a relative offset, never `vertical-align`,
+     and stays inside the text's own height.
+   `box-decoration-break: clone` gives each line's fragment of a wrapped pill
+   its own tint and padding; `.sh-ppill-nw` keeps the dot with the first
+   word, the arrow with the shot's far end and the marks with the last word.
+   `.sh-ppill` itself paints nothing: it holds the colours and the sr-only
+   words, which a copy and a screen reader take. */
+.sh-ppill {
+  color: var(--pill-text);
+}
+.sh-ppill-vis {
+  padding: 0 0.14em;
+  background: radial-gradient(
+    farthest-side,
+    var(--pill-tint) 0%,
+    var(--pill-tint) 45%,
+    var(--pill-tint-clear) 100%
+  );
+  line-height: 0;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.sh-ppill-vis * {
+  line-height: 0;
+}
+/* A two-tone shot (RS-OWNERSHIP): each segment its own line's tint, fading
+   as one pill does; the drawing itself paints nothing. */
+.sh-ppill-vis--split {
+  padding: 0;
+  background: none;
+}
+.sh-ppill-seg {
+  padding: 0 0.14em;
+  background: radial-gradient(
+    farthest-side,
+    var(--pill-tint) 0%,
+    var(--pill-tint) 45%,
+    var(--pill-tint-clear) 100%
+  );
+  color: var(--pill-text);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.sh-ppill-nw {
+  white-space: nowrap;
+}
+.sh-ppill-dot,
+.sh-ppill-mark {
+  display: inline-block;
+  border-radius: 9999px;
+}
+.sh-ppill-dot {
+  width: 0.58em;
+  height: 0.58em;
+  margin: -0.58em 0.3em 0 0;
+  vertical-align: 0.06em;
+  background: var(--pill-dot);
+  box-shadow: 0 0 0 1px var(--pill-ring, transparent);
+}
+.sh-ppill-ctx {
+  font-size: 0.857em;
+  color: var(--pill-muted);
+}
+.sh-ppill-mark {
+  width: 0.42em;
+  height: 0.42em;
+  margin: -0.42em 0 0 0.14em;
+  vertical-align: 0.2em;
+  background: var(--mark-dot);
+  box-shadow: 0 0 0 1px var(--mark-ring, transparent);
+}
+.sh-ppill-loop {
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  margin: -0.8em 0 0 0.1em;
+  overflow: hidden;
+  vertical-align: -0.04em;
+  color: var(--pill-muted);
+}
+.sh-ppill-loop svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.sh-ppill-sid {
+  position: relative;
+  top: -0.45em;
+  margin-left: 0.14em;
+  font-size: 0.7em;
   color: var(--pill-muted);
   font-variant-numeric: tabular-nums;
   vertical-align: baseline;

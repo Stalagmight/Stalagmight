@@ -10,27 +10,32 @@ const splitLine = vi.fn();
 
 let dialogData: Record<string, unknown> = {};
 let resolvedTheme = 'dark';
-const uiState = () => ({ closeDialog, clearSelection, dialogData, resolvedTheme });
+const uiState = () => ({ closeDialog, clearSelection, dialogData, resolvedTheme, syntacticLevel: 'full' });
+// Both stores answer a selector too: the summary's prose pills (RS-PROSE)
+// read the lines, the stations and the highlighting level through one.
+// (A function declaration: hoisted above the hoisted vi.mock factories.)
+function select<S>(state: () => S) {
+  return (selector?: (s: S) => unknown) => (selector ? selector(state()) : state());
+}
 vi.mock('../../../store/uiStore', () => ({
-  useUIStore: Object.assign(() => uiState(), { getState: () => uiState() }),
+  useUIStore: Object.assign(select(() => uiState()), { getState: () => uiState() }),
 }));
 
 const shot = (id: number) => ({ id, length: 10 });
 let stations: Array<Record<string, unknown>> = [];
 let mainColor = '#123456';
 let otherLines: Array<Record<string, unknown>> = [];
+const projectState = () => ({
+  splitLine,
+  config: null,
+  stations,
+  surveyData: null,
+  project: {
+    lines: [{ id: 3, name: 'Main', color: mainColor, shots: [shot(31), shot(32), shot(33), shot(34)] }, ...otherLines],
+  },
+});
 vi.mock('../../../store/projectStore', () => ({
-  useProjectStore: () => ({
-    splitLine,
-    config: null,
-    stations,
-    project: {
-      lines: [
-        { id: 3, name: 'Main', color: mainColor, shots: [shot(31), shot(32), shot(33), shot(34)] },
-        ...otherLines,
-      ],
-    },
-  }),
+  useProjectStore: Object.assign(select(() => projectState()), { getState: () => projectState() }),
 }));
 
 let blocked = false;
@@ -47,6 +52,16 @@ vi.mock('../DialogWrapper', () => ({
 import '../../../i18n';
 import SplitLineHereDialog from '../SplitLineHereDialog';
 import { LIGHT_LINE_COLORS, LINE_COLORS } from '../../../utils/colors';
+import { accessibleText } from '../../../test/accessibleText';
+
+/** The summary's pill kinds, and the sentence a screen reader reads (RS-PROSE). */
+const summaryOf = () => {
+  const el = screen.getByTestId('split-here-summary');
+  return {
+    pills: [...el.querySelectorAll('.sh-ppill')].map((pill) => pill.getAttribute('data-prose-kind')),
+    text: accessibleText(el),
+  };
+};
 
 const station = (index: number, extra: Record<string, unknown>) => ({
   station_ref: { line_id: 3, station_index: index },
@@ -74,8 +89,8 @@ describe('SplitLineHereDialog', () => {
     expect(screen.getByTestId('split-here-color-a')).toHaveValue('#123456');
     // B is a new line: the colour a new line gets, not A's.
     expect(screen.getByTestId('split-here-color-b')).toHaveValue(LINE_COLORS[0]);
-    // The station by its name, never its position.
-    expect(screen.getByTestId('split-here-summary')).toHaveTextContent('Splitting Main at station 17');
+    // The station by its name, never its position; the line and the station as pills.
+    expect(summaryOf()).toEqual({ pills: ['line', 'station'], text: 'Splitting Main at station 17' });
     expect(screen.getByTestId('split-here-credit-note')).toHaveTextContent(
       'Each shot keeps its own surveyors, explorers and survey date.'
     );
@@ -166,7 +181,9 @@ describe('SplitLineHereDialog', () => {
     stations = [station(1, { name: 'A1' }), station(2, { name: 'A2' })];
     render(<SplitLineHereDialog />);
     // Shot 32 is the line's second: it runs from station 1 to station 2.
-    expect(screen.getByTestId('split-here-summary')).toHaveTextContent('(40%) along shot A1 \u2192 A2');
+    const summary = summaryOf();
+    expect(summary.pills).toEqual(['line', 'shot']);
+    expect(summary.text).toMatch(/^Splitting Main .+ \(40%\) along shot A1 \u2192 A2$/);
     fireEvent.change(screen.getByTestId('split-here-name-b'), { target: { value: 'Tail' } });
     fireEvent.click(screen.getByTestId('split-here-confirm'));
     await waitFor(() => expect(splitLine).toHaveBeenCalled());

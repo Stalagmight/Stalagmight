@@ -45,7 +45,10 @@ const ONE_POINT_BY_PROMOTION: &str =
 /// (`Main Line / 4`, each end on its `via` line), so a warning for a closure
 /// the command removed names the stations the user created it between: the
 /// command may retire a station into an alias (a merge) and a name read
-/// afterwards would be the survivor's. Empty on a project without closures.
+/// afterwards would be the survivor's. Each name is marked
+/// ([`Project::station_marked`], RS-PROSE), so a warning built from them
+/// splits into its message and its parts. Empty on a project without
+/// closures.
 #[derive(Debug, Default)]
 struct ClosureNames(BTreeMap<ClosureId, (String, String)>);
 
@@ -59,8 +62,8 @@ impl ClosureNames {
                     (
                         c.id,
                         (
-                            project.station_text(c.a, c.a_via),
-                            project.station_text(c.b, c.b_via),
+                            project.station_marked(c.a, c.a_via),
+                            project.station_marked(c.b, c.b_via),
                         ),
                     )
                 })
@@ -68,12 +71,13 @@ impl ClosureNames {
         )
     }
 
-    /// `closure`'s two names as recorded, else as `after` reads them.
+    /// `closure`'s two names as recorded, else as `after` reads them;
+    /// marked.
     fn pair(&self, after: &Project, closure: &LoopClosure) -> (String, String) {
         self.0.get(&closure.id).cloned().unwrap_or_else(|| {
             (
-                after.station_text(closure.a, closure.a_via),
-                after.station_text(closure.b, closure.b_via),
+                after.station_marked(closure.a, closure.a_via),
+                after.station_marked(closure.b, closure.b_via),
             )
         })
     }
@@ -116,11 +120,11 @@ fn swept_closure_warnings(
         .iter()
         .map(|c| {
             let (a, b) = names.pair(after, c);
-            ValidationWarning {
-                code: CLOSURE_REMOVED_MERGED_ENDS.to_string(),
-                message: format!("Removed loop closure {a} to {b}: {why}"),
-                severity: WarningSeverity::Warning,
-            }
+            ValidationWarning::marked_before_edit(
+                CLOSURE_REMOVED_MERGED_ENDS,
+                &format!("Removed loop closure {a} to {b}: {why}"),
+                WarningSeverity::Warning,
+            )
         })
         .collect()
 }
