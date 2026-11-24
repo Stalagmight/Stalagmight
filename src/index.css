@@ -2032,7 +2032,8 @@ button.sh-apill {
    empty inline box like the leading dot (never an inline-block: WebKit
    breaks after an atomic inline, RS-ARROW), its circle a radial gradient in
    its padding, centred on its content area and lifted by a relative offset
-   to superscript height (its middle about 0.63em up in Segoe UI); its
+   to superscript height (its middle about 0.66em up in Segoe UI, as in a
+   link pill, so a from end's dot clears the arrow's tail below it); its
    negative right margin gives back its whole advance, so it takes no room
    and, with a zero line-height, adds nothing to the line box. At the end of
    a pill it hangs into the space before the next word. A word joiner is its
@@ -2041,7 +2042,7 @@ button.sh-apill {
 .sh-ppill-home {
   --home-r: 0.18em;
   position: relative;
-  top: -0.22em;
+  top: -0.25em;
   margin-left: calc(0.02em - 1.25px);
   margin-right: calc(-0.02em - 2 * var(--home-r) - 1.25px);
   padding: 0 calc(var(--home-r) + 1.25px);
