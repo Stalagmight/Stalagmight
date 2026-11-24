@@ -98,7 +98,7 @@ impl ProsePart {
 // import path needs the same base.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-#[ts(rename_all = "snake_case", export_to = "../../bindings/ProsePart.ts")]
+#[ts(rename_all = "snake_case", export, export_to = "../../bindings/")]
 pub enum ProsePart {
     /// Words between the names.
     Text { text: String },
@@ -113,7 +113,7 @@ pub enum ProsePart {
 
 /// A station named in prose.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export_to = "../../bindings/ProseStation.ts")]
+#[ts(export, export_to = "../../bindings/")]
 pub struct ProseStation {
     /// The words plain text has here: `12`, `Side / 12 (Main)`, `Main / 12
     /// (loop end on Side)`.
@@ -155,7 +155,7 @@ pub struct ProseStation {
 
 /// One end of a shot named in prose.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export_to = "../../bindings/ProseShotEnd.ts")]
+#[ts(export, export_to = "../../bindings/")]
 pub struct ProseShotEnd {
     /// The bare name.
     pub name: String,
@@ -174,7 +174,7 @@ pub struct ProseShotEnd {
 
 /// A shot named in prose.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export_to = "../../bindings/ProseShot.ts")]
+#[ts(export, export_to = "../../bindings/")]
 pub struct ProseShot {
     /// The words plain text has here: `Side: 12 (Main) \u{2192} 13`.
     pub text: String,
@@ -192,7 +192,7 @@ pub struct ProseShot {
 
 /// A line named in prose.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export_to = "../../bindings/ProseLine.ts")]
+#[ts(export, export_to = "../../bindings/")]
 pub struct ProseLine {
     /// The words plain text has here: `Main`, or with its quotes `"Main"`.
     pub text: String,
