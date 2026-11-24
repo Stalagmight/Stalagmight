@@ -1,0 +1,100 @@
+{
+ "light-1440 link": {
+  "dots": 35,
+  "size_em": [
+   0.36
+  ],
+  "gap_em": [
+   0.02,
+   0.02
+  ],
+  "middle_up_em": [
+   0.648,
+   0.65
+  ],
+  "sid_clear_em": [
+   0.256,
+   0.256
+  ],
+  "before_arrow": 16,
+  "moved": 0,
+  "font_px": [
+   11,
+   14
+  ]
+ },
+ "light-1440 prose": {
+  "dots": 10,
+  "size_em": [
+   0.36
+  ],
+  "gap_em": [
+   0.02,
+   0.021
+  ],
+  "middle_up_em": [
+   0.643,
+   0.667
+  ],
+  "sid_clear_em": [
+   0.221,
+   0.222
+  ],
+  "before_arrow": 4,
+  "moved": 0,
+  "font_px": [
+   12,
+   14,
+   16
+  ]
+ },
+ "dark-1440 link": {
+  "dots": 35,
+  "size_em": [
+   0.36
+  ],
+  "gap_em": [
+   0.02,
+   0.02
+  ],
+  "middle_up_em": [
+   0.648,
+   0.65
+  ],
+  "sid_clear_em": [
+   0.256,
+   0.256
+  ],
+  "before_arrow": 16,
+  "moved": 0,
+  "font_px": [
+   11,
+   14
+  ]
+ },
+ "dark-1440 prose": {
+  "dots": 10,
+  "size_em": [
+   0.36
+  ],
+  "gap_em": [
+   0.02,
+   0.021
+  ],
+  "middle_up_em": [
+   0.643,
+   0.667
+  ],
+  "sid_clear_em": [
+   0.221,
+   0.222
+  ],
+  "before_arrow": 4,
+  "moved": 0,
+  "font_px": [
+   12,
+   14,
+   16
+  ]
+ }
+}

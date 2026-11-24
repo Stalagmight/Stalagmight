@@ -1,0 +1,10994 @@
+[
+ {
+  "name": "table-shots-blue",
+  "file": "table-shots-blue-dark-1440.png",
+  "rects": [
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      1331,
+      152,
+      1388,
+      168
+     ],
+     [
+      1160,
+      172,
+      1409,
+      188
+     ],
+     [
+      1160,
+      192,
+      1190,
+      208
+     ]
+    ],
+    "p": "station-detail-loop-end-shown",
+    "k": "prose",
+    "r": [
+     1331,
+     152,
+     1388,
+     168
+    ],
+    "top": true,
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3#32",
+    "dot": [
+     1334.5,
+     153,
+     1345.1,
+     167
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      1239,
+      214,
+      1263,
+      227
+     ]
+    ],
+    "p": "station-detail-loop-end-own",
+    "k": "prose",
+    "r": [
+     1239,
+     214,
+     1263,
+     227
+    ],
+    "top": true,
+    "t": "1",
+    "dot": [
+     1241.4,
+     214,
+     1250.9,
+     226
+    ],
+    "ring": "#6d8eda"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      1343,
+      327,
+      1428,
+      350
+     ]
+    ],
+    "p": "line-3-link",
+    "k": "link",
+    "r": [
+     1343,
+     327,
+     1428,
+     350
+    ],
+    "top": true,
+    "t": "Blue Link",
+    "dot": [
+     1351,
+     334.3,
+     1359.4,
+     342.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      1152,
+      539,
+      1398,
+      562
+     ]
+    ],
+    "p": "station-2-3-link",
+    "k": "link",
+    "r": [
+     1152,
+     539,
+     1398,
+     562
+    ],
+    "top": true,
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3 #32",
+    "dot": [
+     1160,
+     546.3,
+     1168.4,
+     554.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      1151,
+      589,
+      1235,
+      602
+     ]
+    ],
+    "p": "closure-archive-1",
+    "k": "prose",
+    "r": [
+     1151,
+     589,
+     1235,
+     602
+    ],
+    "top": true,
+    "t": "Blue Link: 1#36",
+    "dot": [
+     1153.4,
+     589.1,
+     1162.9,
+     601.1
+    ],
+    "ring": "#6d8eda"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      1374,
+      589,
+      1424,
+      602
+     ],
+     [
+      1152,
+      605,
+      1383,
+      618
+     ]
+    ],
+    "p": "closure-archive-1",
+    "k": "prose",
+    "r": [
+     1374,
+     589,
+     1424,
+     602
+    ],
+    "top": true,
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3#32",
+    "dot": [
+     1376.9,
+     589.1,
+     1386.4,
+     601.1
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": true,
+    "all": [
+     [
+      1359,
+      683,
+      1428,
+      706
+     ]
+    ],
+    "p": "shot-3-1-link",
+    "k": "link",
+    "r": [
+     1359,
+     683,
+     1428,
+     706
+    ],
+    "top": true,
+    "t": "4 (Main Passage of the Northern Sump System) → 3 (Lemon Squeeze Crawlway past th",
+    "dot": [
+     1366.5,
+     690.4,
+     1374.9,
+     698.8
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      649,
+      669,
+      741,
+      689
+     ]
+    ],
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     649,
+     669,
+     741,
+     689
+    ],
+    "top": true,
+    "t": "Blue Link",
+    "dot": [
+     656.2,
+     675.4,
+     663.4,
+     682.6
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": true,
+    "all": [
+     [
+      270,
+      735,
+      325,
+      753
+     ]
+    ],
+    "p": "data-table-shot-row-label-3-300000",
+    "k": "link",
+    "r": [
+     270,
+     735,
+     325,
+     753
+    ],
+    "top": true,
+    "t": "4 (Main Passage of the Northern Sump System) → 3 (Lemon Squeeze Crawlway past th",
+    "dot": [
+     276.3,
+     740.7,
+     282.9,
+     747.3
+    ],
+    "ring": "transparent"
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "table-shots-branch",
+  "file": "table-shots-branch-dark-1440.png",
+  "rects": [
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1188,
+      205,
+      1428,
+      228
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1188,
+     205,
+     1428,
+     228
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1196,
+     212.3,
+     1204.4,
+     220.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": true,
+    "all": [
+     [
+      1351,
+      373,
+      1428,
+      396
+     ]
+    ],
+    "p": "shot-1-1-link",
+    "k": "link",
+    "r": [
+     1351,
+     373,
+     1428,
+     396
+    ],
+    "top": true,
+    "t": "12 (Main Passage of the Northern Sump System) → 1",
+    "dot": [
+     1358.5,
+     380.3,
+     1366.9,
+     388.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1362,
+      400,
+      1428,
+      423
+     ]
+    ],
+    "p": "shot-1-2-link",
+    "k": "link",
+    "r": [
+     1362,
+     400,
+     1428,
+     423
+    ],
+    "top": true,
+    "t": "1 → 2",
+    "dot": [
+     1370,
+     407.4,
+     1378.4,
+     415.8
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      569,
+      439,
+      821,
+      459
+     ]
+    ],
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     569,
+     439,
+     821,
+     459
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     576.1,
+     445.4,
+     583.3,
+     452.6
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": true,
+    "all": [
+     [
+      267,
+      505,
+      328,
+      523
+     ]
+    ],
+    "p": "data-table-shot-row-label-1-100000",
+    "k": "link",
+    "r": [
+     267,
+     505,
+     328,
+     523
+    ],
+    "top": true,
+    "t": "12 (Main Passage of the Northern Sump System) → 1",
+    "dot": [
+     273.3,
+     510.7,
+     279.9,
+     517.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      271,
+      538,
+      324,
+      556
+     ]
+    ],
+    "p": "data-table-shot-row-label-1-100001",
+    "k": "link",
+    "r": [
+     271,
+     538,
+     324,
+     556
+    ],
+    "top": true,
+    "t": "1 → 2",
+    "dot": [
+     277.5,
+     543.7,
+     284.1,
+     550.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      271,
+      571,
+      324,
+      589
+     ]
+    ],
+    "p": "data-table-shot-row-label-1-100002",
+    "k": "link",
+    "r": [
+     271,
+     571,
+     324,
+     589
+    ],
+    "top": true,
+    "t": "2 → 3",
+    "dot": [
+     277.5,
+     576.7,
+     284.1,
+     583.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      271,
+      604,
+      324,
+      622
+     ]
+    ],
+    "p": "data-table-shot-row-label-1-100003",
+    "k": "link",
+    "r": [
+     271,
+     604,
+     324,
+     622
+    ],
+    "top": true,
+    "t": "3 → 4",
+    "dot": [
+     277.5,
+     609.7,
+     284.1,
+     616.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      271,
+      637,
+      324,
+      655
+     ]
+    ],
+    "p": "data-table-shot-row-label-1-100004",
+    "k": "link",
+    "r": [
+     271,
+     637,
+     324,
+     655
+    ],
+    "top": true,
+    "t": "4 → 5",
+    "dot": [
+     277.5,
+     642.7,
+     284.1,
+     649.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      271,
+      670,
+      324,
+      688
+     ]
+    ],
+    "p": "data-table-shot-row-label-1-100005",
+    "k": "link",
+    "r": [
+     271,
+     670,
+     324,
+     688
+    ],
+    "top": true,
+    "t": "5 → 6",
+    "dot": [
+     277.5,
+     675.7,
+     284.1,
+     682.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      271,
+      703,
+      324,
+      721
+     ]
+    ],
+    "p": "data-table-shot-row-label-1-100006",
+    "k": "link",
+    "r": [
+     271,
+     703,
+     324,
+     721
+    ],
+    "top": true,
+    "t": "6 → 7",
+    "dot": [
+     277.5,
+     708.7,
+     284.1,
+     715.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      271,
+      736,
+      324,
+      754
+     ]
+    ],
+    "p": "data-table-shot-row-label-1-100007",
+    "k": "link",
+    "r": [
+     271,
+     736,
+     324,
+     754
+    ],
+    "top": true,
+    "t": "7 → 8",
+    "dot": [
+     277.5,
+     741.7,
+     284.1,
+     748.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      271,
+      769,
+      324,
+      787
+     ]
+    ],
+    "p": "data-table-shot-row-label-1-100008",
+    "k": "link",
+    "r": [
+     271,
+     769,
+     324,
+     787
+    ],
+    "top": true,
+    "t": "8 → 9",
+    "dot": [
+     277.5,
+     774.7,
+     284.1,
+     781.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      268,
+      802,
+      327,
+      820
+     ]
+    ],
+    "p": "data-table-shot-row-label-1-100009",
+    "k": "link",
+    "r": [
+     268,
+     802,
+     327,
+     820
+    ],
+    "top": true,
+    "t": "9 → 10",
+    "dot": [
+     274.5,
+     807.7,
+     281.1,
+     814.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      265,
+      835,
+      330,
+      853
+     ]
+    ],
+    "p": "data-table-shot-row-label-1-100010",
+    "k": "link",
+    "r": [
+     265,
+     835,
+     330,
+     853
+    ],
+    "top": true,
+    "t": "10 → 11",
+    "dot": [
+     271.9,
+     840.7,
+     278.5,
+     847.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      265,
+      868,
+      330,
+      886
+     ]
+    ],
+    "p": "data-table-shot-row-label-1-100011",
+    "k": "link",
+    "r": [
+     265,
+     868,
+     330,
+     886
+    ],
+    "top": false,
+    "t": "11 → 12",
+    "dot": [
+     271.9,
+     873.7,
+     278.5,
+     880.3
+    ],
+    "ring": "#646464"
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "table-shots-spur",
+  "file": "table-shots-spur-dark-1440.png",
+  "rects": [
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      1340,
+      205,
+      1428,
+      228
+     ]
+    ],
+    "p": "line-5-link",
+    "k": "link",
+    "r": [
+     1340,
+     205,
+     1428,
+     228
+    ],
+    "top": true,
+    "t": "Blue Spur",
+    "dot": [
+     1348,
+     212.3,
+     1356.4,
+     220.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": true,
+    "all": [
+     [
+      1359,
+      373,
+      1428,
+      396
+     ]
+    ],
+    "p": "shot-5-1-link",
+    "k": "link",
+    "r": [
+     1359,
+     373,
+     1428,
+     396
+    ],
+    "top": true,
+    "t": "5 (Lemon Squeeze Crawlway past the Second Restriction) → 1",
+    "dot": [
+     1366.5,
+     380.3,
+     1374.9,
+     388.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      1362,
+      400,
+      1428,
+      423
+     ]
+    ],
+    "p": "shot-5-2-link",
+    "k": "link",
+    "r": [
+     1362,
+     400,
+     1428,
+     423
+    ],
+    "top": true,
+    "t": "1 → 2",
+    "dot": [
+     1370,
+     407.4,
+     1378.4,
+     415.8
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      648,
+      439,
+      742,
+      459
+     ]
+    ],
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     648,
+     439,
+     742,
+     459
+    ],
+    "top": true,
+    "t": "Blue Spur",
+    "dot": [
+     655.2,
+     445.4,
+     662.4,
+     452.6
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": true,
+    "all": [
+     [
+      270,
+      505,
+      325,
+      523
+     ]
+    ],
+    "p": "data-table-shot-row-label-5-500000",
+    "k": "link",
+    "r": [
+     270,
+     505,
+     325,
+     523
+    ],
+    "top": true,
+    "t": "5 (Lemon Squeeze Crawlway past the Second Restriction) → 1",
+    "dot": [
+     276.3,
+     510.7,
+     282.9,
+     517.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      271,
+      538,
+      324,
+      556
+     ]
+    ],
+    "p": "data-table-shot-row-label-5-500001",
+    "k": "link",
+    "r": [
+     271,
+     538,
+     324,
+     556
+    ],
+    "top": true,
+    "t": "1 → 2",
+    "dot": [
+     277.5,
+     543.7,
+     284.1,
+     550.3
+    ],
+    "ring": "transparent"
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "table-shots-grey",
+  "file": "table-shots-grey-dark-1440.png",
+  "rects": [
+   {
+    "dotColor": "#808080",
+    "split": false,
+    "all": [
+     [
+      1296,
+      205,
+      1428,
+      228
+     ]
+    ],
+    "p": "line-6-link",
+    "k": "link",
+    "r": [
+     1296,
+     205,
+     1428,
+     228
+    ],
+    "top": true,
+    "t": "Grey Side Tunnel",
+    "dot": [
+     1304.4,
+     212.3,
+     1312.8,
+     220.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#808080",
+    "split": true,
+    "all": [
+     [
+      1359,
+      373,
+      1428,
+      396
+     ]
+    ],
+    "p": "shot-6-1-link",
+    "k": "link",
+    "r": [
+     1359,
+     373,
+     1428,
+     396
+    ],
+    "top": true,
+    "t": "8 (Main Passage of the Northern Sump System) → 1",
+    "dot": [
+     1366.5,
+     380.3,
+     1374.9,
+     388.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#808080",
+    "split": false,
+    "all": [
+     [
+      1362,
+      400,
+      1428,
+      423
+     ]
+    ],
+    "p": "shot-6-2-link",
+    "k": "link",
+    "r": [
+     1362,
+     400,
+     1428,
+     423
+    ],
+    "top": true,
+    "t": "1 → 2",
+    "dot": [
+     1370,
+     407.4,
+     1378.4,
+     415.8
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#808080",
+    "split": false,
+    "all": [
+     [
+      630,
+      439,
+      760,
+      459
+     ]
+    ],
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     630,
+     439,
+     760,
+     459
+    ],
+    "top": true,
+    "t": "Grey Side Tunnel",
+    "dot": [
+     636.8,
+     445.4,
+     644,
+     452.6
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#808080",
+    "split": true,
+    "all": [
+     [
+      270,
+      505,
+      325,
+      523
+     ]
+    ],
+    "p": "data-table-shot-row-label-6-600000",
+    "k": "link",
+    "r": [
+     270,
+     505,
+     325,
+     523
+    ],
+    "top": true,
+    "t": "8 (Main Passage of the Northern Sump System) → 1",
+    "dot": [
+     276.3,
+     510.7,
+     282.9,
+     517.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#808080",
+    "split": false,
+    "all": [
+     [
+      271,
+      538,
+      324,
+      556
+     ]
+    ],
+    "p": "data-table-shot-row-label-6-600001",
+    "k": "link",
+    "r": [
+     271,
+     538,
+     324,
+     556
+    ],
+    "top": true,
+    "t": "1 → 2",
+    "dot": [
+     277.5,
+     543.7,
+     284.1,
+     550.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#808080",
+    "split": false,
+    "all": [
+     [
+      271,
+      571,
+      324,
+      589
+     ]
+    ],
+    "p": "data-table-shot-row-label-6-600002",
+    "k": "link",
+    "r": [
+     271,
+     571,
+     324,
+     589
+    ],
+    "top": true,
+    "t": "2 → 3",
+    "dot": [
+     277.5,
+     576.7,
+     284.1,
+     583.3
+    ],
+    "ring": "transparent"
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "table-stations-blue",
+  "file": "table-stations-blue-dark-1440.png",
+  "rects": [
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      1331,
+      152,
+      1388,
+      168
+     ],
+     [
+      1160,
+      172,
+      1409,
+      188
+     ],
+     [
+      1160,
+      192,
+      1190,
+      208
+     ]
+    ],
+    "p": "station-detail-loop-end-shown",
+    "k": "prose",
+    "r": [
+     1331,
+     152,
+     1388,
+     168
+    ],
+    "top": true,
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3#32",
+    "dot": [
+     1334.5,
+     153,
+     1345.1,
+     167
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      1239,
+      214,
+      1263,
+      227
+     ]
+    ],
+    "p": "station-detail-loop-end-own",
+    "k": "prose",
+    "r": [
+     1239,
+     214,
+     1263,
+     227
+    ],
+    "top": true,
+    "t": "1",
+    "dot": [
+     1241.4,
+     214,
+     1250.9,
+     226
+    ],
+    "ring": "#6d8eda"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      1343,
+      327,
+      1428,
+      350
+     ]
+    ],
+    "p": "line-3-link",
+    "k": "link",
+    "r": [
+     1343,
+     327,
+     1428,
+     350
+    ],
+    "top": true,
+    "t": "Blue Link",
+    "dot": [
+     1351,
+     334.3,
+     1359.4,
+     342.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      1152,
+      539,
+      1398,
+      562
+     ]
+    ],
+    "p": "station-2-3-link",
+    "k": "link",
+    "r": [
+     1152,
+     539,
+     1398,
+     562
+    ],
+    "top": true,
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3 #32",
+    "dot": [
+     1160,
+     546.3,
+     1168.4,
+     554.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      1151,
+      589,
+      1235,
+      602
+     ]
+    ],
+    "p": "closure-archive-1",
+    "k": "prose",
+    "r": [
+     1151,
+     589,
+     1235,
+     602
+    ],
+    "top": true,
+    "t": "Blue Link: 1#36",
+    "dot": [
+     1153.4,
+     589.1,
+     1162.9,
+     601.1
+    ],
+    "ring": "#6d8eda"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      1374,
+      589,
+      1424,
+      602
+     ],
+     [
+      1152,
+      605,
+      1383,
+      618
+     ]
+    ],
+    "p": "closure-archive-1",
+    "k": "prose",
+    "r": [
+     1374,
+     589,
+     1424,
+     602
+    ],
+    "top": true,
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3#32",
+    "dot": [
+     1376.9,
+     589.1,
+     1386.4,
+     601.1
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": true,
+    "all": [
+     [
+      1359,
+      683,
+      1428,
+      706
+     ]
+    ],
+    "p": "shot-3-1-link",
+    "k": "link",
+    "r": [
+     1359,
+     683,
+     1428,
+     706
+    ],
+    "top": true,
+    "t": "4 (Main Passage of the Northern Sump System) → 3 (Lemon Squeeze Crawlway past th",
+    "dot": [
+     1366.5,
+     690.4,
+     1374.9,
+     698.8
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      649,
+      439,
+      741,
+      459
+     ]
+    ],
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     649,
+     439,
+     741,
+     459
+    ],
+    "top": true,
+    "t": "Blue Link",
+    "dot": [
+     656.2,
+     445.4,
+     663.4,
+     452.6
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      275,
+      505,
+      320,
+      523
+     ]
+    ],
+    "p": "data-table-station-pill-3-0",
+    "k": "link",
+    "r": [
+     275,
+     505,
+     320,
+     523
+    ],
+    "top": true,
+    "t": "4 (Main Passage of the Northern Sump System) Station ID #4",
+    "dot": [
+     281.5,
+     510.7,
+     288.1,
+     517.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      273,
+      538,
+      322,
+      556
+     ]
+    ],
+    "p": "data-table-station-pill-3-1",
+    "k": "link",
+    "r": [
+     273,
+     538,
+     322,
+     556
+    ],
+    "top": true,
+    "t": "3 (Lemon Squeeze Crawlway past the Second Restriction) loop end Station ID #32",
+    "dot": [
+     279.5,
+     543.7,
+     286.1,
+     550.3
+    ],
+    "ring": "transparent"
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "table-stations-two-12s",
+  "file": "table-stations-two-12s-dark-1440.png",
+  "rects": [
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1188,
+      209,
+      1428,
+      232
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1188,
+     209,
+     1428,
+     232
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1196,
+     216.3,
+     1204.4,
+     224.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1346,
+      377,
+      1428,
+      400
+     ]
+    ],
+    "p": "shot-1-12-link",
+    "k": "link",
+    "r": [
+     1346,
+     377,
+     1428,
+     400
+    ],
+    "top": false,
+    "t": "11 → 12",
+    "dot": [
+     1354,
+     384.3,
+     1362.4,
+     392.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1346,
+      404,
+      1428,
+      427
+     ]
+    ],
+    "p": "shot-1-13-link",
+    "k": "link",
+    "r": [
+     1346,
+     404,
+     1428,
+     427
+    ],
+    "top": false,
+    "t": "12 → 13",
+    "dot": [
+     1354,
+     411.4,
+     1362.4,
+     419.8
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      594,
+      59,
+      846,
+      79
+     ]
+    ],
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     594,
+     59,
+     846,
+     79
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     601.1,
+     65.4,
+     608.3,
+     72.6
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      20,
+      125,
+      75,
+      143
+     ]
+    ],
+    "p": "data-table-station-pill-1-0",
+    "k": "link",
+    "r": [
+     20,
+     125,
+     75,
+     143
+    ],
+    "top": true,
+    "t": "12 (Main Passage of the Northern Sump System) Station ID #12",
+    "dot": [
+     26.5,
+     130.7,
+     33.1,
+     137.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      25,
+      158,
+      70,
+      176
+     ]
+    ],
+    "p": "data-table-station-pill-1-1",
+    "k": "link",
+    "r": [
+     25,
+     158,
+     70,
+     176
+    ],
+    "top": true,
+    "t": "1 Station ID #16",
+    "dot": [
+     31.8,
+     163.7,
+     38.4,
+     170.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      25,
+      191,
+      70,
+      209
+     ]
+    ],
+    "p": "data-table-station-pill-1-2",
+    "k": "link",
+    "r": [
+     25,
+     191,
+     70,
+     209
+    ],
+    "top": true,
+    "t": "2 Station ID #17",
+    "dot": [
+     31.8,
+     196.7,
+     38.4,
+     203.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      25,
+      224,
+      70,
+      242
+     ]
+    ],
+    "p": "data-table-station-pill-1-3",
+    "k": "link",
+    "r": [
+     25,
+     224,
+     70,
+     242
+    ],
+    "top": true,
+    "t": "3 Station ID #18",
+    "dot": [
+     31.8,
+     229.7,
+     38.4,
+     236.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      25,
+      257,
+      70,
+      275
+     ]
+    ],
+    "p": "data-table-station-pill-1-4",
+    "k": "link",
+    "r": [
+     25,
+     257,
+     70,
+     275
+    ],
+    "top": true,
+    "t": "4 Station ID #19",
+    "dot": [
+     31.8,
+     262.7,
+     38.4,
+     269.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      25,
+      290,
+      70,
+      308
+     ]
+    ],
+    "p": "data-table-station-pill-1-5",
+    "k": "link",
+    "r": [
+     25,
+     290,
+     70,
+     308
+    ],
+    "top": true,
+    "t": "5 Station ID #20",
+    "dot": [
+     31.8,
+     295.7,
+     38.4,
+     302.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      25,
+      323,
+      70,
+      341
+     ]
+    ],
+    "p": "data-table-station-pill-1-6",
+    "k": "link",
+    "r": [
+     25,
+     323,
+     70,
+     341
+    ],
+    "top": true,
+    "t": "6 Station ID #21",
+    "dot": [
+     31.8,
+     328.7,
+     38.4,
+     335.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      25,
+      356,
+      70,
+      374
+     ]
+    ],
+    "p": "data-table-station-pill-1-7",
+    "k": "link",
+    "r": [
+     25,
+     356,
+     70,
+     374
+    ],
+    "top": true,
+    "t": "7 Station ID #22",
+    "dot": [
+     31.8,
+     361.7,
+     38.4,
+     368.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      25,
+      389,
+      70,
+      407
+     ]
+    ],
+    "p": "data-table-station-pill-1-8",
+    "k": "link",
+    "r": [
+     25,
+     389,
+     70,
+     407
+    ],
+    "top": true,
+    "t": "8 Station ID #23",
+    "dot": [
+     31.8,
+     394.7,
+     38.4,
+     401.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      25,
+      422,
+      70,
+      440
+     ]
+    ],
+    "p": "data-table-station-pill-1-9",
+    "k": "link",
+    "r": [
+     25,
+     422,
+     70,
+     440
+    ],
+    "top": true,
+    "t": "9 Station ID #24",
+    "dot": [
+     31.8,
+     427.7,
+     38.4,
+     434.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      22,
+      455,
+      73,
+      473
+     ]
+    ],
+    "p": "data-table-station-pill-1-10",
+    "k": "link",
+    "r": [
+     22,
+     455,
+     73,
+     473
+    ],
+    "top": true,
+    "t": "10 Station ID #25",
+    "dot": [
+     28.8,
+     460.7,
+     35.4,
+     467.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      23,
+      488,
+      72,
+      506
+     ]
+    ],
+    "p": "data-table-station-pill-1-11",
+    "k": "link",
+    "r": [
+     23,
+     488,
+     72,
+     506
+    ],
+    "top": true,
+    "t": "11 Station ID #26",
+    "dot": [
+     29.2,
+     493.7,
+     35.8,
+     500.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      22,
+      521,
+      73,
+      539
+     ]
+    ],
+    "p": "data-table-station-pill-1-12",
+    "k": "link",
+    "r": [
+     22,
+     521,
+     73,
+     539
+    ],
+    "top": true,
+    "t": "12 Station ID #27",
+    "dot": [
+     28.8,
+     526.7,
+     35.4,
+     533.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      22,
+      554,
+      73,
+      572
+     ]
+    ],
+    "p": "data-table-station-pill-1-13",
+    "k": "link",
+    "r": [
+     22,
+     554,
+     73,
+     572
+    ],
+    "top": true,
+    "t": "13 Station ID #28",
+    "dot": [
+     28.8,
+     559.7,
+     35.4,
+     566.3
+    ],
+    "ring": "#646464"
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "details-foreign",
+  "file": "details-foreign-dark-1440.png",
+  "rects": [
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1151,
+      176,
+      1201,
+      189
+     ]
+    ],
+    "p": "station-detail-belongs",
+    "k": "prose",
+    "r": [
+     1151,
+     176,
+     1201,
+     189
+    ],
+    "top": true,
+    "t": "12#12",
+    "dot": [
+     1153.4,
+     176,
+     1162.9,
+     188
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1261,
+      176,
+      1385,
+      189
+     ],
+     [
+      1152,
+      192,
+      1277,
+      205
+     ]
+    ],
+    "p": "station-detail-belongs",
+    "k": "prose",
+    "r": [
+     1261,
+     176,
+     1385,
+     189
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1263.5,
+     176,
+     1272.9,
+     188
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1188,
+      249,
+      1428,
+      272
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1188,
+     249,
+     1428,
+     272
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1196,
+     256.3,
+     1204.4,
+     264.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1152,
+      486,
+      1398,
+      509
+     ]
+    ],
+    "p": "station-0-12-link",
+    "k": "link",
+    "r": [
+     1152,
+     486,
+     1398,
+     509
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1160,
+     493.3,
+     1168.4,
+     501.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1151,
+      562,
+      1180,
+      577
+     ]
+    ],
+    "p": "station-detail-record-15-text",
+    "k": "prose",
+    "r": [
+     1151,
+     562,
+     1180,
+     577
+    ],
+    "top": true,
+    "t": "0",
+    "dot": [
+     1153.7,
+     562.1,
+     1164.3,
+     576.1
+    ],
+    "ring": "#868686"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1276,
+      562,
+      1381,
+      577
+     ],
+     [
+      1152,
+      582,
+      1316,
+      597
+     ]
+    ],
+    "p": "station-detail-record-15-text",
+    "k": "prose",
+    "r": [
+     1276,
+     562,
+     1381,
+     577
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1279.4,
+     562.1,
+     1290,
+     576.1
+    ],
+    "ring": "#868686"
+   },
+   {
+    "dotColor": "#101010",
+    "split": true,
+    "all": [
+     [
+      1351,
+      663,
+      1428,
+      686
+     ]
+    ],
+    "p": "shot-1-1-link",
+    "k": "link",
+    "r": [
+     1351,
+     663,
+     1428,
+     686
+    ],
+    "top": true,
+    "t": "12 (Main Passage of the Northern Sump System) → 1",
+    "dot": [
+     1358.5,
+     670.4,
+     1366.9,
+     678.8
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1174,
+      694,
+      1465,
+      709
+     ]
+    ],
+    "p": "station-detail-other-shot-0-11-label",
+    "k": "prose",
+    "r": [
+     1174,
+     694,
+     1465,
+     709
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1176.7,
+     694.1,
+     1187.3,
+     708.1
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1368,
+      690,
+      1428,
+      713
+     ]
+    ],
+    "p": "shot-0-12-link",
+    "k": "link",
+    "r": [
+     1368,
+     690,
+     1428,
+     713
+    ],
+    "top": true,
+    "t": "11 → 12",
+    "dot": [
+     1375.9,
+     697.4,
+     1384.3,
+     705.8
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1174,
+      721,
+      1465,
+      736
+     ]
+    ],
+    "p": "station-detail-other-shot-0-12-label",
+    "k": "prose",
+    "r": [
+     1174,
+     721,
+     1465,
+     736
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1176.7,
+     721.1,
+     1187.3,
+     735.1
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1368,
+      717,
+      1428,
+      740
+     ]
+    ],
+    "p": "shot-0-13-link",
+    "k": "link",
+    "r": [
+     1368,
+     717,
+     1428,
+     740
+    ],
+    "top": true,
+    "t": "12 → 13",
+    "dot": [
+     1375.9,
+     724.4,
+     1384.3,
+     732.8
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      569,
+      439,
+      821,
+      459
+     ]
+    ],
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     569,
+     439,
+     821,
+     459
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     576.1,
+     445.4,
+     583.3,
+     452.6
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      270,
+      505,
+      325,
+      523
+     ]
+    ],
+    "p": "data-table-station-pill-1-0",
+    "k": "link",
+    "r": [
+     270,
+     505,
+     325,
+     523
+    ],
+    "top": true,
+    "t": "12 (Main Passage of the Northern Sump System) Station ID #12",
+    "dot": [
+     276.5,
+     510.7,
+     283.1,
+     517.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      275,
+      538,
+      320,
+      556
+     ]
+    ],
+    "p": "data-table-station-pill-1-1",
+    "k": "link",
+    "r": [
+     275,
+     538,
+     320,
+     556
+    ],
+    "top": true,
+    "t": "1 Station ID #16",
+    "dot": [
+     281.8,
+     543.7,
+     288.4,
+     550.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      275,
+      571,
+      320,
+      589
+     ]
+    ],
+    "p": "data-table-station-pill-1-2",
+    "k": "link",
+    "r": [
+     275,
+     571,
+     320,
+     589
+    ],
+    "top": true,
+    "t": "2 Station ID #17",
+    "dot": [
+     281.8,
+     576.7,
+     288.4,
+     583.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      275,
+      604,
+      320,
+      622
+     ]
+    ],
+    "p": "data-table-station-pill-1-3",
+    "k": "link",
+    "r": [
+     275,
+     604,
+     320,
+     622
+    ],
+    "top": true,
+    "t": "3 Station ID #18",
+    "dot": [
+     281.8,
+     609.7,
+     288.4,
+     616.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      275,
+      637,
+      320,
+      655
+     ]
+    ],
+    "p": "data-table-station-pill-1-4",
+    "k": "link",
+    "r": [
+     275,
+     637,
+     320,
+     655
+    ],
+    "top": true,
+    "t": "4 Station ID #19",
+    "dot": [
+     281.8,
+     642.7,
+     288.4,
+     649.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      275,
+      670,
+      320,
+      688
+     ]
+    ],
+    "p": "data-table-station-pill-1-5",
+    "k": "link",
+    "r": [
+     275,
+     670,
+     320,
+     688
+    ],
+    "top": true,
+    "t": "5 Station ID #20",
+    "dot": [
+     281.8,
+     675.7,
+     288.4,
+     682.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      275,
+      703,
+      320,
+      721
+     ]
+    ],
+    "p": "data-table-station-pill-1-6",
+    "k": "link",
+    "r": [
+     275,
+     703,
+     320,
+     721
+    ],
+    "top": true,
+    "t": "6 Station ID #21",
+    "dot": [
+     281.8,
+     708.7,
+     288.4,
+     715.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      275,
+      736,
+      320,
+      754
+     ]
+    ],
+    "p": "data-table-station-pill-1-7",
+    "k": "link",
+    "r": [
+     275,
+     736,
+     320,
+     754
+    ],
+    "top": true,
+    "t": "7 Station ID #22",
+    "dot": [
+     281.8,
+     741.7,
+     288.4,
+     748.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      275,
+      769,
+      320,
+      787
+     ]
+    ],
+    "p": "data-table-station-pill-1-8",
+    "k": "link",
+    "r": [
+     275,
+     769,
+     320,
+     787
+    ],
+    "top": true,
+    "t": "8 Station ID #23",
+    "dot": [
+     281.8,
+     774.7,
+     288.4,
+     781.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      275,
+      802,
+      320,
+      820
+     ]
+    ],
+    "p": "data-table-station-pill-1-9",
+    "k": "link",
+    "r": [
+     275,
+     802,
+     320,
+     820
+    ],
+    "top": true,
+    "t": "9 Station ID #24",
+    "dot": [
+     281.8,
+     807.7,
+     288.4,
+     814.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      272,
+      835,
+      323,
+      853
+     ]
+    ],
+    "p": "data-table-station-pill-1-10",
+    "k": "link",
+    "r": [
+     272,
+     835,
+     323,
+     853
+    ],
+    "top": true,
+    "t": "10 Station ID #25",
+    "dot": [
+     278.8,
+     840.7,
+     285.4,
+     847.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      273,
+      868,
+      322,
+      886
+     ]
+    ],
+    "p": "data-table-station-pill-1-11",
+    "k": "link",
+    "r": [
+     273,
+     868,
+     322,
+     886
+    ],
+    "top": false,
+    "t": "11 Station ID #26",
+    "dot": [
+     279.2,
+     873.7,
+     285.8,
+     880.3
+    ],
+    "ring": "#646464"
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "details-loop-end",
+  "file": "details-loop-end-dark-1440.png",
+  "rects": [
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      1331,
+      152,
+      1388,
+      168
+     ],
+     [
+      1160,
+      172,
+      1409,
+      188
+     ],
+     [
+      1160,
+      192,
+      1190,
+      208
+     ]
+    ],
+    "p": "station-detail-loop-end-shown",
+    "k": "prose",
+    "r": [
+     1331,
+     152,
+     1388,
+     168
+    ],
+    "top": true,
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3#32",
+    "dot": [
+     1334.5,
+     153,
+     1345.1,
+     167
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      1239,
+      214,
+      1263,
+      227
+     ]
+    ],
+    "p": "station-detail-loop-end-own",
+    "k": "prose",
+    "r": [
+     1239,
+     214,
+     1263,
+     227
+    ],
+    "top": true,
+    "t": "1",
+    "dot": [
+     1241.4,
+     214,
+     1250.9,
+     226
+    ],
+    "ring": "#6d8eda"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      1343,
+      327,
+      1428,
+      350
+     ]
+    ],
+    "p": "line-3-link",
+    "k": "link",
+    "r": [
+     1343,
+     327,
+     1428,
+     350
+    ],
+    "top": true,
+    "t": "Blue Link",
+    "dot": [
+     1351,
+     334.3,
+     1359.4,
+     342.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      1152,
+      539,
+      1398,
+      562
+     ]
+    ],
+    "p": "station-2-3-link",
+    "k": "link",
+    "r": [
+     1152,
+     539,
+     1398,
+     562
+    ],
+    "top": true,
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3 #32",
+    "dot": [
+     1160,
+     546.3,
+     1168.4,
+     554.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      1151,
+      589,
+      1235,
+      602
+     ]
+    ],
+    "p": "closure-archive-1",
+    "k": "prose",
+    "r": [
+     1151,
+     589,
+     1235,
+     602
+    ],
+    "top": true,
+    "t": "Blue Link: 1#36",
+    "dot": [
+     1153.4,
+     589.1,
+     1162.9,
+     601.1
+    ],
+    "ring": "#6d8eda"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      1374,
+      589,
+      1424,
+      602
+     ],
+     [
+      1152,
+      605,
+      1383,
+      618
+     ]
+    ],
+    "p": "closure-archive-1",
+    "k": "prose",
+    "r": [
+     1374,
+     589,
+     1424,
+     602
+    ],
+    "top": true,
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3#32",
+    "dot": [
+     1376.9,
+     589.1,
+     1386.4,
+     601.1
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": true,
+    "all": [
+     [
+      1359,
+      683,
+      1428,
+      706
+     ]
+    ],
+    "p": "shot-3-1-link",
+    "k": "link",
+    "r": [
+     1359,
+     683,
+     1428,
+     706
+    ],
+    "top": true,
+    "t": "4 (Main Passage of the Northern Sump System) → 3 (Lemon Squeeze Crawlway past th",
+    "dot": [
+     1366.5,
+     690.4,
+     1374.9,
+     698.8
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      649,
+      439,
+      741,
+      459
+     ]
+    ],
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     649,
+     439,
+     741,
+     459
+    ],
+    "top": true,
+    "t": "Blue Link",
+    "dot": [
+     656.2,
+     445.4,
+     663.4,
+     452.6
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      275,
+      505,
+      320,
+      523
+     ]
+    ],
+    "p": "data-table-station-pill-3-0",
+    "k": "link",
+    "r": [
+     275,
+     505,
+     320,
+     523
+    ],
+    "top": true,
+    "t": "4 (Main Passage of the Northern Sump System) Station ID #4",
+    "dot": [
+     281.5,
+     510.7,
+     288.1,
+     517.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      273,
+      538,
+      322,
+      556
+     ]
+    ],
+    "p": "data-table-station-pill-3-1",
+    "k": "link",
+    "r": [
+     273,
+     538,
+     322,
+     556
+    ],
+    "top": true,
+    "t": "3 (Lemon Squeeze Crawlway past the Second Restriction) loop end Station ID #32",
+    "dot": [
+     279.5,
+     543.7,
+     286.1,
+     550.3
+    ],
+    "ring": "transparent"
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "warnings",
+  "file": "warnings-dark-1440.png",
+  "rects": [
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      -6,
+      1258,
+      17
+     ]
+    ],
+    "p": "warning-0%3A11%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     -6,
+     1258,
+     17
+    ],
+    "top": false,
+    "t": "11 → 12",
+    "dot": [
+     1184,
+     1.3,
+     1192.4,
+     9.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      45,
+      1416,
+      68
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     45,
+     1416,
+     68
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     52.3,
+     1172.4,
+     60.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1155,
+      118,
+      1408,
+      134
+     ],
+     [
+      1156,
+      142,
+      1194,
+      158
+     ]
+    ],
+    "p": "warning-0%3A11%3AJUNCTION_DEPTH_SPREAD%3Ad12-message",
+    "k": "prose",
+    "r": [
+     1155,
+     118,
+     1408,
+     134
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "dot": [
+     1157.7,
+     119,
+     1168.3,
+     133
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      236,
+      1416,
+      259
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     236,
+     1416,
+     259
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     243.3,
+     1172.4,
+     251.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      282,
+      1258,
+      305
+     ]
+    ],
+    "p": "warning-0%3A12%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     282,
+     1258,
+     305
+    ],
+    "top": true,
+    "t": "12 → 13",
+    "dot": [
+     1184,
+     289.3,
+     1192.4,
+     297.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      333,
+      1416,
+      356
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     333,
+     1416,
+     356
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     340.3,
+     1172.4,
+     348.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      379,
+      1258,
+      402
+     ]
+    ],
+    "p": "warning-0%3A13%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     379,
+     1258,
+     402
+    ],
+    "top": true,
+    "t": "13 → 14",
+    "dot": [
+     1184,
+     386.3,
+     1192.4,
+     394.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      430,
+      1416,
+      453
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     430,
+     1416,
+     453
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     437.3,
+     1172.4,
+     445.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": true,
+    "all": [
+     [
+      1176,
+      476,
+      1253,
+      499
+     ]
+    ],
+    "p": "warning-1%3A100000%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     476,
+     1253,
+     499
+    ],
+    "top": true,
+    "t": "12 (Main Passage of the Northern Sump System) → 1",
+    "dot": [
+     1184,
+     483.3,
+     1192.4,
+     491.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      527,
+      1416,
+      550
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     527,
+     1416,
+     550
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     534.3,
+     1172.4,
+     542.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      573,
+      1242,
+      596
+     ]
+    ],
+    "p": "warning-1%3A100001%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     573,
+     1242,
+     596
+    ],
+    "top": true,
+    "t": "1 → 2",
+    "dot": [
+     1184,
+     580.3,
+     1192.4,
+     588.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      624,
+      1416,
+      647
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     624,
+     1416,
+     647
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     631.3,
+     1172.4,
+     639.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      670,
+      1242,
+      693
+     ]
+    ],
+    "p": "warning-1%3A100002%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     670,
+     1242,
+     693
+    ],
+    "top": true,
+    "t": "2 → 3",
+    "dot": [
+     1184,
+     677.3,
+     1192.4,
+     685.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      721,
+      1416,
+      744
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     721,
+     1416,
+     744
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     728.3,
+     1172.4,
+     736.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      767,
+      1242,
+      790
+     ]
+    ],
+    "p": "warning-1%3A100003%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     767,
+     1242,
+     790
+    ],
+    "top": true,
+    "t": "3 → 4",
+    "dot": [
+     1184,
+     774.3,
+     1192.4,
+     782.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      818,
+      1416,
+      841
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     818,
+     1416,
+     841
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     825.3,
+     1172.4,
+     833.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      864,
+      1242,
+      887
+     ]
+    ],
+    "p": "warning-1%3A100004%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     864,
+     1242,
+     887
+    ],
+    "top": false,
+    "t": "4 → 5",
+    "dot": [
+     1184,
+     871.3,
+     1192.4,
+     879.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      649,
+      439,
+      741,
+      459
+     ]
+    ],
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     649,
+     439,
+     741,
+     459
+    ],
+    "top": true,
+    "t": "Blue Link",
+    "dot": [
+     656.2,
+     445.4,
+     663.4,
+     452.6
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      275,
+      505,
+      320,
+      523
+     ]
+    ],
+    "p": "data-table-station-pill-3-0",
+    "k": "link",
+    "r": [
+     275,
+     505,
+     320,
+     523
+    ],
+    "top": true,
+    "t": "4 (Main Passage of the Northern Sump System) Station ID #4",
+    "dot": [
+     281.5,
+     510.7,
+     288.1,
+     517.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      273,
+      538,
+      322,
+      556
+     ]
+    ],
+    "p": "data-table-station-pill-3-1",
+    "k": "link",
+    "r": [
+     273,
+     538,
+     322,
+     556
+    ],
+    "top": true,
+    "t": "3 (Lemon Squeeze Crawlway past the Second Restriction) loop end Station ID #32",
+    "dot": [
+     279.5,
+     543.7,
+     286.1,
+     550.3
+    ],
+    "ring": "transparent"
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "merge",
+  "file": "merge-dark-1440.png",
+  "rects": [
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      -6,
+      1258,
+      17
+     ]
+    ],
+    "p": "warning-0%3A11%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     -6,
+     1258,
+     17
+    ],
+    "top": false,
+    "t": "11 → 12",
+    "dot": [
+     1184,
+     1.3,
+     1192.4,
+     9.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      45,
+      1416,
+      68
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     45,
+     1416,
+     68
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     52.3,
+     1172.4,
+     60.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1155,
+      118,
+      1408,
+      134
+     ],
+     [
+      1156,
+      142,
+      1194,
+      158
+     ]
+    ],
+    "p": "warning-0%3A11%3AJUNCTION_DEPTH_SPREAD%3Ad12-message",
+    "k": "prose",
+    "r": [
+     1155,
+     118,
+     1408,
+     134
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "dot": [
+     1157.7,
+     119,
+     1168.3,
+     133
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      236,
+      1416,
+      259
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     236,
+     1416,
+     259
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     243.3,
+     1172.4,
+     251.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      282,
+      1258,
+      305
+     ]
+    ],
+    "p": "warning-0%3A12%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     282,
+     1258,
+     305
+    ],
+    "top": false,
+    "t": "12 → 13",
+    "dot": [
+     1184,
+     289.3,
+     1192.4,
+     297.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      333,
+      1416,
+      356
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     333,
+     1416,
+     356
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     340.3,
+     1172.4,
+     348.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      379,
+      1258,
+      402
+     ]
+    ],
+    "p": "warning-0%3A13%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     379,
+     1258,
+     402
+    ],
+    "top": false,
+    "t": "13 → 14",
+    "dot": [
+     1184,
+     386.3,
+     1192.4,
+     394.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      430,
+      1416,
+      453
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     430,
+     1416,
+     453
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     437.3,
+     1172.4,
+     445.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": true,
+    "all": [
+     [
+      1176,
+      476,
+      1253,
+      499
+     ]
+    ],
+    "p": "warning-1%3A100000%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     476,
+     1253,
+     499
+    ],
+    "top": false,
+    "t": "12 (Main Passage of the Northern Sump System) → 1",
+    "dot": [
+     1184,
+     483.3,
+     1192.4,
+     491.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      527,
+      1416,
+      550
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     527,
+     1416,
+     550
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     534.3,
+     1172.4,
+     542.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      573,
+      1242,
+      596
+     ]
+    ],
+    "p": "warning-1%3A100001%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     573,
+     1242,
+     596
+    ],
+    "top": false,
+    "t": "1 → 2",
+    "dot": [
+     1184,
+     580.3,
+     1192.4,
+     588.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      624,
+      1416,
+      647
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     624,
+     1416,
+     647
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     631.3,
+     1172.4,
+     639.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      670,
+      1242,
+      693
+     ]
+    ],
+    "p": "warning-1%3A100002%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     670,
+     1242,
+     693
+    ],
+    "top": false,
+    "t": "2 → 3",
+    "dot": [
+     1184,
+     677.3,
+     1192.4,
+     685.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      721,
+      1416,
+      744
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     721,
+     1416,
+     744
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     728.3,
+     1172.4,
+     736.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      767,
+      1242,
+      790
+     ]
+    ],
+    "p": "warning-1%3A100003%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     767,
+     1242,
+     790
+    ],
+    "top": false,
+    "t": "3 → 4",
+    "dot": [
+     1184,
+     774.3,
+     1192.4,
+     782.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      818,
+      1416,
+      841
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     818,
+     1416,
+     841
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     825.3,
+     1172.4,
+     833.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      864,
+      1242,
+      887
+     ]
+    ],
+    "p": "warning-1%3A100004%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     864,
+     1242,
+     887
+    ],
+    "top": false,
+    "t": "4 → 5",
+    "dot": [
+     1184,
+     871.3,
+     1192.4,
+     879.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      649,
+      439,
+      741,
+      459
+     ]
+    ],
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     649,
+     439,
+     741,
+     459
+    ],
+    "top": false,
+    "t": "Blue Link",
+    "dot": [
+     656.2,
+     445.4,
+     663.4,
+     452.6
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      275,
+      505,
+      320,
+      523
+     ]
+    ],
+    "p": "data-table-station-pill-3-0",
+    "k": "link",
+    "r": [
+     275,
+     505,
+     320,
+     523
+    ],
+    "top": false,
+    "t": "4 (Main Passage of the Northern Sump System) Station ID #4",
+    "dot": [
+     281.5,
+     510.7,
+     288.1,
+     517.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      273,
+      538,
+      322,
+      556
+     ]
+    ],
+    "p": "data-table-station-pill-3-1",
+    "k": "link",
+    "r": [
+     273,
+     538,
+     322,
+     556
+    ],
+    "top": false,
+    "t": "3 (Lemon Squeeze Crawlway past the Second Restriction) loop end Station ID #32",
+    "dot": [
+     279.5,
+     543.7,
+     286.1,
+     550.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#c2185b",
+    "split": false,
+    "all": [
+     [
+      511,
+      261,
+      752,
+      284
+     ]
+    ],
+    "p": "merge-keep-37-pill",
+    "k": "link",
+    "r": [
+     511,
+     261,
+     752,
+     284
+    ],
+    "top": true,
+    "t": "Annex beyond the Terminal Sump: 0 Station ID #37",
+    "dot": [
+     519,
+     268.3,
+     527.4,
+     276.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      511,
+      296,
+      800,
+      319
+     ]
+    ],
+    "p": "merge-keep-2-pill",
+    "k": "link",
+    "r": [
+     511,
+     296,
+     800,
+     319
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System: 2 Station ID #2",
+    "dot": [
+     519,
+     303.3,
+     527.4,
+     311.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#c2185b",
+    "split": false,
+    "all": [
+     [
+      480,
+      342,
+      706,
+      358
+     ]
+    ],
+    "p": "merge-renamed-lines",
+    "k": "prose",
+    "r": [
+     480,
+     342,
+     706,
+     358
+    ],
+    "top": true,
+    "t": "Annex beyond the Terminal Sump",
+    "dot": [
+     482.7,
+     343,
+     493.3,
+     357
+    ],
+    "ring": "#cf7288"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      766,
+      342,
+      944,
+      358
+     ],
+     [
+      481,
+      362,
+      583,
+      378
+     ]
+    ],
+    "p": "merge-renamed-lines",
+    "k": "prose",
+    "r": [
+     766,
+     342,
+     944,
+     358
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System: 2#2",
+    "dot": [
+     769.3,
+     343,
+     779.9,
+     357
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#c2185b",
+    "split": false,
+    "all": [
+     [
+      480,
+      386,
+      710,
+      402
+     ]
+    ],
+    "p": "merge-hidden",
+    "k": "prose",
+    "r": [
+     480,
+     386,
+     710,
+     402
+    ],
+    "top": true,
+    "t": "Annex beyond the Terminal Sump: 0#37",
+    "dot": [
+     482.7,
+     387,
+     493.3,
+     401
+    ],
+    "ring": "#cf7288"
+   },
+   {
+    "dotColor": "#c2185b",
+    "split": false,
+    "all": [
+     [
+      648,
+      410,
+      842,
+      423
+     ]
+    ],
+    "p": "merge-hidden-back",
+    "k": "prose",
+    "r": [
+     648,
+     410,
+     842,
+     423
+    ],
+    "top": true,
+    "t": "Annex beyond the Terminal Sump: 0#37",
+    "dot": [
+     650.9,
+     410,
+     660.3,
+     422
+    ],
+    "ring": "#cf7288"
+   },
+   {
+    "dotColor": "#c2185b",
+    "split": false,
+    "all": [
+     [
+      480,
+      430,
+      706,
+      446
+     ]
+    ],
+    "p": "merge-repeat-4-39",
+    "k": "prose",
+    "r": [
+     480,
+     430,
+     706,
+     446
+    ],
+    "top": true,
+    "t": "Annex beyond the Terminal Sump",
+    "dot": [
+     482.7,
+     431,
+     493.3,
+     445
+    ],
+    "ring": "#cf7288"
+   },
+   {
+    "dotColor": "#c2185b",
+    "split": false,
+    "all": [
+     [
+      604,
+      450,
+      831,
+      466
+     ]
+    ],
+    "p": "merge-repeat-4-39",
+    "k": "prose",
+    "r": [
+     604,
+     450,
+     831,
+     466
+    ],
+    "top": true,
+    "t": "Annex beyond the Terminal Sump",
+    "dot": [
+     607.4,
+     451,
+     618,
+     465
+    ],
+    "ring": "#cf7288"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      548,
+      470,
+      839,
+      486
+     ]
+    ],
+    "p": "merge-repeat-4-39",
+    "k": "prose",
+    "r": [
+     548,
+     470,
+     839,
+     486
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     550.7,
+     471,
+     561.3,
+     485
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#c2185b",
+    "split": false,
+    "all": [
+     [
+      488,
+      514,
+      714,
+      530
+     ]
+    ],
+    "p": "merge-preview-move",
+    "k": "prose",
+    "r": [
+     488,
+     514,
+     714,
+     530
+    ],
+    "top": true,
+    "t": "Annex beyond the Terminal Sump",
+    "dot": [
+     490.7,
+     515,
+     501.3,
+     529
+    ],
+    "ring": "#cf7288"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      828,
+      514,
+      934,
+      530
+     ],
+     [
+      489,
+      534,
+      662,
+      550
+     ]
+    ],
+    "p": "merge-preview-move",
+    "k": "prose",
+    "r": [
+     828,
+     514,
+     934,
+     530
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System: 2#2",
+    "dot": [
+     831.1,
+     515,
+     841.7,
+     529
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#c2185b",
+    "split": false,
+    "all": [
+     [
+      579,
+      578,
+      805,
+      594
+     ]
+    ],
+    "p": "merge-preview-depths",
+    "k": "prose",
+    "r": [
+     579,
+     578,
+     805,
+     594
+    ],
+    "top": true,
+    "t": "Annex beyond the Terminal Sump",
+    "dot": [
+     581.7,
+     579,
+     592.3,
+     593
+    ],
+    "ring": "#cf7288"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      856,
+      578,
+      908,
+      594
+     ],
+     [
+      489,
+      598,
+      729,
+      614
+     ]
+    ],
+    "p": "merge-preview-depths",
+    "k": "prose",
+    "r": [
+     856,
+     578,
+     908,
+     594
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     859.3,
+     579,
+     869.9,
+     593
+    ],
+    "ring": "transparent"
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "detach",
+  "file": "detach-dark-1440.png",
+  "rects": [
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      -6,
+      1258,
+      17
+     ]
+    ],
+    "p": "warning-0%3A11%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     -6,
+     1258,
+     17
+    ],
+    "top": false,
+    "t": "11 → 12",
+    "dot": [
+     1184,
+     1.3,
+     1192.4,
+     9.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      45,
+      1416,
+      68
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     45,
+     1416,
+     68
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     52.3,
+     1172.4,
+     60.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1155,
+      118,
+      1408,
+      134
+     ],
+     [
+      1156,
+      142,
+      1194,
+      158
+     ]
+    ],
+    "p": "warning-0%3A11%3AJUNCTION_DEPTH_SPREAD%3Ad12-message",
+    "k": "prose",
+    "r": [
+     1155,
+     118,
+     1408,
+     134
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "dot": [
+     1157.7,
+     119,
+     1168.3,
+     133
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      236,
+      1416,
+      259
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     236,
+     1416,
+     259
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     243.3,
+     1172.4,
+     251.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      282,
+      1258,
+      305
+     ]
+    ],
+    "p": "warning-0%3A12%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     282,
+     1258,
+     305
+    ],
+    "top": false,
+    "t": "12 → 13",
+    "dot": [
+     1184,
+     289.3,
+     1192.4,
+     297.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      333,
+      1416,
+      356
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     333,
+     1416,
+     356
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     340.3,
+     1172.4,
+     348.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      379,
+      1258,
+      402
+     ]
+    ],
+    "p": "warning-0%3A13%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     379,
+     1258,
+     402
+    ],
+    "top": false,
+    "t": "13 → 14",
+    "dot": [
+     1184,
+     386.3,
+     1192.4,
+     394.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      430,
+      1416,
+      453
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     430,
+     1416,
+     453
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     437.3,
+     1172.4,
+     445.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": true,
+    "all": [
+     [
+      1176,
+      476,
+      1253,
+      499
+     ]
+    ],
+    "p": "warning-1%3A100000%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     476,
+     1253,
+     499
+    ],
+    "top": false,
+    "t": "12 (Main Passage of the Northern Sump System) → 1",
+    "dot": [
+     1184,
+     483.3,
+     1192.4,
+     491.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      527,
+      1416,
+      550
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     527,
+     1416,
+     550
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     534.3,
+     1172.4,
+     542.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      573,
+      1242,
+      596
+     ]
+    ],
+    "p": "warning-1%3A100001%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     573,
+     1242,
+     596
+    ],
+    "top": false,
+    "t": "1 → 2",
+    "dot": [
+     1184,
+     580.3,
+     1192.4,
+     588.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      624,
+      1416,
+      647
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     624,
+     1416,
+     647
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     631.3,
+     1172.4,
+     639.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      670,
+      1242,
+      693
+     ]
+    ],
+    "p": "warning-1%3A100002%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     670,
+     1242,
+     693
+    ],
+    "top": false,
+    "t": "2 → 3",
+    "dot": [
+     1184,
+     677.3,
+     1192.4,
+     685.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      721,
+      1416,
+      744
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     721,
+     1416,
+     744
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     728.3,
+     1172.4,
+     736.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      767,
+      1242,
+      790
+     ]
+    ],
+    "p": "warning-1%3A100003%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     767,
+     1242,
+     790
+    ],
+    "top": false,
+    "t": "3 → 4",
+    "dot": [
+     1184,
+     774.3,
+     1192.4,
+     782.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      818,
+      1416,
+      841
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     818,
+     1416,
+     841
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     825.3,
+     1172.4,
+     833.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      864,
+      1242,
+      887
+     ]
+    ],
+    "p": "warning-1%3A100004%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     864,
+     1242,
+     887
+    ],
+    "top": false,
+    "t": "4 → 5",
+    "dot": [
+     1184,
+     871.3,
+     1192.4,
+     879.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      649,
+      439,
+      741,
+      459
+     ]
+    ],
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     649,
+     439,
+     741,
+     459
+    ],
+    "top": false,
+    "t": "Blue Link",
+    "dot": [
+     656.2,
+     445.4,
+     663.4,
+     452.6
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      275,
+      505,
+      320,
+      523
+     ]
+    ],
+    "p": "data-table-station-pill-3-0",
+    "k": "link",
+    "r": [
+     275,
+     505,
+     320,
+     523
+    ],
+    "top": false,
+    "t": "4 (Main Passage of the Northern Sump System) Station ID #4",
+    "dot": [
+     281.5,
+     510.7,
+     288.1,
+     517.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      273,
+      538,
+      322,
+      556
+     ]
+    ],
+    "p": "data-table-station-pill-3-1",
+    "k": "link",
+    "r": [
+     273,
+     538,
+     322,
+     556
+    ],
+    "top": false,
+    "t": "3 (Lemon Squeeze Crawlway past the Second Restriction) loop end Station ID #32",
+    "dot": [
+     279.5,
+     543.7,
+     286.1,
+     550.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      512,
+      369,
+      780,
+      385
+     ]
+    ],
+    "p": "unmerge-stations-naming",
+    "k": "prose",
+    "r": [
+     512,
+     369,
+     780,
+     385
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     514.7,
+     370,
+     525.3,
+     384
+    ],
+    "ring": "#868686"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      619,
+      389,
+      910,
+      405
+     ]
+    ],
+    "p": "unmerge-stations-naming",
+    "k": "prose",
+    "r": [
+     619,
+     389,
+     910,
+     405
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     622.2,
+     390,
+     632.8,
+     404
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      596,
+      409,
+      651,
+      425
+     ]
+    ],
+    "p": "unmerge-stations-naming",
+    "k": "prose",
+    "r": [
+     596,
+     409,
+     651,
+     425
+    ],
+    "top": true,
+    "t": "12#12",
+    "dot": [
+     599.4,
+     410,
+     610,
+     424
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      512,
+      481,
+      738,
+      494
+     ]
+    ],
+    "p": "unmerge-stations-explain",
+    "k": "prose",
+    "r": [
+     512,
+     481,
+     738,
+     494
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     514.4,
+     481,
+     523.9,
+     493
+    ],
+    "ring": "#868686"
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "delete-shot-blue-both-ends",
+  "file": "delete-shot-blue-both-ends-dark-1440.png",
+  "rects": [
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      -6,
+      1258,
+      17
+     ]
+    ],
+    "p": "warning-0%3A11%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     -6,
+     1258,
+     17
+    ],
+    "top": false,
+    "t": "11 → 12",
+    "dot": [
+     1184,
+     1.3,
+     1192.4,
+     9.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      45,
+      1416,
+      68
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     45,
+     1416,
+     68
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     52.3,
+     1172.4,
+     60.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1155,
+      118,
+      1408,
+      134
+     ],
+     [
+      1156,
+      142,
+      1194,
+      158
+     ]
+    ],
+    "p": "warning-0%3A11%3AJUNCTION_DEPTH_SPREAD%3Ad12-message",
+    "k": "prose",
+    "r": [
+     1155,
+     118,
+     1408,
+     134
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "dot": [
+     1157.7,
+     119,
+     1168.3,
+     133
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      236,
+      1416,
+      259
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     236,
+     1416,
+     259
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     243.3,
+     1172.4,
+     251.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      282,
+      1258,
+      305
+     ]
+    ],
+    "p": "warning-0%3A12%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     282,
+     1258,
+     305
+    ],
+    "top": false,
+    "t": "12 → 13",
+    "dot": [
+     1184,
+     289.3,
+     1192.4,
+     297.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      333,
+      1416,
+      356
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     333,
+     1416,
+     356
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     340.3,
+     1172.4,
+     348.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      379,
+      1258,
+      402
+     ]
+    ],
+    "p": "warning-0%3A13%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     379,
+     1258,
+     402
+    ],
+    "top": false,
+    "t": "13 → 14",
+    "dot": [
+     1184,
+     386.3,
+     1192.4,
+     394.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      430,
+      1416,
+      453
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     430,
+     1416,
+     453
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     437.3,
+     1172.4,
+     445.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": true,
+    "all": [
+     [
+      1176,
+      476,
+      1253,
+      499
+     ]
+    ],
+    "p": "warning-1%3A100000%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     476,
+     1253,
+     499
+    ],
+    "top": false,
+    "t": "12 (Main Passage of the Northern Sump System) → 1",
+    "dot": [
+     1184,
+     483.3,
+     1192.4,
+     491.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      527,
+      1416,
+      550
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     527,
+     1416,
+     550
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     534.3,
+     1172.4,
+     542.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      573,
+      1242,
+      596
+     ]
+    ],
+    "p": "warning-1%3A100001%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     573,
+     1242,
+     596
+    ],
+    "top": false,
+    "t": "1 → 2",
+    "dot": [
+     1184,
+     580.3,
+     1192.4,
+     588.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      624,
+      1416,
+      647
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     624,
+     1416,
+     647
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     631.3,
+     1172.4,
+     639.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      670,
+      1242,
+      693
+     ]
+    ],
+    "p": "warning-1%3A100002%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     670,
+     1242,
+     693
+    ],
+    "top": false,
+    "t": "2 → 3",
+    "dot": [
+     1184,
+     677.3,
+     1192.4,
+     685.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      721,
+      1416,
+      744
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     721,
+     1416,
+     744
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     728.3,
+     1172.4,
+     736.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      767,
+      1242,
+      790
+     ]
+    ],
+    "p": "warning-1%3A100003%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     767,
+     1242,
+     790
+    ],
+    "top": false,
+    "t": "3 → 4",
+    "dot": [
+     1184,
+     774.3,
+     1192.4,
+     782.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      818,
+      1416,
+      841
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     818,
+     1416,
+     841
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     825.3,
+     1172.4,
+     833.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      864,
+      1242,
+      887
+     ]
+    ],
+    "p": "warning-1%3A100004%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     864,
+     1242,
+     887
+    ],
+    "top": false,
+    "t": "4 → 5",
+    "dot": [
+     1184,
+     871.3,
+     1192.4,
+     879.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      649,
+      439,
+      741,
+      459
+     ]
+    ],
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     649,
+     439,
+     741,
+     459
+    ],
+    "top": false,
+    "t": "Blue Link",
+    "dot": [
+     656.2,
+     445.4,
+     663.4,
+     452.6
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      275,
+      505,
+      320,
+      523
+     ]
+    ],
+    "p": "data-table-station-pill-3-0",
+    "k": "link",
+    "r": [
+     275,
+     505,
+     320,
+     523
+    ],
+    "top": false,
+    "t": "4 (Main Passage of the Northern Sump System) Station ID #4",
+    "dot": [
+     281.5,
+     510.7,
+     288.1,
+     517.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      273,
+      538,
+      322,
+      556
+     ]
+    ],
+    "p": "data-table-station-pill-3-1",
+    "k": "link",
+    "r": [
+     273,
+     538,
+     322,
+     556
+    ],
+    "top": false,
+    "t": "3 (Lemon Squeeze Crawlway past the Second Restriction) loop end Station ID #32",
+    "dot": [
+     279.5,
+     543.7,
+     286.1,
+     550.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": true,
+    "all": [
+     [
+      549,
+      322,
+      672,
+      343
+     ]
+    ],
+    "p": "delete-shot-choice-lead",
+    "k": "prose",
+    "r": [
+     549,
+     322,
+     672,
+     343
+    ],
+    "top": true,
+    "t": "Blue Link: 4 → 3",
+    "dot": [
+     550.9,
+     326.4,
+     562.7,
+     342.4
+    ],
+    "ring": "#7698e5"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      541,
+      446,
+      654,
+      469
+     ]
+    ],
+    "p": "delete-shot-choice-dialog-body",
+    "k": "link",
+    "r": [
+     541,
+     446,
+     654,
+     469
+    ],
+    "top": true,
+    "t": "Blue Link: 4 (Main Passage of the Northern Sump System) Station ID #4",
+    "dot": [
+     549,
+     453.8,
+     557.4,
+     462.1
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      526,
+      469,
+      815,
+      493
+     ]
+    ],
+    "p": "delete-shot-choice-dialog-body",
+    "k": "link",
+    "r": [
+     526,
+     469,
+     815,
+     493
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System: 4 Station ID #4",
+    "dot": [
+     534,
+     476.8,
+     542.4,
+     485.2
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      541,
+      521,
+      659,
+      544
+     ]
+    ],
+    "p": "delete-shot-choice-dialog-body",
+    "k": "link",
+    "r": [
+     541,
+     521,
+     659,
+     544
+    ],
+    "top": true,
+    "t": "Blue Link: 3 (Lemon Squeeze Crawlway past the Second Restriction) loop end Stati",
+    "dot": [
+     549,
+     527.8,
+     557.4,
+     536.2
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      526,
+      544,
+      871,
+      567
+     ]
+    ],
+    "p": "delete-shot-choice-dialog-body",
+    "k": "link",
+    "r": [
+     526,
+     544,
+     871,
+     567
+    ],
+    "top": true,
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3 Station ID #32",
+    "dot": [
+     534,
+     550.8,
+     542.4,
+     559.2
+    ],
+    "ring": "transparent"
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "delete-shot-branch-first",
+  "file": "delete-shot-branch-first-dark-1440.png",
+  "rects": [
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      -6,
+      1258,
+      17
+     ]
+    ],
+    "p": "warning-0%3A11%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     -6,
+     1258,
+     17
+    ],
+    "top": false,
+    "t": "11 → 12",
+    "dot": [
+     1184,
+     1.3,
+     1192.4,
+     9.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      45,
+      1416,
+      68
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     45,
+     1416,
+     68
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     52.3,
+     1172.4,
+     60.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1155,
+      118,
+      1408,
+      134
+     ],
+     [
+      1156,
+      142,
+      1194,
+      158
+     ]
+    ],
+    "p": "warning-0%3A11%3AJUNCTION_DEPTH_SPREAD%3Ad12-message",
+    "k": "prose",
+    "r": [
+     1155,
+     118,
+     1408,
+     134
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "dot": [
+     1157.7,
+     119,
+     1168.3,
+     133
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      236,
+      1416,
+      259
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     236,
+     1416,
+     259
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     243.3,
+     1172.4,
+     251.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      282,
+      1258,
+      305
+     ]
+    ],
+    "p": "warning-0%3A12%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     282,
+     1258,
+     305
+    ],
+    "top": false,
+    "t": "12 → 13",
+    "dot": [
+     1184,
+     289.3,
+     1192.4,
+     297.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      333,
+      1416,
+      356
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     333,
+     1416,
+     356
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     340.3,
+     1172.4,
+     348.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      379,
+      1258,
+      402
+     ]
+    ],
+    "p": "warning-0%3A13%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     379,
+     1258,
+     402
+    ],
+    "top": false,
+    "t": "13 → 14",
+    "dot": [
+     1184,
+     386.3,
+     1192.4,
+     394.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      430,
+      1416,
+      453
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     430,
+     1416,
+     453
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     437.3,
+     1172.4,
+     445.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": true,
+    "all": [
+     [
+      1176,
+      476,
+      1253,
+      499
+     ]
+    ],
+    "p": "warning-1%3A100000%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     476,
+     1253,
+     499
+    ],
+    "top": false,
+    "t": "12 (Main Passage of the Northern Sump System) → 1",
+    "dot": [
+     1184,
+     483.3,
+     1192.4,
+     491.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      527,
+      1416,
+      550
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     527,
+     1416,
+     550
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     534.3,
+     1172.4,
+     542.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      573,
+      1242,
+      596
+     ]
+    ],
+    "p": "warning-1%3A100001%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     573,
+     1242,
+     596
+    ],
+    "top": false,
+    "t": "1 → 2",
+    "dot": [
+     1184,
+     580.3,
+     1192.4,
+     588.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      624,
+      1416,
+      647
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     624,
+     1416,
+     647
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     631.3,
+     1172.4,
+     639.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      670,
+      1242,
+      693
+     ]
+    ],
+    "p": "warning-1%3A100002%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     670,
+     1242,
+     693
+    ],
+    "top": false,
+    "t": "2 → 3",
+    "dot": [
+     1184,
+     677.3,
+     1192.4,
+     685.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      721,
+      1416,
+      744
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     721,
+     1416,
+     744
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     728.3,
+     1172.4,
+     736.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      767,
+      1242,
+      790
+     ]
+    ],
+    "p": "warning-1%3A100003%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     767,
+     1242,
+     790
+    ],
+    "top": false,
+    "t": "3 → 4",
+    "dot": [
+     1184,
+     774.3,
+     1192.4,
+     782.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      818,
+      1416,
+      841
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     818,
+     1416,
+     841
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     825.3,
+     1172.4,
+     833.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      864,
+      1242,
+      887
+     ]
+    ],
+    "p": "warning-1%3A100004%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     864,
+     1242,
+     887
+    ],
+    "top": false,
+    "t": "4 → 5",
+    "dot": [
+     1184,
+     871.3,
+     1192.4,
+     879.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      649,
+      439,
+      741,
+      459
+     ]
+    ],
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     649,
+     439,
+     741,
+     459
+    ],
+    "top": false,
+    "t": "Blue Link",
+    "dot": [
+     656.2,
+     445.4,
+     663.4,
+     452.6
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      275,
+      505,
+      320,
+      523
+     ]
+    ],
+    "p": "data-table-station-pill-3-0",
+    "k": "link",
+    "r": [
+     275,
+     505,
+     320,
+     523
+    ],
+    "top": false,
+    "t": "4 (Main Passage of the Northern Sump System) Station ID #4",
+    "dot": [
+     281.5,
+     510.7,
+     288.1,
+     517.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      273,
+      538,
+      322,
+      556
+     ]
+    ],
+    "p": "data-table-station-pill-3-1",
+    "k": "link",
+    "r": [
+     273,
+     538,
+     322,
+     556
+    ],
+    "top": false,
+    "t": "3 (Lemon Squeeze Crawlway past the Second Restriction) loop end Station ID #32",
+    "dot": [
+     279.5,
+     543.7,
+     286.1,
+     550.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": true,
+    "all": [
+     [
+      549,
+      310,
+      873,
+      331
+     ]
+    ],
+    "p": "delete-shot-choice-lead",
+    "k": "prose",
+    "r": [
+     549,
+     310,
+     873,
+     331
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber: 12 → 1",
+    "dot": [
+     550.9,
+     314.4,
+     562.7,
+     330.4
+    ],
+    "ring": "#959595"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      541,
+      458,
+      827,
+      481
+     ]
+    ],
+    "p": "delete-shot-choice-dialog-body",
+    "k": "link",
+    "r": [
+     541,
+     458,
+     827,
+     481
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber: 12 (Main Passage of the Northern Sump Syst",
+    "dot": [
+     549,
+     465.8,
+     557.4,
+     474.1
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      526,
+      481,
+      828,
+      505
+     ]
+    ],
+    "p": "delete-shot-choice-dialog-body",
+    "k": "link",
+    "r": [
+     526,
+     481,
+     828,
+     505
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System: 12 Station ID #12",
+    "dot": [
+     534,
+     488.8,
+     542.4,
+     497.2
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      541,
+      533,
+      659,
+      556
+     ]
+    ],
+    "p": "delete-shot-choice-dialog-body",
+    "k": "link",
+    "r": [
+     541,
+     533,
+     659,
+     556
+    ],
+    "top": true,
+    "t": "Blue Link: 3 (Lemon Squeeze Crawlway past the Second Restriction) loop end Stati",
+    "dot": [
+     549,
+     539.8,
+     557.4,
+     548.2
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      526,
+      556,
+      871,
+      579
+     ]
+    ],
+    "p": "delete-shot-choice-dialog-body",
+    "k": "link",
+    "r": [
+     526,
+     556,
+     871,
+     579
+    ],
+    "top": true,
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3 Station ID #32",
+    "dot": [
+     534,
+     562.8,
+     542.4,
+     571.2
+    ],
+    "ring": "transparent"
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "delete-shot-spur",
+  "file": "delete-shot-spur-dark-1440.png",
+  "rects": [
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      -6,
+      1258,
+      17
+     ]
+    ],
+    "p": "warning-0%3A11%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     -6,
+     1258,
+     17
+    ],
+    "top": false,
+    "t": "11 → 12",
+    "dot": [
+     1184,
+     1.3,
+     1192.4,
+     9.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      45,
+      1416,
+      68
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     45,
+     1416,
+     68
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     52.3,
+     1172.4,
+     60.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1155,
+      118,
+      1408,
+      134
+     ],
+     [
+      1156,
+      142,
+      1194,
+      158
+     ]
+    ],
+    "p": "warning-0%3A11%3AJUNCTION_DEPTH_SPREAD%3Ad12-message",
+    "k": "prose",
+    "r": [
+     1155,
+     118,
+     1408,
+     134
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "dot": [
+     1157.7,
+     119,
+     1168.3,
+     133
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      236,
+      1416,
+      259
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     236,
+     1416,
+     259
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     243.3,
+     1172.4,
+     251.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      282,
+      1258,
+      305
+     ]
+    ],
+    "p": "warning-0%3A12%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     282,
+     1258,
+     305
+    ],
+    "top": false,
+    "t": "12 → 13",
+    "dot": [
+     1184,
+     289.3,
+     1192.4,
+     297.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      333,
+      1416,
+      356
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     333,
+     1416,
+     356
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     340.3,
+     1172.4,
+     348.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      379,
+      1258,
+      402
+     ]
+    ],
+    "p": "warning-0%3A13%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     379,
+     1258,
+     402
+    ],
+    "top": false,
+    "t": "13 → 14",
+    "dot": [
+     1184,
+     386.3,
+     1192.4,
+     394.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      430,
+      1416,
+      453
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     430,
+     1416,
+     453
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     437.3,
+     1172.4,
+     445.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": true,
+    "all": [
+     [
+      1176,
+      476,
+      1253,
+      499
+     ]
+    ],
+    "p": "warning-1%3A100000%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     476,
+     1253,
+     499
+    ],
+    "top": false,
+    "t": "12 (Main Passage of the Northern Sump System) → 1",
+    "dot": [
+     1184,
+     483.3,
+     1192.4,
+     491.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      527,
+      1416,
+      550
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     527,
+     1416,
+     550
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     534.3,
+     1172.4,
+     542.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      573,
+      1242,
+      596
+     ]
+    ],
+    "p": "warning-1%3A100001%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     573,
+     1242,
+     596
+    ],
+    "top": false,
+    "t": "1 → 2",
+    "dot": [
+     1184,
+     580.3,
+     1192.4,
+     588.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      624,
+      1416,
+      647
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     624,
+     1416,
+     647
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     631.3,
+     1172.4,
+     639.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      670,
+      1242,
+      693
+     ]
+    ],
+    "p": "warning-1%3A100002%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     670,
+     1242,
+     693
+    ],
+    "top": false,
+    "t": "2 → 3",
+    "dot": [
+     1184,
+     677.3,
+     1192.4,
+     685.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      721,
+      1416,
+      744
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     721,
+     1416,
+     744
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     728.3,
+     1172.4,
+     736.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      767,
+      1242,
+      790
+     ]
+    ],
+    "p": "warning-1%3A100003%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     767,
+     1242,
+     790
+    ],
+    "top": false,
+    "t": "3 → 4",
+    "dot": [
+     1184,
+     774.3,
+     1192.4,
+     782.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      818,
+      1416,
+      841
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     818,
+     1416,
+     841
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     825.3,
+     1172.4,
+     833.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      864,
+      1242,
+      887
+     ]
+    ],
+    "p": "warning-1%3A100004%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     864,
+     1242,
+     887
+    ],
+    "top": false,
+    "t": "4 → 5",
+    "dot": [
+     1184,
+     871.3,
+     1192.4,
+     879.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      649,
+      439,
+      741,
+      459
+     ]
+    ],
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     649,
+     439,
+     741,
+     459
+    ],
+    "top": false,
+    "t": "Blue Link",
+    "dot": [
+     656.2,
+     445.4,
+     663.4,
+     452.6
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      275,
+      505,
+      320,
+      523
+     ]
+    ],
+    "p": "data-table-station-pill-3-0",
+    "k": "link",
+    "r": [
+     275,
+     505,
+     320,
+     523
+    ],
+    "top": false,
+    "t": "4 (Main Passage of the Northern Sump System) Station ID #4",
+    "dot": [
+     281.5,
+     510.7,
+     288.1,
+     517.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      273,
+      538,
+      322,
+      556
+     ]
+    ],
+    "p": "data-table-station-pill-3-1",
+    "k": "link",
+    "r": [
+     273,
+     538,
+     322,
+     556
+    ],
+    "top": false,
+    "t": "3 (Lemon Squeeze Crawlway past the Second Restriction) loop end Station ID #32",
+    "dot": [
+     279.5,
+     543.7,
+     286.1,
+     550.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": true,
+    "all": [
+     [
+      549,
+      359,
+      675,
+      380
+     ]
+    ],
+    "p": "delete-shot-choice-lead",
+    "k": "prose",
+    "r": [
+     549,
+     359,
+     675,
+     380
+    ],
+    "top": true,
+    "t": "Blue Spur: 5 → 1",
+    "dot": [
+     550.9,
+     363.5,
+     562.7,
+     379.5
+    ],
+    "ring": "#7698e5"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      541,
+      483,
+      661,
+      507
+     ]
+    ],
+    "p": "delete-shot-choice-dialog-body",
+    "k": "link",
+    "r": [
+     541,
+     483,
+     661,
+     507
+    ],
+    "top": true,
+    "t": "Blue Spur: 5 (Lemon Squeeze Crawlway past the Second Restriction) Station ID #34",
+    "dot": [
+     549,
+     490.8,
+     557.4,
+     499.2
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      526,
+      507,
+      871,
+      530
+     ]
+    ],
+    "p": "delete-shot-choice-dialog-body",
+    "k": "link",
+    "r": [
+     526,
+     507,
+     871,
+     530
+    ],
+    "top": true,
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 5 Station ID #34",
+    "dot": [
+     534,
+     513.8,
+     542.4,
+     522.2
+    ],
+    "ring": "transparent"
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "history",
+  "file": "history-dark-1440.png",
+  "rects": [
+   {
+    "dotColor": "#1f4fff",
+    "split": true,
+    "all": [
+     [
+      294,
+      84,
+      404,
+      103
+     ]
+    ],
+    "p": "toolbar-undo-button-description-0",
+    "k": "prose",
+    "r": [
+     294,
+     84,
+     404,
+     103
+    ],
+    "top": true,
+    "t": "Blue Link: 4 → 3",
+    "dot": [
+     296,
+     88,
+     306.6,
+     102
+    ],
+    "ring": "#7698e5"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      364,
+      135,
+      412,
+      151
+     ],
+     [
+      214,
+      155,
+      422,
+      171
+     ],
+     [
+      214,
+      175,
+      260,
+      191
+     ]
+    ],
+    "p": "toolbar-undo-button-description-1",
+    "k": "prose",
+    "r": [
+     364,
+     135,
+     412,
+     151
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "dot": [
+     367.1,
+     136,
+     377.7,
+     150
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#808080",
+    "split": false,
+    "all": [
+     [
+      257,
+      223,
+      397,
+      239
+     ]
+    ],
+    "p": "toolbar-undo-button-description-2",
+    "k": "prose",
+    "r": [
+     257,
+     223,
+     397,
+     239
+    ],
+    "top": true,
+    "t": "Grey Side Tunnel: 0#44",
+    "dot": [
+     259.9,
+     224,
+     270.5,
+     238
+    ],
+    "ring": "#949494"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      213,
+      243,
+      424,
+      259
+     ],
+     [
+      214,
+      263,
+      283,
+      279
+     ]
+    ],
+    "p": "toolbar-undo-button-description-2",
+    "k": "prose",
+    "r": [
+     213,
+     243,
+     424,
+     259
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System: 8#8",
+    "dot": [
+     216.1,
+     244,
+     226.7,
+     258
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      257,
+      311,
+      361,
+      327
+     ]
+    ],
+    "p": "toolbar-undo-button-description-3",
+    "k": "prose",
+    "r": [
+     257,
+     311,
+     361,
+     327
+    ],
+    "top": false,
+    "t": "Blue Spur: 0#41",
+    "dot": [
+     259.9,
+     312,
+     270.5,
+     326
+    ],
+    "ring": "#6d8eda"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      213,
+      331,
+      414,
+      347
+     ],
+     [
+      214,
+      351,
+      349,
+      367
+     ]
+    ],
+    "p": "toolbar-undo-button-description-3",
+    "k": "prose",
+    "r": [
+     213,
+     331,
+     414,
+     347
+    ],
+    "top": false,
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 5#34",
+    "dot": [
+     216.1,
+     332,
+     226.7,
+     346
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      338,
+      495,
+      439,
+      511
+     ]
+    ],
+    "p": "toolbar-undo-button-description-6",
+    "k": "prose",
+    "r": [
+     338,
+     495,
+     439,
+     511
+    ],
+    "top": false,
+    "t": "Blue Link: 1#36",
+    "dot": [
+     340.6,
+     496,
+     351.2,
+     510
+    ],
+    "ring": "#6d8eda"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      274,
+      515,
+      430,
+      531
+     ],
+     [
+      214,
+      535,
+      394,
+      551
+     ]
+    ],
+    "p": "toolbar-undo-button-description-6",
+    "k": "prose",
+    "r": [
+     274,
+     515,
+     430,
+     531
+    ],
+    "top": false,
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 3#32",
+    "dot": [
+     277.1,
+     516,
+     287.7,
+     530
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      257,
+      583,
+      359,
+      599
+     ]
+    ],
+    "p": "toolbar-undo-button-description-7",
+    "k": "prose",
+    "r": [
+     257,
+     583,
+     359,
+     599
+    ],
+    "top": false,
+    "t": "Blue Link: 0#35",
+    "dot": [
+     259.9,
+     584,
+     270.5,
+     598
+    ],
+    "ring": "#6d8eda"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      388,
+      583,
+      436,
+      599
+     ],
+     [
+      214,
+      603,
+      422,
+      619
+     ],
+     [
+      214,
+      623,
+      240,
+      639
+     ]
+    ],
+    "p": "toolbar-undo-button-description-7",
+    "k": "prose",
+    "r": [
+     388,
+     583,
+     436,
+     599
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System: 4#4",
+    "dot": [
+     390.8,
+     584,
+     401.4,
+     598
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      257,
+      671,
+      438,
+      687
+     ],
+     [
+      214,
+      691,
+      369,
+      707
+     ]
+    ],
+    "p": "toolbar-undo-button-description-8",
+    "k": "prose",
+    "r": [
+     257,
+     671,
+     438,
+     687
+    ],
+    "top": false,
+    "t": "Lemon Squeeze Crawlway past the Second Restriction: 0#29",
+    "dot": [
+     259.9,
+     672,
+     270.5,
+     686
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      213,
+      711,
+      392,
+      727
+     ],
+     [
+      214,
+      731,
+      299,
+      747
+     ]
+    ],
+    "p": "toolbar-undo-button-description-8",
+    "k": "prose",
+    "r": [
+     213,
+     711,
+     392,
+     727
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber: 5#20",
+    "dot": [
+     216.1,
+     712,
+     226.7,
+     726
+    ],
+    "ring": "#868686"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      257,
+      759,
+      436,
+      775
+     ],
+     [
+      214,
+      779,
+      299,
+      795
+     ]
+    ],
+    "p": "toolbar-undo-button-description-9",
+    "k": "prose",
+    "r": [
+     257,
+     759,
+     436,
+     775
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber: 0#15",
+    "dot": [
+     259.9,
+     760,
+     270.5,
+     774
+    ],
+    "ring": "#868686"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      328,
+      779,
+      434,
+      795
+     ],
+     [
+      214,
+      799,
+      400,
+      815
+     ]
+    ],
+    "p": "toolbar-undo-button-description-9",
+    "k": "prose",
+    "r": [
+     328,
+     779,
+     434,
+     795
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "dot": [
+     331.2,
+     780,
+     341.8,
+     794
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      364,
+      847,
+      417,
+      863
+     ],
+     [
+      214,
+      867,
+      425,
+      883
+     ]
+    ],
+    "p": "toolbar-undo-button-description-10",
+    "k": "prose",
+    "r": [
+     364,
+     847,
+     417,
+     863
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber: 0#15",
+    "dot": [
+     367.1,
+     848,
+     377.7,
+     862
+    ],
+    "ring": "#868686"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      -6,
+      1258,
+      17
+     ]
+    ],
+    "p": "warning-0%3A11%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     -6,
+     1258,
+     17
+    ],
+    "top": false,
+    "t": "11 → 12",
+    "dot": [
+     1184,
+     1.3,
+     1192.4,
+     9.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      45,
+      1416,
+      68
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     45,
+     1416,
+     68
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     52.3,
+     1172.4,
+     60.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1155,
+      118,
+      1408,
+      134
+     ],
+     [
+      1156,
+      142,
+      1194,
+      158
+     ]
+    ],
+    "p": "warning-0%3A11%3AJUNCTION_DEPTH_SPREAD%3Ad12-message",
+    "k": "prose",
+    "r": [
+     1155,
+     118,
+     1408,
+     134
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "dot": [
+     1157.7,
+     119,
+     1168.3,
+     133
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      236,
+      1416,
+      259
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     236,
+     1416,
+     259
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     243.3,
+     1172.4,
+     251.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      282,
+      1258,
+      305
+     ]
+    ],
+    "p": "warning-0%3A12%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     282,
+     1258,
+     305
+    ],
+    "top": true,
+    "t": "12 → 13",
+    "dot": [
+     1184,
+     289.3,
+     1192.4,
+     297.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      333,
+      1416,
+      356
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     333,
+     1416,
+     356
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     340.3,
+     1172.4,
+     348.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      379,
+      1258,
+      402
+     ]
+    ],
+    "p": "warning-0%3A13%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     379,
+     1258,
+     402
+    ],
+    "top": true,
+    "t": "13 → 14",
+    "dot": [
+     1184,
+     386.3,
+     1192.4,
+     394.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      430,
+      1416,
+      453
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     430,
+     1416,
+     453
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     437.3,
+     1172.4,
+     445.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": true,
+    "all": [
+     [
+      1176,
+      476,
+      1253,
+      499
+     ]
+    ],
+    "p": "warning-1%3A100000%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     476,
+     1253,
+     499
+    ],
+    "top": true,
+    "t": "12 (Main Passage of the Northern Sump System) → 1",
+    "dot": [
+     1184,
+     483.3,
+     1192.4,
+     491.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      527,
+      1416,
+      550
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     527,
+     1416,
+     550
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     534.3,
+     1172.4,
+     542.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      573,
+      1242,
+      596
+     ]
+    ],
+    "p": "warning-1%3A100001%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     573,
+     1242,
+     596
+    ],
+    "top": true,
+    "t": "1 → 2",
+    "dot": [
+     1184,
+     580.3,
+     1192.4,
+     588.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      624,
+      1416,
+      647
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     624,
+     1416,
+     647
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     631.3,
+     1172.4,
+     639.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      670,
+      1242,
+      693
+     ]
+    ],
+    "p": "warning-1%3A100002%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     670,
+     1242,
+     693
+    ],
+    "top": true,
+    "t": "2 → 3",
+    "dot": [
+     1184,
+     677.3,
+     1192.4,
+     685.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      721,
+      1416,
+      744
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     721,
+     1416,
+     744
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     728.3,
+     1172.4,
+     736.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      767,
+      1242,
+      790
+     ]
+    ],
+    "p": "warning-1%3A100003%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     767,
+     1242,
+     790
+    ],
+    "top": true,
+    "t": "3 → 4",
+    "dot": [
+     1184,
+     774.3,
+     1192.4,
+     782.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      818,
+      1416,
+      841
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     818,
+     1416,
+     841
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     825.3,
+     1172.4,
+     833.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      864,
+      1242,
+      887
+     ]
+    ],
+    "p": "warning-1%3A100004%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     864,
+     1242,
+     887
+    ],
+    "top": false,
+    "t": "4 → 5",
+    "dot": [
+     1184,
+     871.3,
+     1192.4,
+     879.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      649,
+      439,
+      741,
+      459
+     ]
+    ],
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     649,
+     439,
+     741,
+     459
+    ],
+    "top": true,
+    "t": "Blue Link",
+    "dot": [
+     656.2,
+     445.4,
+     663.4,
+     452.6
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      275,
+      505,
+      320,
+      523
+     ]
+    ],
+    "p": "data-table-station-pill-3-0",
+    "k": "link",
+    "r": [
+     275,
+     505,
+     320,
+     523
+    ],
+    "top": true,
+    "t": "4 (Main Passage of the Northern Sump System) Station ID #4",
+    "dot": [
+     281.5,
+     510.7,
+     288.1,
+     517.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      273,
+      538,
+      322,
+      556
+     ]
+    ],
+    "p": "data-table-station-pill-3-1",
+    "k": "link",
+    "r": [
+     273,
+     538,
+     322,
+     556
+    ],
+    "top": true,
+    "t": "3 (Lemon Squeeze Crawlway past the Second Restriction) loop end Station ID #32",
+    "dot": [
+     279.5,
+     543.7,
+     286.1,
+     550.3
+    ],
+    "ring": "transparent"
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "merge-foreign",
+  "file": "merge-foreign-dark-1440.png",
+  "rects": [
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      -6,
+      1258,
+      17
+     ]
+    ],
+    "p": "warning-0%3A11%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     -6,
+     1258,
+     17
+    ],
+    "top": false,
+    "t": "11 → 12",
+    "dot": [
+     1184,
+     1.3,
+     1192.4,
+     9.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      45,
+      1416,
+      68
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     45,
+     1416,
+     68
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     52.3,
+     1172.4,
+     60.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1155,
+      118,
+      1408,
+      134
+     ],
+     [
+      1156,
+      142,
+      1194,
+      158
+     ]
+    ],
+    "p": "warning-0%3A11%3AJUNCTION_DEPTH_SPREAD%3Ad12-message",
+    "k": "prose",
+    "r": [
+     1155,
+     118,
+     1408,
+     134
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "dot": [
+     1157.7,
+     119,
+     1168.3,
+     133
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      236,
+      1416,
+      259
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     236,
+     1416,
+     259
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     243.3,
+     1172.4,
+     251.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      282,
+      1258,
+      305
+     ]
+    ],
+    "p": "warning-0%3A12%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     282,
+     1258,
+     305
+    ],
+    "top": false,
+    "t": "12 → 13",
+    "dot": [
+     1184,
+     289.3,
+     1192.4,
+     297.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      333,
+      1416,
+      356
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     333,
+     1416,
+     356
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     340.3,
+     1172.4,
+     348.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      379,
+      1258,
+      402
+     ]
+    ],
+    "p": "warning-0%3A13%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     379,
+     1258,
+     402
+    ],
+    "top": false,
+    "t": "13 → 14",
+    "dot": [
+     1184,
+     386.3,
+     1192.4,
+     394.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      430,
+      1416,
+      453
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     430,
+     1416,
+     453
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     437.3,
+     1172.4,
+     445.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": true,
+    "all": [
+     [
+      1176,
+      476,
+      1253,
+      499
+     ]
+    ],
+    "p": "warning-1%3A100000%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     476,
+     1253,
+     499
+    ],
+    "top": false,
+    "t": "12 (Main Passage of the Northern Sump System) → 1",
+    "dot": [
+     1184,
+     483.3,
+     1192.4,
+     491.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      527,
+      1416,
+      550
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     527,
+     1416,
+     550
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     534.3,
+     1172.4,
+     542.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      573,
+      1242,
+      596
+     ]
+    ],
+    "p": "warning-1%3A100001%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     573,
+     1242,
+     596
+    ],
+    "top": false,
+    "t": "1 → 2",
+    "dot": [
+     1184,
+     580.3,
+     1192.4,
+     588.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      624,
+      1416,
+      647
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     624,
+     1416,
+     647
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     631.3,
+     1172.4,
+     639.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      670,
+      1242,
+      693
+     ]
+    ],
+    "p": "warning-1%3A100002%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     670,
+     1242,
+     693
+    ],
+    "top": false,
+    "t": "2 → 3",
+    "dot": [
+     1184,
+     677.3,
+     1192.4,
+     685.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      721,
+      1416,
+      744
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     721,
+     1416,
+     744
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     728.3,
+     1172.4,
+     736.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      767,
+      1242,
+      790
+     ]
+    ],
+    "p": "warning-1%3A100003%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     767,
+     1242,
+     790
+    ],
+    "top": false,
+    "t": "3 → 4",
+    "dot": [
+     1184,
+     774.3,
+     1192.4,
+     782.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      818,
+      1416,
+      841
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     818,
+     1416,
+     841
+    ],
+    "top": false,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     825.3,
+     1172.4,
+     833.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      864,
+      1242,
+      887
+     ]
+    ],
+    "p": "warning-1%3A100004%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     864,
+     1242,
+     887
+    ],
+    "top": false,
+    "t": "4 → 5",
+    "dot": [
+     1184,
+     871.3,
+     1192.4,
+     879.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#1f4fff",
+    "split": false,
+    "all": [
+     [
+      649,
+      439,
+      741,
+      459
+     ]
+    ],
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     649,
+     439,
+     741,
+     459
+    ],
+    "top": false,
+    "t": "Blue Link",
+    "dot": [
+     656.2,
+     445.4,
+     663.4,
+     452.6
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      275,
+      505,
+      320,
+      523
+     ]
+    ],
+    "p": "data-table-station-pill-3-0",
+    "k": "link",
+    "r": [
+     275,
+     505,
+     320,
+     523
+    ],
+    "top": false,
+    "t": "4 (Main Passage of the Northern Sump System) Station ID #4",
+    "dot": [
+     281.5,
+     510.7,
+     288.1,
+     517.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      273,
+      538,
+      322,
+      556
+     ]
+    ],
+    "p": "data-table-station-pill-3-1",
+    "k": "link",
+    "r": [
+     273,
+     538,
+     322,
+     556
+    ],
+    "top": false,
+    "t": "3 (Lemon Squeeze Crawlway past the Second Restriction) loop end Station ID #32",
+    "dot": [
+     279.5,
+     543.7,
+     286.1,
+     550.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#c2185b",
+    "split": false,
+    "all": [
+     [
+      511,
+      241,
+      752,
+      264
+     ]
+    ],
+    "p": "merge-keep-37-pill",
+    "k": "link",
+    "r": [
+     511,
+     241,
+     752,
+     264
+    ],
+    "top": true,
+    "t": "Annex beyond the Terminal Sump: 0 Station ID #37",
+    "dot": [
+     519,
+     248.3,
+     527.4,
+     256.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      511,
+      276,
+      818,
+      299
+     ]
+    ],
+    "p": "merge-keep-12-pill",
+    "k": "link",
+    "r": [
+     511,
+     276,
+     818,
+     299
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System: 12 (on Upper Branch towards the Dry Ch",
+    "dot": [
+     519,
+     283.3,
+     527.4,
+     291.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#c2185b",
+    "split": false,
+    "all": [
+     [
+      480,
+      322,
+      706,
+      338
+     ]
+    ],
+    "p": "merge-renamed-lines",
+    "k": "prose",
+    "r": [
+     480,
+     322,
+     706,
+     338
+    ],
+    "top": true,
+    "t": "Annex beyond the Terminal Sump",
+    "dot": [
+     482.7,
+     323,
+     493.3,
+     337
+    ],
+    "ring": "#cf7288"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      766,
+      322,
+      944,
+      338
+     ],
+     [
+      481,
+      342,
+      596,
+      358
+     ]
+    ],
+    "p": "merge-renamed-lines",
+    "k": "prose",
+    "r": [
+     766,
+     322,
+     944,
+     338
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "dot": [
+     769.3,
+     323,
+     779.9,
+     337
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#c2185b",
+    "split": false,
+    "all": [
+     [
+      480,
+      366,
+      710,
+      382
+     ]
+    ],
+    "p": "merge-hidden",
+    "k": "prose",
+    "r": [
+     480,
+     366,
+     710,
+     382
+    ],
+    "top": true,
+    "t": "Annex beyond the Terminal Sump: 0#37",
+    "dot": [
+     482.7,
+     367,
+     493.3,
+     381
+    ],
+    "ring": "#cf7288"
+   },
+   {
+    "dotColor": "#c2185b",
+    "split": false,
+    "all": [
+     [
+      648,
+      390,
+      842,
+      403
+     ]
+    ],
+    "p": "merge-hidden-back",
+    "k": "prose",
+    "r": [
+     648,
+     390,
+     842,
+     403
+    ],
+    "top": true,
+    "t": "Annex beyond the Terminal Sump: 0#37",
+    "dot": [
+     650.9,
+     390,
+     660.3,
+     402
+    ],
+    "ring": "#cf7288"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      488,
+      430,
+      785,
+      446
+     ]
+    ],
+    "p": "merge-preview-junction-1-0",
+    "k": "prose",
+    "r": [
+     488,
+     430,
+     785,
+     446
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "dot": [
+     490.7,
+     431,
+     501.3,
+     445
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      888,
+      430,
+      947,
+      446
+     ],
+     [
+      489,
+      450,
+      699,
+      466
+     ]
+    ],
+    "p": "merge-preview-junction-1-0",
+    "k": "prose",
+    "r": [
+     888,
+     430,
+     947,
+     446
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     891.2,
+     431,
+     901.8,
+     445
+    ],
+    "ring": "#868686"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      727,
+      450,
+      932,
+      466
+     ],
+     [
+      489,
+      470,
+      576,
+      486
+     ]
+    ],
+    "p": "merge-preview-junction-1-0",
+    "k": "prose",
+    "r": [
+     727,
+     450,
+     932,
+     466
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     730.3,
+     451,
+     740.9,
+     465
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#c2185b",
+    "split": false,
+    "all": [
+     [
+      488,
+      514,
+      714,
+      530
+     ]
+    ],
+    "p": "merge-preview-move",
+    "k": "prose",
+    "r": [
+     488,
+     514,
+     714,
+     530
+    ],
+    "top": true,
+    "t": "Annex beyond the Terminal Sump",
+    "dot": [
+     490.7,
+     515,
+     501.3,
+     529
+    ],
+    "ring": "#cf7288"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      828,
+      514,
+      934,
+      530
+     ],
+     [
+      489,
+      534,
+      682,
+      550
+     ]
+    ],
+    "p": "merge-preview-move",
+    "k": "prose",
+    "r": [
+     828,
+     514,
+     934,
+     530
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "dot": [
+     831.1,
+     515,
+     841.7,
+     529
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#c2185b",
+    "split": false,
+    "all": [
+     [
+      579,
+      578,
+      805,
+      594
+     ]
+    ],
+    "p": "merge-preview-depths",
+    "k": "prose",
+    "r": [
+     579,
+     578,
+     805,
+     594
+    ],
+    "top": true,
+    "t": "Annex beyond the Terminal Sump",
+    "dot": [
+     581.7,
+     579,
+     592.3,
+     593
+    ],
+    "ring": "#cf7288"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      856,
+      578,
+      915,
+      594
+     ],
+     [
+      489,
+      598,
+      699,
+      614
+     ]
+    ],
+    "p": "merge-preview-depths",
+    "k": "prose",
+    "r": [
+     856,
+     578,
+     915,
+     594
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     859.3,
+     579,
+     869.9,
+     593
+    ],
+    "ring": "#868686"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      758,
+      598,
+      902,
+      614
+     ],
+     [
+      489,
+      618,
+      637,
+      634
+     ]
+    ],
+    "p": "merge-preview-depths",
+    "k": "prose",
+    "r": [
+     758,
+     598,
+     902,
+     614
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     761.3,
+     599,
+     771.9,
+     613
+    ],
+    "ring": "transparent"
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "table-shots-lemon",
+  "file": "table-shots-lemon-dark-1440.png",
+  "rects": [
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      -6,
+      1258,
+      17
+     ]
+    ],
+    "p": "warning-0%3A11%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     -6,
+     1258,
+     17
+    ],
+    "top": false,
+    "t": "11 → 12",
+    "dot": [
+     1184,
+     1.3,
+     1192.4,
+     9.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      45,
+      1416,
+      68
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     45,
+     1416,
+     68
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     52.3,
+     1172.4,
+     60.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1155,
+      118,
+      1408,
+      134
+     ],
+     [
+      1156,
+      142,
+      1194,
+      158
+     ]
+    ],
+    "p": "warning-0%3A11%3AJUNCTION_DEPTH_SPREAD%3Ad12-message",
+    "k": "prose",
+    "r": [
+     1155,
+     118,
+     1408,
+     134
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "dot": [
+     1157.7,
+     119,
+     1168.3,
+     133
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      236,
+      1416,
+      259
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     236,
+     1416,
+     259
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     243.3,
+     1172.4,
+     251.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      282,
+      1258,
+      305
+     ]
+    ],
+    "p": "warning-0%3A12%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     282,
+     1258,
+     305
+    ],
+    "top": true,
+    "t": "12 → 13",
+    "dot": [
+     1184,
+     289.3,
+     1192.4,
+     297.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      333,
+      1416,
+      356
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     333,
+     1416,
+     356
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     340.3,
+     1172.4,
+     348.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      379,
+      1258,
+      402
+     ]
+    ],
+    "p": "warning-0%3A13%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     379,
+     1258,
+     402
+    ],
+    "top": true,
+    "t": "13 → 14",
+    "dot": [
+     1184,
+     386.3,
+     1192.4,
+     394.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      430,
+      1416,
+      453
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     430,
+     1416,
+     453
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     437.3,
+     1172.4,
+     445.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": true,
+    "all": [
+     [
+      1176,
+      476,
+      1253,
+      499
+     ]
+    ],
+    "p": "warning-1%3A100000%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     476,
+     1253,
+     499
+    ],
+    "top": true,
+    "t": "12 (Main Passage of the Northern Sump System) → 1",
+    "dot": [
+     1184,
+     483.3,
+     1192.4,
+     491.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      527,
+      1416,
+      550
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     527,
+     1416,
+     550
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     534.3,
+     1172.4,
+     542.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      573,
+      1242,
+      596
+     ]
+    ],
+    "p": "warning-1%3A100001%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     573,
+     1242,
+     596
+    ],
+    "top": true,
+    "t": "1 → 2",
+    "dot": [
+     1184,
+     580.3,
+     1192.4,
+     588.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      624,
+      1416,
+      647
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     624,
+     1416,
+     647
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     631.3,
+     1172.4,
+     639.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      670,
+      1242,
+      693
+     ]
+    ],
+    "p": "warning-1%3A100002%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     670,
+     1242,
+     693
+    ],
+    "top": true,
+    "t": "2 → 3",
+    "dot": [
+     1184,
+     677.3,
+     1192.4,
+     685.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      721,
+      1416,
+      744
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     721,
+     1416,
+     744
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     728.3,
+     1172.4,
+     736.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      767,
+      1242,
+      790
+     ]
+    ],
+    "p": "warning-1%3A100003%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     767,
+     1242,
+     790
+    ],
+    "top": true,
+    "t": "3 → 4",
+    "dot": [
+     1184,
+     774.3,
+     1192.4,
+     782.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      818,
+      1416,
+      841
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     818,
+     1416,
+     841
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     825.3,
+     1172.4,
+     833.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      864,
+      1242,
+      887
+     ]
+    ],
+    "p": "warning-1%3A100004%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     864,
+     1242,
+     887
+    ],
+    "top": false,
+    "t": "4 → 5",
+    "dot": [
+     1184,
+     871.3,
+     1192.4,
+     879.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      533,
+      439,
+      857,
+      459
+     ]
+    ],
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     533,
+     439,
+     857,
+     459
+    ],
+    "top": true,
+    "t": "Lemon Squeeze Crawlway past the Second Restriction",
+    "dot": [
+     540,
+     445.4,
+     547.1,
+     452.6
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": true,
+    "all": [
+     [
+      270,
+      505,
+      325,
+      523
+     ]
+    ],
+    "p": "data-table-shot-row-label-2-200000",
+    "k": "link",
+    "r": [
+     270,
+     505,
+     325,
+     523
+    ],
+    "top": true,
+    "t": "5 (Upper Branch towards the Dry Chamber) → 1",
+    "dot": [
+     276.3,
+     510.7,
+     282.9,
+     517.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      271,
+      538,
+      324,
+      556
+     ]
+    ],
+    "p": "data-table-shot-row-label-2-200001",
+    "k": "link",
+    "r": [
+     271,
+     538,
+     324,
+     556
+    ],
+    "top": true,
+    "t": "1 → 2",
+    "dot": [
+     277.5,
+     543.7,
+     284.1,
+     550.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      271,
+      571,
+      324,
+      589
+     ]
+    ],
+    "p": "data-table-shot-row-label-2-200002",
+    "k": "link",
+    "r": [
+     271,
+     571,
+     324,
+     589
+    ],
+    "top": true,
+    "t": "2 → 3",
+    "dot": [
+     277.5,
+     576.7,
+     284.1,
+     583.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      271,
+      604,
+      324,
+      622
+     ]
+    ],
+    "p": "data-table-shot-row-label-2-200003",
+    "k": "link",
+    "r": [
+     271,
+     604,
+     324,
+     622
+    ],
+    "top": true,
+    "t": "3 → 4",
+    "dot": [
+     277.5,
+     609.7,
+     284.1,
+     616.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      271,
+      637,
+      324,
+      655
+     ]
+    ],
+    "p": "data-table-shot-row-label-2-200004",
+    "k": "link",
+    "r": [
+     271,
+     637,
+     324,
+     655
+    ],
+    "top": true,
+    "t": "4 → 5",
+    "dot": [
+     277.5,
+     642.7,
+     284.1,
+     649.3
+    ],
+    "ring": "transparent"
+   }
+  ],
+  "err": false
+ },
+ {
+  "name": "table-stations-lemon",
+  "file": "table-stations-lemon-dark-1440.png",
+  "rects": [
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      -6,
+      1258,
+      17
+     ]
+    ],
+    "p": "warning-0%3A11%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     -6,
+     1258,
+     17
+    ],
+    "top": false,
+    "t": "11 → 12",
+    "dot": [
+     1184,
+     1.3,
+     1192.4,
+     9.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      45,
+      1416,
+      68
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     45,
+     1416,
+     68
+    ],
+    "top": false,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     52.3,
+     1172.4,
+     60.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1155,
+      118,
+      1408,
+      134
+     ],
+     [
+      1156,
+      142,
+      1194,
+      158
+     ]
+    ],
+    "p": "warning-0%3A11%3AJUNCTION_DEPTH_SPREAD%3Ad12-message",
+    "k": "prose",
+    "r": [
+     1155,
+     118,
+     1408,
+     134
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System: 12#12",
+    "dot": [
+     1157.7,
+     119,
+     1168.3,
+     133
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      236,
+      1416,
+      259
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     236,
+     1416,
+     259
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     243.3,
+     1172.4,
+     251.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      282,
+      1258,
+      305
+     ]
+    ],
+    "p": "warning-0%3A12%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     282,
+     1258,
+     305
+    ],
+    "top": true,
+    "t": "12 → 13",
+    "dot": [
+     1184,
+     289.3,
+     1192.4,
+     297.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      333,
+      1416,
+      356
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     333,
+     1416,
+     356
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     340.3,
+     1172.4,
+     348.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1176,
+      379,
+      1258,
+      402
+     ]
+    ],
+    "p": "warning-0%3A13%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     379,
+     1258,
+     402
+    ],
+    "top": true,
+    "t": "13 → 14",
+    "dot": [
+     1184,
+     386.3,
+     1192.4,
+     394.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#f6f6f2",
+    "split": false,
+    "all": [
+     [
+      1156,
+      430,
+      1416,
+      453
+     ]
+    ],
+    "p": "line-0-link",
+    "k": "link",
+    "r": [
+     1156,
+     430,
+     1416,
+     453
+    ],
+    "top": true,
+    "t": "Main Passage of the Northern Sump System",
+    "dot": [
+     1164,
+     437.3,
+     1172.4,
+     445.7
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": true,
+    "all": [
+     [
+      1176,
+      476,
+      1253,
+      499
+     ]
+    ],
+    "p": "warning-1%3A100000%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     476,
+     1253,
+     499
+    ],
+    "top": true,
+    "t": "12 (Main Passage of the Northern Sump System) → 1",
+    "dot": [
+     1184,
+     483.3,
+     1192.4,
+     491.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      527,
+      1416,
+      550
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     527,
+     1416,
+     550
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     534.3,
+     1172.4,
+     542.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      573,
+      1242,
+      596
+     ]
+    ],
+    "p": "warning-1%3A100001%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     573,
+     1242,
+     596
+    ],
+    "top": true,
+    "t": "1 → 2",
+    "dot": [
+     1184,
+     580.3,
+     1192.4,
+     588.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      624,
+      1416,
+      647
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     624,
+     1416,
+     647
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     631.3,
+     1172.4,
+     639.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      670,
+      1242,
+      693
+     ]
+    ],
+    "p": "warning-1%3A100002%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     670,
+     1242,
+     693
+    ],
+    "top": true,
+    "t": "2 → 3",
+    "dot": [
+     1184,
+     677.3,
+     1192.4,
+     685.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      721,
+      1416,
+      744
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     721,
+     1416,
+     744
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     728.3,
+     1172.4,
+     736.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      767,
+      1242,
+      790
+     ]
+    ],
+    "p": "warning-1%3A100003%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     767,
+     1242,
+     790
+    ],
+    "top": true,
+    "t": "3 → 4",
+    "dot": [
+     1184,
+     774.3,
+     1192.4,
+     782.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1156,
+      818,
+      1416,
+      841
+     ]
+    ],
+    "p": "line-1-link",
+    "k": "link",
+    "r": [
+     1156,
+     818,
+     1416,
+     841
+    ],
+    "top": true,
+    "t": "Upper Branch towards the Dry Chamber",
+    "dot": [
+     1164,
+     825.3,
+     1172.4,
+     833.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      1176,
+      864,
+      1242,
+      887
+     ]
+    ],
+    "p": "warning-1%3A100004%3AAZIMUTH_DEVIATION-open-shot",
+    "k": "link",
+    "r": [
+     1176,
+     864,
+     1242,
+     887
+    ],
+    "top": false,
+    "t": "4 → 5",
+    "dot": [
+     1184,
+     871.3,
+     1192.4,
+     879.7
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      533,
+      439,
+      857,
+      459
+     ]
+    ],
+    "p": "data-table-line-pill",
+    "k": "link",
+    "r": [
+     533,
+     439,
+     857,
+     459
+    ],
+    "top": true,
+    "t": "Lemon Squeeze Crawlway past the Second Restriction",
+    "dot": [
+     540,
+     445.4,
+     547.1,
+     452.6
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#101010",
+    "split": false,
+    "all": [
+     [
+      273,
+      505,
+      322,
+      523
+     ]
+    ],
+    "p": "data-table-station-pill-2-0",
+    "k": "link",
+    "r": [
+     273,
+     505,
+     322,
+     523
+    ],
+    "top": true,
+    "t": "5 (Upper Branch towards the Dry Chamber) Station ID #20",
+    "dot": [
+     279.5,
+     510.7,
+     286.1,
+     517.3
+    ],
+    "ring": "#646464"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      275,
+      538,
+      320,
+      556
+     ]
+    ],
+    "p": "data-table-station-pill-2-1",
+    "k": "link",
+    "r": [
+     275,
+     538,
+     320,
+     556
+    ],
+    "top": true,
+    "t": "1 Station ID #30",
+    "dot": [
+     281.8,
+     543.7,
+     288.4,
+     550.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      275,
+      571,
+      320,
+      589
+     ]
+    ],
+    "p": "data-table-station-pill-2-2",
+    "k": "link",
+    "r": [
+     275,
+     571,
+     320,
+     589
+    ],
+    "top": true,
+    "t": "2 Station ID #31",
+    "dot": [
+     281.8,
+     576.7,
+     288.4,
+     583.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      275,
+      604,
+      320,
+      622
+     ]
+    ],
+    "p": "data-table-station-pill-2-3",
+    "k": "link",
+    "r": [
+     275,
+     604,
+     320,
+     622
+    ],
+    "top": true,
+    "t": "3 Station ID #32",
+    "dot": [
+     281.8,
+     609.7,
+     288.4,
+     616.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      275,
+      637,
+      320,
+      655
+     ]
+    ],
+    "p": "data-table-station-pill-2-4",
+    "k": "link",
+    "r": [
+     275,
+     637,
+     320,
+     655
+    ],
+    "top": true,
+    "t": "4 Station ID #33",
+    "dot": [
+     281.8,
+     642.7,
+     288.4,
+     649.3
+    ],
+    "ring": "transparent"
+   },
+   {
+    "dotColor": "#ffe600",
+    "split": false,
+    "all": [
+     [
+      275,
+      670,
+      320,
+      688
+     ]
+    ],
+    "p": "data-table-station-pill-2-5",
+    "k": "link",
+    "r": [
+     275,
+     670,
+     320,
+     688
+    ],
+    "top": true,
+    "t": "5 Station ID #34",
+    "dot": [
+     281.8,
+     675.7,
+     288.4,
+     682.3
+    ],
+    "ring": "transparent"
+   }
+  ],
+  "err": false
+ }
+]
