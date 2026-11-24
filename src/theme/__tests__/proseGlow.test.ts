@@ -34,6 +34,10 @@ describe('the glow geometry', () => {
     expect(value('blur')).toBe(GLOW.blur);
     expect(rule).toContain('--glow-reach: calc(var(--glow-spread) + 1.5 * var(--glow-blur));');
     expect(GLOW_REACH).toBeCloseTo(GLOW.spread + 1.5 * GLOW.blur, 10);
+    // A clipping box around prose keeps the halo's room with the same numbers.
+    const clip = /\n\.sh-ppill-clip \{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(clip).toContain(`var(--glow-spread, ${GLOW.spread})`);
+    expect(clip).toContain(`var(--glow-blur, ${GLOW.blur})`);
   });
 
   it('a pill takes a little more room than its words, and its halo reaches beyond its core', () => {

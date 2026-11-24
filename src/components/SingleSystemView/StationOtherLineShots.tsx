@@ -49,7 +49,10 @@ export function StationOtherLineShots({ mergedWith }: { mergedWith: ReadonlyArra
           className="flex justify-between gap-2"
           data-testid={`station-detail-other-shot-${s.lineId}-${s.shotIndex}`}
         >
-          <span className="text-text-secondary truncate" data-testid={`station-detail-other-shot-${s.lineId}-${s.shotIndex}-label`}>
+          <span
+            className="text-text-secondary truncate sh-ppill-clip"
+            data-testid={`station-detail-other-shot-${s.lineId}-${s.shotIndex}-label`}
+          >
             <Prose text={t('detailPanel.station.otherLineShots', { line: prose.line(s.lineId) })} />:
           </span>
           <DetailLink

@@ -1929,6 +1929,13 @@ button.sh-apill {
 .sh-ppill-seg {
   color: var(--pill-text);
 }
+/* A box that clips its prose (a `truncate` label) keeps room above and below
+   for the glow's halo, given back so the row keeps its height: clipped at
+   the line box, the halo ended in flat top and bottom edges. */
+.sh-ppill-clip {
+  padding-block: calc(var(--glow-spread, 0.14) * 1em + var(--glow-blur, 0.28) * 1em);
+  margin-block: calc(-1 * (var(--glow-spread, 0.14) * 1em + var(--glow-blur, 0.28) * 1em));
+}
 .sh-ppill-nw {
   white-space: nowrap;
 }
