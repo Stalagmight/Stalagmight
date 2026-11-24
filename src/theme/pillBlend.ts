@@ -63,9 +63,9 @@ export const BRIDGE_SAMPLES = [1, 0.875, 0.75, 0.625, 0.5, 0.375, 0.25, 0.125, 0
 
 /**
  * The part of a bridge the from end's superscript dot can overhang, as the
- * share of its left colour: the dot takes no room, so it reaches about 0.45em
- * past the end's name, into the arrow's first third (a bridge is at least
- * 1.2em wide).
+ * share of its left colour: the dot takes no room, so it reaches about 0.4em
+ * past the end's name (1px more with its ring), into the arrow's first third
+ * at most (a bridge is at least 1.2em wide).
  */
 export const HOME_BRIDGE_SAMPLES = [1, 0.875, 0.75, 0.625] as const;
 
