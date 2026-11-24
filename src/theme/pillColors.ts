@@ -101,6 +101,14 @@ const BG_CHROMA = { share: 0.5, max: { dark: 0.05, light: 0.04 } } as const;
 const HOVER_LIFT = 0.02;
 const HOVER_CHROMA = { share: 0.7, max: { dark: 0.07, light: 0.06 } } as const;
 const BORDER_LIFT = { rest: 0.17, hover: 0.26 } as const;
+/**
+ * How much further a border goes for a line far toward the theme's text
+ * pole (a pale line on a dark theme, a dark one on a light theme), on top of
+ * `BORDER_LIFT` (RS-OWNERSHIP). The fills of a near-white and a near-black
+ * line differ by little (the band keeps text legible), so on a two-tone shot
+ * or two pills side by side the border is what tells them apart.
+ */
+const BORDER_TRACK = 0.22;
 const BORDER_CHROMA = { rest: { share: 0.7, max: 0.1 }, hover: { share: 0.85, max: 0.14 } } as const;
 const RING_CHROMA_MAX = 0.12;
 /** Below this chroma a colour is a grey: its hue is noise, so the tints stay neutral. */
@@ -250,13 +258,15 @@ export function pillColors(lineColor: string | null | undefined, theme: PillThem
   // The border leaves from whichever of the panel and the fill is further out,
   // so a pill sunk below the panel still has an edge that reads on the panel.
   const borderBase = edge > 0 ? Math.max(bgL, panelL) : Math.min(bgL, panelL);
+  // A line toward the text pole gets a stronger edge (see BORDER_TRACK).
+  const track = BORDER_TRACK * (theme.dark ? t : 1 - t);
   const border = hexOfOklch({
-    L: clamp(borderBase + edge * BORDER_LIFT.rest, 0, 1),
+    L: clamp(borderBase + edge * (BORDER_LIFT.rest + track), 0, 1),
     C: Math.min(tone.C * BORDER_CHROMA.rest.share, BORDER_CHROMA.rest.max),
     h: tone.h,
   });
   const hoverBorder = hexOfOklch({
-    L: clamp(borderBase + edge * BORDER_LIFT.hover, 0, 1),
+    L: clamp(borderBase + edge * (BORDER_LIFT.hover + track), 0, 1),
     C: Math.min(tone.C * BORDER_CHROMA.hover.share, BORDER_CHROMA.hover.max),
     h: tone.h,
   });
