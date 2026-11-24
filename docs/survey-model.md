@@ -428,9 +428,11 @@ canonical form, so `RawJson::parse` leaves it unchanged):
 
 - `v` is `HISTORY_FORMAT_VERSION` (3) for an entry with `label_parts` and
   `OLDEST_HISTORY_FORMAT_VERSION` (2) for one without: a version 2 entry is
-  the same layout without `label_parts`, so the previous build reads a
-  history whose labels name nothing, and its label reads plain. This build
-  reads both. Any other version decodes to `EntryError::Version`: drop the
+  the same layout without `label_parts`, and its label reads plain. That
+  only helps a history whose labels all name nothing: the previous build
+  drops a whole history for one version 3 entry, and most labels name a
+  station, a shot or a line, so in practice a downgrade loses the history.
+  This build reads both. Any other version decodes to `EntryError::Version`: drop the
   history whole with the existing banner. Bump it with any change to the
   layout or to the line hash.
 - `label_parts` (version 3, RS-PROSE) is the label's words as prose parts

@@ -2141,11 +2141,15 @@ this package took, each with its reason; they supersede section 6's
   persisted, so its parts are too: `label_parts` beside `label`, without
   slots (stable ids only). An entry is written as version 3 only when it has
   parts; one whose label names nothing keeps version 2's layout, which the
-  previous build reads (pre-PR fix 4). Version 2 entries are still read and
+  previous build reads (pre-PR fix 4). That only helps a history whose
+  labels all name nothing: one version 3 entry makes the previous build drop
+  the whole history, and most labels name something (all 16 of the measured
+  mix below), so in practice a downgrade loses the history, as any version
+  bump does. Version 2 entries are still read and
   render plain; parts that do not fit (a cut label, words that differ, a part
   drawing a name or context its own words do not hold, an unknown kind) are
-  dropped on read, never the entry (fix 5). An older build drops a history
-  holding version 3 entries with its banner, as any version bump does.
+  dropped on read, never the entry (fix 5). The older build drops such a
+  history with its banner.
 - **What the parts cost the history budget** (measured, pre-PR item 9;
   `history_labels_tests::label_parts_cost_a_measured_share_of_the_history_budget`):
   a typical mix of 16 steps (9 shot cell edits, 2 renames, a comment, an

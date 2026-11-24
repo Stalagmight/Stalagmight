@@ -11,10 +11,13 @@
 //!
 //! - `v` is [`HISTORY_FORMAT_VERSION`] for an entry with `label_parts`, and
 //!   [`OLDEST_HISTORY_FORMAT_VERSION`] for one without (RS-PROSE fix 4): a
-//!   version 2 entry is the same layout without `label_parts`, so the
-//!   previous build reads a history of entries whose labels name nothing,
-//!   and only an entry with parts costs it the history. This build reads
-//!   both; an entry of any other version does not decode
+//!   version 2 entry is the same layout without `label_parts`. That only
+//!   helps a history whose labels ALL name nothing: the previous build
+//!   drops a whole history for one version 3 entry, and most labels name a
+//!   station, a shot or a line (all 16 of a typical mix,
+//!   `label_parts_cost_a_measured_share_of_the_history_budget`), so in
+//!   practice a downgrade loses the history. This build reads both; an
+//!   entry of any other version does not decode
 //!   ([`EntryError::Version`]); the caller drops the history whole with the
 //!   existing banner, as #808 did.
 //! - `t` is the push time, RFC 3339 UTC with nanoseconds (the format reads it
@@ -458,8 +461,9 @@ pub fn encode_entry(entry: &HistoryEntry) -> Result<String, EntryError> {
     }
     shape::check(&entry.changes).map_err(EntryError::Shape)?;
     // Version 3 only for an entry with parts (RS-PROSE fix 4): one without is
-    // version 2's layout, which the previous build reads, so its history
-    // survives a downgrade.
+    // version 2's layout, which the previous build reads. A downgrade keeps
+    // the history only when no entry has parts: one version 3 entry makes
+    // the previous build drop it whole (see the module doc).
     let wire = WireOut {
         v: if entry.label_parts.is_empty() {
             OLDEST_HISTORY_FORMAT_VERSION
