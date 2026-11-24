@@ -309,6 +309,7 @@ fn prose_parts_word_a_slot_as_its_plain_text_does() {
     let b6 = at(&p, br, 6);
     ok(p.create_closure(b6, Some(br), m12, Some(main), BATCH, Some(m12), &[]));
     let slot = |line, i| StationRef::new(line, i);
+    let (main_label, br_label) = (p.line_label_of(main), p.line_label_of(br));
     let station = |part: Option<ProsePart>| match part {
         Some(ProsePart::Station(s)) => s,
         other => panic!("a station part, not {other:?}"),
@@ -337,10 +338,16 @@ fn prose_parts_word_a_slot_as_its_plain_text_does() {
     assert_eq!(foreign.home_line, Some(main));
     assert_eq!(foreign.station_id, Some(m12));
     assert_eq!(foreign.loop_end, None);
+    // RS-OWNERSHIP: the pill is coloured and named by the line its station
+    // belongs to, so the context is Main's; the words keep Branch's.
+    assert_eq!(foreign.context.as_deref(), Some(main_label.as_str()));
+    assert!(foreign.text.starts_with(&br_label));
     let loop_end = station(p.slot_part(slot(br, 6), false));
     assert_eq!(loop_end.loop_end, Some(true));
-    assert_eq!(loop_end.home_line, None);
+    assert_eq!(loop_end.home_line, Some(main), "its kept end's home line");
     assert_eq!(loop_end.station_id, Some(m12), "it shows Main's 12");
+    let native = station(p.slot_part(slot(br, 12), true));
+    assert_eq!((native.home_line, native.context.as_deref()), (None, Some(br_label.as_str())));
     assert_eq!(p.slot_part(slot(br, 99), true), None);
 
     let ProsePart::Shot(shot) = p.shot_part(br, 0) else {
