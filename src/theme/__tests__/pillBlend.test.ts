@@ -16,6 +16,7 @@ const stops = (gradient: string) => {
   const inner = /linear-gradient\(to right, (.*)\)$/.exec(gradient)?.[1] ?? '';
   return inner.split(/,\s(?=#)/).map((s) => s.trim().split(' ')[0]!);
 };
+const lastOf = (xs: string[]) => xs[xs.length - 1];
 
 describe('link segments (RS-BLEND)', () => {
   const A = pillColorsOf('#f6f6f2', 'dark');
@@ -27,10 +28,10 @@ describe('link segments (RS-BLEND)', () => {
 
   it('neighbours meet in one colour, fill and border, at rest and on hover', () => {
     for (const key of ['--seg-fill', '--seg-fill-hover', '--seg-edge', '--seg-edge-hover']) {
-      expect(stops(head[key]!).at(-1)).toBe(stops(from[key]!)[0]);
-      expect(stops(from[key]!).at(-1)).toBe(stops(to[key]!)[0]);
+      expect(lastOf(stops(head[key]!))).toBe(stops(from[key]!)[0]);
+      expect(lastOf(stops(from[key]!))).toBe(stops(to[key]!)[0]);
     }
-    expect(stops(head['--seg-fill']!).at(-1)).toBe(mixHex(A.bg, B.bg, 0.5));
+    expect(lastOf(stops(head['--seg-fill']!))).toBe(mixHex(A.bg, B.bg, 0.5));
   });
 
   it('each half keeps its own colour away from the seam, over a 2 x SEAM_EM cross-fade', () => {
