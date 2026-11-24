@@ -4430,6 +4430,7 @@
     "stationName": "Name",
     "nameInvalidChars": "A name cannot contain control characters or invisible formatting characters.",
     "loopEnd": "loop end",
+    "loopEndMarkTitle": "Loop end: a loop closure shows this station here",
     "loopEndLabel": "{{station}} (loop end on {{line}})",
     "loopEndPinLabel": "{{own}} (loop end, shown as {{station}})",
     "loopEndPinLabelLine": "Loop end on {{line}}, shown as {{station}}",
