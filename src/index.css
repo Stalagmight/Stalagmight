@@ -1981,12 +1981,15 @@ button.sh-apill {
     transparent 100%
   );
 }
+/* The mask covers the whole box (the glyph keeps its aspect, centred and
+   0.8em wide): WebKit left the parts of an inline box outside a smaller
+   mask image unmasked, as two bars above and below the glyph. */
 .sh-ppill-loop {
   margin-left: 0.1em;
   padding: 0 0.4em;
   background-color: var(--pill-muted);
-  -webkit-mask: var(--loop-glyph) center / 0.8em 0.8em no-repeat;
-  mask: var(--loop-glyph) center / 0.8em 0.8em no-repeat;
+  -webkit-mask: var(--loop-glyph) 0 0 / 100% 100% no-repeat;
+  mask: var(--loop-glyph) 0 0 / 100% 100% no-repeat;
 }
 .sh-ppill-sid {
   position: relative;
