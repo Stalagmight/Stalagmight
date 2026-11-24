@@ -3,10 +3,11 @@
  * slot (its line knew another station there; the junction shows the kept
  * one) ends with the shown Station ID and takes the colour of the line its
  * shown station belongs to (RS-OWNERSHIP, where it once carried a second
- * dot); a loop end carries the loop mark and its kept end's colour. Shot
- * pills carry each foreign end's dot and each loop end's loop mark, after the
- * end's bare name (RS-FX5: the marks stand for the plain-text qualifier), and
- * are two-tone when an end belongs to another line. The plain text below
+ * dot); a loop end takes its kept end's colour. No pill draws a dot or a
+ * mark (RS-NODOTS): a foreign end and a loop end say what they are in a
+ * tooltip and in words after the end's bare name (RS-FX5: the words are the
+ * plain-text qualifier), and a shot pill is two-tone when an end belongs to
+ * another line. The plain text below
  * Full says whose station it is, with or without the line.
  * Injections: reading the node id for the superscript fails "ends with the
  * shown Station ID"; dropping the default owner fails "takes the home line's
@@ -94,42 +95,40 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     expect(screen.getByTestId('foreign-owner').textContent).toBe(' (on Side)');
   });
 
-  it('names the station bare in the pill: the dot and the loop mark say whose', () => {
+  it('names the station bare in the pill: its words and tooltip say whose', () => {
     render(
       <>
         <StationBlob station={{ line_id: SIDE, station_index: 0 }} testId="foreign" />
         <StationBlob station={{ line_id: SIDE, station_index: 2 }} testId="loop" />
       </>,
     );
-    // The dot reads "(Main)" to a screen reader (RS-FX6, P2-5).
+    // A screen reader reads "(Main)" (RS-FX6, P2-5), the tooltip says it.
     expect(screen.getByTestId('foreign')).toHaveTextContent(/^12\s*\(Main\)\s*Station ID\s*#11$/);
     expect(screen.getByTestId('loop')).toHaveTextContent(/^3\s*\(Main\)\s*loop end\s*Station ID\s*#3$/);
+    expect(screen.getByTestId('foreign')).toHaveAttribute('title', 'Belongs to Main');
+    expect(screen.getByTestId('loop').getAttribute('title')).toBe(
+      'Belongs to Main\nLoop end: a loop closure shows this station here',
+    );
   });
 
-  it('ends a loop end with the shown Station ID and the loop mark', () => {
+  it('ends a loop end with the shown Station ID and its words, no mark', () => {
     render(<StationBlob station={{ line_id: SIDE, station_index: 2 }} testId="loop" />);
     expect(screen.getByTestId('loop-station-id')).toHaveTextContent(/#3$/);
     expect(screen.getByTestId('loop-station-id')).not.toHaveTextContent('22');
     expect(screen.getByTestId('loop-loop-end')).toHaveTextContent('loop end');
+    expect(screen.getByTestId('loop-loop-end')).toHaveClass('sr-only');
     // The kept end is Main's: the loop end takes Main's colour, no dot.
     expect(screen.queryByTestId('loop-home-dot')).toBeNull();
     expect(screen.getByTestId('loop').style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('#ffff00', 'dark').bg);
   });
 
-  it('draws the loop mark as the loop-closure sign, never a ring that reads as a second dot (RS-ARROW)', () => {
-    // The user: "why does table-shots-blue-link have two dots at the end".
-    // Injection: the old open ring (an arc with an arrowhead) fails here.
+  it('draws no loop mark and no dot (RS-NODOTS): the tooltip and the words say it', () => {
+    // The user: "get rid of the circle and squiggle indicators".
     render(<StationBlob station={{ line_id: SIDE, station_index: 2 }} testId="loop" />);
-    const mark = screen.getByTestId('loop-loop-end');
-    expect(mark).toHaveAttribute('title', 'Loop end: a loop closure shows this station here');
-    const glyph = mark.querySelector('svg[data-glyph="loop"]')!;
-    const paths = [...glyph.querySelectorAll('path')];
-    // One open stroke, the reversed tilde: two curves, no arc, no fill.
-    expect(paths).toHaveLength(1);
-    expect(paths[0]!.getAttribute('fill')).toBe('none');
-    expect(paths[0]!.getAttribute('d')).not.toMatch(/[Aa]/);
-    expect(paths[0]!.getAttribute('d')!.match(/C/g)).toHaveLength(2);
-    expect(glyph.querySelector('circle')).toBeNull();
+    const pill = screen.getByTestId('loop');
+    expect(pill.querySelector('svg, .sh-lpill-loop, .sh-lpill-mark, .sh-lpill-dot, [data-glyph]')).toBeNull();
+    expect(pill.getAttribute('title')).toContain('Loop end: a loop closure shows this station here');
+    expect(screen.getByTestId('loop-loop-end')).toHaveClass('sr-only');
   });
 
   it("bySlot: a list of slots keeps each slot's line, and still says whose station it shows", () => {
@@ -163,7 +162,7 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     expect(screen.getByTestId('bare-loop')).toHaveTextContent(/^3 \(loop end on Side\)$/);
   });
 
-  it("gives a station link the same: shown ID, the owner's colour, loop mark, and a spoken whose", () => {
+  it("gives a station link the same: shown ID, the owner's colour, loop end words, and a spoken whose", () => {
     render(
       <DetailLink
         type="station"
@@ -175,32 +174,37 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     );
     const id = `station-${SIDE}-2-link`;
     expect(screen.getByTestId(`${id}-station-id`)).toHaveTextContent(/#3$/);
-    expect(screen.getByTestId(`${id}-loop-end`)).toBeInTheDocument();
+    expect(screen.getByTestId(`${id}-loop-end`)).toHaveClass('sr-only');
     expect(screen.queryByTestId(`${id}-home-dot`)).toBeNull();
+    expect(screen.getByTestId(id).querySelector('svg')).toBeNull();
     expect(screen.getByTestId(id).style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('#ffff00', 'dark').bg);
-    expect(screen.getByTestId(id)).toHaveAttribute('title', 'Belongs to Main');
+    expect(screen.getByTestId(id).getAttribute('title')).toBe('Belongs to Main\nLoop end: a loop closure shows this station here');
     expect(screen.getByTestId(id)).toHaveAccessibleName('Select station Main / 3 (loop end on Side), Station ID 3');
   });
 
-  it("gives a shot link each foreign end's dot, with the ends' bare names", () => {
+  it("gives a shot link each foreign end's words and tooltip, with the ends' bare names, no dot", () => {
     // Side's first shot runs from the foreign junction slot to Side 1.
     render(
       <DetailLink type="shot" target={{ lineId: SIDE, position: 1 }} displayText="12 (Main) → 1" onSelect={() => {}} />,
     );
     const id = `shot-${SIDE}-1-link`;
-    expect(screen.getByTestId(`${id}-from-home-dot`)).toBeInTheDocument();
-    expect(screen.queryByTestId(`${id}-to-home-dot`)).toBeNull();
+    expect(screen.queryByTestId(`${id}-from-home-dot`)).toBeNull();
+    expect(screen.getByTestId(`${id}-from-owner`)).toHaveClass('sr-only');
+    expect(screen.getByTestId(`${id}-from-end`)).toHaveAttribute('title', 'Belongs to Main');
+    expect(screen.queryByTestId(`${id}-to-owner`)).toBeNull();
+    expect(screen.getByTestId(`${id}-to-end`)).not.toHaveAttribute('title');
     expect(screen.queryByTestId(`${id}-from-loop-end`)).toBeNull();
     // Two-tone: the foreign from end's half in Main's colour, after a head in Side's.
+    // No head: it held the dot, and with no context nothing stays in Side's colour before the arrow.
     expect(screen.getByTestId(id)).toHaveClass('sh-lpill--split');
     expect(screen.getByTestId(`${id}-from`).style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('#ffff00', 'dark').bg);
-    expect(screen.getByTestId(`${id}-head`).style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('navy', 'dark').bg);
+    expect(screen.queryByTestId(`${id}-head`)).toBeNull();
     expect(screen.getByTestId(`${id}-to`).style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('navy', 'dark').bg);
     expect(screen.getByTestId(id)).toHaveTextContent(/^12\s*\(Main\)\s*→\s*1$/);
     expect(screen.getByTestId(id)).toHaveAccessibleName('Select shot 12 (Main) → 1');
   });
 
-  it("gives a shot link a loop end's loop mark, with the ends' bare names (RS-FX5)", () => {
+  it("gives a shot link a loop end's words and tooltip, with the ends' bare names (RS-FX5)", () => {
     // Side's second shot runs from Side 1 to the loop end Side 2.
     render(
       <DetailLink
@@ -211,13 +215,17 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
       />,
     );
     const id = `shot-${SIDE}-2-link`;
-    expect(screen.getByTestId(`${id}-to-loop-end`)).toBeInTheDocument();
+    expect(screen.getByTestId(`${id}-to-loop-end`)).toHaveClass('sr-only');
     expect(screen.queryByTestId(`${id}-from-loop-end`)).toBeNull();
-    expect(screen.getByTestId(`${id}-to-home-dot`)).toBeInTheDocument();
+    expect(screen.queryByTestId(`${id}-to-home-dot`)).toBeNull();
+    expect(screen.getByTestId(`${id}-to-end`).getAttribute('title')).toBe(
+      'Belongs to Main\nLoop end: a loop closure shows this station here',
+    );
+    expect(screen.getByTestId(id).querySelector('svg')).toBeNull();
     expect(screen.getByTestId(id)).toHaveTextContent(/^1\s*→\s*3\s*\(Main\)\s*loop end$/);
   });
 
-  it("gives a shot pill (EntityBlob) the same marks through shotEndMarks", () => {
+  it("gives a shot pill (EntityBlob) the same words through shotEndMarks", () => {
     const labels = identityLabels({
       surveyData: useProjectStore.getState().surveyData,
       stations: useProjectStore.getState().stations,
@@ -241,8 +249,9 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
         {labels.shotPillAt(SIDE, 1)}
       </EntityBlob>,
     );
-    expect(screen.getByTestId('shot-pill-to-loop-end')).toBeInTheDocument();
-    expect(screen.getByTestId('shot-pill-to-home-dot')).toBeInTheDocument();
+    expect(screen.getByTestId('shot-pill-to-loop-end')).toHaveClass('sr-only');
+    expect(screen.getByTestId('shot-pill-to-owner')).toHaveClass('sr-only');
+    expect(screen.queryByTestId('shot-pill-to-home-dot')).toBeNull();
     // The loop end's half takes its kept end's (Main's) colour.
     expect(screen.getByTestId('shot-pill-to').style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('#ffff00', 'dark').bg);
     expect(screen.getByTestId('shot-pill-from').style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('navy', 'dark').bg);

@@ -173,12 +173,14 @@ test.describe('Syntactic Highlighting', () => {
     await expect(page.getByTestId('data-table')).toBeVisible();
 
     // Full (default): line pills render in the table, and detail-panel links
-    // lead with a dot in their line's colour (it replaced the entity symbol).
+    // are pills in their line's colour, with no dot (RS-NODOTS) and no
+    // entity symbol.
     await expect(page.locator('[data-entity]').first()).toBeVisible({ timeout: 5000 });
-    await expect(page.locator('[data-testid$="-link-dot"]').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('button.sh-lpill[data-testid$="-link"]').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid$="-link-dot"]')).toHaveCount(0);
     await expect(page.locator('[data-testid$="-link-symbol"]')).toHaveCount(0);
-    // The link renders as a line pill: inline-flex (dot next to text),
-    // rounded, with a tinted background.
+    // The link renders as a line pill: inline-flex, rounded, with a tinted
+    // background and a border in the line's colour.
     const linkPill = page.locator('[data-testid$="-link"]').first();
     const pill = await linkPill.evaluate((el) => {
       const s = getComputedStyle(el);
@@ -204,7 +206,7 @@ test.describe('Syntactic Highlighting', () => {
     expect((await linkPill.textContent())?.trim()).not.toMatch(/\d+:\d+/);
     await expect(page.locator('[data-testid$="-link-id"]')).toHaveCount(0);
 
-    // Switch to Off via the store preview: pills and their dots disappear.
+    // Switch to Off via the store preview: the pills disappear.
     await page.evaluate(() => {
       const e2e = (window as unknown as {
         __E2E_TEST__: { uiStore: { getState: () => { setSyntacticHighlightPreview: (c: unknown) => void } } };
@@ -212,7 +214,7 @@ test.describe('Syntactic Highlighting', () => {
       e2e.uiStore.getState().setSyntacticHighlightPreview({ level: 'off', preset: 'default', overrides: {} });
     });
     await expect(page.locator('[data-entity]')).toHaveCount(0);
-    await expect(page.locator('[data-testid$="-link-dot"]')).toHaveCount(0);
+    await expect(page.locator('.sh-lpill')).toHaveCount(0);
     await expect(page.locator('[data-testid$="-link-id"]')).toHaveCount(0);
     await expect(page.locator('[data-testid$="-link-station-id"]')).toHaveCount(0);
   });

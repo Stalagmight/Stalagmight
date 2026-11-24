@@ -3,26 +3,27 @@
  * paints, derived from the colour of the line it belongs to and the theme.
  *
  * A line colour is user data and can be anything (near-white, near-black, pure
- * yellow, a CSS name), so nothing here uses it as a fill directly except the
- * dot. The rest is a tint of its hue, in OKLCH, with lightness and chroma
- * clamped to one band per theme:
+ * yellow, a CSS name). A pill shows its line by its fill and its border alone
+ * (RS-NODOTS: no colour dot, no marks), so:
  *
  * - background: the panel lifted a little toward the line's hue (dark themes
- *   lift it, light themes sink it), chroma capped, so a yellow pill and a navy
- *   pill have nearly the same lightness and read as one family;
- * - border: the same hue further from the panel, so the edge carries the line
- *   colour without the fill having to;
+ *   lift it, light themes sink it), up to 80% of the line's chroma within a
+ *   cap, so a yellow pill and a navy pill have nearly the same lightness and
+ *   read as one family, each in its own hue; a pale line sits at the band's
+ *   lighter edge, a dark one at its darker edge;
+ * - border: the line colour itself (what the dot used to show), moved toward
+ *   the theme's text pole only as far as it takes to stand out from the
+ *   panel and the fill ({@link BORDER_MIN}): the border carries the colour
+ *   where the fill cannot (a grey line has no hue, so a near-white, a grey
+ *   and a near-black line differ by their borders' lightness);
  * - hover: a stronger tint and border, inside the same legibility limits;
- * - dot: the line colour itself (as the Sections panel draws it), with a ring
- *   in the line's hue on the text side when the colour alone is too close to
- *   the pill's background (a near-black line on a dark theme);
  * - text: the theme's own text tokens, nudged toward black or white only on a
  *   theme whose token cannot reach the floor on the band.
  *
  * Floors (pinned by `__tests__/pillColors.test.ts` over a sweep of colours on
  * every theme): main text 7:1 (WCAG AAA), muted context and Station ID 4.5:1
- * (AA), dot or its ring 3:1 (non-text), on the resting and the hover
- * background. Every value is `#rrggbb`.
+ * (AA), on the resting and the hover background; the border at least
+ * {@link BORDER_MIN} against the panel and the fill. Every value is `#rrggbb`.
  */
 import { themeTokens } from './tokens';
 import {
@@ -39,11 +40,14 @@ import {
 export const PILL_TEXT_MIN = 7;
 export const PILL_MUTED_MIN = 4.5;
 export const PILL_DOT_MIN = 3;
+/** A pill's border against the panel and its fill: enough to show the line's colour as an edge (RS-NODOTS). */
+export const BORDER_MIN = 1.8;
 
 /** Solve to these, a little above the floors, so rounding to 8 bits never dips under. */
 const TEXT_TARGET = PILL_TEXT_MIN + 0.1;
 const MUTED_TARGET = PILL_MUTED_MIN + 0.1;
 const DOT_TARGET = PILL_DOT_MIN + 0.25;
+const BORDER_TARGET = BORDER_MIN + 0.05;
 
 /** The theme as the pills need it, see {@link pillTheme}. */
 export interface PillTheme {
@@ -72,7 +76,7 @@ export interface PillDot {
   ring: string | null;
 }
 
-export interface PillColors extends PillDot {
+export interface PillColors {
   bg: string;
   border: string;
   hoverBg: string;
@@ -97,19 +101,14 @@ export interface MissingPillColors {
  * lighter than a dark line's, never more.
  */
 const BG_LIFT = { min: 0.03, max: 0.06 } as const;
-const BG_CHROMA = { share: 0.5, max: { dark: 0.05, light: 0.04 } } as const;
+/** The fill's share of the line's chroma, and its cap (RS-NODOTS: up from 0.5 and 0.05 / 0.04 with the dot gone). */
+const BG_CHROMA = { share: 0.8, max: { dark: 0.08, light: 0.07 } } as const;
 const HOVER_LIFT = 0.02;
-const HOVER_CHROMA = { share: 0.7, max: { dark: 0.07, light: 0.06 } } as const;
-const BORDER_LIFT = { rest: 0.17, hover: 0.26 } as const;
-/**
- * How much further a border goes for a line far toward the theme's text
- * pole (a pale line on a dark theme, a dark one on a light theme), on top of
- * `BORDER_LIFT` (RS-OWNERSHIP). The fills of a near-white and a near-black
- * line differ by little (the band keeps text legible), so on a two-tone shot
- * or two pills side by side the border is what tells them apart.
- */
-const BORDER_TRACK = 0.22;
-const BORDER_CHROMA = { rest: { share: 0.7, max: 0.1 }, hover: { share: 0.85, max: 0.14 } } as const;
+const HOVER_CHROMA = { share: 0.9, max: { dark: 0.1, light: 0.09 } } as const;
+/** How far the hover border goes past the resting one toward the text pole. */
+const BORDER_HOVER_STEP = 0.1;
+/** The missing-target pill's grey border, off the panel. */
+const MISSING_BORDER_LIFT = 0.26;
 const RING_CHROMA_MAX = 0.12;
 /** Below this chroma a colour is a grey: its hue is noise, so the tints stay neutral. */
 const GREY_CHROMA = 0.02;
@@ -255,23 +254,23 @@ export function pillColors(lineColor: string | null | undefined, theme: PillThem
     tone.h,
     theme,
   );
-  // The border leaves from whichever of the panel and the fill is further out,
-  // so a pill sunk below the panel still has an edge that reads on the panel.
-  const borderBase = edge > 0 ? Math.max(bgL, panelL) : Math.min(bgL, panelL);
-  // A line toward the text pole gets a stronger edge (see BORDER_TRACK).
-  const track = BORDER_TRACK * (theme.dark ? t : 1 - t);
-  const border = hexOfOklch({
-    L: clamp(borderBase + edge * (BORDER_LIFT.rest + track), 0, 1),
-    C: Math.min(tone.C * BORDER_CHROMA.rest.share, BORDER_CHROMA.rest.max),
-    h: tone.h,
-  });
-  const hoverBorder = hexOfOklch({
-    L: clamp(borderBase + edge * (BORDER_LIFT.hover + track), 0, 1),
-    C: Math.min(tone.C * BORDER_CHROMA.hover.share, BORDER_CHROMA.hover.max),
-    h: tone.h,
-  });
-  const { dot, ring } = pillDot(line ?? theme.muted, [bg, hoverBg], theme);
-  return { bg, border, hoverBg, hoverBorder, text: theme.text, muted: theme.muted, dot, ring };
+  // The border is the line colour, moved toward the text pole only as far
+  // as it must go to stand out from the panel and the fill (RS-NODOTS).
+  const towardText = theme.dark;
+  const standsOn = (fill: string) => (c: string) =>
+    contrastOfHex(c, theme.panel) >= BORDER_TARGET && contrastOfHex(c, fill) >= BORDER_TARGET;
+  const border = pushUntil(line ?? hexOfOklch({ L: tone.L, C: 0, h: 0 }), towardText, standsOn(bg));
+  // On hover the border goes further toward the text pole, at most half the
+  // way there, so a border already near it (a yellow line on a dark theme)
+  // keeps its hue instead of turning white or black.
+  const borderL = oklchOfHex(border);
+  const room = edge > 0 ? 1 - borderL.L : borderL.L;
+  const hoverBorder = pushUntil(
+    hexOfOklch({ L: clamp(borderL.L + edge * Math.min(BORDER_HOVER_STEP, room / 2), 0, 1), C: borderL.C, h: borderL.h }),
+    towardText,
+    standsOn(hoverBg),
+  );
+  return { bg, border, hoverBg, hoverBorder, text: theme.text, muted: theme.muted };
 }
 
 /** The pill of a missing target on `theme`: the resting band in grey, its border dashed by the CSS. */
@@ -281,7 +280,7 @@ export function missingPillColors(theme: PillTheme): MissingPillColors {
   const edge = theme.dark ? 1 : -1;
   const bgL = oklchOfHex(bg).L;
   const base = edge > 0 ? Math.max(bgL, panelL) : Math.min(bgL, panelL);
-  const border = hexOfOklch({ L: clamp(base + edge * BORDER_LIFT.hover, 0, 1), C: 0, h: 0 });
+  const border = hexOfOklch({ L: clamp(base + edge * MISSING_BORDER_LIFT, 0, 1), C: 0, h: 0 });
   const warning = pushUntil(theme.warning, theme.dark, (c) => contrastOfHex(c, bg) >= DOT_TARGET);
   return { bg, border, text: theme.text, muted: theme.muted, warning };
 }
@@ -291,12 +290,10 @@ export function missingPillColors(theme: PillTheme): MissingPillColors {
  * no fill and no border but a soft radial tint of the line's hue, strongest
  * at its centre (the hover band's tint, `hoverBg`) and fading to nothing at
  * its edges, where the bare panel shows. So everything on it is held on both
- * ends of the fade: main text 7:1, the muted context and Station ID 4.5:1, the
- * dot or its ring and the home-line dot 3:1, on the tint and on the panel.
- * `bg` is the tint's centre and `hoverBg` the panel (what {@link pillMarkOf}
- * checks a home-line dot against); there is no hover, and `border` is the
- * resting pill's, unused. Text is the theme's own unless a floor needs it
- * nudged, as for the link pill.
+ * ends of the fade: main text 7:1 and the muted context and Station ID 4.5:1,
+ * on the tint and on the panel. `bg` is the tint's centre and `hoverBg` the
+ * panel; there is no hover, and `border` is the resting pill's, unused. Text
+ * is the theme's own unless a floor needs it nudged, as for the link pill.
  */
 export function prosePillColors(lineColor: string | null | undefined, theme: PillTheme): PillColors {
   const pill = pillColors(lineColor, theme);
@@ -304,8 +301,7 @@ export function prosePillColors(lineColor: string | null | undefined, theme: Pil
   const reaches = (min: number) => (c: string) => on.every((bg) => contrastOfHex(c, bg) >= min);
   const text = pushUntil(pill.text, theme.dark, reaches(TEXT_TARGET));
   const muted = pushUntil(pill.muted, theme.dark, reaches(MUTED_TARGET));
-  const { dot, ring } = pillDot(lineHex(lineColor, theme.panel) ?? muted, on, theme);
-  return { ...pill, bg: pill.hoverBg, hoverBg: theme.panel, text, muted, dot, ring };
+  return { ...pill, bg: pill.hoverBg, hoverBg: theme.panel, text, muted };
 }
 
 /**
@@ -405,21 +401,4 @@ const missingCache = new Map<string, MissingPillColors>();
 export function panelDotOf(lineColor: string | null | undefined, themeName: string): PillDot {
   const theme = pillThemeOf(themeName);
   return pillDot(lineHex(lineColor, theme.panel) ?? theme.muted, [theme.panel], theme);
-}
-
-/**
- * A dot in `markColor` drawn over `backgrounds` (a two-tone pill's own fill,
- * its hover fill and the blends toward its neighbours, RS-BLEND), with the
- * ring {@link pillDot} gives it when the colour alone does not reach 3:1 on
- * every one of them.
- */
-export function pillMarkOver(markColor: string | null | undefined, backgrounds: readonly string[], themeName: string): PillDot {
-  const theme = pillThemeOf(themeName);
-  return pillDot(lineHex(markColor, theme.panel) ?? theme.muted, backgrounds, theme);
-}
-
-/** The second dot (a station's home line) on a pill already coloured `on`. */
-export function pillMarkOf(markColor: string | null | undefined, on: PillColors, themeName: string): PillDot {
-  const theme = pillThemeOf(themeName);
-  return pillDot(lineHex(markColor, theme.panel) ?? theme.muted, [on.bg, on.hoverBg], theme);
 }

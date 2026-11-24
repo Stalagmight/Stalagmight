@@ -1686,10 +1686,11 @@ button.sh-apill {
 /* Line link pill (DetailLink, EntityBlob; src/components/common/LinePill.tsx).
    Every colour is a custom property set inline from src/theme/pillColors.ts,
    derived from the line's own colour and the theme so the text keeps 7:1 and
-   the muted parts 4.5:1 whatever colour the line has. The main part takes the
-   surrounding text size; the context and the Station ID are smaller. Children
-   share one baseline (the smaller context sits on the name's baseline); the
-   dots are centred, and the Station ID is lifted off the baseline by a
+   the muted parts 4.5:1 whatever colour the line has. The pill shows its line
+   by its fill and border alone (RS-NODOTS: no dot, no marks). The main part
+   takes the surrounding text size; the context and the Station ID are
+   smaller. Children share one baseline (the smaller context sits on the
+   name's baseline), and the Station ID is lifted off the baseline by a
    relative offset so it never changes the pill's height. */
 .sh-lpill {
   display: inline-flex;
@@ -1697,7 +1698,7 @@ button.sh-apill {
   gap: 0.3em;
   max-width: 100%;
   min-width: 0;
-  padding: 0.18em 0.6em 0.18em 0.5em;
+  padding: 0.18em 0.6em;
   border: 1px solid var(--pill-border);
   border-radius: 9999px;
   background: var(--pill-bg);
@@ -1713,17 +1714,6 @@ button.sh-apill {
 }
 .sh-lpill--missing {
   border-style: dashed;
-}
-/* The line colour, as the Sections panel's row dot draws it, sized for the
-   pill; the ring is drawn only when the colour alone is too close to the fill. */
-.sh-lpill-dot {
-  flex: none;
-  align-self: center;
-  width: 0.6em;
-  height: 0.6em;
-  border-radius: 9999px;
-  background: var(--pill-dot);
-  box-shadow: 0 0 0 1px var(--pill-ring, transparent);
 }
 .sh-lpill-warn {
   flex: none;
@@ -1784,15 +1774,16 @@ button.sh-apill {
   color: var(--pill-text);
 }
 /* A zero-width strut in the pill's own font: every segment, even one holding
-   only the dot (the head), has the text's baseline and height, so the
-   halves line up and are one height. The gap after it is taken back. */
+   only the small context (the head), has the text's baseline and height,
+   so the halves line up and are one height. The gap after it is taken
+   back. */
 .sh-lpill-seg::before {
   content: '\200b';
   margin-right: -0.3em;
 }
 .sh-lpill-seg:first-child {
   flex: 0 1000 auto;
-  padding-left: 0.5em;
+  padding-left: 0.6em;
   border-left-width: 1px;
   border-radius: 9999px 0 0 9999px;
 }
@@ -1812,7 +1803,7 @@ button.sh-apill {
    arrow keeps the one-colour pill's spacing and the blend spans the arrow
    and the space around it. The from half sits above the arrow's 1px
    overlap (both are its colour there), so the overlap never covers the
-   from end's dot. */
+   last glyph of the from end's name. */
 .sh-lpill-seg.sh-lpill-seg--to-arrow {
   position: relative;
   z-index: 1;
@@ -1831,30 +1822,10 @@ button.sh-apill {
     var(--seg-fill-hover, linear-gradient(var(--pill-bg-hover), var(--pill-bg-hover))) padding-box,
     var(--seg-edge-hover, linear-gradient(var(--pill-border-hover), var(--pill-border-hover))) border-box;
 }
-/* A station's home-line mark: a smaller dot right after its name. Inline in a
-   shot's two ends, a flex item after a station's name. */
-.sh-lpill-mark {
-  display: inline-block;
-  flex: none;
-  align-self: center;
-  width: 0.42em;
-  height: 0.42em;
-  margin-left: 0.12em;
-  border-radius: 9999px;
-  vertical-align: 0.12em;
-  background: var(--mark-dot);
-  box-shadow: 0 0 0 1px var(--mark-ring, transparent);
-}
-/* A loop end's mark (RS 6): a small open ring after the name and its dot, in
-   the pill's muted colour. */
-.sh-lpill-loop {
-  display: inline-flex;
-  flex: none;
-  align-self: center;
-  margin-left: 0.08em;
-  font-size: 0.8em;
-  line-height: 1;
-  color: var(--pill-muted);
+/* A shot end's name: inline inside the main part, its tooltip says whose
+   station it is and whether it is a loop end (RS-NODOTS). */
+.sh-lpill-end {
+  display: inline;
 }
 .sh-lpill-sid {
   flex: none;
@@ -1869,8 +1840,8 @@ button.sh-apill {
 }
 
 /* Prose pill (ProsePill, src/components/common/Prose.tsx; RS-PROSE): a line
-   pill inline in running text, with the link pill's dot, context, marks and
-   Station ID, but no pill shape: a soft radial tint in the line's colour
+   pill inline in running text, with the link pill's context and Station ID
+   (no dot or marks since RS-NODOTS), but no pill shape: a soft radial tint in the line's colour
    (`--pill-tint`, a translucent overlay: prosePillColors and proseTintOf in
    pillColors.ts) that fades to nothing at each fragment's edges. A bordered fill stood 0 to 1 px from the fill of
    the line above on most stacked pairs (the fill covers the font's whole
@@ -1882,13 +1853,11 @@ button.sh-apill {
      line box's height (CSS 2.1 10.8.1);
    - every text part inside has line-height 0 (a smaller font with the
      paragraph's line-height would sit lower and push the line box down);
-   - the dots and the loop mark are inline-blocks whose negative top margin
-     cancels their height, so their margin box is zero tall;
    - the Station ID is lifted by a relative offset, never `vertical-align`,
      and stays inside the text's own height.
    `box-decoration-break: clone` gives each line's fragment of a wrapped pill
-   its own tint and padding; `.sh-ppill-nw` keeps the dot with the first
-   word, the arrow with the shot's far end and the marks with the last word.
+   its own tint and padding; `.sh-ppill-nw` keeps the Station ID with the
+   last word.
    `.sh-ppill` itself paints nothing: it holds the colours and the sr-only
    words, which a copy and a screen reader take. */
 .sh-ppill {
@@ -1946,49 +1915,9 @@ button.sh-apill {
 .sh-ppill-nw {
   white-space: nowrap;
 }
-.sh-ppill-dot {
-  display: inline-block;
-  border-radius: 9999px;
-}
-.sh-ppill-dot {
-  width: 0.58em;
-  height: 0.58em;
-  margin: -0.58em 0.3em 0 0;
-  vertical-align: 0.06em;
-  background: var(--pill-dot);
-  box-shadow: 0 0 0 1px var(--pill-ring, transparent);
-}
 .sh-ppill-ctx {
   font-size: 0.857em;
   color: var(--pill-muted);
-}
-/* The marks after a name are empty inline boxes, not inline-blocks
-   (RS-ARROW): WebKit allows a line break after an atomic inline even where
-   white-space forbids one, and that break separated a from end's dot from
-   the arrow. The home-line dot (0.42em, its 1px ring outside) is a radial
-   gradient in the box's padding; the loop mark is its glyph as a mask over
-   the muted colour (`--loop-glyph`, LinePill.tsx). Both are centred on the
-   x-height, and an inline box adds no height to the line. */
-.sh-ppill-mark {
-  margin-left: 0.14em;
-  padding: 0 calc(0.21em + 1px);
-  background: radial-gradient(
-    circle closest-side,
-    var(--mark-dot) calc(100% - 1.25px),
-    var(--mark-ring, transparent) calc(100% - 0.75px),
-    var(--mark-ring, transparent) calc(100% - 0.25px),
-    transparent 100%
-  );
-}
-/* The mask covers the whole box (the glyph keeps its aspect, centred and
-   0.8em wide): WebKit left the parts of an inline box outside a smaller
-   mask image unmasked, as two bars above and below the glyph. */
-.sh-ppill-loop {
-  margin-left: 0.1em;
-  padding: 0 0.4em;
-  background-color: var(--pill-muted);
-  -webkit-mask: var(--loop-glyph) 0 0 / 100% 100% no-repeat;
-  mask: var(--loop-glyph) 0 0 / 100% 100% no-repeat;
 }
 .sh-ppill-sid {
   position: relative;

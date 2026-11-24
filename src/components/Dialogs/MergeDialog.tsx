@@ -409,8 +409,8 @@ function KeepOutcome({
 /**
  * Each name a line will show twice after the merge (RS-FX6, P2-6): the
  * line's own station of that name keeps it (RS-FX5, "dotted slots don't
- * collide"), and the junction shows the kept station by the same name with
- * its home line's dot (or a loop end with the loop mark). Said before the
+ * collide"), and the junction shows the kept station by the same name in
+ * its home line's colour (or as a loop end). Said before the
  * user confirms, so a line listing a name twice is no surprise.
  */
 function NameRepeats({ repeats }: { repeats: readonly NameRepeat[] }) {

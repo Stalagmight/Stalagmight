@@ -142,8 +142,8 @@ describe('Edit Station asks whose station it is (RS 5.4)', () => {
     expect(accessibleText(lead)).toBe('12 belongs to Main.');
     expect(pillKinds(lead)).toEqual(['station', 'line']);
     expect(pillDrawings(lead)).toEqual(['12#11', 'Main']);
-    // RS-OWNERSHIP: the slot's pill is in Main's colour, no second dot.
-    expect(lead.querySelector('[data-prose-mark="home"]')).toBeNull();
+    // RS-OWNERSHIP: the slot's pill is in Main's colour, no dot (RS-NODOTS).
+    expect(lead.querySelector('[data-prose-mark]')).toBeNull();
     expect(lead.querySelector('.sh-ppill')!.getAttribute('data-owner-line')).toBe(String(MAIN));
     expect(pillKinds(screen.getByTestId('shown-identity-prompt-proceed'))).toEqual([]);
     expect(pillKinds(screen.getByTestId('shown-identity-prompt-detach'))).toEqual([]);
@@ -201,11 +201,13 @@ describe('Edit Station asks whose station it is (RS 5.4)', () => {
     expect(said(screen.getByTestId('station-datum-loop-end'))).toContain(
       'This station is Main / 3 (loop end on Side): the datum goes on its own point.',
     );
-    // RS-PROSE: the loop end is a pill with its loop mark; the words stay.
+    // RS-PROSE: the loop end is a pill, with no mark since RS-NODOTS: its
+    // tooltip says it is a loop end; the words stay.
     const datum = screen.getByTestId('station-datum-loop-end');
     expect(accessibleText(datum)).toBe('This station is Main / 3 (loop end on Side): the datum goes on its own point.');
     expect(pillKinds(datum)).toEqual(['station']);
-    expect(datum.querySelector('[data-prose-mark="loop"]')).not.toBeNull();
+    expect(datum.querySelector('[data-prose-mark], [data-glyph]')).toBeNull();
+    expect(datum.querySelector('.sh-ppill')!.getAttribute('title')).toContain('Loop end');
   });
 
   it('saves a native slot at once', async () => {

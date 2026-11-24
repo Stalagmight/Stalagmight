@@ -5,9 +5,8 @@
  * it").
  *
  * A shot with an end of another line is drawn in segments, each in its own
- * line's colours (RS-OWNERSHIP): an optional head (the leading dot and the
- * context, in the shot's colour, when the from end's half is another
- * line's), the from end's half, the arrow, the to end's half.
+ * line's colours (RS-OWNERSHIP): an optional head (the context, in the
+ * shot's colour, when the from end's half is another line's), the from end's half, the arrow, the to end's half.
  *
  * - The arrow is a segment of its own, a **bridge**: its colour runs from
  *   the from half's to the to half's across its whole width, so the
@@ -30,14 +29,14 @@
  *   fading only at the outer ends and top and bottom, with no dip. A wrapped
  *   pill is tinted per line (`components/common/useSegmentTints.ts`).
  *
- * Text and dots over a blend must read on every colour it passes through:
- * {@link blendBackdrops} and {@link bridgeBackdrops} list them (sampled);
- * dots get their ring against them and the arrow takes the text colour that
- * reads on all of them (`__tests__/twoTonePills.test.ts` sweeps the samples).
+ * Text over a blend must read on every colour it passes through:
+ * {@link blendBackdrops} and {@link bridgeBackdrops} list them (sampled),
+ * and the arrow takes the text colour that reads on all of them
+ * (`__tests__/twoTonePills.test.ts` sweeps the samples).
  */
 import type { CSSProperties } from 'react';
 import { contrastOfHex, oklabOf, rgbOfOklab, hexOfRgb } from './cssColor';
-import { pillDot, pillThemeOf, proseOverlayOf, type PillColors, type PillDot } from './pillColors';
+import { pillThemeOf, proseOverlayOf, type PillColors } from './pillColors';
 
 /** How far a segment fades at a seam; the cross-fade is twice this, centred on the seam. */
 export const SEAM_EM = 0.4;
@@ -75,7 +74,7 @@ export interface Neighbours {
 }
 
 /**
- * Every colour a segment's text and dots can sit on: its fill and hover fill
+ * Every colour a segment's text can sit on: its fill and hover fill
  * (a prose pill's tint centre and the bare panel, `panel` given), and the
  * blends toward each neighbour at {@link BLEND_SAMPLES} (the hover blends
  * too).
@@ -161,12 +160,9 @@ function linkPaint(stopsOf: (pick: (c: PillColors) => string) => Stop[]): CSSPro
 
 /**
  * A link pill segment's custom properties: its own colours (the `.sh-lpill`
- * names), its dot and ring checked against every backdrop, and its fill and
- * border as gradients, at rest and on hover.
+ * names), and its fill and border as gradients, at rest and on hover.
  */
-export function linkSegmentStyle(own: PillColors, near: Neighbours, themeName: string): CSSProperties {
-  const theme = pillThemeOf(themeName);
-  const dot: PillDot = pillDot(own.dot, blendBackdrops(own, near), theme);
+export function linkSegmentStyle(own: PillColors, near: Neighbours): CSSProperties {
   return {
     '--pill-bg': own.bg,
     '--pill-border': own.border,
@@ -174,8 +170,6 @@ export function linkSegmentStyle(own: PillColors, near: Neighbours, themeName: s
     '--pill-border-hover': own.hoverBorder,
     '--pill-text': own.text,
     '--pill-muted': own.muted,
-    '--pill-dot': dot.dot,
-    '--pill-ring': dot.ring ?? 'transparent',
     ...linkPaint((pick) => seamStops(pick(own), near.left ? pick(near.left) : null, near.right ? pick(near.right) : null, null)),
   } as CSSProperties;
 }
@@ -251,20 +245,15 @@ export function proseBridgeTint(left: PillColors, right: PillColors, panel: stri
 }
 
 /**
- * A prose pill segment's custom properties: its text, muted part, its dot
- * and ring checked against every backdrop (the tint, the panel and the
- * blends), and its tint (`--seg-tint`, {@link proseSegmentTint}).
- * `widthEm` estimates the segment's width, so the seam fade is about
- * {@link SEAM_EM} wide.
+ * A prose pill segment's custom properties: its text, muted part and its
+ * tint (`--seg-tint`, {@link proseSegmentTint}). `widthEm` estimates the
+ * segment's width, so the seam fade is about {@link SEAM_EM} wide.
  */
 export function proseSegmentStyle(own: PillColors, near: Neighbours, themeName: string, widthEm: number): CSSProperties {
   const theme = pillThemeOf(themeName);
-  const dot: PillDot = pillDot(own.dot, blendBackdrops(own, near, theme.panel), theme);
   return {
     '--pill-text': own.text,
     '--pill-muted': own.muted,
-    '--pill-dot': dot.dot,
-    '--pill-ring': dot.ring ?? 'transparent',
     '--seg-tint': proseSegmentTint(own, near, theme.panel, SEAM_EM / Math.max(widthEm, 0.1)),
   } as CSSProperties;
 }

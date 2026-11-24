@@ -7,7 +7,8 @@
  * A name is a {@link ProsePart}, the shape the backend sends beside a text it
  * words (`models::prose`): the words plain text has in its place (`text`,
  * "Side / 12 (Main)") and what the pill draws (the line's colour, the muted
- * context, the bare name, the home-line dot, the loop mark, the Station ID).
+ * context, the bare name, the Station ID; whose station an end is and a
+ * loop end only in its tooltip since RS-NODOTS).
  *
  * A sentence the frontend words through i18n puts a **token** where the name
  * goes: the part, URI-encoded JSON between U+0001 and U+0002, after this page
@@ -208,8 +209,8 @@ export function backendProse(plain: string, parts: readonly ProsePart[] | null |
  * without the line), and what `StationBlob` draws: the colour of the line
  * the station belongs to (the slot's, or for a foreign slot or a loop end
  * of another line `ownerLineOf`'s, RS-OWNERSHIP), with `withLine` that line
- * as the context, the bare name, the loop mark of a loop end and the
- * Station ID it shows.
+ * as the context, the bare name and the Station ID it shows (a loop end says
+ * so in its tooltip).
  */
 export function stationPartOf(src: IdentitySource, ref: StationRef, withLine = false): ProsePart {
   const shown = shownSlotOf(src, ref);
@@ -272,7 +273,7 @@ export function namedLinePart(name: string, lineId?: number | null): ProsePart {
 
 /**
  * The shot at 0-based `shotIndex` of line `lineId` as a shot part: the words
- * of `shotLabelAt`, each end's bare name with its home-line dot and loop mark.
+ * of `shotLabelAt`, each end's bare name with its home line and loop end (its tooltip).
  */
 export function shotPartAt(src: IdentitySource, lineId: number, shotIndex: number, withLine = false): ProsePart {
   const end = (index: number) => {

@@ -1,8 +1,8 @@
 /**
  * EntityBlob - a line pill that is not a link: the data table's row gutters
  * and line picker, and the station, shot and line names in dialogs. Same look
- * as the `DetailLink` pill (`LinePill.tsx`): the colour of its line, a dot,
- * an optional muted context, the main part and, for a station, its Station
+ * as the `DetailLink` pill (`LinePill.tsx`): the colour of its line in its
+ * fill and border (no dot since RS-NODOTS), an optional muted context, the main part and, for a station, its Station
  * ID as a muted superscript.
  *
  * Renders the pill only when the highlighting level is "full"; otherwise it
@@ -16,7 +16,7 @@ import { useUIStore } from '../../store/uiStore';
 import type { BlobEntity } from '../../theme/syntacticPalette';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import type { StationRef } from '../../types/project';
-import { markOf, markOver, PillParts, pillStyle, shotToneOf, useResolvePill } from './LinePill';
+import { endTitleOf, markOf, PillParts, pillStyle, shotToneOf, useResolvePill } from './LinePill';
 import type { ShotEndMarks } from './shotEndMarks';
 
 export interface EntityBlobProps {
@@ -34,10 +34,11 @@ export interface EntityBlobProps {
    *  pill takes its colour and names it as the context (RS-OWNERSHIP, see
    *  `LinePill.tsx`). */
   homeLineId?: number | null | undefined;
-  /** A station pill's loop mark: a loop closure shows this station as its other end (RS 6). */
+  /** A loop end's station pill (a loop closure shows this station as its other end, RS 6): said in its tooltip and words. */
   loopEnd?: boolean | undefined;
-  /** A shot pill's two ends, each with an optional home-line mark, loop mark
-   *  and owner line (its half's colour); replaces `children` in the pill. */
+  /** A shot pill's two ends, each with an optional home line and loop end
+   *  (its tooltip and words) and owner line (its half's colour); replaces
+   *  `children` in the pill. */
   shotEnds?: ShotEndMarks | null | undefined;
   /** What the lower highlighting levels show; defaults to `children`. */
   plain?: ReactNode | undefined;
@@ -88,11 +89,9 @@ export function EntityBlob({
   }
 
   const tone =
-    entity === 'shot' && shotEnds ? shotToneOf(resolve, lineId, shotEnds.fromOwnerLineId, shotEnds.toOwnerLineId, 'link') : null;
-  // A foreign end's dot sits in its own half, near a blended seam: it is
-  // checked against that half's colours and the blends (RS-BLEND).
-  const endMark = (home: number | null | undefined, on: readonly string[] | undefined) =>
-    tone && on ? markOver(pill, home, on) : markOf(pill, home);
+    entity === 'shot' && shotEnds
+      ? shotToneOf(resolve, lineId, shotEnds.fromOwnerLineId, shotEnds.toOwnerLineId, 'link', undefined, Boolean(context))
+      : null;
   return (
     <span
       className={`sh-lpill${tone ? ' sh-lpill--split' : ''} ${className}`}
@@ -100,7 +99,7 @@ export function EntityBlob({
       data-entity={entity}
       data-owner-line={owner ?? undefined}
       data-testid={testId}
-      title={title ?? (ownerName !== null ? t('identity.homeMarkTitle', { line: ownerName }) : undefined)}
+      title={title ?? endTitleOf(ownerName !== null ? { line: ownerName } : null, entity === 'station' && loopEnd)}
     >
       <PillParts
         testId={testId}
@@ -111,8 +110,8 @@ export function EntityBlob({
             ? {
                 from: shotEnds.from,
                 to: shotEnds.to,
-                fromMark: endMark(shotEnds.fromHomeLineId, tone?.fromOn),
-                toMark: endMark(shotEnds.toHomeLineId, tone?.toOn),
+                fromMark: markOf(pill, shotEnds.fromHomeLineId),
+                toMark: markOf(pill, shotEnds.toHomeLineId),
                 fromLoopEnd: shotEnds.fromLoopEnd,
                 toLoopEnd: shotEnds.toLoopEnd,
               }
@@ -143,13 +142,13 @@ export function EntityBlob({
  * colour and, with `withLine`, its line as the context (`Main Line: 17`). A
  * foreign slot, or a loop end whose kept end lives on another line, takes
  * the colour and name of the line its shown station belongs to
- * (RS-OWNERSHIP), unless `homeLineId` says otherwise; a loop end keeps the
- * loop mark (RS 6). With `bySlot` it is the slot's pill instead: its own
- * line's colour and name, for a list of slots whose point is which lines
- * they are on (a delete's "no longer shared" pairs, as the "Also on" rows
- * name a line); its tooltip and screen-reader words still say whose station
- * it shows. Below Full it
- * is the plain label (`17`, `Main Line / 17`; `12 (Main)`, `Side / 12 (Main)`
+ * (RS-OWNERSHIP), unless `homeLineId` says otherwise; a loop end says so in
+ * its tooltip and words (RS 6, no mark since RS-NODOTS). With `bySlot` it is
+ * the slot's pill instead: its own line's colour and name, for a list of
+ * slots whose point is which lines they are on (a delete's "no longer
+ * shared" pairs, as the "Also on" rows name a line); its tooltip and
+ * screen-reader words still say whose station it shows. Below Full it is
+ * the plain label (`17`, `Main Line / 17`; `12 (Main)`, `Side / 12 (Main)`
  * for a foreign slot; `3 (loop end on Side)` for a loop end).
  */
 export function StationBlob({

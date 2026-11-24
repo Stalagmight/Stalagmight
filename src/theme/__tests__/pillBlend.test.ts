@@ -22,9 +22,9 @@ describe('link segments (RS-BLEND)', () => {
   const A = pillColorsOf('#f6f6f2', 'dark');
   const B = pillColorsOf('#101010', 'dark');
   const C = pillColorsOf('#ffe600', 'dark');
-  const head = linkSegmentStyle(A, { left: null, right: B }, 'dark') as Record<string, string>;
-  const from = linkSegmentStyle(B, { left: A, right: C }, 'dark') as Record<string, string>;
-  const to = linkSegmentStyle(C, { left: B, right: null }, 'dark') as Record<string, string>;
+  const head = linkSegmentStyle(A, { left: null, right: B }) as Record<string, string>;
+  const from = linkSegmentStyle(B, { left: A, right: C }) as Record<string, string>;
+  const to = linkSegmentStyle(C, { left: B, right: null }) as Record<string, string>;
 
   it('neighbours meet in one colour, fill and border, at rest and on hover', () => {
     for (const key of ['--seg-fill', '--seg-fill-hover', '--seg-edge', '--seg-edge-hover']) {
@@ -63,11 +63,11 @@ describe('prose segments (RS-BLEND)', () => {
     expect(last?.slice(1)).toEqual(first?.slice(1));
   });
 
-  it('a segment style carries its tint, text and dot', () => {
+  it('a segment style carries its tint and text, and no dot (RS-NODOTS)', () => {
     const style = proseSegmentStyle(A, { left: null, right: B }, 'light', 3) as Record<string, string>;
     expect(style['--seg-tint']).toMatch(/^url\("data:image\/svg\+xml,/);
     expect(style['--pill-text']).toBe(A.text);
-    expect(style['--pill-dot']).toBe(A.dot);
+    expect(style['--pill-dot']).toBeUndefined();
   });
 });
 
@@ -83,8 +83,8 @@ describe('the arrow bridge (RS-ARROW)', () => {
   const L = pillColorsOf('#ffe600', 'light');
   const R = pillColorsOf('#1f4fff', 'light');
   const arrow = linkBridgeStyle(L, R, 'light') as Record<string, string>;
-  const from = linkSegmentStyle(L, { left: null, right: L }, 'light') as Record<string, string>;
-  const to = linkSegmentStyle(R, { left: R, right: null }, 'light') as Record<string, string>;
+  const from = linkSegmentStyle(L, { left: null, right: L }) as Record<string, string>;
+  const to = linkSegmentStyle(R, { left: R, right: null }) as Record<string, string>;
 
   it("runs from the from half's colour to the to half's, the midpoint on the arrow's middle", () => {
     for (const [key, pick] of [

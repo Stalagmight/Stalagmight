@@ -1,8 +1,8 @@
 /**
  * RS-PROSE: the prose pill. A sentence worded with prose tokens draws each
- * station, shot and line it names as an inline pill (the line's dot, the
- * muted context, the bare name, the home-line dot, the loop mark, the
- * Station ID), while a screen reader still reads, word for word, the
+ * station, shot and line it names as an inline pill in its line's tint (the
+ * muted context, the bare name, the Station ID; no dot or marks since
+ * RS-NODOTS, the tooltip says whose and a loop end), while a screen reader still reads, word for word, the
  * sentence plain text wrote: the drawing is aria-hidden and the plain words
  * sit beside it as sr-only text. Below Full the sentence is plain text.
  * Injections: rendering the token's words visibly fails "reads the plain
@@ -27,6 +27,7 @@ import {
 } from '../../../utils/prose';
 import { identityLabels } from '../../../utils/stationIdentity';
 import { prosePillColorsOf } from '../../../theme/pillColors';
+import { prosePillStyle } from '../LinePill';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { surveyDataFromLegacy } from '../../../types/survey-data';
@@ -111,29 +112,28 @@ describe('prose pills (RS-PROSE)', () => {
     expect([...pills].map((el) => el.getAttribute('data-prose-kind'))).toEqual(['line', 'station', 'station', 'shot']);
     expect(accessibleText(p)).toBe(plain);
     // The drawing: the foreign slot in the colour of the line it belongs to
-    // (RS-OWNERSHIP), named by it, bare name and Station ID, no second dot.
+    // (RS-OWNERSHIP), named by it, bare name and Station ID, no dot.
     const foreign = pills[1]! as HTMLElement;
     const drawing = foreign.querySelector('[aria-hidden="true"]')!;
     expect(drawing.textContent).toBe('Main: 12#11');
     expect(foreign.querySelector('[data-prose-mark="home"]')).toBeNull();
     expect(foreign.getAttribute('title')).toBe('Belongs to Main');
     expect(foreign.getAttribute('data-owner-line')).toBe(String(MAIN));
-    expect(foreign.style.getPropertyValue('--pill-dot')).toBe(prosePillColorsOf('#ffff00', 'dark').dot);
-    // The loop end: its loop mark, the Station ID it shows, its kept end's (Main's) colour.
+    const mainTint = (prosePillStyle(prosePillColorsOf('#ffff00', 'dark'), 'dark') as Record<string, string>)['--pill-tint'];
+    expect(foreign.style.getPropertyValue('--pill-tint')).toBe(mainTint);
+    expect(foreign.style.getPropertyValue('--pill-dot')).toBe('');
+    // The loop end: no mark, the Station ID it shows, its kept end's (Main's)
+    // colour; its tooltip says whose it is and that it is a loop end.
     const loopEnd = pills[2]! as HTMLElement;
-    // The loop mark: the loop-closure glyph as a mask on an empty inline box
-    // (no atomic inline a line could break after, RS-ARROW).
-    const loopMark = loopEnd.querySelector('[data-prose-mark="loop"][data-glyph="loop"]') as HTMLElement;
-    expect(loopMark.style.getPropertyValue('--loop-glyph')).toContain(encodeURIComponent('M1.2 4.9C2.5'));
-    expect(loopMark.querySelector('svg')).toBeNull();
-    expect(loopEnd.querySelector('[data-prose-mark="loop"]')).toHaveAttribute('title', 'Loop end: a loop closure shows this station here');
+    expect(loopEnd.querySelector('[data-prose-mark], [data-glyph], svg')).toBeNull();
+    expect(loopEnd.getAttribute('title')).toBe('Belongs to Main\nLoop end: a loop closure shows this station here');
     expect(loopEnd.querySelector('[aria-hidden="true"]')!.textContent).toBe('3#3');
-    expect(loopEnd.style.getPropertyValue('--pill-dot')).toBe(prosePillColorsOf('#ffff00', 'dark').dot);
+    expect(loopEnd.style.getPropertyValue('--pill-tint')).toBe(mainTint);
     // The shot: two tints, the foreign from end's half in Main's after a
-    // head in Side's, the end's dot kept; no Station ID.
+    // head in Side's, no dot; no Station ID.
     const shotPill = pills[3]!;
     expect(shotPill.querySelector('[aria-hidden="true"]')!.textContent).toBe('Side: 12\u00a0→\u00a01');
-    expect(shotPill.querySelectorAll('[data-prose-mark="home"]')).toHaveLength(1);
+    expect(shotPill.querySelectorAll('[data-prose-mark]')).toHaveLength(0);
     const seg = (name: string) => shotPill.querySelector(`[data-prose-seg="${name}"]`) as HTMLElement;
     expect(seg('head').textContent).toBe('Side: ');
     expect(seg('from').textContent).toBe('12');
@@ -149,10 +149,10 @@ describe('prose pills (RS-PROSE)', () => {
     // no-break spaces, and the from half, the arrow and the to half are joined.
     expect(seg('from').parentElement).toHaveClass('sh-ppill-join');
     expect(seg('arrow').parentElement).toBe(seg('to').parentElement);
-    expect(seg('from')).toContainElement(shotPill.querySelector('[data-prose-mark="home"]') as HTMLElement);
+    // The foreign end says whose it is in its tooltip.
+    expect(seg('from')).toHaveAttribute('title', 'Belongs to Main');
+    expect(seg('to')).not.toHaveAttribute('title');
     expect(shotPill.querySelector('[data-prose-sid]')).toBeNull();
-    // Colours come from the line (custom properties of pillColors.ts).
-    expect((foreign as HTMLElement).style.getPropertyValue('--pill-dot')).not.toBe('');
   });
 
   it('tints a two-tone shot per line once laid out, and a moving layout never loops the update (RS-BLEND)', () => {

@@ -1,10 +1,12 @@
 import type { IdentityLabels } from '../../utils/stationIdentity';
 
 /**
- * A shot pill's two ends: each bare name with its home-line dot and loop
- * mark, and the line each end's station belongs to when it is not the
- * shot's line (RS-OWNERSHIP: the half of the pill holding that end takes
- * that line's colour).
+ * A shot pill's two ends: each bare name, the line its station belongs to
+ * and whether it is a loop end (said in a tooltip and in words since
+ * RS-NODOTS, where a home-line dot and a loop mark once drew them), and the
+ * line each end's station belongs to when it is not the shot's line
+ * (RS-OWNERSHIP: the half of the pill holding that end takes that line's
+ * colour).
  */
 export interface ShotEndMarks {
   from: string;
@@ -20,14 +22,15 @@ export interface ShotEndMarks {
 }
 
 /**
- * A shot pill's two ends with their marks (RS 6), for the shot at 0-based
+ * A shot pill's two ends with what they are (RS 6), for the shot at 0-based
  * position `shotIndex` of line `lineId`: an end on a foreign slot (it shows
- * another line's station) carries that station's home-line dot, and a loop
- * end the loop mark; an end whose station belongs to another line (a foreign
- * slot, or a loop end whose kept end lives elsewhere) colours its half of
- * the pill by that line (RS-OWNERSHIP). The names are bare, the marks and
- * colours saying what plain text's qualifier says (`12 (Main) → 13`). Null
- * when neither end is marked, so the pill shows the shot as one label.
+ * another line's station) names that station's home line, and a loop end
+ * says so, both in a tooltip and in words (RS-NODOTS: no marks); an end
+ * whose station belongs to another line (a foreign slot, or a loop end
+ * whose kept end lives elsewhere) colours its half of the pill by that line
+ * (RS-OWNERSHIP). The names are bare, the colours, tooltips and words saying
+ * what plain text's qualifier says (`12 (Main) → 13`). Null when neither end
+ * is either, so the pill shows the shot as one label.
  */
 export function shotEndMarks(
   labels: Pick<IdentityLabels, 'stationPill' | 'homeMark' | 'shown' | 'ownerLine'>,
