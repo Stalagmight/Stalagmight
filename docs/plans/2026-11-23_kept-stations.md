@@ -2192,3 +2192,77 @@ this package took, each with its reason; they supersede section 6's
   span stays, and the radios whose label is a prose sentence (collision
   answers, Detach's lines that come off together) carry the plain sentence
   as their `aria-label`.
+
+## Deviations (package RS-OWNERSHIP)
+
+The user's request (2026-11-24): stations need no disambiguation dot, the
+whole pill takes the colour of the line the station actually belongs to;
+the dot is only needed in shots, and a shot pill is half one colour, half
+the other. Decisions this package took, each with its reason; they
+supersede section 6's "Pills" bullet (pills pass `homeLineId` for a dot)
+and RS-FX6's home-line mark on station pills.
+
+- **A station pill is its owner's pill.** The owner is the home line of
+  the identity the slot shows, when it is not the slot's line
+  (`ownerLineOf`: a foreign slot, or a loop end whose kept end lives on
+  another line). The link pill's fill, border, hover and leading dot, or
+  the prose pill's tint and dot, are that line's, and a shown context names
+  it ("Main: 12" on Side), so no pill reads one line's name in another's
+  colour. The second dot is gone. The tooltip says "Belongs to Main"; a
+  button pill's aria-label keeps the plain words, a span pill reads "(Main)"
+  after the name, or "(on Side)" when its context already names Main, so
+  the slot's line is not lost to a screen reader. A loop end keeps its loop
+  mark and takes its kept end's colour. The data table's Name column keeps
+  "(Main)": its words tell the two 12s apart.
+- **Parts carry the owner for loop ends too.** `ProseStation.home_line` and
+  `ProseShotEnd.home_line` are now the owner line (a loop end's kept end's
+  home line included), and a station part's context names it. History
+  entries written by RS-PROSE builds before this package carried the slot's
+  line as context and no home line for a loop end; they render with the
+  slot's colour, which only affects unreleased development files, so the
+  format version stays 3.
+- **A two-tone shot pill, split before the arrow.** A shot with an end of
+  another line paints segments instead of one pill: the from end's half and
+  the to end's half (the arrow opens the second), each in its owner's
+  colours or the shot's. The foreign end keeps its home-line dot, checked
+  against its own half (it is that line's own pill dot). When the from end
+  is the foreign one, the leading dot and the context (the shot's line)
+  form a head segment in the shot's colour, so the shot's name is never
+  printed on another line's colour; with both ends foreign the head, the
+  from half and the to half are three colours. Link pills: the halves are
+  `inline-flex` segments with no border between them, the later one
+  overlapping the earlier by 1px so no hairline of the panel shows at a
+  fractional seam, and a zero-width strut in the pill's font gives every
+  segment, even a head holding only the dot, the text's baseline and
+  height (without it the head came out 15 px tall against 23 px). Prose
+  pills: one radial tint per segment, fading as one pill does.
+- **The border tracks the line's lightness.** The fills of a near-white and
+  a near-black line differ by about 0.03 in OKLCH lightness (the band keeps
+  text legible), so in the first capture a near-white half read as a dark
+  gap. The border now goes `BORDER_TRACK` (0.22) further for a line toward
+  the theme's text pole: on the dark theme a near-white line's border is
+  #9d9d9d against a near-black one's #626262, on the light theme #bcbcbc
+  against #7e7e7e. The fill band and every text floor are unchanged;
+  `twoTonePills.test.ts` sweeps ordered pairs of hard colours (near-white
+  and near-black, yellow and blue, greys, primaries, a hue sweep) on every
+  theme for both variants: text 7:1, muted 4.5:1, the leading dot and the
+  foreign end's dot 3:1, each on its own half, at rest and on hover, and on
+  the tint and the panel for prose.
+- **Lists of slots keep the slot's line.** A delete's "no longer shared"
+  and "loop closures that join" pairs name two slots of one station; in
+  the owner's colour both read "Main: 12". They use `StationBlob`'s
+  `bySlot`, the slot's own colour and name, as the "Also on" rows name a
+  line, and still say whose station in a tooltip and in words.
+- **The narrow-panel truncation.** A link pill's context shrinks first
+  (`flex: 0 1000 auto`, ellipsized), so the station's name and Station ID
+  stay in the pill; a details row's value and the "Also on" row can shrink,
+  so a long line pill ellipsizes inside the panel instead of running past
+  its edge.
+- **Measured in the real app** (this worktree's build, a synthetic survey of
+  near-white, near-black, yellow, blue and magenta lines, two 12s on one
+  line, three junctions and a loop end; 13 surfaces in dark and light at
+  1440x900 and 860x900): prose line pitch equal to plain text's in every
+  compared block (18 to 20 blocks, 66 to 97 line gaps per combination, 0 px
+  deviation), with 6 to 10 two-tone prose pills on screen; no two tint
+  fragments on adjacent lines overlap (44 and 61 pairs); the Playwright
+  line-pitch spec now includes a two-tone prose shot.
