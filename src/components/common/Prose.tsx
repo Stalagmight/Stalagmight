@@ -176,7 +176,6 @@ function Drawing({
     // belongs to (RS-OWNERSHIP); a foreign one has its home dot after its
     // name, in the same colour; the tooltip says whose it is and whether it
     // is a loop end.
-    const sid = stationIdOf(part.station_id);
     return (
       <>
         <Head context={context} />
@@ -184,14 +183,10 @@ function Drawing({
           before={dot}
           text={part.name}
           after={
-            foreign ? (
-              <>
-                {HOME}
-                {sid}
-              </>
-            ) : (
-              sid
-            )
+            <>
+              {foreign && HOME}
+              {stationIdOf(part.station_id)}
+            </>
           }
         />
       </>
