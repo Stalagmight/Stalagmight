@@ -61,8 +61,9 @@ fn samples() -> Vec<(String, super::super::Project, super::super::Project)> {
 fn an_entry_is_canonical_compact_json_and_a_fixpoint() {
     for (text, _, _) in samples() {
         assert!(
+            // A sample's label names nothing: version 2 (RS-PROSE fix 4).
             text.starts_with(&format!(
-                "{{\"v\":{HISTORY_FORMAT_VERSION},\"t\":\"2026-11-20T12:59:00.000000000Z\",\"k\":"
+                "{{\"v\":{OLDEST_HISTORY_FORMAT_VERSION},\"t\":\"2026-11-20T12:59:00.000000000Z\",\"k\":"
             )),
             "{text}"
         );
@@ -89,7 +90,8 @@ fn an_entry_of_another_version_or_an_unknown_member_is_refused() {
         (OLDEST_HISTORY_FORMAT_VERSION, HISTORY_FORMAT_VERSION),
         (2, 3)
     );
-    let v3 = "{\"v\":3,";
+    // Without parts the sample is version 2 (RS-PROSE fix 4).
+    let v3 = "{\"v\":2,";
     assert!(text.starts_with(v3), "{text}");
     let other = text.replacen(v3, "{\"v\":4,", 1);
     assert_eq!(
@@ -102,7 +104,7 @@ fn an_entry_of_another_version_or_an_unknown_member_is_refused() {
         decode_entry(&older, &EntryLimits::default()).unwrap_err(),
         EntryError::Version(1)
     );
-    let extra = text.replacen(v3, "{\"v\":3,\"cmd\":{},", 1);
+    let extra = text.replacen(v3, "{\"v\":2,\"cmd\":{},", 1);
     assert!(matches!(
         decode_entry(&extra, &EntryLimits::default()),
         Err(EntryError::Syntax(_))
@@ -576,4 +578,57 @@ fn parts_that_do_not_fit_cost_the_pills_never_the_entry() {
     assert_ne!(slotted, text);
     let back = decode_entry(&slotted, &limits).unwrap();
     assert_eq!(back.label_parts, e.label_parts);
+}
+
+/// RS-PROSE fix 4: an entry whose label names nothing is written as version
+/// 2, which the previous build reads, so a history of such entries survives
+/// a downgrade; only an entry with parts is version 3. Before, every entry
+/// was version 3 and the previous build dropped the whole history.
+/// Injection: writing `HISTORY_FORMAT_VERSION` for every entry fails it.
+#[test]
+fn an_entry_without_parts_is_written_as_version_2_and_one_with_parts_as_version_3() {
+    let plain = encode_entry(&entry(super::Changeset::default())).unwrap();
+    assert!(plain.starts_with("{\"v\":2,"), "{plain}");
+    assert!(!plain.contains("label_parts"), "{plain}");
+    let back = decode_entry(&plain, &EntryLimits::default()).unwrap();
+    assert!(back.label_parts.is_empty());
+    assert_eq!(encode_entry(&back).unwrap(), plain, "a fixpoint");
+    let mut e = labelled(super::Changeset::default());
+    e.fit_limits(&EntryLimits::default());
+    let with_parts = encode_entry(&e).unwrap();
+    assert!(with_parts.starts_with("{\"v\":3,"), "{with_parts}");
+    let back = decode_entry(&with_parts, &EntryLimits::default()).unwrap();
+    assert_eq!(back.label_parts, e.label_parts);
+    assert_eq!(encode_entry(&back).unwrap(), with_parts, "a fixpoint");
+}
+
+/// RS-PROSE fix 5: a persisted part draws only what it says. Each part's
+/// visible fields (a station's and a line's name and context, a shot's ends
+/// and context) must occur in its own words, else the entry's parts go and
+/// its label reads plain: a hand edit cannot make a pill show one name while
+/// a screen reader reads another. Injection: dropping the visible-field
+/// check in `fitted_parts` fails it.
+#[test]
+fn a_part_whose_drawing_is_not_in_its_words_costs_the_pills() {
+    let mut e = labelled(super::Changeset::default());
+    e.fit_limits(&EntryLimits::default());
+    let text = encode_entry(&e).unwrap();
+    let limits = EntryLimits::default();
+    for hostile in [
+        // A station drawn "Evil" whose words say "Side / 0".
+        text.replacen("\"name\":\"0\"", "\"name\":\"Evil\"", 1),
+        // A context the words do not hold.
+        text.replacen("\"context\":\"Side\"", "\"context\":\"Elsewhere\"", 1),
+        // A shot end the words do not hold.
+        text.replacen("\"name\":\"5\"", "\"name\":\"55\"", 1),
+        // A line drawn under another name.
+        text.replacen("\"name\":\"Main\"", "\"name\":\"Other\"", 1),
+    ] {
+        assert_ne!(hostile, text);
+        let back = decode_entry(&hostile, &limits).unwrap();
+        assert_eq!(back.label, e.label);
+        assert!(back.label_parts.is_empty(), "{hostile}");
+    }
+    // The untouched entry keeps them.
+    assert!(!decode_entry(&text, &limits).unwrap().label_parts.is_empty());
 }

@@ -480,12 +480,15 @@ fn open(path: &Path) -> AppState {
     state
 }
 
-/// The entry text with its version swapped for `version`.
+/// The entry text with its version swapped for `version`. An entry is
+/// version 2 without label parts and version 3 with them (RS-PROSE fix 4).
 fn with_version(entry: &RawJson, version: u32) -> RawJson {
-    let current = format!(
-        "{{\"v\":{},",
-        crate::models::survey::changeset::HISTORY_FORMAT_VERSION
-    );
+    use crate::models::survey::changeset::{HISTORY_FORMAT_VERSION, OLDEST_HISTORY_FORMAT_VERSION};
+    let current = [OLDEST_HISTORY_FORMAT_VERSION, HISTORY_FORMAT_VERSION]
+        .map(|v| format!("{{\"v\":{v},"))
+        .into_iter()
+        .find(|v| entry.as_str().starts_with(v.as_str()))
+        .unwrap_or_default();
     let text = entry
         .as_str()
         .replacen(&current, &format!("{{\"v\":{version},"), 1);
@@ -592,13 +595,8 @@ fn an_unreadable_entry_drops_the_whole_history_with_the_banner() {
                     RawJson::parse(&text).unwrap()
                 }
                 _ => {
-                    let current = format!(
-                        "{{\"v\":{},",
-                        crate::models::survey::changeset::HISTORY_FORMAT_VERSION
-                    );
-                    let text = undo
-                        .as_str()
-                        .replacen(&current, &format!("{current}\"zz\":0,"), 1);
+                    // The entry's own version (2 without label parts, RS-PROSE fix 4).
+                    let text = undo.as_str().replacen(",\"t\":", ",\"zz\":0,\"t\":", 1);
                     RawJson::parse(&text).unwrap()
                 }
             };

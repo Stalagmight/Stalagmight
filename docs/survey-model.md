@@ -426,18 +426,21 @@ canonical form, so `RawJson::parse` leaves it unchanged):
  "ops":{...the changeset...}}
 ```
 
-- `v` is `HISTORY_FORMAT_VERSION` (3). This build reads versions 2 and 3
-  (`OLDEST_HISTORY_FORMAT_VERSION`): a version 2 entry is the same layout
-  without `label_parts`, and its label reads plain. Any other version
-  decodes to `EntryError::Version`: drop the history whole with the existing
-  banner. Bump it with any change to the layout or to the line hash.
+- `v` is `HISTORY_FORMAT_VERSION` (3) for an entry with `label_parts` and
+  `OLDEST_HISTORY_FORMAT_VERSION` (2) for one without: a version 2 entry is
+  the same layout without `label_parts`, so the previous build reads a
+  history whose labels name nothing, and its label reads plain. This build
+  reads both. Any other version decodes to `EntryError::Version`: drop the
+  history whole with the existing banner. Bump it with any change to the
+  layout or to the line hash.
 - `label_parts` (version 3, RS-PROSE) is the label's words as prose parts
   (`models::prose::ProsePart`), so the history rows draw its stations, shots
   and lines as prose pills: their words concatenated are exactly `label`,
   and they name stable ids only (a line id, a Station ID), never a slot.
   Absent when the label names nothing. Parts that do not fit (a cut label,
-  words that differ from the label, an unknown kind) are dropped on read,
-  never the entry.
+  words that differ from the label, a part that draws a name or a context
+  its own words do not hold, an unknown kind) are dropped on read, never
+  the entry.
 - `t` is RFC 3339 UTC with nanoseconds (the format reads it for the
   SpeleoDB watermark cut).
 - `k`, `label`, `refs`, `preview` are the core's: the command kind (icon),
