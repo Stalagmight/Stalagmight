@@ -1,7 +1,7 @@
 /**
  * The prose token's form and the one sanitiser for values put into a prose
  * sentence (RS-PROSE fix 1). No imports, so `i18n/index.ts` can use
- * {@link proseValue} as its interpolation escape without a cycle.
+ * {@link proseValue} as its interpolation `format` without a cycle.
  *
  * A token is U+0001, this page load's random nonce, a colon, the part as
  * URI-encoded JSON, and U+0002. Text a user or a file controls (a comment, a
@@ -41,7 +41,7 @@ export function ownPayload(payload: string): string | null {
 /**
  * A raw value made safe for a prose sentence: the app's own tokens (this
  * page's nonce) are kept, every other C0 control (bar tab and line breaks)
- * goes, so a value can carry no marker. The i18n escape for every `t()`
+ * goes, so a value can carry no marker. The i18n `format` for every `t()`
  * interpolation, and what a sentence built by hand runs its raw values
  * through (comments, typed or imported names, file names, backend words).
  */

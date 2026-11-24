@@ -2163,7 +2163,9 @@ this package took, each with its reason; they supersede section 6's
   name or a file name interpolated into a sentence could hold U+0001...U+0002.
   Frontend: a token carries the page load's random nonce and is read only
   with a part's full shape (`partOf`); every `t()` interpolation (the i18n
-  escape hook) and every raw value a sentence is built from by hand goes
+  `format` hook, run for every value before i18next measures it: an
+  `escape` hook that shortened a value made i18next skip the next
+  placeholder) and every raw value a sentence is built from by hand goes
   through `proseValue`, which drops the markers and other C0 controls; a pill
   whose part lacks a field draws its plain words. Backend: marks carry the
   process's random nonce, `parse` drops every other marker character (the

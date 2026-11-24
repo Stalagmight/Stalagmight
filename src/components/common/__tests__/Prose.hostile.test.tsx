@@ -11,7 +11,7 @@
  * to its plain words).
  * Injections: dropping the shape check in `decode` (`partOf`) fails "a bad
  * shape reads as its words"; dropping the nonce check fails it too (the
- * forged station draws a pill); dropping the i18n escape hook fails "a raw
+ * forged station draws a pill); dropping the i18n format hook fails "a raw
  * value is stripped" (`t()` keeps the comment's markers); dropping the
  * pill's fallback fails "a part with a missing field renders its words".
  */
