@@ -28,9 +28,10 @@ function changesSentence(changes: readonly string[]): string {
 /**
  * {@link changesSentence} as prose parts (RS-PROSE): each clause by its parts
  * when the backend sends some (`change_parts`, index-aligned), else its words,
- * joined by '; ' and ended with '.'. The first letter is capitalised when the
- * sentence opens with words; a sentence that opens with a name keeps the name
- * as it is. `null` when no clause names anything (the plain sentence then).
+ * joined by '; ' and ended with '.'. The first letter is capitalised as the
+ * plain sentence's is: opening words, or an opening name's spoken words (its
+ * drawing keeps the name as it is). `null` when no clause names anything
+ * (the plain sentence then).
  */
 function changesSentenceParts(
   changes: readonly string[],
@@ -45,8 +46,12 @@ function changesSentenceParts(
     else out.push({ kind: 'text', text: clause });
   });
   out.push({ kind: 'text', text: '.' });
+  // The first letter is capitalised as the plain sentence capitalises it:
+  // opening words, or an opening name's words (what a screen reader reads;
+  // the pill draws the name as it is), so the sentence reads the same with
+  // pills as plain (RS-PROSE fix 7).
   const first = out[0];
-  if (first?.kind === 'text') out[0] = { kind: 'text', text: `${first.text.charAt(0).toUpperCase()}${first.text.slice(1)}` };
+  if (first) out[0] = { ...first, text: `${first.text.charAt(0).toUpperCase()}${first.text.slice(1)}` };
   return out;
 }
 
