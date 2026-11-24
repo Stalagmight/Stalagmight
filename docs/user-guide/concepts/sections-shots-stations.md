@@ -115,11 +115,14 @@ A merged station is one station: the one the merge kept, with its name and
 Station ID on every line through it. Where a side line was merged onto
 station `Junction` of the main line and `Junction` was kept, the side line
 shows `Junction` too, its pill in the main line's colour and named by it
-("Main: Junction"), which says the station belongs to another line (hover
-it: "Belongs to Main"; the data table's Name column reads `Junction (Main)`).
-A shot from that station is drawn in two colours that blend across the
-arrow: the half with `Junction` in the main line's colour, the rest in the
-side line's. The side line's own `0` is archived: it is
+("Main: Junction"), with a small dot in the main line's colour raised right
+after the name. Both say the station belongs to another line (hover it:
+"Belongs to Main"; the data table's Name column reads `Junction (Main)`).
+Every pill starts with a dot in its line's colour, so the two dots of such a
+station match. A shot from that station is drawn in two colours that blend
+across the arrow: the half with `Junction` in the main line's colour, with
+that small raised dot after `Junction`, the rest in the side line's; its
+leading dot is the side line's. The side line's own `0` is archived: it is
 listed under **Archived here** in the station's **Details**, its name is free
 to use again on the side line, and **Detach Line from Station** brings it
 back. The **Station IDs** and **Station names** labels draw the kept station
@@ -127,8 +130,9 @@ once.
 
 A loop closure can show its two ends as one station in the same way: the
 hidden end keeps its own point on the map, but gets no label, and its slot
-shows the kept station in its line's colour (hover it for "Loop end"; the
-data table's Name column reads `3 (loop end)`). **Remove Closure** brings its name back. Its
+shows the kept station in its line's colour, with the small raised dot
+when that is another line (hover it for "Loop end"; the data table's Name
+column reads `3 (loop end)`). **Remove Closure** brings its name back. Its
 **Details** show the station it is shown as, then its own point's position;
 a Plan pin on it names it by its own station first: `Loop / L8 (loop end,
 shown as Main / 8)`.
