@@ -184,7 +184,7 @@ export function ProsePill({ part, testId }: { part: NamePart; testId?: string | 
   const pill = useProsePillColors(part.line_id ?? null);
   if (!syntacticLevelAtLeast(level, 'full')) return <>{part.text}</>;
   return (
-    <span className="sh-ppill" style={prosePillStyle(pill.colors)} data-prose-kind={part.kind} data-testid={testId}>
+    <span className="sh-ppill" style={prosePillStyle(pill.colors, pill.theme)} data-prose-kind={part.kind} data-testid={testId}>
       <span className="sh-ppill-vis" aria-hidden="true">
         <Drawing part={part} pill={pill} />
       </span>

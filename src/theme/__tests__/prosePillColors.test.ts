@@ -21,6 +21,7 @@ import {
   pillThemeOf,
   prosePillColors,
   prosePillColorsOf,
+  proseTintOf,
 } from '../pillColors';
 
 const THEMES = Object.keys(themeTokens);
@@ -87,5 +88,34 @@ describe('prosePillColors sweep', () => {
     const a = prosePillColorsOf('#1f4fff', 'light');
     expect(a).toEqual(prosePillColors('#1f4fff', pillThemeOf('light')));
     expect(prosePillColorsOf('#1f4fff', 'light')).toBe(a);
+  });
+});
+
+describe('proseTintOf', () => {
+  const rgba = (css: string) => {
+    const m = /rgba\((\d+), (\d+), (\d+), ([\d.]+)\)/.exec(css);
+    if (!m) throw new Error(css);
+    return { rgb: [Number(m[1]), Number(m[2]), Number(m[3])], a: Number(m[4]) };
+  };
+  const hex = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+
+  it.each(THEMES)('%s: over the panel the overlay is the tint itself, within one 8-bit step', (name) => {
+    const theme = pillThemeOf(name);
+    for (const color of COLORS) {
+      const target = prosePillColors(color, theme).bg;
+      const { tint, clear } = proseTintOf(target, theme.panel);
+      const o = rgba(tint);
+      const panel = hex(theme.panel);
+      const composed = panel.map((p, i) => p * (1 - o.a) + o.rgb[i]! * o.a);
+      hex(target).forEach((t, i) => expect(Math.abs(composed[i]! - t), `${name} ${color}`).toBeLessThanOrEqual(1.01));
+      expect(o.a).toBeGreaterThan(0);
+      expect(o.a).toBeLessThanOrEqual(1);
+      expect(rgba(clear).rgb).toEqual(o.rgb);
+      expect(rgba(clear).a).toBe(0);
+    }
+  });
+
+  it('a tint equal to the panel is no overlay at all', () => {
+    expect(proseTintOf('#202020', '#202020')).toEqual({ tint: 'rgba(0, 0, 0, 0)', clear: 'rgba(0, 0, 0, 0)' });
   });
 });

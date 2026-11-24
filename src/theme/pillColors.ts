@@ -298,6 +298,33 @@ export function prosePillColors(lineColor: string | null | undefined, theme: Pil
   return { ...pill, bg: pill.hoverBg, hoverBg: theme.panel, text, muted, dot, ring };
 }
 
+/**
+ * The prose tint as a translucent overlay (RS-PROSE): a colour and an alpha
+ * that, composited over the panel, give exactly `target` (the tint's centre,
+ * `prosePillColors().bg`). Prose sits on more than the panel (an accent or
+ * warning wash, a toast, a lighter box), and an opaque tint computed for the
+ * panel read there as a dark smudge; the overlay moves whatever is behind it
+ * the same way it moves the panel. The alpha is the least that keeps the
+ * overlay colour inside sRGB, so the overlay is as close to its surroundings
+ * as it can be. Returns CSS `rgba()` strings: the overlay and the same colour
+ * fully transparent (what the radial tint fades to, so no grey fringe).
+ */
+export function proseTintOf(target: string, panel: string): { tint: string; clear: string } {
+  const t = rgbOfHex(target.toLowerCase());
+  const p = rgbOfHex(panel.toLowerCase());
+  let alpha = 0;
+  for (let i = 0; i < 3; i++) {
+    const d = t[i]! - p[i]!;
+    if (d > 0) alpha = Math.max(alpha, d / (1 - p[i]!));
+    else if (d < 0) alpha = Math.max(alpha, -d / p[i]!);
+  }
+  if (alpha === 0) return { tint: 'rgba(0, 0, 0, 0)', clear: 'rgba(0, 0, 0, 0)' };
+  alpha = Math.min(1, alpha);
+  const channel = (i: number) => Math.round(clamp(p[i]! + (t[i]! - p[i]!) / alpha, 0, 1) * 255);
+  const rgb = `${channel(0)}, ${channel(1)}, ${channel(2)}`;
+  return { tint: `rgba(${rgb}, ${alpha.toFixed(4)})`, clear: `rgba(${rgb}, 0)` };
+}
+
 const proseCache = new Map<string, PillColors>();
 
 /** {@link prosePillColors} for a named app theme, cached per (theme, colour). */

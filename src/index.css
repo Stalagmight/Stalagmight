@@ -1782,8 +1782,8 @@ button.sh-apill {
 /* Prose pill (ProsePill, src/components/common/Prose.tsx; RS-PROSE): a line
    pill inline in running text, with the link pill's dot, context, marks and
    Station ID, but no pill shape: a soft radial tint in the line's colour
-   (`--pill-tint`, prosePillColors in pillColors.ts) that fades to nothing at
-   each fragment's edges. A bordered fill stood 0 to 1 px from the fill of
+   (`--pill-tint`, a translucent overlay: prosePillColors and proseTintOf in
+   pillColors.ts) that fades to nothing at each fragment's edges. A bordered fill stood 0 to 1 px from the fill of
    the line above on most stacked pairs (the fill covers the font's whole
    content area), so two lines of pills read as one block; a tint with no
    hard edge cannot collide. It must leave the paragraph's line pitch exactly
@@ -1806,7 +1806,7 @@ button.sh-apill {
   color: var(--pill-text);
 }
 .sh-ppill-vis {
-  padding: 0 0.42em 0 0.36em;
+  padding: 0 0.14em;
   background: radial-gradient(
     farthest-side,
     var(--pill-tint) 0%,

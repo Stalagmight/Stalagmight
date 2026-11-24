@@ -24,7 +24,9 @@ import {
   missingPillColorsOf,
   pillColorsOf,
   pillMarkOf,
+  pillThemeOf,
   prosePillColorsOf,
+  proseTintOf,
   type MissingPillColors,
   type PillColors,
   type PillDot,
@@ -91,13 +93,15 @@ export function useProsePillColors(lineId: number | null | undefined): ResolvedP
 
 /**
  * A prose pill's colours as the custom properties the `.sh-ppill` rules read:
- * the tint's centre, the same colour fully transparent (what the radial tint
- * fades to, so no grey fringe), and the text, muted part, dot and ring.
+ * the tint as a translucent overlay that gives the tint's centre over the
+ * panel (`proseTintOf`), the same colour fully transparent (what the radial
+ * tint fades to), and the text, muted part, dot and ring.
  */
-export function prosePillStyle(colors: PillColors): CSSProperties {
+export function prosePillStyle(colors: PillColors, themeName: string): CSSProperties {
+  const { tint, clear } = proseTintOf(colors.bg, pillThemeOf(themeName).panel);
   return {
-    '--pill-tint': colors.bg,
-    '--pill-tint-clear': `${colors.bg}00`,
+    '--pill-tint': tint,
+    '--pill-tint-clear': clear,
     '--pill-text': colors.text,
     '--pill-muted': colors.muted,
     '--pill-dot': colors.dot,
