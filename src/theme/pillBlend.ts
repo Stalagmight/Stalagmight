@@ -6,9 +6,9 @@
  * line's colours (RS-OWNERSHIP). Instead of a hard seam, each segment fades
  * over the last {@link SEAM_EM} at a seam from its own colour to the
  * midpoint with its neighbour, mixed in OKLab (so yellow and blue meet in a
- * clean green-grey, not a muddy one): two segments meet in the same colour,
- * and the cross-fade is 2 x SEAM_EM wide, centred on the seam (just before
- * the arrow). Each half still carries its line's colour away from the seam.
+ * neutral that keeps some colour, not sRGB's duller grey): two segments
+ * meet in the same colour, and the cross-fade is 2 x SEAM_EM wide, centred
+ * on the seam (just before the arrow). Each half still carries its line's colour away from the seam.
  * A stop at three quarters keeps the browser's sRGB interpolation between
  * stops close to the OKLab path.
  *
@@ -19,7 +19,8 @@
  *   is an SVG background whose colour shifts toward the midpoint at a seam,
  *   masked by the tint's fade, centred on the seam so the alpha is the same
  *   on both sides of it: one continuous tint, fading only at the outer
- *   edges and top and bottom, with no dip at the seam.
+ *   edges and top and bottom, with no dip at the seam. A wrapped pill is
+ *   tinted per line (`components/common/useSegmentTints.ts`).
  *
  * Text and dots that sit over a blend must read on every colour it passes
  * through: {@link blendBackdrops} lists them (sampled), and dots get their

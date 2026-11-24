@@ -2330,8 +2330,9 @@ they amend RS-OWNERSHIP's two-tone bullet.
 - **Mixed in OKLab, in code, not by the browser.** The midpoint is the
   OKLab mean (`mixHex`), with a stop at three quarters so the browser's
   sRGB interpolation between stops stays near the OKLab path: yellow and
-  blue meet in a clean grey-green, not sRGB's flat grey (a test holds
-  OKLab's chroma above sRGB's), near-white and near-black in a mid grey.
+  blue meet in a neutral that keeps some colour, not sRGB's duller grey (a
+  test holds OKLab's chroma above sRGB's), near-white and near-black in a
+  mid grey.
   The colours are computed rather than left to CSS gradient interpolation
   spaces so they are the same in every webview (WebKitGTK, WKWebView and
   WebView2 differ in support) and so the contrast sweep tests exactly what
