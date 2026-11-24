@@ -1807,17 +1807,24 @@ button.sh-apill {
 }
 /* The arrow is a segment of its own (RS-ARROW): its fill and border run
    from the from half's colour to the to half's, so the cross-fade is
-   centred on the arrow. The halves beside it give up their padding on that
-   side, so the arrow keeps the one-colour pill's spacing and the blend
-   spans the arrow and the space around it. */
+   centred on the arrow, whose padding is the same on both sides. The
+   halves beside it give up most of their padding on that side, so the
+   arrow keeps the one-colour pill's spacing and the blend spans the arrow
+   and the space around it. The from half sits above the arrow's 1px
+   overlap (both are its colour there), so the overlap never covers the
+   from end's dot. */
 .sh-lpill-seg.sh-lpill-seg--to-arrow {
-  padding-right: 0;
+  position: relative;
+  z-index: 1;
+  padding-right: 0.05em;
 }
 .sh-lpill-seg.sh-lpill-seg--from-arrow {
-  padding-left: 0;
+  padding-left: 0.05em;
 }
-.sh-lpill-seg--arrow {
+.sh-lpill-seg.sh-lpill-seg--arrow {
   flex: none;
+  padding-left: 0.25em;
+  padding-right: 0.25em;
 }
 .sh-lpill--split:hover:not([aria-disabled='true']) .sh-lpill-seg {
   background:
