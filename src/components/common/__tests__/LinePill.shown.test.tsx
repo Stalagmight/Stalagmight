@@ -3,11 +3,12 @@
  * slot (its line knew another station there; the junction shows the kept
  * one) ends with the shown Station ID and takes the colour of the line its
  * shown station belongs to (RS-OWNERSHIP, where it once carried a second
- * dot); a loop end takes its kept end's colour. No pill draws a dot or a
- * mark (RS-NODOTS): a foreign end and a loop end say what they are in a
- * tooltip and in words after the end's bare name (RS-FX5: the words are the
+ * dot), its one leading dot that line's colour (RS-LEADDOT); a loop end
+ * takes its kept end's colour. No pill draws a dot or a mark after a name
+ * (RS-NODOTS): a foreign end and a loop end say what they are in a tooltip
+ * and in words after the end's bare name (RS-FX5: the words are the
  * plain-text qualifier), and a shot pill is two-tone when an end belongs to
- * another line. The plain text below
+ * another line, its leading dot the shot's line's. The plain text below
  * Full says whose station it is, with or without the line.
  * Injections: reading the node id for the superscript fails "ends with the
  * shown Station ID"; dropping the default owner fails "takes the home line's
@@ -73,7 +74,7 @@ beforeEach(() => {
 });
 
 describe('station pills of foreign slots and loop ends (RS 6)', () => {
-  it("takes the home line's colour on a foreign slot, its own line's on a native one, and no dot", () => {
+  it("takes the home line's colour on a foreign slot, its own line's on a native one, its dot too and no second dot", () => {
     render(
       <>
         <StationBlob station={{ line_id: SIDE, station_index: 0 }} testId="foreign" />
@@ -86,6 +87,8 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     expect(screen.getByTestId('foreign')).toHaveAttribute('title', 'Belongs to Main');
     expect(screen.getByTestId('native')).not.toHaveAttribute('title');
     expect(screen.queryByTestId('foreign-home-dot')).toBeNull();
+    expect(screen.getByTestId('foreign').style.getPropertyValue('--pill-dot')).toBe(pillColorsOf('#ffff00', 'dark').dot);
+    expect(screen.getByTestId('foreign').querySelectorAll('.sh-lpill-dot')).toHaveLength(1);
     expect(screen.getByTestId('foreign-station-id')).toHaveTextContent('#11');
   });
 
@@ -117,16 +120,20 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     expect(screen.getByTestId('loop-station-id')).not.toHaveTextContent('22');
     expect(screen.getByTestId('loop-loop-end')).toHaveTextContent('loop end');
     expect(screen.getByTestId('loop-loop-end')).toHaveClass('sr-only');
-    // The kept end is Main's: the loop end takes Main's colour, no dot.
+    // The kept end is Main's: the loop end takes Main's colour and dot, no second dot.
     expect(screen.queryByTestId('loop-home-dot')).toBeNull();
+    expect(screen.getByTestId('loop').style.getPropertyValue('--pill-dot')).toBe(pillColorsOf('#ffff00', 'dark').dot);
     expect(screen.getByTestId('loop').style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('#ffff00', 'dark').bg);
   });
 
-  it('draws no loop mark and no dot (RS-NODOTS): the tooltip and the words say it', () => {
-    // The user: "get rid of the circle and squiggle indicators".
+  it('draws no loop mark (RS-NODOTS), only the leading dot (RS-LEADDOT): the tooltip and the words say it', () => {
+    // The user: "get rid of the circle and squiggle indicators"; the leading
+    // dot came back, the marks after a name did not.
     render(<StationBlob station={{ line_id: SIDE, station_index: 2 }} testId="loop" />);
     const pill = screen.getByTestId('loop');
-    expect(pill.querySelector('svg, .sh-lpill-loop, .sh-lpill-mark, .sh-lpill-dot, [data-glyph]')).toBeNull();
+    expect(pill.querySelector('svg, .sh-lpill-loop, .sh-lpill-mark, [data-glyph]')).toBeNull();
+    expect(pill.firstElementChild).toHaveClass('sh-lpill-dot');
+    expect(pill.querySelectorAll('.sh-lpill-dot')).toHaveLength(1);
     expect(pill.getAttribute('title')).toContain('Loop end: a loop closure shows this station here');
     expect(screen.getByTestId('loop-loop-end')).toHaveClass('sr-only');
   });
@@ -135,6 +142,8 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     render(<StationBlob station={{ line_id: SIDE, station_index: 0 }} withLine bySlot testId="slot" />);
     const pill = screen.getByTestId('slot');
     expect(pill.style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('navy', 'dark').bg);
+    // Its dot matches its colour: the slot's line.
+    expect(pill.style.getPropertyValue('--pill-dot')).toBe(pillColorsOf('navy', 'dark').dot);
     expect(screen.getByTestId('slot-id')).toHaveTextContent('Side:');
     expect(pill).toHaveAttribute('title', 'Belongs to Main');
     expect(screen.getByTestId('slot-owner').textContent).toBe(' (Main)');
@@ -182,7 +191,7 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     expect(screen.getByTestId(id)).toHaveAccessibleName('Select station Main / 3 (loop end on Side), Station ID 3');
   });
 
-  it("gives a shot link each foreign end's words and tooltip, with the ends' bare names, no dot", () => {
+  it("gives a shot link each foreign end's words and tooltip, with the ends' bare names, the shot's dot leading", () => {
     // Side's first shot runs from the foreign junction slot to Side 1.
     render(
       <DetailLink type="shot" target={{ lineId: SIDE, position: 1 }} displayText="12 (Main) → 1" onSelect={() => {}} />,
@@ -194,11 +203,15 @@ describe('station pills of foreign slots and loop ends (RS 6)', () => {
     expect(screen.queryByTestId(`${id}-to-owner`)).toBeNull();
     expect(screen.getByTestId(`${id}-to-end`)).not.toHaveAttribute('title');
     expect(screen.queryByTestId(`${id}-from-loop-end`)).toBeNull();
-    // Two-tone: the foreign from end's half in Main's colour, after a head in Side's.
-    // No head: it held the dot, and with no context nothing stays in Side's colour before the arrow.
+    // Two-tone: the foreign from end's half in Main's colour, after a head in
+    // Side's that holds the dot alone (RS-LEADDOT: the shot's dot sits in the
+    // shot line's part at the start).
     expect(screen.getByTestId(id)).toHaveClass('sh-lpill--split');
     expect(screen.getByTestId(`${id}-from`).style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('#ffff00', 'dark').bg);
-    expect(screen.queryByTestId(`${id}-head`)).toBeNull();
+    const head = screen.getByTestId(`${id}-head`);
+    expect(head.style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('navy', 'dark').bg);
+    expect(head).toContainElement(screen.getByTestId(`${id}-dot`));
+    expect(head.style.getPropertyValue('--pill-dot')).toBe(pillColorsOf('navy', 'dark').dot);
     expect(screen.getByTestId(`${id}-to`).style.getPropertyValue('--pill-bg')).toBe(pillColorsOf('navy', 'dark').bg);
     expect(screen.getByTestId(id)).toHaveTextContent(/^12\s*\(Main\)\s*→\s*1$/);
     expect(screen.getByTestId(id)).toHaveAccessibleName('Select shot 12 (Main) → 1');

@@ -11,7 +11,8 @@ import { setupMockedPage, createProject, seedProjectWithLines, waitForMapReady, 
  * consecutive lines are compared, with pills (Full highlighting) and as plain
  * text (highlighting off), on the Bulk Delete dialog's summary and on a
  * Warnings tab message holding a two-tone shot (RS-OWNERSHIP: an end of
- * another line). Every gap must equal the line-height within 0.5 px.
+ * another line). Every gap must equal the line-height within 0.5 px. Every
+ * pill leads with its line's dot (RS-LEADDOT), measured with them.
  */
 
 const LONG_LINE = 'Main Passage of the Northern Sump System';
@@ -262,5 +263,79 @@ test.describe('Prose pills keep the line pitch', () => {
     });
     expect(broken.joins).toBe(2);
     expect(broken.bad).toEqual([]);
+  });
+
+  // The dot is an empty inline box whose only text is a zero-width joiner.
+  // Injection: without the joiner Chromium left the dot at the end of the
+  // line before its word whenever the line broke right before the pill.
+  test('the leading dot stays with its first word, inside the glow at its start (RS-LEADDOT)', async ({ page }) => {
+    const message = await showWarning(page);
+    const report = await message.evaluate((root) => {
+      const pills = [...root.querySelectorAll('.sh-ppill')];
+      const mid = (r: DOMRect) => (r.top + r.bottom) / 2;
+      const bad: string[] = [];
+      let dots = 0;
+      let breaksBefore = 0;
+      for (let width = 60; width <= 420; width += 8) {
+        (root as HTMLElement).style.width = `${width}px`;
+        for (const pill of pills) {
+          const found = pill.querySelectorAll('[data-prose-dot]');
+          dots = Math.max(dots, found.length);
+          const dot = found[0] as HTMLElement | undefined;
+          if (!dot || found.length !== 1) {
+            bad.push(`${width}px: ${pill.textContent} has ${found.length} dots`);
+            continue;
+          }
+          const d = dot.getBoundingClientRect();
+          // The first letter after the dot (the context's or the name's) is on its line.
+          const w = document.createTreeWalker(pill.querySelector('.sh-ppill-vis')!, NodeFilter.SHOW_TEXT);
+          let first: Text | null = null;
+          for (let n = w.nextNode(); n; n = w.nextNode()) {
+            if (dot.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING && /\S/.test((n as Text).data)) {
+              first = n as Text;
+              break;
+            }
+          }
+          const r = document.createRange();
+          const at = first!.data.search(/\S/);
+          r.setStart(first!, at);
+          r.setEnd(first!, at + 1);
+          const letter = r.getClientRects()[0]!;
+          if (Math.abs(mid(letter) - mid(d)) > letter.height / 2) bad.push(`${width}px: the dot of ${pill.textContent} left its first word`);
+          // A line may still break before the pill: the dot then starts a line, the words before it end the one above.
+          const prev = pill.previousSibling;
+          if (prev && prev.nodeType === Node.TEXT_NODE && /\S\s*$/.test((prev as Text).data)) {
+            const t = prev as Text;
+            const i = t.data.search(/\S\s*$/);
+            const before = document.createRange();
+            before.setStart(t, i);
+            before.setEnd(t, i + 1);
+            if (mid(before.getClientRects()[0]!) < d.top) breaksBefore += 1;
+          }
+          if (!(d.right <= letter.left + 0.5)) bad.push(`${width}px: the dot of ${pill.textContent} is not before its first word`);
+          // Inside the glow's core at its start, centred on it: the one-colour
+          // pill's first painted fragment, or the two-colour pill's first box.
+          const core = (pill.querySelector('.sh-ppill-vis--split .sh-ppill-w') ?? pill.querySelector('.sh-ppill-vis'))!;
+          const box = core.getClientRects()[0]!;
+          const cs = getComputedStyle(core);
+          const split = core.classList.contains('sh-ppill-w');
+          // A word box keeps the halo's room above and below (spread + 1.5 blur, em); the core is inside it.
+          const ps = getComputedStyle(pill);
+          const em = (name: string) => parseFloat(ps.getPropertyValue(name));
+          const reach = split ? (em('--glow-spread') + 1.5 * em('--glow-blur')) * parseFloat(ps.fontSize) : 0;
+          if (split && !(reach > 0)) bad.push('no halo reach read');
+          const top = box.top + (split ? reach : 0);
+          const bottom = box.bottom - (split ? reach : 0);
+          if (!(d.top >= top - 0.5 && d.bottom <= bottom + 0.5)) bad.push(`${width}px: the dot of ${pill.textContent} sticks out of the core`);
+          if (Math.abs(mid(d) - (top + bottom) / 2) > 1.5) bad.push(`${width}px: the dot of ${pill.textContent} is off the core's middle`);
+          if (!(d.left >= box.left + (split ? parseFloat(cs.paddingLeft) - 0.5 : 0))) bad.push(`${width}px: the dot of ${pill.textContent} starts before the core`);
+        }
+      }
+      return { pills: pills.length, dots, bad, breaksBefore };
+    });
+    expect(report.pills).toBe(5);
+    expect(report.dots).toBe(1);
+    expect(report.breaksBefore).toBeGreaterThan(0);
+    expect(report.bad.slice(0, 10)).toEqual([]);
   });
 });

@@ -1,25 +1,28 @@
 /**
  * The body of a line link pill, shared by `DetailLink` (a button) and
- * `EntityBlob` (a span): the muted context (`Main Line:`), the main part at
- * the surrounding text size (a station name, a shot `4 → 5`, a line name)
- * and, for a station, its Station ID as a muted superscript. The pill shows
- * its line by its fill and border alone (RS-NODOTS: no colour dot and no
- * marks); every colour comes from `theme/pillColors.ts` through CSS custom
- * properties (the `.sh-lpill` rules in index.css).
+ * `EntityBlob` (a span): a dot in the line's colour, the muted context
+ * (`Main Line:`), the main part at the surrounding text size (a station
+ * name, a shot `4 → 5`, a line name) and, for a station, its Station ID as a
+ * muted superscript. The pill shows its line by the leading dot, its fill and
+ * its border (RS-LEADDOT brought the dot back after RS-NODOTS; no other dot
+ * or mark); every colour comes from `theme/pillColors.ts` through CSS custom
+ * properties (the `.sh-lpill` rules in index.css). The dot is decorative
+ * (aria-hidden): the words say the same.
  *
  * A station pill takes the colour of the line its shown station belongs to
  * (RS-OWNERSHIP): a foreign slot (Side's junction showing Main's 12) or a
- * loop end whose kept end lives on another line is a Main pill with the
- * context "Main:". Its tooltip ("Belongs to Main") and its words for a
- * screen reader say so; a loop end says "loop end" the same way.
+ * loop end whose kept end lives on another line is a Main pill, its dot
+ * Main's and its context "Main:". Its tooltip ("Belongs to Main") and its
+ * words for a screen reader say so; a loop end says "loop end" the same way.
  *
  * A shot pill with an end whose station belongs to another line is two-tone
  * ({@link ShotTone}): the half holding that end takes that line's colour and
  * the other half keeps the shot's, blending across the arrow. A foreign or
- * loop end says what it is in a tooltip and in words for a screen reader.
- * When the from end is the foreign one, the context (the shot's line) keeps
- * the shot's colour on its own, so no half reads one line's name in
- * another's colour.
+ * loop end says what it is in a tooltip and in words for a screen reader
+ * (no dot after its name). The leading dot is the shot's line's: when the
+ * from end is the foreign one, the dot and the context keep the shot's
+ * colour on their own (a head), so the dot sits in the shot's part and no
+ * half reads one line's name in another's colour.
  */
 import { useCallback, type CSSProperties, type ReactNode } from 'react';
 import { useShallow } from 'zustand/react/shallow';
@@ -102,13 +105,16 @@ export function useProsePillColors(lineId: number | null | undefined): ResolvedP
 /**
  * A prose pill's colours as the custom properties the `.sh-ppill` rules read:
  * the glow as a wash that gives its colour over the panel (`proseTintOf`,
- * RS-NODOTS), and the text and muted part.
+ * RS-NODOTS), the text and muted part, and the leading dot and its ring
+ * (RS-LEADDOT).
  */
 export function prosePillStyle(colors: PillColors, themeName: string): CSSProperties {
   return {
     '--pill-tint': proseTintOf(colors.bg, pillThemeOf(themeName).panel).tint,
     '--pill-text': colors.text,
     '--pill-muted': colors.muted,
+    '--pill-dot': colors.dot,
+    '--pill-ring': colors.ring ?? 'transparent',
   } as CSSProperties;
 }
 
@@ -139,8 +145,8 @@ export function useResolvePill(variant: 'link' | 'prose' = 'link'): (lineId: num
  * seam. Null for a one-colour shot (neither end belongs to another line).
  */
 export interface ShotTone {
-  /** The context, in the shot's colour, on its own: only when the pill has
-   *  one and the from end's half takes another line's colour. */
+  /** The leading dot and the context, in the shot's colour, on their own:
+   *  only when the from end's half takes another line's colour. */
   head: CSSProperties | null;
   /** The from end's half: its owner's colour, or the shot's. */
   from: CSSProperties;
@@ -156,7 +162,7 @@ export interface ShotTone {
   panel: string;
 }
 
-/** A two-tone shot pill's segments: the head (when the from half is another line's), the from half, the arrow, the to half. */
+/** A two-tone shot pill's segments: the head (the dot and context, when the from half is another line's), the from half, the arrow, the to half. */
 export type SegmentKey = 'head' | 'from' | 'arrow' | 'to';
 
 /** One segment of a two-tone shot: its colours, and for the arrow the colours it runs to. */
@@ -183,8 +189,6 @@ export function shotToneOf(
   fromOwner: number | null | undefined,
   toOwner: number | null | undefined,
   variant: 'link' | 'prose' = 'link',
-  /** Whether the pill has a context to keep in the shot's colour (a head segment). */
-  withHead = true,
 ): ShotTone | null {
   const foreign = (owner: number | null | undefined) => owner !== null && owner !== undefined && owner !== lineId;
   if (!foreign(fromOwner) && !foreign(toOwner)) return null;
@@ -192,7 +196,7 @@ export function shotToneOf(
   const fromPill = foreign(fromOwner) ? resolve(fromOwner) : shot;
   const toPill = foreign(toOwner) ? resolve(toOwner) : shot;
   const segs: Array<ToneSegment & { pill: ResolvedPill }> = [
-    ...(foreign(fromOwner) && withHead ? [{ key: 'head' as const, pill: shot, colors: shot.colors }] : []),
+    ...(foreign(fromOwner) ? [{ key: 'head' as const, pill: shot, colors: shot.colors }] : []),
     { key: 'from', pill: fromPill, colors: fromPill.colors },
     { key: 'arrow', pill: fromPill, colors: fromPill.colors, bridgeTo: toPill.colors },
     { key: 'to', pill: toPill, colors: toPill.colors },
@@ -223,7 +227,7 @@ export function shotToneOf(
   };
 }
 
-/** The line a foreign shot end belongs to, by name, for its tooltip and words (RS-NODOTS: no dot). */
+/** The line a foreign shot end belongs to, by name, for its tooltip and words (no dot after its name since RS-NODOTS). */
 export interface HomeMark {
   line?: string | undefined;
 }
@@ -237,6 +241,8 @@ export function pillStyle(colors: PillColors): CSSProperties {
     '--pill-border-hover': colors.hoverBorder,
     '--pill-text': colors.text,
     '--pill-muted': colors.muted,
+    '--pill-dot': colors.dot,
+    '--pill-ring': colors.ring ?? 'transparent',
   } as CSSProperties;
 }
 
@@ -268,7 +274,7 @@ export function markOf(pill: ResolvedPill, homeLineId: number | null | undefined
 /**
  * A pill end's tooltip: whose station it is ("Belongs to Main") and that it
  * is a loop end, what the home-line dot and the loop mark used to show
- * (RS-NODOTS).
+ * (RS-NODOTS; they stay gone with RS-LEADDOT).
  */
 export function endTitleOf(mark: HomeMark | null | undefined, loopEnd: boolean | undefined): string | undefined {
   const titles = [
@@ -291,7 +297,7 @@ export interface ShotEnds {
 }
 
 export interface PillPartsProps {
-  /** Test id root: parts get `-id` (the context), `-loop-end` (its words),
+  /** Test id root: parts get `-dot`, `-id` (the context), `-loop-end` (its words),
    *  `-station-id`, `-owner` (a station's owner words), and a shot's ends
    *  `-from-end`, `-to-end` with their words `-from-owner`, `-from-loop-end`,
    *  `-to-owner`, `-to-loop-end`; a two-tone shot's segments `-head`,
@@ -318,7 +324,7 @@ export interface PillPartsProps {
    *  takes another line's colour (`(Main)`, RS-OWNERSHIP). A button pill's
    *  aria-label says it already. */
   ownerWords?: string | null | undefined;
-  /** The target is gone: a warning glyph before the name. */
+  /** The target is gone: a warning glyph instead of the dot. */
   missing?: boolean | undefined;
   /** After everything (the data table's picker chevron). */
   trailing?: ReactNode | undefined;
@@ -340,12 +346,15 @@ export function PillParts({
   trailing,
 }: PillPartsProps) {
   const part = (suffix: string) => (testId ? `${testId}-${suffix}` : undefined);
-  // No colour dot (RS-NODOTS): only a missing target keeps its warning glyph.
-  const warn = missing ? (
+  // The leading dot in the line's colour (RS-LEADDOT), decorative: the words
+  // say whose it is. A missing target has its warning glyph instead.
+  const dot = missing ? (
     <span className="sh-lpill-warn" aria-hidden="true" data-testid={part('missing')}>
       &#x26A0;
     </span>
-  ) : null;
+  ) : (
+    <span className="sh-lpill-dot" aria-hidden="true" data-testid={part('dot')} />
+  );
   const ctx = context ? (
     <>
       <span className="sh-lpill-ctx" data-testid={part('id')}>
@@ -378,19 +387,19 @@ export function PillParts({
     );
   };
   if (shotEnds && tone) {
-    // Two-tone (RS-OWNERSHIP): the head (the context) stays in the shot's
-    // colour when the from end's half is another line's; the arrow is its
-    // own segment, the blend between the halves (RS-ARROW).
+    // Two-tone (RS-OWNERSHIP): the head (the dot and the context) stays in
+    // the shot's colour when the from end's half is another line's; the
+    // arrow is its own segment, the blend between the halves (RS-ARROW).
     return (
       <>
         {tone.head && (
           <span className="sh-lpill-seg" style={tone.head} data-testid={part('head')}>
-            {warn}
+            {dot}
             {ctx}
           </span>
         )}
         <span className="sh-lpill-seg sh-lpill-seg--to-arrow" style={tone.from} data-testid={part('from')}>
-          {!tone.head && warn}
+          {!tone.head && dot}
           {!tone.head && ctx}
           <span className="sh-lpill-main">{end('from')}</span>
         </span>{' '}
@@ -408,7 +417,7 @@ export function PillParts({
   }
   return (
     <>
-      {warn}
+      {dot}
       {ctx}
       <span className="sh-lpill-main">
         {shotEnds ? (

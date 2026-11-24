@@ -2,8 +2,8 @@
  * EntityBlob - a line pill that is not a link: the data table's row gutters
  * and line picker, and the station, shot and line names in dialogs. Same look
  * as the `DetailLink` pill (`LinePill.tsx`): the colour of its line in its
- * fill and border (no dot since RS-NODOTS), an optional muted context, the main part and, for a station, its Station
- * ID as a muted superscript.
+ * leading dot, fill and border, an optional muted context, the main part
+ * and, for a station, its Station ID as a muted superscript.
  *
  * Renders the pill only when the highlighting level is "full"; otherwise it
  * renders `plain` (or its children) as plain text, so callers can wrap a name
@@ -89,9 +89,7 @@ export function EntityBlob({
   }
 
   const tone =
-    entity === 'shot' && shotEnds
-      ? shotToneOf(resolve, lineId, shotEnds.fromOwnerLineId, shotEnds.toOwnerLineId, 'link', Boolean(context))
-      : null;
+    entity === 'shot' && shotEnds ? shotToneOf(resolve, lineId, shotEnds.fromOwnerLineId, shotEnds.toOwnerLineId, 'link') : null;
   return (
     <span
       className={`sh-lpill${tone ? ' sh-lpill--split' : ''} ${className}`}
@@ -142,12 +140,13 @@ export function EntityBlob({
  * colour and, with `withLine`, its line as the context (`Main Line: 17`). A
  * foreign slot, or a loop end whose kept end lives on another line, takes
  * the colour and name of the line its shown station belongs to
- * (RS-OWNERSHIP), unless `homeLineId` says otherwise; a loop end says so in
- * its tooltip and words (RS 6, no mark since RS-NODOTS). With `bySlot` it is
- * the slot's pill instead: its own line's colour and name, for a list of
- * slots whose point is which lines they are on (a delete's "no longer
- * shared" pairs, as the "Also on" rows name a line); its tooltip and
- * screen-reader words still say whose station it shows. Below Full it is
+ * (RS-OWNERSHIP), its dot that line's colour, unless `homeLineId` says
+ * otherwise; a loop end says so in its tooltip and words (RS 6, no mark since
+ * RS-NODOTS). With `bySlot` it is the slot's pill instead: its own line's
+ * colour (its dot too) and name, for a list of slots whose point is which
+ * lines they are on (a delete's "no longer shared" pairs, as the "Also on"
+ * rows name a line); its tooltip and screen-reader words still say whose
+ * station it shows. Below Full it is
  * the plain label (`17`, `Main Line / 17`; `12 (Main)`, `Side / 12 (Main)`
  * for a foreign slot; `3 (loop end on Side)` for a loop end).
  */
