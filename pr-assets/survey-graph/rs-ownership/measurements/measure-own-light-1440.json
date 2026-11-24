@@ -1,0 +1,870 @@
+[
+ {
+  "name": "table-stations-two-12s",
+  "file": "table-stations-two-12s-light-1440.png",
+  "links": {
+   "owned": 1,
+   "split": 0
+  },
+  "blocks": [
+   {
+    "sidOut": 0,
+    "fragH": 19,
+    "pitch": [
+     20,
+     20
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 0,
+    "sidMaxOut": 0,
+    "lh": "20px",
+    "split": 1,
+    "fs": 14,
+    "at": "warning-resolution-message",
+    "pairs": 1,
+    "frags": 3,
+    "plainPitch": [
+     20,
+     20,
+     20
+    ]
+   }
+  ]
+ },
+ {
+  "name": "table-shots-branch",
+  "file": "table-shots-branch-light-1440.png",
+  "links": {
+   "owned": 0,
+   "split": 1
+  },
+  "blocks": [
+   {
+    "sidOut": 0,
+    "fragH": 19,
+    "pitch": [
+     20,
+     20
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 0,
+    "sidMaxOut": 0,
+    "lh": "20px",
+    "split": 1,
+    "fs": 14,
+    "at": "warning-resolution-message",
+    "pairs": 1,
+    "frags": 3,
+    "plainPitch": [
+     20,
+     20,
+     20
+    ]
+   }
+  ]
+ },
+ {
+  "name": "table-shots-lemon",
+  "file": "table-shots-lemon-light-1440.png",
+  "links": {
+   "owned": 0,
+   "split": 1
+  },
+  "blocks": [
+   {
+    "sidOut": 0,
+    "fragH": 19,
+    "pitch": [
+     20,
+     20
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 0,
+    "sidMaxOut": 0,
+    "lh": "20px",
+    "split": 1,
+    "fs": 14,
+    "at": "warning-resolution-message",
+    "pairs": 1,
+    "frags": 3,
+    "plainPitch": [
+     20,
+     20,
+     20
+    ]
+   }
+  ]
+ },
+ {
+  "name": "table-shots-blue",
+  "file": "table-shots-blue-light-1440.png",
+  "links": {
+   "owned": 0,
+   "split": 1
+  },
+  "blocks": [
+   {
+    "sidOut": 0,
+    "fragH": 19,
+    "pitch": [
+     20,
+     20
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 0,
+    "sidMaxOut": 0,
+    "lh": "20px",
+    "split": 1,
+    "fs": 14,
+    "at": "warning-resolution-message",
+    "pairs": 1,
+    "frags": 3,
+    "plainPitch": [
+     20,
+     20,
+     20
+    ]
+   }
+  ]
+ },
+ {
+  "name": "details-foreign",
+  "file": "details-foreign-light-1440.png",
+  "links": {
+   "owned": 1,
+   "split": 1
+  },
+  "blocks": [
+   {
+    "sidOut": 0,
+    "fragH": 16,
+    "pitch": [
+     16
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 2,
+    "minGap": 0,
+    "touch": 1,
+    "sids": 1,
+    "sidMaxOut": 0,
+    "lh": "16px",
+    "split": 0,
+    "fs": 12,
+    "at": "station-detail-belongs",
+    "pairs": 1,
+    "frags": 3,
+    "plainPitch": [
+     16
+    ]
+   },
+   {
+    "sidOut": 0,
+    "fragH": 19,
+    "pitch": [
+     20
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 2,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 0,
+    "sidMaxOut": 0,
+    "lh": "20px",
+    "split": 0,
+    "fs": 14,
+    "at": "station-detail-record-15",
+    "pairs": 2,
+    "frags": 3,
+    "plainPitch": [
+     20
+    ]
+   },
+   {
+    "sidOut": 0,
+    "fragH": 19,
+    "pitch": [],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": null,
+    "touch": 0,
+    "sids": 0,
+    "sidMaxOut": 0,
+    "lh": "20px",
+    "split": 0,
+    "fs": 14,
+    "at": "station-detail-other-shot-0-11-label",
+    "pairs": 0,
+    "frags": 1,
+    "plainPitch": []
+   },
+   {
+    "sidOut": 0,
+    "fragH": 19,
+    "pitch": [],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": null,
+    "touch": 0,
+    "sids": 0,
+    "sidMaxOut": 0,
+    "lh": "20px",
+    "split": 0,
+    "fs": 14,
+    "at": "station-detail-other-shot-0-12-label",
+    "pairs": 0,
+    "frags": 1,
+    "plainPitch": []
+   }
+  ]
+ },
+ {
+  "name": "details-loop-end",
+  "file": "details-loop-end-light-1440.png",
+  "links": {
+   "owned": 2,
+   "split": 1
+  },
+  "blocks": [
+   {
+    "sidOut": 1,
+    "fragH": 19,
+    "pitch": [],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 1,
+    "sidMaxOut": 0.41,
+    "lh": "20px",
+    "split": 0,
+    "fs": 14,
+    "at": "station-detail-loop-end-shown",
+    "pairs": 2,
+    "frags": 3,
+    "plainPitch": [
+     20,
+     20
+    ]
+   },
+   {
+    "sidOut": 0,
+    "fragH": 16,
+    "pitch": [
+     16
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": null,
+    "touch": 0,
+    "sids": 0,
+    "sidMaxOut": 0,
+    "lh": "16px",
+    "split": 0,
+    "fs": 12,
+    "at": "station-detail-loop-end-own",
+    "pairs": 0,
+    "frags": 1,
+    "plainPitch": [
+     16
+    ]
+   },
+   {
+    "sidOut": 0,
+    "fragH": 16,
+    "pitch": [
+     16,
+     16
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 2,
+    "minGap": 0,
+    "touch": 2,
+    "sids": 2,
+    "sidMaxOut": 0,
+    "lh": "16px",
+    "split": 0,
+    "fs": 12,
+    "at": "closure-archive-1",
+    "pairs": 2,
+    "frags": 3,
+    "plainPitch": [
+     16,
+     16
+    ]
+   }
+  ]
+ },
+ {
+  "name": "merge",
+  "file": "merge-light-1440.png",
+  "links": {
+   "owned": 2,
+   "split": 0
+  },
+  "blocks": [
+   {
+    "sidOut": 1,
+    "fragH": 19,
+    "pitch": [
+     20
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 2,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 1,
+    "sidMaxOut": 0.41,
+    "lh": "20px",
+    "split": 0,
+    "fs": 14,
+    "at": "merge-renamed-lines",
+    "pairs": 1,
+    "frags": 3,
+    "plainPitch": [
+     20
+    ]
+   },
+   {
+    "sidOut": 1,
+    "fragH": 19,
+    "pitch": [],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": null,
+    "touch": 0,
+    "sids": 1,
+    "sidMaxOut": 0.41,
+    "lh": "20px",
+    "split": 0,
+    "fs": 14,
+    "at": "merge-hidden",
+    "pairs": 0,
+    "frags": 1,
+    "plainPitch": []
+   },
+   {
+    "sidOut": 0,
+    "fragH": 16,
+    "pitch": [],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": null,
+    "touch": 0,
+    "sids": 1,
+    "sidMaxOut": 0,
+    "lh": "16px",
+    "split": 0,
+    "fs": 12,
+    "at": "merge-hidden-back",
+    "pairs": 0,
+    "frags": 1,
+    "plainPitch": []
+   },
+   {
+    "sidOut": 0,
+    "fragH": 19,
+    "pitch": [
+     20,
+     20
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 3,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 0,
+    "sidMaxOut": 0,
+    "lh": "20px",
+    "split": 0,
+    "fs": 14,
+    "at": "merge-repeat-4-39",
+    "pairs": 3,
+    "frags": 3,
+    "plainPitch": [
+     20,
+     20
+    ]
+   },
+   {
+    "sidOut": 1,
+    "fragH": 19,
+    "pitch": [
+     20
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 2,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 1,
+    "sidMaxOut": 0.41,
+    "lh": "20px",
+    "split": 0,
+    "fs": 14,
+    "at": "merge-preview-move",
+    "pairs": 1,
+    "frags": 3,
+    "plainPitch": [
+     20
+    ]
+   },
+   {
+    "sidOut": 0,
+    "fragH": 19,
+    "pitch": [
+     20,
+     20
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 2,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 0,
+    "sidMaxOut": 0,
+    "lh": "20px",
+    "split": 0,
+    "fs": 14,
+    "at": "merge-preview-depths",
+    "pairs": 1,
+    "frags": 3,
+    "plainPitch": [
+     20,
+     20
+    ]
+   }
+  ]
+ },
+ {
+  "name": "detach",
+  "file": "detach-light-1440.png",
+  "links": {
+   "owned": 2,
+   "split": 0
+  },
+  "blocks": [
+   {
+    "sidOut": 1,
+    "fragH": 19,
+    "pitch": [
+     20,
+     20
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 3,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 1,
+    "sidMaxOut": 0.41,
+    "lh": "20px",
+    "split": 0,
+    "fs": 14,
+    "at": "unmerge-stations-naming",
+    "pairs": 3,
+    "frags": 3,
+    "plainPitch": [
+     20,
+     20
+    ]
+   },
+   {
+    "sidOut": 0,
+    "fragH": 16,
+    "pitch": [
+     16
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": null,
+    "touch": 0,
+    "sids": 0,
+    "sidMaxOut": 0,
+    "lh": "16px",
+    "split": 0,
+    "fs": 12,
+    "at": "unmerge-stations-explain",
+    "pairs": 0,
+    "frags": 1,
+    "plainPitch": [
+     16
+    ]
+   }
+  ]
+ },
+ {
+  "name": "warnings",
+  "file": "warnings-light-1440.png",
+  "links": {
+   "owned": 2,
+   "split": 1
+  },
+  "blocks": [
+   {
+    "sidOut": 1,
+    "fragH": 19,
+    "pitch": [],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": 5,
+    "touch": 0,
+    "sids": 1,
+    "sidMaxOut": 0.41,
+    "lh": "24px",
+    "split": 0,
+    "fs": 16,
+    "at": "warning-0%3A11%3AJUNCTION_DEPTH_SPREAD%3Ad12-message",
+    "pairs": 1,
+    "frags": 2,
+    "plainPitch": []
+   },
+   {
+    "sidOut": 1,
+    "fragH": 19,
+    "pitch": [],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": 5,
+    "touch": 0,
+    "sids": 1,
+    "sidMaxOut": 0.41,
+    "lh": "24px",
+    "split": 0,
+    "fs": 16,
+    "at": "warning-1%3A100004%3AJUNCTION_DEPTH_SPREAD%3Ad5-message",
+    "pairs": 1,
+    "frags": 2,
+    "plainPitch": []
+   }
+  ]
+ },
+ {
+  "name": "warning-resolve-two-tone",
+  "file": "warning-resolve-two-tone-light-1440.png",
+  "links": {
+   "owned": 0,
+   "split": 1
+  },
+  "blocks": [
+   {
+    "sidOut": 0,
+    "fragH": 19,
+    "pitch": [
+     20,
+     20
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 0,
+    "sidMaxOut": 0,
+    "lh": "20px",
+    "split": 1,
+    "fs": 14,
+    "at": "warning-resolution-message",
+    "pairs": 1,
+    "frags": 3,
+    "plainPitch": [
+     20,
+     20,
+     20
+    ]
+   }
+  ]
+ },
+ {
+  "name": "delete-shot-branch-first",
+  "file": "delete-shot-branch-first-light-1440.png",
+  "links": {
+   "owned": 0,
+   "split": 1
+  },
+  "blocks": [
+   {
+    "sidOut": 0,
+    "fragH": 19,
+    "pitch": [
+     20,
+     20
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 0,
+    "sidMaxOut": 0,
+    "lh": "20px",
+    "split": 1,
+    "fs": 14,
+    "at": "warning-resolution-message",
+    "pairs": 1,
+    "frags": 3,
+    "plainPitch": [
+     20,
+     20,
+     20
+    ]
+   },
+   {
+    "sidOut": 0,
+    "fragH": 21,
+    "pitch": [
+     24,
+     24
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": null,
+    "touch": 0,
+    "sids": 0,
+    "sidMaxOut": 0,
+    "lh": "24px",
+    "split": 1,
+    "fs": 16,
+    "at": "delete-shot-choice-lead",
+    "pairs": 0,
+    "frags": 3,
+    "plainPitch": [
+     24,
+     24,
+     24
+    ]
+   }
+  ]
+ },
+ {
+  "name": "delete-shot-blue-both-ends",
+  "file": "delete-shot-blue-both-ends-light-1440.png",
+  "links": {
+   "owned": 0,
+   "split": 1
+  },
+  "blocks": [
+   {
+    "sidOut": 0,
+    "fragH": 19,
+    "pitch": [
+     20,
+     20
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 0,
+    "sidMaxOut": 0,
+    "lh": "20px",
+    "split": 1,
+    "fs": 14,
+    "at": "warning-resolution-message",
+    "pairs": 1,
+    "frags": 3,
+    "plainPitch": [
+     20,
+     20,
+     20
+    ]
+   },
+   {
+    "sidOut": 0,
+    "fragH": 21,
+    "pitch": [
+     24
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": null,
+    "touch": 0,
+    "sids": 0,
+    "sidMaxOut": 0,
+    "lh": "24px",
+    "split": 1,
+    "fs": 16,
+    "at": "delete-shot-choice-lead",
+    "pairs": 0,
+    "frags": 3,
+    "plainPitch": [
+     24,
+     24
+    ]
+   }
+  ]
+ },
+ {
+  "name": "history",
+  "file": "history-light-1440.png",
+  "links": {
+   "owned": 0,
+   "split": 1
+  },
+  "blocks": [
+   {
+    "sidOut": 2,
+    "fragH": 19,
+    "pitch": [
+     20,
+     20
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 2,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 2,
+    "sidMaxOut": 0.41,
+    "lh": "20px",
+    "split": 0,
+    "fs": 14,
+    "at": "toolbar-undo-button-description-0",
+    "pairs": 3,
+    "frags": 3,
+    "plainPitch": null
+   },
+   {
+    "sidOut": 2,
+    "fragH": 19,
+    "pitch": [],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 2,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 2,
+    "sidMaxOut": 0.41,
+    "lh": "20px",
+    "split": 0,
+    "fs": 14,
+    "at": "toolbar-undo-button-description-1",
+    "pairs": 3,
+    "frags": 4,
+    "plainPitch": null
+   },
+   {
+    "sidOut": 2,
+    "fragH": 19,
+    "pitch": [
+     20
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 2,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 2,
+    "sidMaxOut": 0.41,
+    "lh": "20px",
+    "split": 0,
+    "fs": 14,
+    "at": "toolbar-undo-button-description-2",
+    "pairs": 6,
+    "frags": 4,
+    "plainPitch": null
+   },
+   {
+    "sidOut": 2,
+    "fragH": 19,
+    "pitch": [
+     20,
+     20,
+     20
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 2,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 2,
+    "sidMaxOut": 0.41,
+    "lh": "20px",
+    "split": 0,
+    "fs": 14,
+    "at": "toolbar-undo-button-description-3",
+    "pairs": 5,
+    "frags": 4,
+    "plainPitch": null
+   },
+   {
+    "sidOut": 1,
+    "fragH": 19,
+    "pitch": [
+     20
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 1,
+    "sidMaxOut": 0.41,
+    "lh": "20px",
+    "split": 0,
+    "fs": 14,
+    "at": "toolbar-undo-button-description-4",
+    "pairs": 1,
+    "frags": 2,
+    "plainPitch": null
+   },
+   {
+    "sidOut": 0,
+    "fragH": 19,
+    "pitch": [
+     20,
+     20
+    ],
+    "overl": 0,
+    "maxOverlap": 0,
+    "pills": 1,
+    "minGap": 1,
+    "touch": 0,
+    "sids": 0,
+    "sidMaxOut": 0,
+    "lh": "20px",
+    "split": 1,
+    "fs": 14,
+    "at": "warning-resolution-message",
+    "pairs": 1,
+    "frags": 3,
+    "plainPitch": [
+     20,
+     20,
+     20
+    ]
+   }
+  ]
+ }
+]

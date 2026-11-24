@@ -1,0 +1,145 @@
+{
+  "ok": true,
+  "value": {
+    "dark-1440": {
+      "ok": true,
+      "pills": [
+        "station",
+        "station"
+      ],
+      "live": [
+        "Upper Branch towards the Dry Chamber / Upper Start (Station ID 11) is shown again. Blue Restriction Series / 0 (Station ID 27) is shown again."
+      ],
+      "m": [
+        {
+          "sidOut": 0,
+          "fragH": 19,
+          "pitch": [
+            20
+          ],
+          "overl": 0,
+          "maxOverlap": 0,
+          "height": 40,
+          "minGap": 1,
+          "touch": 0,
+          "tops": [
+            828,
+            848
+          ],
+          "sids": 0,
+          "lh": "20px",
+          "sidMaxOut": 0,
+          "fs": 14,
+          "at": "toast",
+          "pairs": 1,
+          "frags": 2
+        }
+      ]
+    },
+    "light-1440": {
+      "ok": true,
+      "pills": [
+        "station",
+        "station"
+      ],
+      "live": [
+        "Upper Branch towards the Dry Chamber / Upper Start (Station ID 11) is shown again. Blue Restriction Series / 0 (Station ID 27) is shown again."
+      ],
+      "m": [
+        {
+          "sidOut": 0,
+          "fragH": 19,
+          "pitch": [
+            20
+          ],
+          "overl": 0,
+          "maxOverlap": 0,
+          "height": 40,
+          "minGap": 1,
+          "touch": 0,
+          "tops": [
+            828,
+            848
+          ],
+          "sids": 0,
+          "lh": "20px",
+          "sidMaxOut": 0,
+          "fs": 14,
+          "at": "toast",
+          "pairs": 1,
+          "frags": 2
+        }
+      ]
+    },
+    "dark-860": {
+      "ok": true,
+      "pills": [
+        "station",
+        "station"
+      ],
+      "live": [
+        "Upper Branch towards the Dry Chamber / Upper Start (Station ID 11) is shown again. Blue Restriction Series / 0 (Station ID 27) is shown again."
+      ],
+      "m": [
+        {
+          "sidOut": 0,
+          "fragH": 19,
+          "pitch": [
+            20
+          ],
+          "overl": 0,
+          "maxOverlap": 0,
+          "height": 40,
+          "minGap": 1,
+          "touch": 0,
+          "tops": [
+            828,
+            848
+          ],
+          "sids": 0,
+          "lh": "20px",
+          "sidMaxOut": 0,
+          "fs": 14,
+          "at": "toast",
+          "pairs": 1,
+          "frags": 2
+        }
+      ]
+    },
+    "light-860": {
+      "ok": true,
+      "pills": [
+        "station",
+        "station"
+      ],
+      "live": [
+        "Upper Branch towards the Dry Chamber / Upper Start (Station ID 11) is shown again. Blue Restriction Series / 0 (Station ID 27) is shown again."
+      ],
+      "m": [
+        {
+          "sidOut": 0,
+          "fragH": 19,
+          "pitch": [
+            20
+          ],
+          "overl": 0,
+          "maxOverlap": 0,
+          "height": 40,
+          "minGap": 1,
+          "touch": 0,
+          "tops": [
+            828,
+            848
+          ],
+          "sids": 0,
+          "lh": "20px",
+          "sidMaxOut": 0,
+          "fs": 14,
+          "at": "toast",
+          "pairs": 1,
+          "frags": 2
+        }
+      ]
+    }
+  }
+}
