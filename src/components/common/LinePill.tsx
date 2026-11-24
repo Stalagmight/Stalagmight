@@ -210,7 +210,8 @@ export function shotToneOf(
       return;
     }
     const near = { left: prev ? rightEdgeOf(prev) : null, right: next ? leftEdgeOf(next) : null };
-    styles[seg.key] = variant === 'link' ? linkSegmentStyle(seg.colors, near) : proseSegmentStyle(seg.colors, near, seg.pill.theme);
+    styles[seg.key] =
+      variant === 'link' ? linkSegmentStyle(seg.colors, near, seg.pill.theme) : proseSegmentStyle(seg.colors, near, seg.pill.theme);
   });
   return {
     head: styles.head ?? null,

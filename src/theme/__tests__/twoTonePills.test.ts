@@ -2,11 +2,17 @@
  * RS-OWNERSHIP: a shot pill with an end of another line is two-tone, the
  * half holding that end in that line's colours and the rest in the shot's.
  * Each half must meet the floors on its own background: main text 7:1 and
- * the muted context 4.5:1, at rest and on hover for a link pill, on the tint
- * and on the bare panel for a prose pill (no dots since RS-NODOTS). Swept
- * over ordered pairs of hard line colours (near-white next to near-black,
- * yellow next to blue, greys, pure primaries, a hue sweep) on every theme,
- * measured with `utils/colors`.
+ * the muted context 4.5:1, and on the shot's half the leading dot (the
+ * shot's line, RS-LEADDOT; no dot after a foreign end since RS-NODOTS) or
+ * its ring 3:1, at rest and on hover for a link pill, on the glow and on the
+ * bare panel for a prose pill. Swept over ordered pairs of hard line colours
+ * (near-white next to near-black, yellow next to blue, greys, pure
+ * primaries, a hue sweep) on every theme, measured with `utils/colors`.
+ * Injections: a prose segment whose dot keeps the ring of its own glow
+ * alone (not of the blend toward its neighbour) fails "the leading dot reads
+ * on every blend" on the dark theme; a link segment's dot with no ring fails
+ * it on every theme (a link pill's fills sit in one narrow band, so its
+ * blends move the dot's backdrop little).
  */
 import { describe, expect, it } from 'vitest';
 import { themeTokens } from '../tokens';
@@ -23,6 +29,7 @@ import {
   type Neighbours,
 } from '../pillBlend';
 import {
+  PILL_DOT_MIN,
   PILL_MUTED_MIN,
   PILL_TEXT_MIN,
   pillColors,
@@ -53,14 +60,15 @@ const HARD = [
 
 const PAIRS: Array<[string, string]> = HARD.flatMap((a) => HARD.filter((b) => b !== a).map((b) => [a, b] as [string, string]));
 
-/** The floors of one half: its text and muted part, on each of its backgrounds. */
-function checkHalf(label: string, half: PillColors, backgrounds: readonly string[], failures: string[]) {
+/** The floors of one half: its text and muted part, and its leading dot when it holds it, on each of its backgrounds. */
+function checkHalf(label: string, half: PillColors, backgrounds: readonly string[], failures: string[], withDot = false) {
   const check = (what: string, value: number, min: number) => {
     if (!(value >= min)) failures.push(`${label} ${what} ${value.toFixed(2)} < ${min}`);
   };
   for (const bg of backgrounds) {
     check(`text on ${bg}`, contrastRatio(half.text, bg), PILL_TEXT_MIN);
     check(`muted on ${bg}`, contrastRatio(half.muted, bg), PILL_MUTED_MIN);
+    if (withDot) check(`dot ${half.dot} on ${bg}`, contrastRatio(half.ring ?? half.dot, bg), PILL_DOT_MIN);
   }
 }
 
@@ -71,7 +79,7 @@ describe('two-tone shot pills (RS-OWNERSHIP)', () => {
     for (const [shotLine, owner] of PAIRS) {
       const shotHalf = pillColors(shotLine, theme);
       const ownerHalf = pillColors(owner, theme);
-      checkHalf(`${shotLine}|${owner} shot half`, shotHalf, [shotHalf.bg, shotHalf.hoverBg], failures);
+      checkHalf(`${shotLine}|${owner} shot half`, shotHalf, [shotHalf.bg, shotHalf.hoverBg], failures, true);
       checkHalf(`${shotLine}|${owner} owner half`, ownerHalf, [ownerHalf.bg, ownerHalf.hoverBg], failures);
     }
     expect(failures).toEqual([]);
@@ -83,7 +91,7 @@ describe('two-tone shot pills (RS-OWNERSHIP)', () => {
     for (const [shotLine, owner] of PAIRS) {
       const shotHalf = prosePillColors(shotLine, theme);
       const ownerHalf = prosePillColors(owner, theme);
-      checkHalf(`${shotLine}|${owner} shot half`, shotHalf, [shotHalf.bg, theme.panel], failures);
+      checkHalf(`${shotLine}|${owner} shot half`, shotHalf, proseBackdrops(shotHalf.bg, theme), failures, true);
       checkHalf(`${shotLine}|${owner} owner half`, ownerHalf, [ownerHalf.bg, theme.panel], failures);
     }
     expect(failures).toEqual([]);
@@ -93,11 +101,14 @@ describe('two-tone shot pills (RS-OWNERSHIP)', () => {
     const theme = pillThemeOf(name);
     const white = pillColors('#f6f6f2', theme);
     const black = pillColors('#101010', theme);
-    // The halves are told apart by their fills and their borders (RS-NODOTS: no dots).
+    // The halves are told apart by their fills, their borders and, at the
+    // start, the dot (RS-LEADDOT).
     expect(white.bg).not.toBe(black.bg);
+    expect(white.dot).not.toBe(black.dot);
     expect(contrastRatio(white.border, black.border)).toBeGreaterThanOrEqual(2);
     for (const half of [white, black]) {
       expect(contrastRatio(half.text, half.bg)).toBeGreaterThanOrEqual(PILL_TEXT_MIN);
+      expect(contrastRatio(half.ring ?? half.dot, half.bg)).toBeGreaterThanOrEqual(PILL_DOT_MIN);
     }
   });
 });
@@ -132,17 +143,25 @@ function blendedColours(own: PillColors, near: Neighbours, panel?: string): stri
 /** A prose glow's colours over the panel as they also fall on every tinted surface of `theme` (`proseBackdrops`). */
 const onSurfaces = (colours: readonly string[], theme: string) => colours.flatMap((c) => proseBackdrops(c, pillThemeOf(theme)));
 
-/** The text and muted colours a segment is painted with (its style's), on every colour of it. */
-function checkBlended(label: string, style: Record<string, string>, on: readonly string[], failures: string[]) {
+/**
+ * The text and muted colours a segment is painted with (its style's), on
+ * every colour of it; with `withDot`, its leading dot too (the ring when it
+ * has one, else the dot): the dot sits in the shot line's part at the start,
+ * a head before a foreign from half or the from half itself (RS-LEADDOT).
+ */
+function checkBlended(label: string, style: Record<string, string>, on: readonly string[], failures: string[], withDot = false) {
+  const ring = style['--pill-ring'];
+  const dot = ring && ring !== 'transparent' ? ring : style['--pill-dot'];
   for (const bg of on) {
     if (contrastRatio(style['--pill-text']!, bg) < PILL_TEXT_MIN) failures.push(`${label} text on ${bg}`);
     if (contrastRatio(style['--pill-muted']!, bg) < PILL_MUTED_MIN) failures.push(`${label} muted on ${bg}`);
+    if (withDot && !(contrastRatio(dot!, bg) >= PILL_DOT_MIN)) failures.push(`${label} dot ${dot} on ${bg}`);
   }
 }
 
 /** A segment's style as the variant paints it. */
 const segmentStyle = (variant: 'link' | 'prose', own: PillColors, near: Neighbours, theme: string) =>
-  (variant === 'link' ? linkSegmentStyle(own, near) : proseSegmentStyle(own, near, theme)) as Record<string, string>;
+  (variant === 'link' ? linkSegmentStyle(own, near, theme) : proseSegmentStyle(own, near, theme)) as Record<string, string>;
 
 /** Shots of three regions (head, from half, to half): the pairs, each with a third hard colour. */
 const TRIPLES: Array<[string, string, string]> = PAIRS.flatMap(([a, b]) =>
@@ -154,7 +173,7 @@ type PillTint = 'link' | 'prose';
 const colorsOf = (variant: PillTint, name: string) => (c: string) => (variant === 'link' ? pillColorsOf(c, name) : prosePillColorsOf(c, name));
 
 describe.each(['link', 'prose'] as const)('blended two-tone %s pills (RS-BLEND)', (variant) => {
-  it.each(THEMES)('%s: text and muted parts read on every blend of every pair', (name) => {
+  it.each(THEMES)('%s: text, muted parts and the leading dot read on every blend of every pair', (name) => {
     const theme = pillThemeOf(name);
     const panel = variant === 'prose' ? theme.panel : undefined;
     const failures: string[] = [];
@@ -166,7 +185,7 @@ describe.each(['link', 'prose'] as const)('blended two-tone %s pills (RS-BLEND)'
       const onB = blendedColours(B, { left: A, right: null }, panel);
       const styleA = segmentStyle(variant, A, { left: null, right: B }, name);
       const styleB = segmentStyle(variant, B, { left: A, right: null }, name);
-      checkBlended(`${shotLine}|${owner} shot half`, styleA, panel ? onSurfaces(onA, name) : onA, failures);
+      checkBlended(`${shotLine}|${owner} shot half`, styleA, panel ? onSurfaces(onA, name) : onA, failures, true);
       checkBlended(`${shotLine}|${owner} owner half`, styleB, panel ? onSurfaces(onB, name) : onB, failures);
     }
     expect(failures.slice(0, 20)).toEqual([]);

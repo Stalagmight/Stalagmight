@@ -7,12 +7,13 @@
  * the words' colours, which must read on the blend toward a stronger
  * neighbour. Injections: a segment ending in its own colour at a seam fails
  * "neighbours meet in one colour"; a prose segment keeping its own muted
- * colour fails "words that read on the blend".
+ * colour fails "words that read on the blend"; a link segment whose dot has
+ * no ring fails "its ring checked against the seam's blend" (RS-LEADDOT).
  */
 import { describe, expect, it } from 'vitest';
 import { linkBridgeStyle, linkSegmentStyle, mixHex, proseSegmentStyle, SEAM_EM } from '../pillBlend';
 import { contrastOfHex } from '../cssColor';
-import { pillColorsOf, pillThemeOf, prosePillColorsOf, proseTintOf } from '../pillColors';
+import { PILL_DOT_MIN, pillColorsOf, pillThemeOf, prosePillColorsOf, proseTintOf } from '../pillColors';
 
 const stops = (gradient: string) => {
   const inner = /linear-gradient\(to right, (.*)\)$/.exec(gradient)?.[1] ?? '';
@@ -24,9 +25,9 @@ describe('link segments (RS-BLEND)', () => {
   const A = pillColorsOf('#f6f6f2', 'dark');
   const B = pillColorsOf('#101010', 'dark');
   const C = pillColorsOf('#ffe600', 'dark');
-  const head = linkSegmentStyle(A, { left: null, right: B }) as Record<string, string>;
-  const from = linkSegmentStyle(B, { left: A, right: C }) as Record<string, string>;
-  const to = linkSegmentStyle(C, { left: B, right: null }) as Record<string, string>;
+  const head = linkSegmentStyle(A, { left: null, right: B }, 'dark') as Record<string, string>;
+  const from = linkSegmentStyle(B, { left: A, right: C }, 'dark') as Record<string, string>;
+  const to = linkSegmentStyle(C, { left: B, right: null }, 'dark') as Record<string, string>;
 
   it('neighbours meet in one colour, fill and border, at rest and on hover', () => {
     for (const key of ['--seg-fill', '--seg-fill-hover', '--seg-edge', '--seg-edge-hover']) {
@@ -42,16 +43,37 @@ describe('link segments (RS-BLEND)', () => {
     expect(head['--seg-fill']).toContain(`${A.bg} calc(100% - ${SEAM_EM}em)`);
     expect(head['--pill-bg']).toBe(A.bg);
   });
+
+  it('the leading dot is the line colour, its ring checked against the seam\'s blend (RS-LEADDOT)', () => {
+    // A near-black head before a near-white from half on the dark theme: the
+    // dot sits on the blend toward the near-white fill, lighter than its own.
+    const style = linkSegmentStyle(B, { left: null, right: A }, 'dark') as Record<string, string>;
+    expect(style['--pill-dot']).toBe(B.dot);
+    const ring = style['--pill-ring']!;
+    expect(ring).not.toBe('transparent');
+    for (const t of [1, 0.875, 0.75, 0.625, 0.5]) {
+      expect(contrastOfHex(ring, mixHex(B.bg, A.bg, t))).toBeGreaterThanOrEqual(PILL_DOT_MIN);
+      expect(contrastOfHex(ring, mixHex(B.hoverBg, A.hoverBg, t))).toBeGreaterThanOrEqual(PILL_DOT_MIN);
+    }
+    // A blue dot reads on its own light fill: no ring.
+    const blue = pillColorsOf('#1f4fff', 'light');
+    const plain = linkSegmentStyle(blue, { left: null, right: blue }, 'light') as Record<string, string>;
+    expect(plain['--pill-dot']).toBe('#1f4fff');
+    expect(plain['--pill-ring']).toBe('transparent');
+  });
 });
 
-describe('prose segments (RS-BLEND, RS-NODOTS)', () => {
-  it('a segment style carries its words and its glow\'s wash, and no dot', () => {
+describe('prose segments (RS-BLEND, RS-NODOTS, RS-LEADDOT)', () => {
+  it('a segment style carries its words, its glow\'s wash and its dot', () => {
     const A = prosePillColorsOf('#ffe600', 'light');
     const B = prosePillColorsOf('#1f4fff', 'light');
     const style = proseSegmentStyle(A, { left: null, right: B }, 'light') as Record<string, string>;
     expect(style['--pill-tint']).toBe(proseTintOf(A.bg, pillThemeOf('light').panel).tint);
     expect(style['--pill-text']).toBe(A.text);
-    expect(style['--pill-dot']).toBeUndefined();
+    expect(style['--pill-dot']).toBe('#ffe600');
+    // Yellow on its light glow does not reach 3:1 alone: ringed.
+    expect(style['--pill-ring']).not.toBe('transparent');
+    expect(contrastOfHex(style['--pill-ring']!, A.bg)).toBeGreaterThanOrEqual(PILL_DOT_MIN);
     expect(style['--seg-tint']).toBeUndefined();
   });
 
@@ -83,8 +105,8 @@ describe('the arrow bridge (RS-ARROW)', () => {
   const L = pillColorsOf('#ffe600', 'light');
   const R = pillColorsOf('#1f4fff', 'light');
   const arrow = linkBridgeStyle(L, R, 'light') as Record<string, string>;
-  const from = linkSegmentStyle(L, { left: null, right: L }) as Record<string, string>;
-  const to = linkSegmentStyle(R, { left: R, right: null }) as Record<string, string>;
+  const from = linkSegmentStyle(L, { left: null, right: L }, 'light') as Record<string, string>;
+  const to = linkSegmentStyle(R, { left: R, right: null }, 'light') as Record<string, string>;
 
   it("runs from the from half's colour to the to half's, the midpoint on the arrow's middle", () => {
     for (const [key, pick] of [

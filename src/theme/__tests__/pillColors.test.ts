@@ -7,11 +7,15 @@
  * palettes, a translucent colour and an unpaintable one. The contrasts are
  * measured with `utils/colors` (`contrastRatio`), not the module's own maths.
  *
- * Since RS-NODOTS a pill has no colour dot: its line shows by its fill (a
- * tint of the line's hue) and its border (the line colour itself, moved
- * toward the text only as far as it must go to stand out from the panel and
- * the fill), so a near-white, a grey and a near-black line, which share a
- * neutral fill, differ by their borders.
+ * A pill's line shows by its fill (a tint of the line's hue), its border
+ * (the line colour itself, moved toward the text only as far as it must go
+ * to stand out from the panel and the fill, RS-NODOTS), so a near-white, a
+ * grey and a near-black line, which share a neutral fill, differ by their
+ * borders, and its leading dot (the line colour, ringed only where it alone
+ * does not reach 3:1 on the fill, RS-LEADDOT).
+ * Injection: dropping the ring (`ring: null` from `pillDot`) fails "dot or
+ * ring 3:1" for a near-black line on the dark themes and a near-white or a
+ * yellow one on the light themes.
  */
 import { describe, expect, it } from 'vitest';
 import { themeTokens } from '../tokens';
@@ -60,7 +64,7 @@ function hueGap(a: number, b: number): number {
 }
 
 describe('pillColors sweep', () => {
-  it.each(THEMES)('%s: main text 7:1, muted 4.5:1, a border that stands out from the panel and the fill, at rest and on hover', (name) => {
+  it.each(THEMES)('%s: main text 7:1, muted 4.5:1, dot or ring 3:1, a border that stands out from the panel and the fill, at rest and on hover', (name) => {
     const theme = pillThemeOf(name);
     const failures: string[] = [];
     const check = (label: string, value: number, min: number) => {
@@ -71,6 +75,7 @@ describe('pillColors sweep', () => {
       for (const [state, bg] of [['rest', p.bg], ['hover', p.hoverBg]] as const) {
         check(`${color} ${state} text`, contrastRatio(p.text, bg), PILL_TEXT_MIN);
         check(`${color} ${state} muted`, contrastRatio(p.muted, bg), PILL_MUTED_MIN);
+        check(`${color} ${state} dot`, contrastRatio(p.ring ?? p.dot, bg), PILL_DOT_MIN);
       }
       check(`${color} border/panel`, contrastRatio(p.border, theme.panel), BORDER_MIN);
       check(`${color} border/fill`, contrastRatio(p.border, p.bg), BORDER_MIN);
@@ -89,6 +94,16 @@ describe('pillColors sweep', () => {
       if (alone >= BORDER_MIN + 0.05) expect(p.border, color).toBe(color);
       // Moved only as far as it must go: never far past the floor.
       else expect(Math.min(contrastRatio(p.border, theme.panel), contrastRatio(p.border, p.bg)), color).toBeLessThan(BORDER_MIN + 0.6);
+    }
+  });
+
+  it.each(THEMES)('%s: a ring only where the dot alone does not reach 3:1 on the fill (RS-LEADDOT)', (name) => {
+    const theme = pillThemeOf(name);
+    for (const color of COLORS) {
+      const p = pillColors(color, theme);
+      const alone = Math.min(contrastRatio(p.dot, p.bg), contrastRatio(p.dot, p.hoverBg));
+      if (p.ring === null) expect(alone, color).toBeGreaterThanOrEqual(PILL_DOT_MIN);
+      else expect(alone, color).toBeLessThan(PILL_DOT_MIN + 0.3);
     }
   });
 
@@ -147,6 +162,32 @@ describe('pillColors sweep', () => {
     expect(hueGap(veiled.h, oklchOfHex('#0f1778').h)).toBeLessThan(12);
   });
 
+  it('the dot is the line colour itself, translucency flattened on the panel (RS-LEADDOT)', () => {
+    const dark = pillThemeOf('dark');
+    expect(pillColors('#4ECDC4', dark).dot).toBe('#4ecdc4');
+    expect(pillColors('gold', dark).dot).toBe('#ffd700');
+    expect(pillColors('rgb(255 0 0)', dark).dot).toBe('#ff0000');
+    // 30% blue on #16213e.
+    expect(pillColors('rgba(0, 0, 255, 0.3)', dark).dot).toBe('#0f1778');
+  });
+
+  it('rings sit on the text side, in the line\'s hue: light on a dark theme, dark on a light one', () => {
+    const dark = pillThemeOf('dark');
+    const light = pillThemeOf('light');
+    const onDark = pillColors('#050505', dark);
+    expect(onDark.ring).not.toBeNull();
+    expect(oklchOfHex(onDark.ring!).L).toBeGreaterThan(oklchOfHex(onDark.bg).L);
+    const onLight = pillColors('#fafafa', light);
+    expect(onLight.ring).not.toBeNull();
+    expect(oklchOfHex(onLight.ring!).L).toBeLessThan(oklchOfHex(onLight.bg).L);
+    // Yellow on the light theme: an olive ring in yellow's hue.
+    const yellow = pillColors('#ffff00', light);
+    expect(yellow.ring).not.toBeNull();
+    expect(hueGap(oklchOfHex(yellow.ring!).h, oklchOfHex('#ffff00').h)).toBeLessThan(12);
+    // A saturated blue reads on the light fill by itself.
+    expect(pillColors('#0000ff', light).ring).toBeNull();
+  });
+
   it('a border moves toward the text side: lighter on a dark theme, darker on a light one, in its hue', () => {
     const dark = pillThemeOf('dark');
     const light = pillThemeOf('light');
@@ -173,11 +214,12 @@ describe('pillColors sweep', () => {
     }
   });
 
-  it('an unpaintable colour is a neutral pill with a neutral border', () => {
+  it('an unpaintable colour is a neutral pill with a neutral border and a muted dot', () => {
     const dark = pillThemeOf('dark');
     const p = pillColors('not-a-colour', dark);
     expect(oklchOfHex(p.bg).C).toBeLessThan(0.012);
     expect(oklchOfHex(p.border).C).toBeLessThan(0.012);
+    expect(p.dot).toBe(dark.muted);
     expect(pillColors(null, dark)).toEqual(p);
   });
 });
@@ -220,7 +262,7 @@ describe('missingPillColors', () => {
   });
 });
 
-describe('pillDot (the Sections panel row dot)', () => {
+describe('pillDot (the pill dots and the Sections panel row dot)', () => {
   it('leaves a colour that already reads alone', () => {
     const theme: PillTheme = pillThemeOf('dark');
     expect(pillDot('#ffffff', ['#16213e'], theme)).toEqual({ dot: '#ffffff', ring: null });

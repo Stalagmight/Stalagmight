@@ -3,8 +3,9 @@
  * paints, derived from the colour of the line it belongs to and the theme.
  *
  * A line colour is user data and can be anything (near-white, near-black, pure
- * yellow, a CSS name). A pill shows its line by its fill and its border alone
- * (RS-NODOTS: no colour dot, no marks), so:
+ * yellow, a CSS name). A pill shows its line by its leading dot, its fill and
+ * its border (RS-NODOTS took the dot away and gave the fill and the border
+ * the colour; RS-LEADDOT brought the leading dot back), so:
  *
  * - background: the panel lifted a little toward the line's hue (dark themes
  *   lift it, light themes sink it), up to 80% of the line's chroma within a
@@ -17,13 +18,18 @@
  *   where the fill cannot (a grey line has no hue, so a near-white, a grey
  *   and a near-black line differ by their borders' lightness);
  * - hover: a stronger tint and border, inside the same legibility limits;
+ * - dot: the line colour itself (as the Sections panel draws it), with a ring
+ *   in the line's hue on the text side only when the colour alone does not
+ *   stand out from the pill's fill (a near-black line on a dark theme, a
+ *   near-white or a yellow one on a light theme);
  * - text: the theme's own text tokens, nudged toward black or white only on a
  *   theme whose token cannot reach the floor on the band.
  *
  * Floors (pinned by `__tests__/pillColors.test.ts` over a sweep of colours on
  * every theme): main text 7:1 (WCAG AAA), muted context and Station ID 4.5:1
- * (AA), on the resting and the hover background; the border at least
- * {@link BORDER_MIN} against the panel and the fill. Every value is `#rrggbb`.
+ * (AA), the dot or its ring 3:1 (non-text), on the resting and the hover
+ * background; the border at least {@link BORDER_MIN} against the panel and
+ * the fill. Every value is `#rrggbb`.
  */
 import { themeTokens } from './tokens';
 import {
@@ -83,7 +89,7 @@ export interface PillDot {
   ring: string | null;
 }
 
-export interface PillColors {
+export interface PillColors extends PillDot {
   bg: string;
   border: string;
   hoverBg: string;
@@ -92,7 +98,7 @@ export interface PillColors {
   muted: string;
 }
 
-/** A pill whose target is gone: neutral (no line colour), dashed, a warning glyph for the dot. */
+/** A pill whose target is gone: neutral (no line colour), dashed, a warning glyph in place of the dot. */
 export interface MissingPillColors {
   bg: string;
   border: string;
@@ -280,7 +286,10 @@ export function pillColors(lineColor: string | null | undefined, theme: PillThem
     towardText,
     standsOn(hoverBg),
   );
-  return { bg, border, hoverBg, hoverBorder, text: theme.text, muted: theme.muted };
+  // The leading dot: the line colour, ringed only where it alone does not
+  // stand out from the fill, at rest or on hover (RS-LEADDOT).
+  const { dot, ring } = pillDot(line ?? theme.muted, [bg, hoverBg], theme);
+  return { bg, border, hoverBg, hoverBorder, text: theme.text, muted: theme.muted, dot, ring };
 }
 
 /** The pill of a missing target on `theme`: the resting band in grey, its border dashed by the CSS. */
@@ -346,11 +355,15 @@ function proseReachable(target: string, panel: string): string {
  * theme's tokens nudged toward the text pole where the glow needs it; the glow steps back toward the panel only as far as it must for
  * those floors and to keep the muted words {@link PROSE_MUTED_APART} from the
  * main text. `hoverBg` is the panel; there is no hover, and `border` is the
- * resting pill's, unused.
+ * resting pill's, unused. The leading dot (RS-LEADDOT) sits inside the
+ * glow's core at its start: the line colour, ringed where it alone does not
+ * reach 3:1 on the glow, over the panel and over the tinted boxes
+ * ({@link proseBackdrops}).
  */
 export function prosePillColors(lineColor: string | null | undefined, theme: PillTheme): PillColors {
   const pill = pillColors(lineColor, theme);
-  const tone = lineTone(lineHex(lineColor, theme.panel));
+  const line = lineHex(lineColor, theme.panel);
+  const tone = lineTone(line);
   const lineL = clamp(tone.L, 0, 1);
   // A pale line on a dark theme (a dark one on a light theme) goes furthest,
   // spread over the room the theme's text leaves (`proseRoom`).
@@ -359,7 +372,8 @@ export function prosePillColors(lineColor: string | null | undefined, theme: Pil
   const far = room >= PROSE_LIFT.near + PROSE_SPREAD_MIN ? room : PROSE_LIFT.far;
   const want = PROSE_LIFT.near + (far - PROSE_LIFT.near) * pole;
   const C = Math.min(tone.C * PROSE_CHROMA.share, PROSE_CHROMA.max);
-  return proseFurthest(pill, theme, want, C, tone.h).colors;
+  const colors = proseFurthest(pill, theme, want, C, tone.h).colors;
+  return { ...colors, ...pillDot(line ?? colors.muted, proseBackdrops(colors.bg, theme), theme) };
 }
 
 /**
