@@ -64,9 +64,10 @@ export function useIdentityLabel(): (identity: StationIdentity) => string {
 }
 
 /**
- * A keep candidate's pill (RS 7): the slot's line as the context, the
- * station's OWN name and Station ID (not what a closure shows it as: the
- * radio says that beside it), coloured by the slot's line.
+ * A keep candidate's pill (RS 7): the station's OWN name and Station ID
+ * (not what a closure shows it as: the radio says that beside it), coloured
+ * and named by the line the station belongs to (its home line, RS-OWNERSHIP;
+ * the slot's line when it has none or is native there).
  */
 export function IdentityPill({
   slot,
@@ -86,6 +87,7 @@ export function IdentityPill({
       lineId={slot.line_id}
       context={line}
       stationId={identity.id}
+      homeLineId={identity.home_line ?? null}
       plain={formatStationLabel(identity.name, line)}
       testId={testId}
     >
