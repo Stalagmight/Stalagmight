@@ -156,7 +156,15 @@ export interface ShotTone {
   fromOn: string[];
   /** What the to end's dot can sit on. */
   toOn: string[];
+  /** The segments in order, with their colours: a prose pill tints each
+   *  line's fragment of them once laid out (`useSegmentTints`). */
+  segments: Array<{ key: SegmentKey; colors: PillColors }>;
+  /** The panel the pill sits on (a prose tint is an overlay on it). */
+  panel: string;
 }
+
+/** A two-tone shot pill's segments: the head (when the from half is another line's), the from half, the to half. */
+export type SegmentKey = 'head' | 'from' | 'to';
 
 /** The words of a two-tone shot's segments, for a prose tint's seam width. */
 export interface ShotWords {
@@ -192,7 +200,7 @@ export function shotToneOf(
     { key: 'to' as const, pill: foreign(toOwner) ? resolve(toOwner) : shot },
   ];
   const panel = pillThemeOf(shot.theme).panel;
-  const styles: Partial<Record<'head' | 'from' | 'to', CSSProperties>> = {};
+  const styles: Partial<Record<SegmentKey, CSSProperties>> = {};
   const on: Partial<Record<'from' | 'to', string[]>> = {};
   lines.forEach((seg, i) => {
     const near = { left: lines[i - 1]?.pill.colors ?? null, right: lines[i + 1]?.pill.colors ?? null };
@@ -210,6 +218,8 @@ export function shotToneOf(
     to: styles.to!,
     fromOn: on.from ?? [],
     toOn: on.to ?? [],
+    segments: lines.map((seg) => ({ key: seg.key, colors: seg.pill.colors })),
+    panel,
   };
 }
 

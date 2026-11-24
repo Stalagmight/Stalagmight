@@ -1900,11 +1900,16 @@ button.sh-apill {
   padding: 0 0.14em;
   /* One continuous tint across the seams (RS-BLEND): an SVG whose colour
      shifts to the midpoint with the neighbour at a seam, masked by the
-     tint's fade centred on the seam (theme/pillBlend.ts). */
-  background: var(--seg-tint, none) center / 100% 100% no-repeat;
+     tint's fade centred on the seam (theme/pillBlend.ts). Laid out, each
+     line's fragment gets its own layer over the fragments put end to end
+     (slice), blended only at a seam on its line (useSegmentTints.ts). */
+  background-image: var(--seg-tint, none);
+  background-size: var(--seg-tint-size, 100% 100%);
+  background-position: var(--seg-tint-pos, 0 0);
+  background-repeat: no-repeat;
   color: var(--pill-text);
-  -webkit-box-decoration-break: clone;
-  box-decoration-break: clone;
+  -webkit-box-decoration-break: slice;
+  box-decoration-break: slice;
 }
 .sh-ppill-nw {
   white-space: nowrap;
