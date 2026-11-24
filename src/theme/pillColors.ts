@@ -27,9 +27,10 @@
  *
  * Floors (pinned by `__tests__/pillColors.test.ts` over a sweep of colours on
  * every theme): main text 7:1 (WCAG AAA), muted context and Station ID 4.5:1
- * (AA), the dot or its ring 3:1 (non-text), on the resting and the hover
- * background; the border at least {@link BORDER_MIN} against the panel and
- * the fill. Every value is `#rrggbb`.
+ * (AA), the dot or its ring 3:1 (non-text), a foreign station's home dot or
+ * its ring {@link HOME_DOT_MIN} (it repeats what words say), on the resting
+ * and the hover background; the border at least {@link BORDER_MIN} against
+ * the panel and the fill. Every value is `#rrggbb`.
  */
 import { themeTokens } from './tokens';
 import {
@@ -47,6 +48,17 @@ import {
 export const PILL_TEXT_MIN = 7;
 export const PILL_MUTED_MIN = 4.5;
 export const PILL_DOT_MIN = 3;
+/**
+ * The floor of a foreign station's superscript home dot (RS-LEADDOT; the
+ * user: "make the suprescript dot more subtle"). WCAG 1.4.11's 3:1 is for
+ * graphics needed to understand the content; this dot repeats what the pill
+ * already says in words (its tooltip "Belongs to Main", the screen reader's
+ * "(Main)") and, on its owner's pill, in its fill, border and leading dot.
+ * It must still be seen and its colour told apart, so it keeps 2:1 on what
+ * it sits on: a little above the 1.8:1 a pill's border keeps to show its
+ * line's colour ({@link BORDER_MIN}).
+ */
+export const HOME_DOT_MIN = 2;
 /** A pill's border against the panel and its fill: enough to show the line's colour as an edge (RS-NODOTS). */
 export const BORDER_MIN = 1.8;
 
@@ -90,6 +102,9 @@ export interface PillDot {
 }
 
 export interface PillColors extends PillDot {
+  /** A foreign station's home dot on this pill: its line's colour at the
+   *  home dot's floor ({@link HOME_DOT_MIN}), ringed only below it. */
+  home: PillDot;
   bg: string;
   border: string;
   hoverBg: string;
@@ -216,11 +231,14 @@ function legibleTint(L: number, C: number, h: number, theme: PillTheme): string 
 /**
  * The dot for `color` on the backgrounds it is drawn on, with a ring in its
  * hue on the text side (lighter on a dark theme, darker on a light one) when
- * the colour itself does not reach 3:1 on every one of them.
+ * the colour itself does not reach `min` (3:1, {@link PILL_DOT_MIN}; a home
+ * dot's {@link HOME_DOT_MIN}) on every one of them: the gentlest ring that
+ * does, so a lower floor gives a lighter ring.
  */
-export function pillDot(color: string, backgrounds: readonly string[], theme: PillTheme): PillDot {
+export function pillDot(color: string, backgrounds: readonly string[], theme: PillTheme, min: number = PILL_DOT_MIN): PillDot {
   const dot = color.toLowerCase();
-  const clears = (c: string) => backgrounds.every((bg) => contrastOfHex(c, bg) >= DOT_TARGET);
+  const target = min === PILL_DOT_MIN ? DOT_TARGET : min + (DOT_TARGET - PILL_DOT_MIN);
+  const clears = (c: string) => backgrounds.every((bg) => contrastOfHex(c, bg) >= target);
   if (clears(dot)) return { dot, ring: null };
   const lch = oklchOfHex(dot);
   const C = lch.C < GREY_CHROMA ? 0 : Math.min(lch.C, RING_CHROMA_MAX);
@@ -289,7 +307,10 @@ export function pillColors(lineColor: string | null | undefined, theme: PillThem
   // The leading dot: the line colour, ringed only where it alone does not
   // stand out from the fill, at rest or on hover (RS-LEADDOT).
   const { dot, ring } = pillDot(line ?? theme.muted, [bg, hoverBg], theme);
-  return { bg, border, hoverBg, hoverBorder, text: theme.text, muted: theme.muted, dot, ring };
+  // A foreign station's home dot on this pill: the line's colour at its own,
+  // lower floor (RS-LEADDOT).
+  const home = pillDot(line ?? theme.muted, [bg, hoverBg], theme, HOME_DOT_MIN);
+  return { bg, border, hoverBg, hoverBorder, text: theme.text, muted: theme.muted, dot, ring, home };
 }
 
 /** The pill of a missing target on `theme`: the resting band in grey, its border dashed by the CSS. */
@@ -373,7 +394,12 @@ export function prosePillColors(lineColor: string | null | undefined, theme: Pil
   const want = PROSE_LIFT.near + (far - PROSE_LIFT.near) * pole;
   const C = Math.min(tone.C * PROSE_CHROMA.share, PROSE_CHROMA.max);
   const colors = proseFurthest(pill, theme, want, C, tone.h).colors;
-  return { ...colors, ...pillDot(line ?? colors.muted, proseBackdrops(colors.bg, theme), theme) };
+  const under = proseBackdrops(colors.bg, theme);
+  return {
+    ...colors,
+    ...pillDot(line ?? colors.muted, under, theme),
+    home: pillDot(line ?? colors.muted, under, theme, HOME_DOT_MIN),
+  };
 }
 
 /**
@@ -550,11 +576,12 @@ export function panelDotOf(lineColor: string | null | undefined, themeName: stri
  * The superscript dot after a foreign station's name (RS-LEADDOT) when the
  * pill it sits on is another line's: a slot's pill in a list of slots
  * (`StationBlob`'s `bySlot`) showing a station of line `lineColor`. The line
- * colour, ringed where it alone does not reach 3:1 on the pill's fill at
- * rest or on hover. On a pill of the station's own line the dot is that
- * pill's own leading dot (`PillColors.dot` and `ring`).
+ * colour, ringed where it alone does not reach the home dot's floor
+ * ({@link HOME_DOT_MIN}) on the pill's fill at rest or on hover. On a pill
+ * of the station's own line it is that pill's `PillColors.home`.
  */
 export function homeDotOn(lineColor: string | null | undefined, on: PillColors, themeName: string): PillDot {
   const theme = pillThemeOf(themeName);
-  return pillDot(lineHex(lineColor, theme.panel) ?? theme.muted, [on.bg, on.hoverBg], theme);
+  return pillDot(lineHex(lineColor, theme.panel) ?? theme.muted, [on.bg, on.hoverBg], theme, HOME_DOT_MIN);
 }
+

@@ -144,8 +144,8 @@ describe('prose pills (RS-PROSE)', () => {
     expect(home.parentElement).toHaveClass('sh-ppill-nw');
     expect(home.previousSibling?.textContent).toBe('12');
     expect(home.nextElementSibling).toHaveAttribute('data-prose-sid');
-    expect(foreign.style.getPropertyValue('--home-dot')).toBe(prosePillColorsOf('#ffff00', 'dark').dot);
-    expect(foreign.style.getPropertyValue('--home-ring')).toBe(prosePillColorsOf('#ffff00', 'dark').ring ?? 'transparent');
+    expect(foreign.style.getPropertyValue('--home-dot')).toBe(prosePillColorsOf('#ffff00', 'dark').home.dot);
+    expect(foreign.style.getPropertyValue('--home-ring')).toBe(prosePillColorsOf('#ffff00', 'dark').home.ring ?? 'transparent');
     // The line pill names no station: no home dot.
     expect(linePill.querySelector('[data-prose-home-dot]')).toBeNull();
     // The dot leads, before the context.

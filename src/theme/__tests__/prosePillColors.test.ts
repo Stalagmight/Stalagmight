@@ -5,9 +5,9 @@
  * dot (RS-LEADDOT) sits inside the core at its start, so the dot or its ring
  * reaches 3:1 there (on the glow over the panel and over each tinted box,
  * and on the bare ones). A foreign station's superscript home dot
- * (RS-LEADDOT) has the same colours (the pill is its owner's); it can hang
- * past the core into the halo and onto the panel, which the bare backdrops
- * cover. The glow is
+ * (RS-LEADDOT) is the same line colour at its own floor, 2:1 (it repeats
+ * what words say); it can hang past the core into the halo and onto the
+ * panel, which the bare backdrops cover. The glow is
  * a wash at one alpha, lighter than a dark panel and darker than a light
  * one, clearly off the panel, in the line's hue, and further off it for a
  * line nearer the text pole, so a near-white, a grey and a near-black line
@@ -24,6 +24,7 @@ import { themeTokens } from '../tokens';
 import { CSS_COLOR_NAMES, hexOfOklch, oklchOfHex } from '../cssColor';
 import { COMMENT_PALETTE, LIGHT_LINE_COLORS, LINE_COLORS, contrastRatio } from '../../utils/colors';
 import {
+  HOME_DOT_MIN,
   PILL_DOT_MIN,
   PILL_MUTED_MIN,
   PILL_TEXT_MIN,
@@ -88,16 +89,31 @@ describe('prosePillColors sweep', () => {
     expect(failures).toEqual([]);
   });
 
-  it.each(THEMES)('%s: a foreign station\'s home dot shares the leading dot\'s colours, swept on the glow and the bare panel (RS-LEADDOT)', (name) => {
+  it.each(THEMES)('%s: a foreign station\'s home dot or its ring 2:1 on the glow, the panel and the tinted boxes, ringed only where needed (RS-LEADDOT)', (name) => {
+    const theme = pillThemeOf(name);
+    const failures: string[] = [];
+    for (const color of COLORS) {
+      const p = prosePillColors(color, theme);
+      const h = p.home;
+      const under = proseBackdrops(p.bg, theme);
+      for (const bg of under) {
+        const c = contrastRatio(h.ring ?? h.dot, bg);
+        if (!(c >= HOME_DOT_MIN)) failures.push(`${color} home on ${bg} ${c.toFixed(2)}`);
+      }
+      const alone = Math.min(...under.map((bg) => contrastRatio(h.dot, bg)));
+      if (h.ring !== null && alone >= HOME_DOT_MIN + 0.3) failures.push(`${color} home ringed for nothing`);
+      if (h.ring !== null && p.ring === null) failures.push(`${color} home ringed, leading dot not`);
+    }
+    expect(failures).toEqual([]);
     for (const color of ['#f6f6f2', '#101010', '#ffe600', '#1f4fff', '#c2185b', '#808080']) {
       const p = prosePillColorsOf(color, name);
       const style = prosePillStyle(p, name) as Record<string, string>;
-      expect(style['--home-dot']).toBe(p.dot);
-      expect(style['--home-ring']).toBe(p.ring ?? 'transparent');
-      // The panel is among the backdrops the dot is held 3:1 on.
+      expect(style['--home-dot']).toBe(p.home.dot);
+      expect(style['--home-ring']).toBe(p.home.ring ?? 'transparent');
+      // The panel is among the backdrops the dot is held 2:1 on.
       const under = proseBackdrops(p.bg, pillThemeOf(name));
       expect(under).toContain(pillThemeOf(name).panel);
-      for (const bg of under) expect(contrastRatio(p.ring ?? p.dot, bg)).toBeGreaterThanOrEqual(PILL_DOT_MIN);
+      for (const bg of under) expect(contrastRatio(p.home.ring ?? p.home.dot, bg)).toBeGreaterThanOrEqual(HOME_DOT_MIN);
     }
   });
 

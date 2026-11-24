@@ -2604,7 +2604,8 @@ station's dot come back, the loop mark does not).
   ringed one (near-white or yellow on light) comes within about a pixel of a
   tall first letter. Room after such a pill (about 0.13em) would clear it
   but move the words after it, which "it doesnt need to take any space"
-  ruled out; left for the user to decide.
+  ruled out; left for the user to decide. (The quieter dot below clears
+  it.)
 - **Tests.** The unit tests pin the dot per pill kind, its colour, its place
   (after the name, before the Station ID, on the foreign end's own half, the
   last word of a two-word end) and its absence on native stations, line
@@ -2632,3 +2633,40 @@ station's dot come back, the loop mark does not).
   - line pitch equal to plain text's in every compared block (59 to 62
     blocks, 25 to 26 gaps per combination, 0 px deviation), every prose pill
     with its leading dot.
+- **Quieter (the user, the same day: "make the suprescript dot more
+  subtle").** 0.26em (was 0.36), 0.02em after the name, its middle where
+  it was; the full line colour; a 1px ring only below a floor of its own,
+  2:1 (`HOME_DOT_MIN`, was 3:1), the gentlest ring that clears it. Why 2:1:
+  WCAG 1.4.11's 3:1 is for graphics needed to understand the content, and
+  this dot is not: it repeats what the pill says in words (the tooltip
+  "Belongs to Main", the screen reader's "(Main)") and, on its owner's pill,
+  in its fill, border and leading dot. It must still be seen and its colour
+  told apart, so it keeps 2:1, a little above the 1.8:1 a pill's border
+  keeps to show its line's colour. The leading dot keeps 3:1: it is the
+  pill's own mark of its line. Compared in the real app on one build
+  (0.36, 0.28 and 0.26em; a 0.6px ring; 75% saturation; 80% opacity; link
+  and prose, light and dark, near-white, near-black, yellow, blue and
+  magenta lines): the thin ring broke up and all but lost the near-white
+  dot on light and the near-black one on dark; desaturating turned yellow
+  olive and fading sank blue and magenta into their dark fills, which is
+  what makes a colour hard to tell. Size did the quieting, and the lower
+  floor lightens the rings that remain (on the light link fills a
+  near-white dot's ring is `#9e9e9e`, was `#838383`; a yellow one's
+  `#ada03c`, was `#908214`); blue and magenta need none. The geometry is
+  custom properties on the pill (`--home-size`, `--home-gap`, `--home-mid`,
+  `--home-clear`, `--home-ring-w`), which the Station ID after the dot reads
+  too; it now steps aside 0.22em clear of the dot, so it moves less. Every
+  pill carries its own home dot colours (`PillColors.home`). The sweeps hold
+  the home dot or its ring at 2:1 on every fill, glow and blend on every
+  theme, ringed only where needed, only where the leading dot is, and never
+  with a stronger ring than a 3:1 dot would need. Measured in the real app
+  (build 018050114, the survey above plus two grey stubs showing a blue and
+  a magenta station; 17 surfaces, light and dark at 1440; shots in
+  `pr-assets/survey-graph/rs-subtle/`): 45 visible home dots per theme, each
+  against the median pixel under it with the dots hidden, at least 2.35:1
+  (light, 30 ringed) and 2.33:1 (dark, 5 ringed), every single pixel under a
+  dot at least 2:1; no glyph moves when one is hidden (beyond WebKit's
+  1/64 px layout rounding). At the end of a prose pill the dot now ends
+  0.03em before the next word's advance box (it overlapped it by about
+  0.07em): in the Delete Shot lead a pixel column separates the yellow dot's
+  ring from the next "i" on light, about 2 px on dark.

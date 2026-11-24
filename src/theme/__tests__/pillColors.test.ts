@@ -13,9 +13,12 @@
  * grey and a near-black line, which share a neutral fill, differ by their
  * borders, and its leading dot (the line colour, ringed only where it alone
  * does not reach 3:1 on the fill, RS-LEADDOT). A foreign station's
- * superscript home dot is its owner's leading dot on its owner's pill, and
- * on a slot's pill of another line (`homeDotOn`) the owner's colour ringed
- * against that pill's fill: swept over pairs of line colours.
+ * superscript home dot is its line's colour at a lower floor, 2:1
+ * (`HOME_DOT_MIN`: it repeats what its words say, and the user asked for it
+ * "more subtle"), ringed only below it, on its owner's pill (`PillColors.home`)
+ * and on a slot's pill of another line (`homeDotOn`), swept over every
+ * colour and over pairs of line colours; its ring is never stronger than the
+ * leading dot's.
  * Injection: dropping the ring (`ring: null` from `pillDot`) fails "dot or
  * ring 3:1" for a near-black line on the dark themes and a near-white or a
  * yellow one on the light themes.
@@ -26,6 +29,7 @@ import { COMMENT_PALETTE, LIGHT_LINE_COLORS, LINE_COLORS, contrastRatio } from '
 import { CSS_COLOR_NAMES, hexOfOklch, oklchOfHex } from '../cssColor';
 import {
   BORDER_MIN,
+  HOME_DOT_MIN,
   PILL_DOT_MIN,
   PILL_MUTED_MIN,
   PILL_TEXT_MIN,
@@ -111,7 +115,7 @@ describe('pillColors sweep', () => {
     }
   });
 
-  it.each(THEMES)('%s: a home dot on another line\'s pill (bySlot) or its ring 3:1 on the fill, at rest and on hover, ringed only where needed (RS-LEADDOT)', (name) => {
+  it.each(THEMES)('%s: a home dot on another line\'s pill (bySlot) or its ring 2:1 on the fill, at rest and on hover, ringed only where needed (RS-LEADDOT)', (name) => {
     // Every pill colour of a coarser sweep against every station line colour of it.
     const some = COLORS.filter((_, i) => i % 9 === 0).concat(['#f6f6f2', '#101010', '#ffe600', '#1f4fff', '#c2185b', '#808080']);
     const failures: string[] = [];
@@ -121,21 +125,54 @@ describe('pillColors sweep', () => {
         const d = homeDotOn(owner, on, name);
         for (const bg of [on.bg, on.hoverBg]) {
           const c = contrastRatio(d.ring ?? d.dot, bg);
-          if (!(c >= PILL_DOT_MIN)) failures.push(`${owner} on ${slot} (${bg}) ${c.toFixed(2)}`);
+          if (!(c >= HOME_DOT_MIN)) failures.push(`${owner} on ${slot} (${bg}) ${c.toFixed(2)}`);
         }
         const alone = Math.min(contrastRatio(d.dot, on.bg), contrastRatio(d.dot, on.hoverBg));
-        if (d.ring !== null && alone >= PILL_DOT_MIN + 0.3) failures.push(`${owner} on ${slot} ringed for nothing`);
+        if (d.ring !== null && alone >= HOME_DOT_MIN + 0.3) failures.push(`${owner} on ${slot} ringed for nothing`);
       }
     }
     expect(failures.slice(0, 20)).toEqual([]);
   });
 
-  it.each(THEMES)('%s: on its owner\'s pill the home dot is the leading dot itself', (name) => {
+  it.each(THEMES)('%s: on its owner\'s pill the home dot is the line colour at 2:1 on the fill, ringed only where needed, never more than the leading dot (RS-LEADDOT)', (name) => {
+    const theme = pillThemeOf(name);
+    const failures: string[] = [];
+    for (const color of COLORS) {
+      const p = pillColors(color, theme);
+      const h = p.home;
+      if (h.dot !== p.dot) failures.push(`${color} home dot ${h.dot} is not the line colour ${p.dot}`);
+      for (const bg of [p.bg, p.hoverBg]) {
+        const c = contrastRatio(h.ring ?? h.dot, bg);
+        if (!(c >= HOME_DOT_MIN)) failures.push(`${color} home on ${bg} ${c.toFixed(2)}`);
+      }
+      const alone = Math.min(contrastRatio(h.dot, p.bg), contrastRatio(h.dot, p.hoverBg));
+      if (h.ring !== null && alone >= HOME_DOT_MIN + 0.3) failures.push(`${color} home ringed for nothing`);
+      // Quieter, never louder: a ring only where the leading dot has one, and no stronger.
+      if (h.ring !== null && p.ring === null) failures.push(`${color} home ringed, leading dot not`);
+      if (h.ring !== null && p.ring !== null && contrastRatio(h.ring, p.bg) > contrastRatio(p.ring, p.bg) + 0.05) {
+        failures.push(`${color} home ring ${h.ring} stronger than ${p.ring}`);
+      }
+    }
+    expect(failures.slice(0, 20)).toEqual([]);
+    // On its owner's pill it is what `homeDotOn` gives for the owner itself.
     for (const color of ['#f6f6f2', '#101010', '#ffe600', '#1f4fff', '#c2185b']) {
       const p = pillColorsOf(color, name);
-      // The owner's own colour on the owner's own fill: what the leading dot sweep holds.
-      expect(homeDotOn(color, p, name)).toEqual({ dot: p.dot, ring: p.ring });
+      expect(homeDotOn(color, p, name)).toEqual(p.home);
     }
+  });
+
+  it('a near-white home dot on the light theme keeps a ring, a lighter one than the leading dot\'s (RS-LEADDOT)', () => {
+    const p = pillColorsOf('#f6f6f2', 'light');
+    expect(p.ring).not.toBeNull();
+    expect(p.home.ring).not.toBeNull();
+    expect(oklchOfHex(p.home.ring!).L).toBeGreaterThan(oklchOfHex(p.ring!).L);
+    // Yellow on light: an olive ring at 2:1, lighter than the 3:1 one.
+    const y = pillColorsOf('#ffe600', 'light');
+    expect(y.home.ring).not.toBeNull();
+    expect(oklchOfHex(y.home.ring!).L).toBeGreaterThan(oklchOfHex(y.ring!).L);
+    // Blue and magenta read alone on light, at either floor.
+    expect(pillColorsOf('#1f4fff', 'light').home.ring).toBeNull();
+    expect(pillColorsOf('#c2185b', 'light').home.ring).toBeNull();
   });
 
   it.each(THEMES)('%s: hover is a visible step from rest', (name) => {

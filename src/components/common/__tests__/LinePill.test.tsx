@@ -262,8 +262,9 @@ describe('ownership (RS-OWNERSHIP): a station of another line takes its colour, 
     const home = screen.getByTestId(`station-${MAIN}-1-link-home-dot`);
     expect(home.previousElementSibling).toHaveClass('sh-lpill-main');
     expect(home).toHaveAttribute('aria-hidden', 'true');
-    expect(cssVar(pill, '--home-dot')).toBe(pillColorsOf(SIDE_COLOR, 'dark').dot);
-    expect(cssVar(pill, '--home-ring')).toBe(pillColorsOf(SIDE_COLOR, 'dark').ring ?? 'transparent');
+    // The home dot is the owner's colour at its own, lower floor (2:1).
+    expect(cssVar(pill, '--home-dot')).toBe(pillColorsOf(SIDE_COLOR, 'dark').home.dot);
+    expect(cssVar(pill, '--home-ring')).toBe(pillColorsOf(SIDE_COLOR, 'dark').home.ring ?? 'transparent');
     // The context names the line the pill is coloured by, never the slot's.
     expect(screen.getByTestId(`station-${MAIN}-1-link-id`)).toHaveTextContent('Side:');
     expect(pill.querySelector('.sh-lpill-mark')).toBeNull();
