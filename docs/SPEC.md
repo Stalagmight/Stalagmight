@@ -382,7 +382,7 @@ frontend's per-slot `Station` (coordinates, `id`, `name`, `comment`,
 `is_zero_datum`, `gps_coordinates`, `merged_with` = the other slots of the same
 station, `closures_with` = direct and transitive closure relationships,
 `archived` = the station's archived stations, `shown` = on a foreign slot or a
-loop end only, the Station ID it shows, its home line and the loop mark) is
+loop end only, the Station ID it shows, its home line and whether it is a loop end) is
 derived for every slot; a junction's slots share its id, its shown name and
 comment, and its archived stations.
 
@@ -491,11 +491,11 @@ no closure archives is a **native slot**: the line shows its own station. On a
 was not kept) the line shows the kept station in the colour of that
 station's **home line**, its first native line in line order: its pill takes
 that line's colour and names it ("Main: 12", RS-OWNERSHIP); a loop end shows
-the kept end with a loop mark (the loop-closure sign `∽`, small and muted),
-in its kept end's home-line colour. A shot with such an end is two-tone,
-blending across the arrow: the half holding that end in its home line's
-colour, with that line's dot after the end's name, the arrow in the blend
-between the two colours. Plain text names them `Side / 12 (Main)` and
+the kept end in its kept end's home-line colour, with no mark: its tooltip
+says it is a loop end and a screen reader reads "loop end" (RS-NODOTS). A
+shot with such an end is two-tone, blending across the arrow: the half
+holding that end in its home line's colour (its tooltip "Belongs to Main"),
+the arrow in the blend between the two colours. Plain text names them `Side / 12 (Main)` and
 `Main / 12 (loop end on Side)`. Split Line Here keeps the split station native
 on both halves, or, when an archived station names the line there, that
 station names the second half too.
@@ -1136,27 +1136,33 @@ the test ids) but are never shown:
   pill (`LinePill.tsx`), coloured by the line it belongs to (a line its own, a
   station the line its shown station belongs to, which may be another than
   its slot's, RS-OWNERSHIP; a shot its line, two-tone when an end belongs to
-  another line): a dot in the line's colour, then
-  (for a station or shot on another line) the line name, smaller and muted,
+  another line), showing the line by colour alone (no dot, no mark,
+  RS-NODOTS): (for a station or shot on another line) the line name, smaller and muted,
   with a colon, then the label at the surrounding text size, and for a station
   its Station ID as a muted superscript with a `#` (`Main Line: 17` with a raised `#42`; the `#` is not read aloud). The aria-label
   and the selection announcement carry the ID too (`Select station Main Line
-  / 17, Station ID 42`). The fill, border, hover, dot and dot ring come from
-  `src/theme/pillColors.ts`, which holds main text at 7:1 and the muted parts
-  at 4.5:1 for any line colour on every theme. The Station detail's "Also on"
+  / 17, Station ID 42`). The fill (a tint of the line's hue), the border (the
+  line colour itself, moved toward the text only until it stands 1.8:1 from
+  the panel and the fill) and the hover come from `src/theme/pillColors.ts`,
+  which holds main text at 7:1 and the muted parts at 4.5:1 for any line
+  colour on every theme. A foreign end or a loop end says so in its tooltip
+  and its screen-reader words. The Station detail's "Also on"
   rows name the other line only, without the ID. The data table's gutter and
   line picker, and the dialogs that name stations or lines, use the same pill
   (`EntityBlob`). Below `full`, links are plain underlined text.
 - Running text (dialog sentences, the Station details' sentences, Warnings
   tab messages, undo and redo history rows, the conversion notice, toasts)
   names a station, shot or line with a **prose pill** (RS-PROSE,
-  `ProsePill`): the same dot, muted context, bare name, loop mark and
-  superscript Station ID inline in the sentence (a station of another line
-  in that line's colour, a two-tone shot as two tints blending across its
-  arrow, which never wraps away from either end), on a soft radial
-  tint of the line's colour that fades to the surface (no border, no pill
-  shape, so wrapped lines never meet), never as `Main / 12`. The paragraph's
-  line pitch is the same as with plain text. A screen reader reads the
+  `ProsePill`): the same muted context, bare name and superscript Station ID
+  inline in the sentence (a station of another line in that line's colour, a
+  two-colour shot blending across its arrow, which never wraps away from
+  either end), on a **glow** of the line's colour (RS-NODOTS): a soft-edged
+  capsule, solid behind the name and rounded at each end of each line's
+  piece, whose halo fades beyond it; a two-colour shot is one capsule whose
+  colour runs from one line's to the other's in OKLab across the arrow.
+  Glows on adjacent lines may touch softly; their cores never meet. Never
+  as `Main / 12`. The paragraph's line pitch is the same as with plain
+  text. A screen reader reads the
   sentence as plain text writes it (`Main / 12 (loop end on Side)`, sr-only
   words beside the drawing); aria-labels, tooltips, copies, exports and logs
   keep the plain text. Backend texts carry their names as parts beside the
