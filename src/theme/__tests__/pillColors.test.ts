@@ -26,7 +26,7 @@
 import { describe, expect, it } from 'vitest';
 import { themeTokens } from '../tokens';
 import { COMMENT_PALETTE, LIGHT_LINE_COLORS, LINE_COLORS, contrastRatio } from '../../utils/colors';
-import { hueStep } from './sweepDensity';
+import { ringHues } from './sweepDensity';
 import { CSS_COLOR_NAMES, hexOfOklch, oklchOfHex } from '../cssColor';
 import {
   BORDER_MIN,
@@ -52,7 +52,7 @@ function sweepColors(): string[] {
   const out: string[] = [];
   for (const L of [0.12, 0.25, 0.4, 0.55, 0.7, 0.85, 0.95, 0.99]) {
     for (const C of [0, 0.03, 0.08, 0.15, 0.25, 0.37]) {
-      for (let h = 0; h < 360; h += hueStep(10)) out.push(hexOfOklch({ L, C, h }));
+      for (const h of ringHues(10)) out.push(hexOfOklch({ L, C, h }));
     }
   }
   for (let v = 0; v <= 255; v += 15) {
@@ -118,7 +118,7 @@ describe('pillColors sweep', () => {
 
   it.each(THEMES)('%s: a home dot on another line\'s pill (bySlot) or its ring 2:1 on the fill, at rest and on hover, ringed only where needed (RS-LEADDOT)', (name) => {
     // Every pill colour of a coarser sweep against every station line colour of it.
-    const some = COLORS.filter((_, i) => i % 9 === 0).concat(['#f6f6f2', '#101010', '#ffe600', '#1f4fff', '#c2185b', '#808080']);
+    const some = COLORS.filter((_, i) => i % 9 === 0).concat(['#f6f6f2', '#101010', '#ffe600', '#1f4fff', '#c2185b', '#808080', '#0000ff', '#7b2fff', '#ff9900']);
     const failures: string[] = [];
     for (const slot of some) {
       const on = pillColorsOf(slot, name);

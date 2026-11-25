@@ -484,13 +484,18 @@ never returns. Use `pnpm exec vitest run` (or `CI=1 pnpm test`) for a
 deterministic run. CI is unaffected.
 
 **The pill colour sweeps sample by default.** `src/theme/__tests__/pillColors`,
-`prosePillColors` and `twoTonePills` check a deterministic subset of their
-colours and pairs. That subset always keeps the hard cases: near-white,
-near-black, yellow, blue, grey, every app palette and every CSS name. The full
-sweeps are about 50 s of unbroken CPU. On a slow CI runner they made the `check`
-job fail with `Timeout calling "onTaskUpdate"` even though every test passed.
-Run the full sweep whenever `pillColors.ts`, `pillBlend.ts` or `proseGlow.ts`
-changes:
+`prosePillColors` and `twoTonePills` check a deterministic subset by default.
+- Single colours: the hue rings are three times wider, plus the yellow and
+  blue peaks, and every hard colour, app palette and CSS name is always in.
+- Pairs: every pair that holds one of the core colours (near-white,
+  near-black, yellow, blue, grey, black, white) is swept both ways, plus every
+  third of the rest.
+
+The full sweeps are about 50 s of unbroken CPU. Run inside the whole suite on
+CI's runner, they made the `check` job fail with `Timeout calling
+"onTaskUpdate"` even though every test passed. CI therefore runs them in full in
+a step of their own after `pnpm test`. Run the full sweep locally whenever
+`pillColors.ts`, `pillBlend.ts` or `proseGlow.ts` changes:
 
 ```bash
 STALAGMIGHT_FULL_COLOUR_SWEEP=1 pnpm exec vitest run src/theme

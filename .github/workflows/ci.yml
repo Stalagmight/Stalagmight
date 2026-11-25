@@ -153,6 +153,16 @@ jobs:
       # vitest unit + component tests (issue #107). `vitest` auto-detects CI
       # (CI=true) and runs once instead of watching.
       - run: pnpm test
+      # The pill colour sweeps sample by default (src/theme/__tests__/
+      # sweepDensity.ts): the full sweeps are about 50 s of unbroken CPU, and
+      # run inside the whole suite they made vitest's worker RPC time out
+      # ("Timeout calling onTaskUpdate") although every test passed. Here they
+      # run in full, alone, so the legibility guarantee is still checked on
+      # every change.
+      - name: Full pill colour sweep
+        env:
+          STALAGMIGHT_FULL_COLOUR_SWEEP: '1'
+        run: pnpm exec vitest run src/theme
       # Zero sccache counters so the post-step reports THIS run's hit-rate, not
       # lifetime totals. Self-hosted only - no sccache on hosted. `|| true`: an
       # observability step must never be able to fail the merge gate. (Likely

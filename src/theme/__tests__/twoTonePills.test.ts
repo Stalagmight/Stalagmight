@@ -70,13 +70,13 @@ const HARD = [
   ...[0, 60, 120, 180, 240, 300].flatMap((h) => [hexOfOklch({ L: 0.5, C: 0.15, h }), hexOfOklch({ L: 0.88, C: 0.12, h })]),
 ];
 
-/** The hardest colours, whose pairs are always all swept (near-white, near-black, yellow, blue, grey, black, white). */
+/** The hardest colours (near-white, near-black, yellow, blue, grey, black, white): every pair that holds one is always swept, both ways. */
 const CORE = new Set(HARD.slice(0, 7));
 
 const PAIRS: Array<[string, string]> = sampled(
   HARD.flatMap((a) => HARD.filter((b) => b !== a).map((b) => [a, b] as [string, string])),
   3,
-  ([a, b]) => CORE.has(a) && CORE.has(b),
+  ([a, b]) => CORE.has(a) || CORE.has(b),
 );
 
 /** The floors of one half: its text and muted part, and its leading dot when it holds it, on each of its backgrounds. */
@@ -192,7 +192,7 @@ type PillTint = 'link' | 'prose';
 const colorsOf = (variant: PillTint, name: string) => (c: string) => (variant === 'link' ? pillColorsOf(c, name) : prosePillColorsOf(c, name));
 
 describe.each(['link', 'prose'] as const)('blended two-tone %s pills (RS-BLEND)', (variant) => {
-  it.each(THEMES)('%s: text, muted parts and the leading dot read on every blend of every pair', (name) => {
+  it.each(THEMES)('%s: text, muted parts and the leading dot read on every blend of every swept pair', (name) => {
     const theme = pillThemeOf(name);
     const panel = variant === 'prose' ? theme.panel : undefined;
     const failures: string[] = [];
@@ -255,7 +255,7 @@ function bridgeColours(left: PillColors, right: PillColors, panel?: string): str
 }
 
 describe.each(['link', 'prose'] as const)('the arrow of a two-tone %s pill reads on its whole blend (RS-ARROW)', (variant) => {
-  it.each(THEMES)('%s: the arrow (text 7:1) on every colour from one half to the other, both ways', (name) => {
+  it.each(THEMES)('%s: the arrow (text 7:1) on every colour from one half to the other, every swept pair both ways', (name) => {
     const theme = pillThemeOf(name);
     const panel = variant === 'prose' ? theme.panel : undefined;
     const of = colorsOf(variant, name);
@@ -320,7 +320,7 @@ function checkHomeDot(label: string, style: Record<string, string>, own: PillCol
 }
 
 describe.each(['link', 'prose'] as const)('the home dot of a foreign end on a two-tone %s pill (RS-LEADDOT)', (variant) => {
-  it.each(THEMES)('%s: on its own half, every blend, and over the arrow it overhangs, every pair both ways', (name) => {
+  it.each(THEMES)('%s: on its own half, every blend, and over the arrow it overhangs, every swept pair both ways', (name) => {
     const theme = pillThemeOf(name);
     const panel = variant === 'prose' ? theme.panel : undefined;
     const on = (c: string[]) => (panel ? onSurfaces(c, name) : c);
