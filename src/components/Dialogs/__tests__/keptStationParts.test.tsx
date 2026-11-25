@@ -9,9 +9,16 @@
  * footer.
  */
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, renderHook, screen } from '@testing-library/react';
 import '../../../i18n';
-import { answeredName, collisionAnswerProse, collisionAnswerText, recordIdentity, StickyDialogFooter } from '../keptStationParts';
+import {
+  answeredName,
+  collisionAnswerProse,
+  collisionAnswerText,
+  recordIdentity,
+  StickyDialogFooter,
+  useCollisionAnswers,
+} from '../keptStationParts';
 import { keptProse } from '../keptStationProse';
 import type { NameCollision } from '../../../types/ipc/NameCollision';
 import { proseParts, proseToPlain } from '../../../utils/prose';
@@ -161,5 +168,60 @@ describe('StickyDialogFooter', () => {
     expect(footer.className).toMatch(/\bsticky\b/);
     expect(footer.className).toMatch(/-bottom-4/);
     expect(footer.className).toMatch(/bg-panel/);
+  });
+});
+
+describe('useCollisionAnswers', () => {
+  const other: NameCollision = { ...collision, name: '5', letter: { ...collision.letter, to: '5a' }, alternative: { ...collision.alternative, to: '5a' } };
+
+  it('answers every collision with the letter until one is picked', () => {
+    const { result } = renderHook(() => useCollisionAnswers([collision]));
+    expect(result.current[0]).toEqual(['letter']);
+    act(() => result.current[1](0, 'alternative'));
+    expect(result.current[0]).toEqual(['alternative']);
+  });
+
+  // The defaults used to be set in an effect, which runs after the rows are
+  // on screen: until it ran, the rows showed answers of the previous
+  // collisions (or none), and a pick made in that window was then overwritten
+  // with the letter, so Remove Closure sent the other station's rename (CI on
+  // #829). Every render must answer exactly the collisions it shows.
+  // Injection: put the defaults back in a useEffect and the first render with
+  // new collisions answers the old ones.
+  it('answers the collisions it shows on the very render that shows them', () => {
+    const seen: { count: number; answers: string[] }[] = [];
+    const { result, rerender } = renderHook(
+      ({ c }: { c: NameCollision[] | undefined }) => {
+        const out = useCollisionAnswers(c);
+        seen.push({ count: c?.length ?? 0, answers: [...out[0]] });
+        return out;
+      },
+      { initialProps: { c: undefined as NameCollision[] | undefined } },
+    );
+    rerender({ c: [collision] });
+    act(() => result.current[1](0, 'alternative'));
+    rerender({ c: [other, collision] });
+    for (const render of seen) expect(render.answers).toHaveLength(render.count);
+    expect(result.current[0]).toEqual(['letter', 'letter']);
+  });
+
+  it('keeps a pick made right after the rows appear', () => {
+    const { result, rerender } = renderHook(({ c }: { c: NameCollision[] | undefined }) => useCollisionAnswers(c), {
+      initialProps: { c: undefined as NameCollision[] | undefined },
+    });
+    rerender({ c: [collision] });
+    act(() => result.current[1](0, 'alternative'));
+    expect(result.current[0]).toEqual(['alternative']);
+  });
+
+  it('starts over when the collisions change', () => {
+    const { result, rerender } = renderHook(({ c }: { c: NameCollision[] }) => useCollisionAnswers(c), {
+      initialProps: { c: [collision] },
+    });
+    act(() => result.current[1](0, 'alternative'));
+    rerender({ c: [other] });
+    expect(result.current[0]).toEqual(['letter']);
+    rerender({ c: [other, collision] });
+    expect(result.current[0]).toEqual(['letter', 'letter']);
   });
 });
