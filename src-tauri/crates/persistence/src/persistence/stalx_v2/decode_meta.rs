@@ -419,6 +419,12 @@ fn read_local_sync(raw: &RawValue, keep: &mut Keep, drop: &mut impl FnMut(String
             "base" => serde_json::from_str(text)
                 .map(|v| sync.base_commit = Some(v))
                 .is_ok(),
+            "base_survey" => serde_json::from_str(text)
+                .map(|v| sync.base_survey = Some(v))
+                .is_ok(),
+            "base_survey_edit" => time_value(text)
+                .map(|v| sync.base_survey_edit = Some(v))
+                .is_some(),
             "unpushed" => serde_json::from_str(text)
                 .map(|v| sync.unpushed_edits = v)
                 .is_ok(),

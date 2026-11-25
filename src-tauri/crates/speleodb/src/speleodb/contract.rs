@@ -59,31 +59,101 @@ pub enum SpeleoDbAction {
 
 /// Why a transport attempt never reached (or never finished with) the server.
 ///
-/// [#270] Derived from the TYPED `reqwest::Error` / `io::ErrorKind` /
-/// `rustls::Error` at the point of failure (`client::network_error` /
-/// `client::api_error`, and `tls::enforce` for an unresolvable `http://` host),
-/// never from the error's Display text -
-/// `io::Error`'s message comes from `strerror`, so it is OS- and locale-
-/// dependent and unusable as a discriminant. Crosses IPC on
+/// [#270] Derived from the TYPED error tree at the point of failure
+/// (`client::transport_cause`, the one classifier of the SDK's send and body
+/// failures: `reqwest::Error`, `hyper::Error`, `io::ErrorKind`, `rustls::Error`;
+/// and `tls::enforce` for an unresolvable `http://` host), never from the
+/// error's Display text - `io::Error`'s message comes from `strerror`, so it is
+/// OS- and locale-dependent and unusable as a discriminant. Crosses IPC on
 /// [`SpeleoErrorDto::transport`] so the frontend renders a translated,
 /// actionable line ("could not reach SpeleoDB at <endpoint> …") instead of
 /// surfacing a bare errno like "Invalid argument". The raw cause is kept in the
 /// error's `detail` (and logged) so bug reports stay actionable.
+///
+/// What each cause says about the request (F1): after [`Self::Refused`] or
+/// [`Self::Dns`] nothing reached the server; after [`Self::Timeout`],
+/// [`Self::Dropped`], [`Self::Tls`] (a TLS error after the handshake can follow
+/// a request already sent) or [`Self::Unknown`] the request may have reached it.
+/// So
+/// every WRITE (upload, lock acquire and release, publish, project create)
+/// treats every transport failure as an outcome it does not know, whatever the
+/// cause: an upload stays unconfirmed and dirty, an acquire asks the server who
+/// holds the lock. A READ that failed with a cause [`Self::got_no_reply`] names
+/// got no complete reply, so it learnt nothing from the server, and an open then
+/// opens the cached copy offline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub enum TransportCause {
-    /// The connection was refused, dropped, or the network/host was unreachable.
+    /// The connection could not be made: the connector failed, refused, the
+    /// network or host unreachable, or any other failure to connect (a
+    /// blackholed address's EINVAL, the case #270 was found through). Nothing
+    /// was sent.
     Refused,
+    /// The connection was made, then closed, reset or reported unreachable
+    /// before the whole reply arrived: closed before any reply, a reply head cut
+    /// short, or a body shorter than its length (F1). The request may have
+    /// reached the server. A JSON reply whose body was cut short is this whatever
+    /// its status said, since the SDK reads the body before the status (a
+    /// download's refusal cut short is [`Self::Unknown`]: the SDK reads that
+    /// body only for a status that is not 200).
+    Dropped,
     /// A configured timeout elapsed (dial, response, or body read).
     Timeout,
     /// The hostname could not be resolved.
     Dns,
-    /// The TLS handshake / certificate validation failed.
+    /// The TLS handshake / certificate validation failed, or a TLS error ended
+    /// the connection after it.
     Tls,
-    /// Anything else - a blackholed address (the EINVAL this fix was
-    /// found through), an unclassified transport failure. Fails to the generic
-    /// "could not reach the server" line rather than showing the raw errno.
+    /// Anything else: an unclassified transport failure, such as a reply that is
+    /// not HTTP at all. Fails to the generic "could not reach the server" line
+    /// rather than showing the raw error.
     Unknown,
+}
+
+impl TransportCause {
+    /// Whether a request that failed this way got no complete reply from the
+    /// server: the connection could not be made, the name did not resolve, the
+    /// time ran out, or the connection closed or reset before the whole reply
+    /// arrived. A read without a reply learnt nothing about the project, so an
+    /// open may fall back to the cached copy (`offline_open_result`).
+    ///
+    /// Not [`Self::Tls`]: the peer did not prove it is the server, which the user
+    /// has to see and fix. Not [`Self::Unknown`]: an unclassified failure fails
+    /// closed. A write never asks this: its outcome is unknown after every
+    /// transport failure (see the type).
+    #[must_use]
+    pub const fn got_no_reply(self) -> bool {
+        matches!(
+            self,
+            Self::Refused | Self::Dropped | Self::Timeout | Self::Dns
+        )
+    }
+
+    /// Whether a request that failed this way never left this computer: the
+    /// connection could not be made, or the server's name did not resolve. A
+    /// WRITE that failed this way did not happen, so it leaves nothing to check
+    /// or hand back; after every other cause it may have reached the server.
+    #[must_use]
+    pub const fn nothing_sent(self) -> bool {
+        matches!(self, Self::Refused | Self::Dns)
+    }
+
+    /// The cause in plain words, for a sentence the backend builds itself (a
+    /// warning that a lock could not be handed back). Never the raw diagnostic,
+    /// which stays in the error's `detail` and the log. The frontend words a
+    /// failure it holds the cause of from its own translated lines instead
+    /// (`humanizeSpeleoError`).
+    #[must_use]
+    pub const fn plain_reason(self) -> &'static str {
+        match self {
+            Self::Refused => "could not connect to SpeleoDB",
+            Self::Dropped => "the connection to SpeleoDB was lost before it finished answering",
+            Self::Timeout => "SpeleoDB did not respond in time",
+            Self::Dns => "could not find the SpeleoDB server",
+            Self::Tls => "could not set up a secure connection to SpeleoDB",
+            Self::Unknown => "could not reach SpeleoDB",
+        }
+    }
 }
 
 /// Why the endpoint policy (`tls::validate_endpoint`) refused a server address
@@ -391,6 +461,8 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         newer_schema,
         endpoint_refusal,
         format_refused,
+        replaced_revisions: None,
+        lock_may_be_held: None,
     }
 }
 
@@ -401,6 +473,50 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
 )]
 mod tests {
     use super::{dto_for_error, map_status, Endpoint, SpeleoDbAction, SpeleoDbError};
+
+    #[test]
+    fn a_transport_failure_reads_in_plain_words_and_only_a_failed_connection_sent_nothing() {
+        // Demo items 3 and 4: the backend's own sentences name a transport failure
+        // by its cause, never "Network error talking to SpeleoDB: <raw>", and only
+        // a connection that could not be made or a name that did not resolve
+        // means the request never left this computer.
+        use super::TransportCause::{Dns, Dropped, Refused, Timeout, Tls, Unknown};
+        let mut reasons = Vec::new();
+        for cause in [Refused, Dropped, Timeout, Dns, Tls, Unknown] {
+            assert_eq!(
+                cause.nothing_sent(),
+                matches!(cause, Refused | Dns),
+                "{cause:?}"
+            );
+            let error = SpeleoDbError::Transport {
+                cause,
+                detail: "error sending request".to_owned(),
+            };
+            let reason = error.user_reason();
+            assert_eq!(reason, cause.plain_reason(), "{cause:?}");
+            assert!(
+                !reason.contains("Network error") && !reason.contains("error sending request"),
+                "{cause:?}: {reason}"
+            );
+            let dto = dto_for_error(Endpoint::Release, &error);
+            assert_eq!(dto.user_reason(), reason, "{cause:?}: the IPC shape agrees");
+            reasons.push(reason);
+        }
+        reasons.sort();
+        reasons.dedup();
+        assert_eq!(reasons.len(), 6, "each cause has its own words");
+        let other = SpeleoDbError::Status {
+            status: 503,
+            message: "Synthetic".to_owned(),
+        };
+        assert_eq!(other.user_reason(), other.to_string());
+        let dto = dto_for_error(Endpoint::Release, &other);
+        assert_eq!(
+            dto.user_reason(),
+            dto.message,
+            "anything else is its message"
+        );
+    }
 
     #[test]
     fn map_status_per_row() {

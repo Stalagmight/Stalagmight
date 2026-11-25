@@ -3,7 +3,7 @@ import type { TFunction } from 'i18next';
 import type { SpeleoCachedProject, SpeleoProjectSummary } from '../../types/ipc.generated';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { permissionAtLeast } from '../../utils/speleoPermission';
-import type { SpeleoLockInfo } from './SpeleoLockBadge';
+import { ownLockText, type SpeleoLockInfo } from './SpeleoLockBadge';
 
 /**
  * The one line that says what the user can do with the project: edit it, wait for
@@ -17,7 +17,9 @@ export function speleoProjectEditLine(
   cached: SpeleoCachedProject | undefined,
 ): string {
   if (cached?.ownership === 'signed_out') return t('speleodb.cachedCopies.readOnlySignedOut');
-  if (lock.lockHolder && lock.lockedByMe) return t('speleodb.projectListing.lockedByYou');
+  // "You are editing" only for a lock this computer took; the held-lock prompt's
+  // words otherwise (sdbdemo2 issue 3: the two used to disagree on one screen).
+  if (lock.lockHolder && lock.lockedByMe) return ownLockText(t, lock.lockOrigin, 'speleodb.projectListing.lockedByYou');
   // A known permission below read-and-write can never edit, whoever holds the lock.
   if (summary.permission && !permissionAtLeast(summary.permission, 'READ_AND_WRITE')) {
     return t('speleodb.cachedCopies.viewOnly');

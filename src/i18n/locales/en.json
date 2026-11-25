@@ -3805,7 +3805,7 @@
       "description": "Your local changes and the version on SpeleoDB have diverged. Choose how to resolve it.",
       "keepLocal": {
         "label": "Keep my local version",
-        "help": "Upload your version to SpeleoDB to resolve the conflict."
+        "help": "Check SpeleoDB again and upload your version if nothing new has landed there. While SpeleoDB has a revision your copy does not contain, this comes back here: to keep your edits then, save them as an unmanaged file."
       },
       "takeRemote": {
         "label": "Take the SpeleoDB version",
@@ -3813,6 +3813,8 @@
         "confirm": {
           "title": "Discard your local changes?",
           "warning": "This permanently destroys your unpushed local edits since the last sync. They are not saved anywhere else and this cannot be undone.",
+          "lockKept": "You keep the write lock and go on editing the SpeleoDB version.",
+          "lockUnchanged": "The write lock is left as it is, and the project stays read-only.",
           "hint": "To keep your work instead, go Back and choose \"Save my version as an unmanaged file\".",
           "back": "Back",
           "destroy": "Destroy and continue",
@@ -4024,6 +4026,7 @@
     },
     "transport": {
       "refused": "Could not connect to SpeleoDB at {{endpoint}}. Check your network connection, the server address, and whether the server is running.",
+      "dropped": "The connection to SpeleoDB at {{endpoint}} was lost before it finished answering. Check your network connection and try again.",
       "timeout": "SpeleoDB at {{endpoint}} did not respond in time. Check your network connection and that the server is running.",
       "dns": "Could not find the SpeleoDB server at {{endpoint}}. Check the address in Settings and your network connection.",
       "tls": "Could not set up a secure connection to SpeleoDB at {{endpoint}}. Check the server's certificate and the address in Settings.",
@@ -4043,13 +4046,19 @@
       "startEditingToRetry": "Start editing to upload",
       "noAnchor": "This survey has no georeferenced zero datum, so SpeleoDB generated no new map geometry. Your data is still stored and shared; any existing online map may be stale."
     },
+    "replaced": {
+      "named": "\"{{message}}\" ({{sha}})",
+      "notice_one": "Your upload replaced {{name}}, uploaded by {{author}} while yours was on its way. Its changes are not in yours. It is still in the SpeleoDB tab's Revision History, where you can view or restore it.",
+      "notice_other": "Your upload replaced {{count}} revisions uploaded by {{author}} while yours was on its way, the latest {{name}}. Their changes are not in yours. They are still in the SpeleoDB tab's Revision History, where you can view or restore them."
+    },
     "heldLocks": {
-      "title": "You hold SpeleoDB write locks",
-      "description_one": "You still hold the write lock on this SpeleoDB project (perhaps from a session that did not exit cleanly). Others cannot edit it until it is released.",
-      "description_other": "You still hold the write lock on {{count}} SpeleoDB projects (perhaps from a session that did not exit cleanly). Others cannot edit them until they are released.",
+      "title": "Your account holds SpeleoDB write locks",
+      "description_one": "Your account holds the write lock on this SpeleoDB project. It may belong to Stalagmight open on another computer with this account, or to a session that did not exit cleanly. If that session is still editing, releasing the lock lets others change the project under it.",
+      "description_other": "Your account holds the write lock on {{count}} SpeleoDB projects. Each may belong to Stalagmight open on another computer with this account, or to a session that did not exit cleanly. If that session is still editing, releasing its lock lets others change the project under it.",
+      "notThisComputer": "Held by this account, not by this computer",
       "keep": "Not now",
-      "release": "Release",
-      "releaseOneAria": "Release the write lock on {{name}}",
+      "release": "Release anyway",
+      "releaseOneAria": "Release the write lock on {{name}} anyway",
       "releasing": "Releasing…",
       "releaseFailed": "Could not release the write locks"
     },
@@ -4069,6 +4078,9 @@
       }
     },
     "workspace": {
+      "newerOnServer": "SpeleoDB has a newer revision than this copy.",
+      "newerOnServerResume": "SpeleoDB has a newer revision than this copy. Resume editing downloads it first.",
+    "newerOnServerReload": "SpeleoDB has a newer revision than this copy. Reload Project downloads it, and you go on editing.",
       "disabled": {
         "busy": "Wait for the current SpeleoDB operation to finish.",
         "noAccess": "Your SpeleoDB account has no access to this project.",
@@ -4094,11 +4106,18 @@
       "youAreEditing": "You are editing",
       "beingEditedBy": "Currently being edited by {{email}}",
       "readyForEditing": "Ready for editing",
-      "readOnly": "Read-only"
+      "readOnly": "Read-only",
+      "heldByYourAccount": "Read-only - your account holds the write lock",
+      "offlineFree": "Offline - the lock was free when last checked",
+      "offlineHeldBy": "Offline - {{email}} was editing when last checked",
+      "offlineHeldByYou": "Offline - your account held the lock when last checked",
+      "offlineUnknown": "Offline - lock state not known"
     },
     "recentBadge": {
       "remote": "Linked to SpeleoDB",
       "lockedByYou": "Linked to SpeleoDB - you are editing",
+      "heldByThisAccount": "Linked to SpeleoDB - held by this account",
+      "heldNotHere": "Linked to SpeleoDB - held by this account, not by this computer",
       "lockedByOther": "Linked to SpeleoDB - currently being edited by {{email}}"
     },
     "projectListing": {
@@ -4112,9 +4131,12 @@
       },
       "lockedBy": "Currently being edited by {{email}}",
       "lockedByYou": "You are editing",
+      "heldByThisAccount": "Held by this account",
       "unlocked": "Ready for editing",
       "lockUnknown": "Editing status unknown",
-      "offlineCopy": "SpeleoDB is unreachable. Opened the last downloaded copy; it may be out of date."
+      "offlineCopy": "SpeleoDB is unreachable. Opened the last downloaded copy; it may be out of date.",
+      "offlineCopyBehind": "SpeleoDB has a newer revision of this project, but its download did not finish. Opened the copy on this computer, which is older.",
+      "offlineCopyCurrent": "The download from SpeleoDB did not finish. Opened the copy on this computer, which is based on SpeleoDB's latest revision."
     },
     "recentInfo": {
       "prefix": "SpeleoDB: {{name}}",
@@ -4248,9 +4270,20 @@
     },
     "readOnlyNotice": {
       "title": "Project opened read-only",
+      "stillReadOnlyTitle": "Still read-only",
+      "lockLostTitle": "Editing stopped",
+      "lockLostReleased": "SpeleoDB no longer holds the write lock for your account: it was handed back elsewhere, for example by Stalagmight open on another computer with this account. This project is read-only now, and your changes are kept on this computer. Resume editing takes the lock again.",
+      "lockLostTaken": "{{email}} holds the write lock now, so this project is read-only. Your changes are kept on this computer, and you can upload them once {{email}} has finished.",
+      "lockLostPermission": "Your SpeleoDB access no longer allows editing this project, so it is read-only now. Your changes are kept on this computer.",
+      "reloadLockReleased": "SpeleoDB no longer holds the write lock for your account: it was handed back elsewhere, for example by Stalagmight open on another computer with this account. The SpeleoDB version is open read-only. Resume editing takes the lock again.",
+      "reloadLockTaken": "{{email}} holds the write lock now, so the SpeleoDB version is open read-only.",
+      "lockMayBeHeld": "The lock request may have reached SpeleoDB; if it did, Stalagmight hands the lock back when you close the project, or you can try again.",
       "lockedBy": "{{email}} is currently editing this project. You can view it, but you cannot make changes.",
       "unavailable": "The editing lock could not be acquired. You can view this project, but you cannot make changes.",
       "failed": "The editing lock could not be acquired. This project is open read-only.",
+      "reloadedNotEditing": "The SpeleoDB version is open, but editing did not start. Resume editing tries again.",
+      "heldByYourAccount": "Your account already holds this project's write lock. It may belong to Stalagmight open on another computer with this account, or to a session that did not exit cleanly, so the project opened read-only. Resume editing edits it here too.",
+      "heldByYourAccountKeepsChanges": "Your account already holds this project's write lock. It may belong to Stalagmight open on another computer with this account, or to a session that did not exit cleanly, so the project opened read-only. Your changes are kept on this computer, and Resume editing edits it here too.",
       "continue": "Continue read-only"
     },
     "release": {
@@ -4370,6 +4403,8 @@
       "discardOthersKept": "Only this project is affected: the other projects keep their changes on this computer.",
       "discardFailed": "The changes to \"{{name}}\" could not be discarded.",
       "willRelease": "These projects will be handed back so others can edit them:",
+    "heldUnclaimedBody_one": "Your account holds the write lock on this project, and Stalagmight on this computer did not take it. It may belong to Stalagmight open on another computer with this account, or to a session that did not exit cleanly, so disconnecting leaves it held. If that session is still editing, releasing the lock lets others change the project under it.",
+    "heldUnclaimedBody_other": "Your account holds the write lock on these {{count}} projects, and Stalagmight on this computer did not take them. Each may belong to Stalagmight open on another computer with this account, or to a session that did not exit cleanly, so disconnecting leaves them held. If that session is still editing, releasing its lock lets others change the project under it.",
       "signOut": "Disconnect",
       "switch": "Switch account",
       "releasing": "Handing projects back to SpeleoDB…",
@@ -4385,8 +4420,10 @@
   "speleoReleaseFailed": {
     "title": "Couldn't hand back the lock",
     "body": "Stalagmight could not hand back the SpeleoDB lock on \"{{name}}\" before {{action}}. Until it is handed back, nobody else can edit the project.",
+    "bodyMaybeHeld": "Stalagmight could not check whether your account holds the SpeleoDB lock on \"{{name}}\", so it could not hand it back before {{action}}. If your account holds it, nobody else can edit the project until it is handed back.",
     "reason": "What went wrong: {{reason}}",
     "choices": "Retry asks SpeleoDB again and hands the lock back if it is still yours. Close and keep the lock leaves the project reserved for you: the next time you connect to SpeleoDB, Stalagmight offers to release it, and you can also release it on the SpeleoDB website. Cancel keeps the project open, read-only until you resume editing.",
+    "choicesMaybeHeld": "Retry asks SpeleoDB again and hands the lock back if it is yours. Close and keep the lock leaves it as it is: if your account holds it, the next time you connect to SpeleoDB, Stalagmight offers to release it, and you can also release it on the SpeleoDB website. Cancel keeps the project open, read-only until you resume editing.",
     "retry": "Retry",
     "retrying": "Retrying...",
     "keep": "Close and keep the lock",

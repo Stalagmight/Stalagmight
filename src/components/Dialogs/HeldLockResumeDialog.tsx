@@ -6,7 +6,12 @@ import { useSpeleoStore, type HeldLock } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { useSpeleoOperationBusy } from '../../hooks/useSpeleoOperationBusy';
 import { useSpeleoLocalStates } from '../../hooks/useSpeleoLocalStates';
-import { hasUnpushedEdits, localStateUnknown, UNPUSHED_ACCENT } from '../../utils/speleoLocalState';
+import {
+  hasUnpushedEdits,
+  localStateUnknown,
+  lockNotTakenHere,
+  UNPUSHED_ACCENT,
+} from '../../utils/speleoLocalState';
 import { humanizeSpeleoError } from '../../utils/speleoError';
 import { needsSpeleoExitPrompt } from '../../utils/speleoExit';
 import { Button } from '../common/Button';
@@ -38,8 +43,18 @@ import { useScreenOccupant } from '../../hooks/useScreenOccupant';
  *   withheld. The Rust guard fails closed on the same input; this keeps the two in
  *   agreement rather than having the UI offer what the backend would refuse.
  *
+ * SpeleoDB's lock belongs to the ACCOUNT (demo item 1): the same account signed in
+ * on another computer holds the very lock this scan lists, and may be editing
+ * under it right now. Nothing here can tell that live session from a crashed one,
+ * so the prompt says both are possible and what releasing does, the release is the
+ * worded "Release anyway" (never a default, never hidden: a crashed session's lock
+ * must stay releasable), and a row this computer can positively not have taken
+ * (`lockNotTakenHere`: no claim of this run, no copy, no recent file linked to the
+ * project) says it is held by this account, not by this computer.
+ *
  * Dialog-wide:
- * - **Not now** - dismiss and leave the locks held.
+ * - **Not now** - dismiss and leave the locks held. It is the default (focused on
+ *   open), so Enter never releases a lock another session may be editing under.
  *
  * There is deliberately NO bulk release. The server verb is all-or-nothing and this
  * prompt is exactly where locks sitting over un-pushed work show up, so a single
@@ -86,6 +101,16 @@ export default function HeldLockResumeDialog() {
   // false` (the listing fails open per row), so without this it is indistinguishable
   // from clean and would offer Release. See `localStateUnknown`.
   const unknownState = (projectId: string) => localStateUnknown(states, projectId);
+  // Held by this account, not by this computer: a positive answer from a read that
+  // succeeded, never a guess from a missing or failed one.
+  const notTakenHere = (projectId: string) =>
+    loaded &&
+    !failed &&
+    lockNotTakenHere(
+      states,
+      projectId,
+      recentProjects.some((p) => p.speleodb_project_id === projectId),
+    );
 
   /**
    * Which action a row offers. Release is the one irreversible button here - the
@@ -205,7 +230,11 @@ export default function HeldLockResumeDialog() {
           );
           return;
         }
-        const result = await loadProject(path);
+        // Without the open's automatic Start Editing: the explicit one below is
+        // the resume. The automatic one stops at a lock this run never claimed
+        // (sdbdemo2 issue 3) and would raise its read-only notice over a resume
+        // the user has just asked for.
+        const result = await loadProject(path, { acquireLock: false });
         // loadProject surfaces its own failure; leave the prompt up so the lock is
         // still resolvable.
         if (!result.success) return;
@@ -250,6 +279,7 @@ export default function HeldLockResumeDialog() {
           {locks.map((lock) => {
             const hasEdits = dirty(lock.projectId);
             const stateUnknown = unknownState(lock.projectId);
+            const elsewhere = notTakenHere(lock.projectId);
             const action = actionFor(lock.projectId);
             return (
               <li
@@ -259,6 +289,7 @@ export default function HeldLockResumeDialog() {
                 data-local-edits={hasEdits ? 'true' : 'false'}
                 data-local-state-unknown={stateUnknown ? 'true' : 'false'}
                 data-row-action={action}
+                data-lock-origin={elsewhere ? 'elsewhere' : 'unknown'}
               >
                 <span className="min-w-0 truncate">
                   {lock.projectName}
@@ -281,6 +312,14 @@ export default function HeldLockResumeDialog() {
                       data-testid={`speleodb-held-lock-state-unknown-${lock.projectId}`}
                     >
                       {t('speleodb.localEdits.heldLocks.localStateUnknown')}
+                    </span>
+                  )}
+                  {elsewhere && (
+                    <span
+                      className="block text-xs text-text-secondary"
+                      data-testid={`speleodb-held-lock-elsewhere-${lock.projectId}`}
+                    >
+                      {t('speleodb.heldLocks.notThisComputer')}
                     </span>
                   )}
                 </span>
@@ -336,7 +375,8 @@ export default function HeldLockResumeDialog() {
         )}
 
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
-          <Button onClick={keep} disabled={busy} data-testid="speleodb-held-lock-keep">
+          {/* The default: focused on open, so Enter keeps every lock. */}
+          <Button onClick={keep} disabled={busy} data-autofocus data-testid="speleodb-held-lock-keep">
             {t('speleodb.heldLocks.keep')}
           </Button>
         </div>

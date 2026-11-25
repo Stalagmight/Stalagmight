@@ -40,11 +40,12 @@ pub use tls::{clean_endpoint_input, validate_endpoint};
 // [Track A] #186/D-B2: SpeleoDbAction + the structured SpeleoErrorDto cross IPC.
 pub use contract::{EndpointRefusal, SpeleoDbAction, TransportCause};
 pub use models::{
-    DoneResult, Permission, PushResult, RemoteState, SpeleoAccessVerification, SpeleoCollaborator,
-    SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult,
-    SpeleoOpenResult, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
-    SpeleoReadOnlyOpen, SpeleoReleaseContext, SpeleoRevision, SpeleoSessionStatus,
-    StartEditingResult, UnpushedLocalEdits, UpdateResult, Visibility,
+    DoneResult, EditingStopped, Permission, PushResult, RemoteState, SpeleoAccessVerification,
+    SpeleoCollaborator, SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus,
+    SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
+    SpeleoPublishParams, SpeleoPublishResult, SpeleoReadOnlyOpen, SpeleoReleaseContext,
+    SpeleoRevision, SpeleoSessionStatus, StartEditingResult, TakeRemoteResult, UnpushedLocalEdits,
+    UpdateResult, Visibility,
 };
 
 /// Errors from the SpeleoDB client and native-file handling.
@@ -186,6 +187,32 @@ pub enum SpeleoDbError {
         local_path: String,
         last_edit_at: Option<String>,
     },
+}
+
+impl SpeleoDbError {
+    /// The reason for a sentence the backend shows the user: a transport failure
+    /// by its cause ([`TransportCause::plain_reason`]), never "Network error
+    /// talking to SpeleoDB: <the raw cause>", which is for the log; any other
+    /// error as it displays.
+    #[must_use]
+    pub fn user_reason(&self) -> String {
+        match self {
+            Self::Transport { cause, .. } => cause.plain_reason().to_owned(),
+            other => other.to_string(),
+        }
+    }
+}
+
+impl SpeleoErrorDto {
+    /// [`SpeleoDbError::user_reason`] for an error already turned into its IPC
+    /// shape: the cause when it is a transport failure, else its message.
+    #[must_use]
+    pub fn user_reason(&self) -> String {
+        self.transport.map_or_else(
+            || self.message.clone(),
+            |cause| cause.plain_reason().to_owned(),
+        )
+    }
 }
 
 /// A byte count as decimal megabytes with one decimal, for user-facing text

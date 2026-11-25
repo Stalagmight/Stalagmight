@@ -279,6 +279,11 @@ impl FileState {
             undo_mode: link.undo_mode,
         });
         let sync = &mut self.extras.local.speleodb;
+        if !same_project || sync.base_commit != link.base_commit_sha {
+            // The survey digest describes the BASE it was recorded for (S2).
+            sync.base_survey = None;
+            sync.base_survey_edit = None;
+        }
         sync.base_commit.clone_from(&link.base_commit_sha);
         sync.unpushed_edits = link.has_unpushed_edits;
         sync.last_edit_at = parse_time(link.last_edit_at.as_ref());
@@ -389,7 +394,9 @@ impl AppState {
     }
 
     /// Change the link in memory and make it durable at once (local-only
-    /// save). `f` returns whether it changed anything.
+    /// save). `f` returns whether it changed anything. Tests only: the app
+    /// changes the link through `speleodb_mutate_link_held` and the landing.
+    #[cfg(test)]
     pub(crate) fn mutate_speleo_link(
         &self,
         f: impl FnOnce(&mut Option<SpeleoLink>) -> bool,

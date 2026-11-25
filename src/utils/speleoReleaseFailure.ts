@@ -31,7 +31,9 @@
 import { create } from 'zustand';
 import { useSpeleoStore } from '../store/speleoStore';
 import type { CommandResult } from '../types/commands';
-import { getErrorMessage, invokeIpc } from './ipc';
+import { invokeIpc } from './ipc';
+import { describeSpeleoError, describeTransportCause } from './speleoError';
+import { ownSpeleoRelease } from './speleoLockLost';
 
 /** What the user is leaving the project for. Picks the wording only. */
 export type ReleaseFailureReason = 'close' | 'switch' | 'quit';
@@ -47,6 +49,11 @@ export interface ReleaseFailureRequest {
   reason: ReleaseFailureReason;
   /** Why the release did not happen, as the backend said it. */
   detail: string;
+  /** The lock was known to be this session's (it was editing under it). A
+      read-only session's claim is only a pointer to a lock that may or may not
+      be held (a lock request whose reply was lost, a lost-lock signal), so the
+      prompt does not state it as certain (sdbdemo2 P3, screenshot 06). */
+  lockCertain: boolean;
   /** Run the release again; the dialog stays up while it fails. */
   retry: () => Promise<ReleaseRetryOutcome>;
   /** Finish the request. Idempotent; only the first call counts. */
@@ -68,6 +75,7 @@ export function askReleaseFailure(
   reason: ReleaseFailureReason,
   detail: string,
   retry: () => Promise<ReleaseRetryOutcome>,
+  lockCertain = true,
 ): Promise<ReleaseFailureAnswer> {
   const { request, working } = useReleaseFailurePrompt.getState();
   if (working) return Promise.resolve('cancel');
@@ -83,7 +91,7 @@ export function askReleaseFailure(
       }
       resolve(answer);
     };
-    useReleaseFailurePrompt.setState({ request: { id, reason, detail, retry, settle }, working: false });
+    useReleaseFailurePrompt.setState({ request: { id, reason, detail, lockCertain, retry, settle }, working: false });
   });
 }
 
@@ -95,6 +103,20 @@ export function resetReleaseFailurePromptForTests(): void {
 /** The backend reported a release that failed or is uncertain. */
 export function releaseFailed(result: CommandResult | null | undefined): boolean {
   return result?.lock_release === 'failed';
+}
+
+/**
+ * What the dialog says went wrong with a failed release. A transport failure is
+ * worded by its cause (`lock_release_transport`), as every read-only notice
+ * words the same failure, naming the server and what to do; the backend's
+ * `error` is shown only for any other failure (a 5xx, a release SpeleoDB
+ * answered without letting go), and its raw diagnostic stays in the log (demo
+ * item 4).
+ */
+export function releaseFailureDetail(result: CommandResult): string {
+  return result.lock_release_transport
+    ? describeTransportCause(result.lock_release_transport)
+    : result.error ?? '';
 }
 
 /** The error the callers of a close already treat as "the user backed out". */
@@ -111,30 +133,33 @@ function failure(error: string): CommandResult {
  * success (released, not ours, or kept), a failure that is not about the lock
  * (shown by the caller as before), or a failure whose error is
  * {@link RELEASE_CANCELLED} - the user stays, with editing paused.
+ * `lockCertain`: the session was editing under the lock when it tried to leave
+ * (see {@link ReleaseFailureRequest.lockCertain}).
  */
 export async function resolveReleaseFailure(
   reason: ReleaseFailureReason,
   failed: CommandResult,
   attempt: (releaseLock: boolean) => Promise<CommandResult>,
+  lockCertain = true,
 ): Promise<CommandResult> {
   let settled: CommandResult = failed;
-  const answer = await askReleaseFailure(reason, failed.error ?? '', async () => {
+  const answer = await askReleaseFailure(reason, releaseFailureDetail(failed), async () => {
     let next: CommandResult;
     try {
       next = await attempt(true);
     } catch (error) {
-      return { ok: false, detail: getErrorMessage(error) };
+      return { ok: false, detail: describeSpeleoError(error) };
     }
-    if (releaseFailed(next)) return { ok: false, detail: next.error ?? '' };
+    if (releaseFailed(next)) return { ok: false, detail: releaseFailureDetail(next) };
     settled = next;
     return { ok: true };
-  });
+  }, lockCertain);
   if (answer === 'settled') return settled;
   if (answer === 'cancel') return { ...failed, error: RELEASE_CANCELLED };
   try {
     return await attempt(false);
   } catch (error) {
-    return failure(getErrorMessage(error));
+    return failure(describeSpeleoError(error));
   }
 }
 
@@ -167,21 +192,23 @@ export async function settleOpenLockBeforeLeaving(
   isCurrent: () => boolean = () => true,
 ): Promise<boolean> {
   if (!projectOpen || useSpeleoStore.getState().link === null) return true;
-  const settle = (releaseLock: boolean) => invokeIpc<CommandResult>(
+  const lockCertain = useSpeleoStore.getState().link?.editState === 'editing';
+  const openProject = useSpeleoStore.getState().remoteProjectId;
+  const settle = (releaseLock: boolean) => ownSpeleoRelease(openProject, () => invokeIpc<CommandResult>(
     'speleodb_settle_open_lock',
     { releaseLock },
     { purpose: releaseLock ? 'hand back the open project lock before leaving it' : 'keep the open project lock on purpose' },
-  );
+  ));
   let result: CommandResult;
   try {
     // A missing reply reports nothing, which is not "nothing to release".
     result = (await settle(true)) ?? { ...failure(''), lock_release: 'failed' };
   } catch (error) {
     // The reply never arrived: whether the lock went back is unknown.
-    result = { ...failure(getErrorMessage(error)), lock_release: 'failed' };
+    result = { ...failure(describeSpeleoError(error)), lock_release: 'failed' };
   }
   if (result.lock_release) pauseOpenEditing();
   if (!releaseFailed(result)) return result.success === true;
   if (!isCurrent()) return false;
-  return (await resolveReleaseFailure(reason, result, settle)).success;
+  return (await resolveReleaseFailure(reason, result, settle, lockCertain)).success;
 }

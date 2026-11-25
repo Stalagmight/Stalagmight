@@ -24,7 +24,11 @@ SpeleoDB sync state and the display toggles (see
 Menu Save, Cmd/Ctrl+S and the SpeleoDB workspace's Save Changes action share
 `dispatchProjectSave`. Local projects use the existing local save flow. Linked
 projects collect a required change description, save locally, then upload only with
-fresh permission and editing-lock verification. Missing locks show an explanation
+fresh permission and editing-lock verification, and only onto the revision the copy
+came from: when SpeleoDB's latest revision is one this session did not upload
+(another session of the same account holds the same lock, R3) nothing is uploaded
+and the divergence prompt opens (see [SpeleoDB integration](SpeleoDB.md#save-switching-and-exit)).
+Missing locks show an explanation
 and recovery controls; recovery never uploads automatically. A clean linked project
 reports No changes to upload. Offline and uncertain uploads never report success.
 Ordinary successful upload retains the editing lock. Save Changes, menu Save and
@@ -36,7 +40,9 @@ while that request is pending. Failure removes the indicator and keeps retry det
 
 Autosave and failed-autosave retry are always local-only, including while an upload
 dialog is open or cancelled. Save and Close releases and closes only after confirmed
-success with no newer edits. Cancel, conflict, uncertainty and release failure leave
+success with no newer edits, and stops on an upload that replaced a revision another
+session pushed meanwhile, so its banner is read. Cancel, conflict, uncertainty and
+release failure leave
 the project open. Plain Close, project switching and Quit retain automatic lock
 release without upload and Discard changes / Cancel protection for unsaved work,
 including unsent SpeleoDB form drafts (asked first, in-app). Saved unuploaded work
@@ -144,8 +150,8 @@ modification time and SHA-256: the save guard below), and sniffs it
 
 The project in memory is exactly what the file says: nothing is healed,
 re-solved or converted back to disk on open, and a legacy file is upgraded
-only by a save (or a Recents rename or link strip, below). Two writes can
-happen during an open, both of state the file already implies:
+only by a save (or a Recents rename or link strip, below). Three writes can
+happen during an open, all of state the file already implies:
 
 - **A hot journal rolled back.** The app's open (`load_project_full`) first
   probes the file's SpeleoDB link (`speleodb_foreign`, the one-local-copy
@@ -166,6 +172,10 @@ happen during an open, both of state the file already implies:
   legacy file keeps it in memory for the upgrading save, and it does not make
   the project unsaved: every open of that file materializes the same mode, so
   a close that drops it loses nothing ([Unsaved changes](#unsaved-changes)).
+- **A stale un-uploaded mark cleared.** A SpeleoDB copy marked un-uploaded
+  whose survey is exactly its BASE revision's (the edit that set the mark was
+  lost) opens clean, and the same local-only save writes the cleared mark
+  ([The un-uploaded mark](#the-un-uploaded-mark-and-the-base-survey-digest)).
 
 ## Save Pipeline
 
@@ -181,7 +191,9 @@ happen during an open, both of state the file already implies:
 4. Build the file in memory: stalx_v2::encode(project, extras, mode) with the
    generator "Stalagmight <version>" and the persisted window of the history;
    mode is DetachedCopy for an explicit destination of a SpeleoDB project
-   (Save a Copy), Normal otherwise
+   (Save a Copy), Normal otherwise. A SpeleoDB copy marked un-uploaded whose
+   survey is its BASE revision's again (an edit taken back) gets the mark
+   cleared in these bytes (see The un-uploaded mark below)
 5. Pick the guard: the open file must still hold what was last read or
    written; a project never written expects nothing at its path; an explicit
    Save As destination is overwritten (the dialog confirmed)
@@ -194,7 +206,8 @@ happen during an open, both of state the file already implies:
    and local_pending flags, remember the history just written
 9. Update recent projects in config
 10. Rewrite a migrated project's 0.6.0 dive-plan pins (never fails the save)
-11. Return CommandResult with saved_path (or unlinked_copy_path)
+11. Return CommandResult with saved_path (or unlinked_copy_path), and
+    speleodb_unpushed_cleared when step 4 cleared the un-uploaded mark
 ```
 
 Except on a legacy file, nothing is written before step 7, and step 7 either
@@ -236,6 +249,8 @@ open and save again.
 3. If saved_path in result, update project.file_path in store
 4. refreshUndoState() - lightweight, just fetches can_undo/can_redo booleans
 5. Clear isDirty only if no newer edits arrived during the save
+6. If speleodb_unpushed_cleared and no newer edits arrived, clear the speleo
+   store's hasUnpushedEdits (the exit prompt reads it)
 ```
 
 Save completion checks the original project identity and load generation before
@@ -538,6 +553,72 @@ program while the upload ran) is logged, never a push failure: the commit is on
 the server, memory holds the new BASE and the clean dirty bit, the
 clear-on-push still runs, and the next save writes them, after the save-conflict
 prompt (`speleodb_record_landing`, review G-speleodb-7).
+
+## The un-uploaded mark and the BASE survey digest
+
+The dirty bit's flip is durable at the edit (`mark_remote_dirty`, above), so a
+crash after an edit still knows there was work; the edit itself reaches the
+file only with the next save. A crash, or a close with "Don't save", in between
+leaves the mark over a file that holds exactly its BASE revision. 0.6.0 had the
+same (one UPDATE per edit). Taken at its word, that mark made the next open
+refuse to update the copy ("this project has local edits that were never
+pushed") and the exit and sign-out prompts ask about work that did not exist
+(the SpeleoDB protocol fuzzer's F2, fix S2).
+
+So whether a copy has un-uploaded work is decided by the survey it holds
+(`speleodb_base_survey.rs`):
+
+- **Recorded.** `local.speleodb.base_survey` is the digest of the BASE
+  revision's survey (`stalx_v2::survey_digest`: every member an upload carries
+  that is survey content, without `project.modified`, the id `counters` (Undo
+  never hands an id back, so an add and its Undo leave them advanced) and the
+  link's endpoint and name, bound to the BASE id; [file-format.md section 12](file-format.md#12-how-stalagmight-saves)).
+  It is written at every install of bytes known to be the BASE revision's
+  (`PreparedDownload::cache_bytes`, which records it only when the caller named
+  the revision it downloaded and that revision is the link's BASE: a pull and a
+  fast-forward name their pinned tip, a View or Restore the revision it fetched)
+  and at every confirmed upload, from the bytes that went up (the 200 arm when it
+  names the new revision, the 304 arm). A change of BASE or of project drops it
+  (`FileState::set_speleo_link`). A Restore of an older revision rides on the tip
+  and records none, whatever its mark says; a Restore of the tip records the
+  tip's (F2-digest-1).
+- **Vouched for.** `local.speleodb.base_survey_edit` is the `last_edit_at` this
+  build vouched for: every edit it records (`mark_remote_dirty`) sets it to the
+  new edit time, when it still equalled the old one; otherwise the digest goes.
+  The digest counts only while the two are equal. A writer that does not know
+  the digest keeps both keys as unknown keys, and an edit it records moves
+  `last_edit_at` alone: that writer may have uploaded without dropping the
+  digest (an older build, a third-party tool), so from there the mark is taken
+  at its word (F2-digest-2).
+- **Dropped at every upload.** The digest holds only while SpeleoDB holds
+  nothing of this copy past BASE. An upload whose answer is lost may have
+  landed (#193), and a survey taken back to BASE's is then a change to upload,
+  not a clean copy, so the push drops the digest in the save it starts with
+  (`speleodb_upload`): a crash during the upload cannot bring it back, and only
+  a confirmed landing records one again. A refused upload leaves the copy
+  without one until its next confirmed upload or download.
+- **Read.** A marked copy whose survey on disk has that digest holds nothing
+  to upload. The shared link probe (`probe_link`, `read_cache_file`) reads
+  such a file whole and reports it clean, writing nothing: the listing behind
+  the sign-out and held-lock prompts, the replace guard, the fast-forward arm
+  and the offline open agree. Only a marked file with a vouched digest is read
+  whole, and a copy found to hold real work is remembered by its length,
+  modification time, digest and edit time, so the listing fetches that follow
+  do not read and hash it again while it is unchanged (F2-digest-5). Only that
+  answer is remembered: a stale entry can keep a mark, never clear one.
+- **Cleared.** An open clears the stale mark and writes it with the open's
+  local-only save; a save whose survey is BASE's again (an edit taken back,
+  by hand or by Undo) clears it in the file it writes and tells the frontend
+  (`CommandResult.speleodb_unpushed_cleared`). Only the mark is cleared:
+  `last_edit_at` stays, and a landing sets the mark for an edit after the
+  push started instead of leaving it as it was. A save while an upload runs
+  has no digest to clear the mark with (above), so the copy cannot end clean
+  over the new BASE.
+- **Unknown stays marked.** A copy without a digest (a 0.6.0 copy, a version
+  2 copy installed before the digest existed) keeps today's behaviour, as
+  does a survey that differs from BASE's in any byte the digest covers (an
+  ignore kept only for a shot the history can bring back, another writer's
+  layout): the conservative answer is the mark.
 
 ## Unsaved changes
 

@@ -18,14 +18,16 @@
 //! - **The reclaim check** ([`AppState::speleodb_release_unless_reclaimed`]):
 //!   a release captured by a session that has since ended (the delete's
 //!   captured release, the janitor below) must stand down when a SUCCESSOR
-//!   session has meanwhile claimed the same project's mutex - the server
-//!   treats a same-account re-acquire as a no-op, so the successor inherited
-//!   the very lock the stale release would free (F8). A successor accounts for
-//!   the lock in exactly one shape: a claim. One whose probe proved the mutex
-//!   unheld records an authored claim; one that INHERITED the still-held mutex
-//!   records an unauthored one - and cannot edit without it, since the claim is
-//!   what opens its gate. (There used to be a second "live edit session without
-//!   a record" eye for the inherited case; that state no longer exists.)
+//!   session of the same account has meanwhile claimed the same project's
+//!   mutex - the server treats a same-account re-acquire as a no-op, so the
+//!   successor inherited the very lock the stale release would free (F8). A
+//!   successor accounts for the lock in exactly one shape: a claim of that
+//!   account. One whose probe proved the mutex unheld records an authored
+//!   claim; one that INHERITED the still-held mutex records an unauthored one -
+//!   and cannot edit without it, since the claim is what opens its gate. (There
+//!   used to be a second "live edit session without a record" eye for the
+//!   inherited case; that state no longer exists.) Another account's claim is
+//!   never a successor: it cannot have inherited this account's lock (F4).
 //!
 //! What makes both guards sound is the `speleodb_lock_ops` mutex, which every
 //! SpeleoDB LOCK OPERATION holds for its whole span:
@@ -193,14 +195,18 @@ impl LockClaim {
         )
     }
 
-    /// Whether this claim's lock lives on `endpoint`'s deployment.
+    /// Whether this claim's lock lives on `endpoint`'s deployment: the server
+    /// half of [`Self::taken_by`] and [`Self::is_same_lock`].
     ///
-    /// Separate from the account test because a captured release knows which
-    /// SERVER it is for without necessarily being the account signed in now -
-    /// and a project UUID means nothing across deployments. A cloned or restored
+    /// A project UUID means nothing across deployments. A cloned or restored
     /// deployment can hold the very same id, which is exactly how a successor
     /// check that compared ids alone stood down for an unrelated session.
-    pub(super) fn on_deployment(&self, endpoint: &str) -> bool {
+    ///
+    /// Private, because a deployment names no account: the reclaim check that
+    /// asked this alone stood a release down for ANOTHER account's claim on the
+    /// project, and the releasing account's lock stayed held (F4). Every claim
+    /// test outside this type names the account too.
+    fn on_deployment(&self, endpoint: &str) -> bool {
         normalize_endpoint(endpoint) == normalize_endpoint(&self.endpoint)
     }
 
@@ -381,9 +387,19 @@ impl AppState {
     }
 
     /// The release half of [`Self::speleodb_unwind_unless_kept`].
+    ///
+    /// Every unwind runs after an acquire that landed, so the lock may be ours
+    /// whoever's claim there is. When the release cannot tell (the holder read
+    /// failed, or the POST did) and no claim was there to put back, it leaves an
+    /// UNBOUND claim, the pointer the acquire-unknown arm leaves too: the next
+    /// close or the janitor hands the lock back, holder-checked, once SpeleoDB
+    /// answers. Without one the lock stayed held with nothing in this process
+    /// pointing at it (F1-transport-1: every read lost, the acquire answered).
     pub(super) fn speleodb_unwind_release(&self, params: &LockReleaseParams, entry_gen: u64) {
         if self.speleodb_session_generation() == entry_gen {
-            self.speleodb_release_best_effort(params);
+            if !self.speleodb_release_best_effort(params) {
+                self.speleodb_record_unbound_claim(&params.project_id);
+            }
             return;
         }
         if let Err(e) = self.speleodb_release_unless_reclaimed_locked(params) {
@@ -397,11 +413,12 @@ impl AppState {
     }
 
     /// Serialized, reclaim-checked release: takes the lock-ops mutex, then
-    /// releases `params.project_id`'s mutex UNLESS a live claim for it exists -
-    /// in which case a successor session inherited the lock (a same-account
-    /// re-acquire is a server-side no-op) and releasing would free the mutex
-    /// out from under them (F8). Standing down reports `Ok`: the lock is held
-    /// by a session that accounts for it, so nothing is stranded.
+    /// releases `params.project_id`'s mutex UNLESS the releasing account holds a
+    /// claim on it - in which case a successor session of that account inherited
+    /// the lock (a same-account re-acquire is a server-side no-op) and releasing
+    /// would free the mutex out from under them (F8). Standing down reports
+    /// `Ok`: the lock is held by a session that accounts for it, so nothing is
+    /// stranded.
     ///
     /// For releases that run detached from the session that captured them (the
     /// delete's captured release, the janitor). Callers already inside a
@@ -420,34 +437,41 @@ impl AppState {
 
     /// The body of [`Self::speleodb_release_unless_reclaimed`], for callers that
     /// already hold the lock-ops mutex. Never touches `lock_acquired_here`: a
-    /// record present here is by definition a successor's (the capturing
-    /// session's own record was cleared when the release was captured), and a
-    /// record absent needs no clearing.
+    /// record of the releasing account present here is by definition a
+    /// successor's (the capturing session's own record was cleared when the
+    /// release was captured), and a record absent needs no clearing.
     ///
     /// ONE stand-down test, because a successor accounts for the lock in one
-    /// shape now: a claim. A successor whose acquire was real records an
-    /// authored claim, and one that INHERITED the still-held mutex (a same-account
-    /// re-acquire is a server-side no-op) records an unauthored one - it cannot
-    /// edit without it, since the claim is what opens the edit gate. There used to
-    /// be a second eye for the inherited, record-less live session; there is no
-    /// such session any more.
+    /// shape now: a claim of the same account. A successor whose acquire was
+    /// real records an authored claim, and one that INHERITED the still-held
+    /// mutex (a same-account re-acquire is a server-side no-op) records an
+    /// unauthored one - it cannot edit without it, since the claim is what opens
+    /// the edit gate. There used to be a second eye for the inherited,
+    /// record-less live session; there is no such session any more.
     ///
-    /// Asked about the DEPLOYMENT this release is for, not just the project id.
-    /// `params` names one server, and a project UUID is only unique on one: a
-    /// cloned or restored deployment holding the same id had a session there
-    /// answering for a mutex on a server it has never touched, so the release was
-    /// never sent and that server's lock stayed held - over a file the delete may
-    /// already have destroyed.
+    /// Asked about the ACCOUNT this release is for, on the DEPLOYMENT it is for
+    /// (`speleodb_claimed_by_releasing_account`), not just the project id:
+    ///
+    /// - A project UUID is only unique on one server: a cloned or restored
+    ///   deployment holding the same id had a session there answering for a
+    ///   mutex on a server it has never touched, so the release was never sent
+    ///   and that server's lock stayed held - over a file the delete may already
+    ///   have destroyed.
+    /// - Only the same account's session can have inherited the lock. Another
+    ///   account's claim on the project (kept across a sign-in by design) stood
+    ///   this release down too, and the account's own lock stayed held with
+    ///   nothing sent (F4). The holder check below is what protects another
+    ///   account's lock.
     pub(super) fn speleodb_release_unless_reclaimed_locked(
         &self,
         params: &LockReleaseParams,
     ) -> Result<HolderCheckedRelease, SpeleoDbError> {
-        if self.speleodb_claim_on_deployment(&params.endpoint, &params.project_id) {
+        if self.speleodb_claimed_by_releasing_account(params) {
             tracing::info!(
                 project_id = %params.project_id,
                 purpose = "avoid freeing a successor session's mutex",
-                "speleodb: standing down a captured release; a live session has \
-                 reclaimed this project's lock"
+                "speleodb: standing down a captured release; a later session of the \
+                 same account has reclaimed this project's lock"
             );
             // The releasing session holds nothing any more: the lock is the
             // successor's to account for.
@@ -1718,7 +1742,7 @@ mod tests {
     fn start_editing_holds_the_guards_in_the_right_order() {
         let src = state_source("speleodb.rs");
         let start = src
-            .find("fn speleodb_start_editing")
+            .find("fn speleodb_start_editing_flow")
             .expect("start editing is present");
         let body = &src[start..];
         let body = &body[..body.find("\n    }\n").expect("fn body terminates")];

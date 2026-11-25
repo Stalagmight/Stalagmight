@@ -15,8 +15,8 @@ use crate::speleodb::contract::{dto_for_error, map_status, Endpoint};
 use crate::speleodb::sync::{self, ReconcileVerdict};
 use crate::speleodb::SpeleoDbAction;
 use crate::speleodb::{
-    RemoteState, SpeleoDbError, SpeleoErrorDto, SpeleoLinkStatus, SpeleoSessionStatus,
-    StartEditingResult,
+    EditingStopped, RemoteState, SpeleoDbError, SpeleoErrorDto, SpeleoLinkStatus,
+    SpeleoSessionStatus, StartEditingResult, TakeRemoteResult,
 };
 
 /// Per-session SpeleoDB connection state held in [`AppState`]. The token lives
@@ -171,17 +171,20 @@ pub(super) fn is_local_edits_refusal(err: &SpeleoDbError) -> bool {
 /// failure, a 5xx or an unreadable reply can all arrive after the server committed
 /// the mutex to us - a proxy giving up on a slow reply, a reset after the write, a
 /// body the SDK's strict schema refuses. A 4xx is the server's own verdict about
-/// the request and is never ambiguous.
+/// the request and is never ambiguous, and neither is a connection that could not
+/// be made or a name that did not resolve (`TransportCause::nothing_sent`): the
+/// request never left this computer, so there is no lock to look for and none to
+/// point at (demo item 3: it used to leave a claim, and the next Close asked
+/// "Couldn't hand back the lock" about a request SpeleoDB never saw).
 fn acquire_outcome_unknown(err: &SpeleoDbError) -> bool {
-    matches!(
-        err,
-        SpeleoDbError::Transport { .. }
-            | SpeleoDbError::Parse(_)
-            | SpeleoDbError::Status {
-                status: 500..=599,
-                ..
-            }
-    )
+    match err {
+        SpeleoDbError::Transport { cause, .. } => !cause.nothing_sent(),
+        SpeleoDbError::Parse(_)
+        | SpeleoDbError::Status {
+            status: 500..=599, ..
+        } => true,
+        _ => false,
+    }
 }
 
 /// [Track A] #186/D-B2: map a non-endpoint (local / session) `SpeleoDbError` to
@@ -657,6 +660,8 @@ impl AppState {
                 link.has_unpushed_edits,
                 &commits,
                 &my_email,
+                // R3: what this session uploaded, the same licence the push checks.
+                &self.speleodb_own_uploads(&link.project_id),
                 we_hold_the_lock,
             ),
             Err(_) => RemoteState::Unknown,
@@ -700,23 +705,38 @@ impl AppState {
         })
     }
 
-    /// Whether a claim exists for `project_id` ON `endpoint`'s deployment,
-    /// whoever holds it.
+    /// Whether the account a release is FOR holds a claim on its project: the
+    /// reclaim check's question (`speleodb_release_unless_reclaimed_locked`).
     ///
-    /// The reclaim check's question, and deliberately NOT
-    /// [`Self::speleodb_lock_acquired_here`]'s. A captured release names the
-    /// server it is for and may outlive the session - and even the sign-in -
-    /// that captured it, so "is this OUR account's?" is the wrong test: what
-    /// matters is whether some session in this process has claimed the very
-    /// mutex the release would free. Keyed on the deployment because a project
-    /// UUID is unique only on one server; a clone holding the same id must not
-    /// answer for it.
-    pub(super) fn speleodb_claim_on_deployment(&self, endpoint: &str, project_id: &str) -> bool {
+    /// The release's own account - the endpoint and email captured with its
+    /// token - and neither of the two other accounts it could ask about:
+    ///
+    /// - Not the account signed in NOW ([`Self::speleodb_lock_acquired_here`]'s
+    ///   question): a captured release may outlive the session, and even the
+    ///   sign-in, that captured it.
+    /// - Not ANY account. A later session accounts for this lock only if it is
+    ///   the same account's: the server treats that account's re-acquire as a
+    ///   no-op, so the later session holds the very mutex the release would
+    ///   free. Another account's claim is no such session. If that account held
+    ///   the mutex, this one does not, and the holder check sends nothing anyway;
+    ///   if it does not, the claim is stale - and claims of other accounts are
+    ///   kept across a sign-in by design. Counting one stood the collaborator's
+    ///   own release down for the owner's stale claim on the same project, and
+    ///   the collaborator's lock stayed held (F4 of the protocol fuzzer).
+    ///
+    /// On the release's deployment, like every claim test
+    /// ([`super::speleodb_session::LockClaim::taken_by`]): a project UUID is
+    /// unique only on one server, so a same-id claim on a clone does not answer
+    /// for it.
+    pub(super) fn speleodb_claimed_by_releasing_account(
+        &self,
+        params: &super::speleodb_lock_release::LockReleaseParams,
+    ) -> bool {
         self.speleodb_session_lock().is_ok_and(|session| {
-            session
-                .locks_acquired_here
-                .iter()
-                .any(|claim| claim.project_id == project_id && claim.on_deployment(endpoint))
+            session.locks_acquired_here.iter().any(|claim| {
+                claim.project_id == params.project_id
+                    && claim.taken_by(Some(&params.endpoint), Some(&params.email))
+            })
         })
     }
 
@@ -862,7 +882,50 @@ impl AppState {
         super::speleodb_local_state::validated_cache_path_in(&root, project_id)
     }
 
+    /// Start Editing: take the write lock and reconcile the copy with SpeleoDB.
+    ///
+    /// A refusal after which this account may hold the lock without editing
+    /// under it - a lock request whose outcome nothing could confirm, so this
+    /// process keeps a pointer to it - says so (`lock_may_be_held`), and the
+    /// read-only notice tells the user the next close will see to it (demo item
+    /// 3). Read from the claim the flow left, so every path that leaves one (the
+    /// acquire whose holder check failed, the unwind whose release could not
+    /// tell) is covered, and no path that leaves none is.
     pub fn speleodb_start_editing(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
+        self.speleodb_start_editing_resuming(true)
+    }
+
+    /// The automatic Start Editing after an open (sdbdemo2 issue 3): the same
+    /// verb, except that it does not take over a lock the ACCOUNT already holds
+    /// while this run holds no claim on it. SpeleoDB's lock is the account's, so
+    /// that lock may be the one Stalagmight open on another computer with this
+    /// account is editing under, and the held-lock prompt has just said so. It
+    /// answers `LockedBy` with this account's own email instead, before any
+    /// request but the holder read: the project opens read-only and the notice
+    /// says why; Resume editing (the plain verb) then edits it here too, on
+    /// purpose. A lock this run claims (taken here, or kept by a close) is
+    /// resumed as before.
+    pub fn speleodb_start_editing_after_open(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
+        self.speleodb_start_editing_resuming(false)
+    }
+
+    fn speleodb_start_editing_resuming(
+        &self,
+        resume_held: bool,
+    ) -> Result<StartEditingResult, SpeleoErrorDto> {
+        self.speleodb_start_editing_flow(resume_held)
+            .map_err(|mut refusal| {
+                if !self.edit_enabled() && self.speleodb_close_would_hand_back() {
+                    refusal.lock_may_be_held = Some(true);
+                }
+                refusal
+            })
+    }
+
+    fn speleodb_start_editing_flow(
+        &self,
+        resume_held: bool,
+    ) -> Result<StartEditingResult, SpeleoErrorDto> {
         // The lock-ops span opens FIRST, before a single fact is read: everything
         // below is decided from facts (the session generation, the link, the
         // token, the mutex holder) that another lock operation could invalidate,
@@ -977,8 +1040,16 @@ impl AppState {
             // Unheld -> this call took it: record the acquisition, hand it back if we
             // walk away.
             Ok(None) => (true, false),
-            // Already ours -> inherited: no authorship, and never hand it back.
+            // Already ours -> inherited: no authorship, and never hand it back. The
+            // automatic Start Editing after an open stops short of such a lock when
+            // this run never claimed it (sdbdemo2 issue 3; see
+            // `speleodb_start_editing_after_open`): nothing was acquired yet.
             Ok(Some(holder)) if lock_held_by_me(Some(holder.as_str()), me.as_deref()) => {
+                if !resume_held && !self.speleodb_holds_claim(&link.project_id) {
+                    return Ok(StartEditingResult::LockedBy {
+                        email: Some(holder),
+                    });
+                }
                 (false, true)
             }
             // Someone else's, and the acquire below still succeeded -> they released in
@@ -1315,16 +1386,40 @@ impl AppState {
     /// `.stalx` path so the frontend can reload the view (as the fast-forward arms
     /// of Start-editing / Update do).
     ///
-    /// Ends the edit session and leaves the project READ-ONLY: the held write lock
-    /// is released (holder-checked and best-effort, like [`Self::speleodb_unlink`]),
-    /// which takes the claim - and with it the edit gate (`speleodb_edit_gate`) -
-    /// before the reload, and the reload can only carry an edit session that still
-    /// has its claim. The user resumes via Start editing, which re-acquires the lock
-    /// and now reconciles cleanly (BASE has advanced to the tip). (data#3: the reload
-    /// used to copy the old gate across and reopen the project editable with no lock
-    /// held.)
-    pub fn speleodb_take_remote(&self) -> Result<String, SpeleoErrorDto> {
+    /// The lock is left exactly as it is: no release, and the claim stays as it
+    /// was (bound, unbound or kept). Taking the server's version needs nothing
+    /// from the lock, and SpeleoDB's lock is the ACCOUNT's: the same account
+    /// signed in on another computer or in another window edits under the very
+    /// lock a release here would free (demo item 2, R3). This used to release it,
+    /// which left that other session editing with no lock on the server for
+    /// anyone else to take. So an edit session carries over the reload (its claim
+    /// is still bound; data#3's rule that only a bound claim carries is
+    /// unchanged) and goes on editing the server version, and a read-only
+    /// session stays read-only.
+    ///
+    /// The edit gate therefore stays open while this reads the history and
+    /// downloads, so an edit can land in the meantime. The user confirmed the
+    /// discard before it, so it is not discarded with the rest: the revision read
+    /// on entry is the consent the fast-forward checks, and an edit since refuses
+    /// the reload (`SessionMoved`) with the edit kept.
+    ///
+    /// The edit session goes on only while SpeleoDB still records this account's
+    /// lock: the claim is this session's own record, and another session of the
+    /// same account can hand the account's lock back on the server (its Close)
+    /// without this one hearing of it. Right before the reload the holder is read
+    /// once (`speleodb_confirm_lock_for_reload`); a lock released elsewhere or
+    /// held by someone else shuts the gate, the reload comes back read-only, and
+    /// the result says why (`editing_stopped`; farm finding
+    /// P2-take-remote-editable).
+    pub fn speleodb_take_remote(&self) -> Result<TakeRemoteResult, SpeleoErrorDto> {
         let (generation, link) = self.speleodb_session_snapshot()?;
+        let consented_revision = {
+            let _project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.current_revision()
+        };
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
@@ -1350,36 +1445,91 @@ impl AppState {
             )));
         }
 
-        // Abandoning local edits ends the edit session. The session's claim is what
-        // holds the gate open, so shut it first, outright: a release that is skipped
-        // (no account claim to release, a token from another deployment) or that
-        // fails (the claim comes back, unbound) must not leave it bound for the
-        // reload below to carry.
-        self.speleodb_shut_edit_gate();
-        // Then release the held lock (if any) so it isn't left stranded, mirroring
-        // speleodb_unlink. Best-effort and holder-checked - an offline release keeps
-        // the claim as a pointer for a later retry. The ABANDONING variant,
-        // necessarily: take-remote is only ever reached WITH un-pushed edits, and
-        // discarding them is the whole point of the verb (behind the frontend's
-        // second destroy-confirmation), so the veto that protects the silent
-        // close/quit/switch release must not apply here.
-        self.speleodb_release_held_lock_abandoning();
+        // An edit session is carried only over a lock SpeleoDB still records as
+        // this account's (see the doc above).
+        let editing_stopped = self.speleodb_confirm_lock_for_reload(
+            (&endpoint, &token, insecure_http),
+            &link.project_id,
+            generation,
+        );
 
         // Re-pull + reset to the tip: BASE = tip, dirty cleared, last_edit_at reset,
         // and the in-place reload starts the undo/redo stacks empty (the server
         // snapshot carries no history). This IS a fast-forward, minus the dirty guard
-        // - the whole point of take-remote is to discard the local edits. With no
-        // bound claim there is no edit session for the reload to carry, so the
-        // project comes back read-only.
-        self.speleodb_fast_forward(
-            &endpoint,
-            &token,
-            insecure_http,
-            &link,
-            tip.as_deref(),
-            (LocalEditsPolicy::Discard, generation, None),
-        )
-        .map_err(local_dto)
+        // - the whole point of take-remote is to discard the local edits - and it
+        // carries the edit session exactly as an Update's fast-forward does: only a
+        // claim still bound to it.
+        let local_path = self
+            .speleodb_fast_forward(
+                &endpoint,
+                &token,
+                insecure_http,
+                &link,
+                tip.as_deref(),
+                (
+                    LocalEditsPolicy::Discard,
+                    generation,
+                    Some(consented_revision),
+                ),
+            )
+            .map_err(local_dto)?;
+        Ok(TakeRemoteResult {
+            local_path,
+            editing_stopped,
+        })
+    }
+
+    /// Before an in-place reload that would carry the open edit session (Take
+    /// the SpeleoDB version, Reload Project): does SpeleoDB still record this
+    /// account as the lock's holder? Read once, right before the reload commits.
+    ///
+    /// - No edit session (`!edit_enabled`): nothing to carry, nothing read.
+    /// - The holder is this account: the session goes on (`None`).
+    /// - No holder, or another account: the lock was handed back elsewhere (the
+    ///   account's other session's Close) or taken since. The gate is shut for
+    ///   the session that asked (the claim stays as the pointer a later
+    ///   holder-checked release needs), so the reload opens read-only, and the
+    ///   answer says why.
+    /// - The holder cannot be read (no reply, a 5xx), or there is no email to
+    ///   compare it with: the session goes on, as before this check. A blip must
+    ///   not end a live session, and nothing is lost by carrying it: every upload
+    ///   reads the holder again before it sends (`speleodb_require_owned_lock_locked`)
+    ///   and shuts the gate then, and the next status refresh does too.
+    pub(super) fn speleodb_confirm_lock_for_reload(
+        &self,
+        (endpoint, token, insecure_http): (&str, &str, bool),
+        project_id: &str,
+        generation: u64,
+    ) -> Option<EditingStopped> {
+        if !self.edit_enabled() {
+            return None;
+        }
+        let me = self.speleodb_my_email();
+        let stopped =
+            match self.speleodb_lock_holder_checked(endpoint, token, insecure_http, project_id) {
+                Ok(Some(holder)) if lock_held_by_me(Some(holder.as_str()), me.as_deref()) => None,
+                Ok(Some(holder)) if me.is_some() => Some(EditingStopped::HeldBy { email: holder }),
+                Ok(None) => Some(EditingStopped::Released),
+                Ok(Some(_)) | Err(_) => {
+                    tracing::warn!(
+                        project_id,
+                        purpose = "confirm the lock before a reload carries the edit session",
+                        "speleodb: the lock holder could not be read or compared; the edit \
+                     session goes on (every upload checks the holder again)"
+                    );
+                    None
+                }
+            };
+        if stopped.is_some() {
+            tracing::info!(
+                project_id,
+                ?stopped,
+                purpose = "never carry an edit session over a lock SpeleoDB no longer records",
+                "speleodb: the lock is no longer this account's; the reload opens read-only"
+            );
+            self.speleodb_disable_editing_if_current(generation);
+        }
+        stopped
     }
 
     pub fn speleodb_release_lock(&self, project_id: String) -> Result<(), SpeleoErrorDto> {
@@ -1504,13 +1654,18 @@ impl AppState {
     /// Holder-checked like every automatic release (lock#4): the POST is sent only
     /// when SpeleoDB names this account as the holder
     /// ([`super::speleodb_lock_release::release_if_held_by_us`]).
+    ///
+    /// `false` when the outcome is unknown (the holder could not be read, or the
+    /// POST failed): the lock may still be ours. A claim this ended is back as a
+    /// pointer then; a caller that knows it took the lock without one leaves its
+    /// own (Start Editing's unwind, `speleodb_unwind_release`).
     pub(super) fn speleodb_release_best_effort(
         &self,
         params: &super::speleodb_lock_release::LockReleaseParams,
-    ) {
+    ) -> bool {
         // The shared sink for start-editing's abort arms, the publish push and -
-        // through `speleodb_release_held_lock_*` - logout / unlink / take-remote /
-        // the instance switch, so this project's claim ends here: a lock the server
+        // through `speleodb_release_held_lock_*` - logout / unlink / the instance
+        // switch, so this project's claim ends here: a lock the server
         // confirms released, or confirms is not ours, is no longer this process's
         // to account for.
         //
@@ -1534,7 +1689,9 @@ impl AppState {
             // to it, so it goes back - as a pointer, never as an edit session - for
             // the next close or the no-project janitor to retry.
             self.speleodb_restore_lock_claim(claim);
+            return false;
         }
+        true
     }
 
     /// [#303] Drop the in-memory undo/redo stacks when an edit session starts over a
@@ -1608,7 +1765,8 @@ impl AppState {
     }
 
     /// Load the open project's `speleo_link`, apply `f`, and persist it. Errors if
-    /// no remote project is open.
+    /// no remote project is open. Tests only (see [`Self::mutate_speleo_link`]).
+    #[cfg(test)]
     pub(super) fn speleodb_mutate_link(
         &self,
         f: impl FnOnce(&mut crate::models::SpeleoLink),
@@ -2954,6 +3112,43 @@ mod tests {
     }
 
     #[test]
+    fn an_acquire_that_never_left_this_computer_is_no_unknown_outcome() {
+        // Demo item 3: a refused connection or an unresolved name sent nothing, so
+        // the acquire cannot have landed and there is no lock to look for or point
+        // at; every other transport failure, a 5xx and an unreadable reply may
+        // follow a landed acquire. A 4xx is the server's verdict.
+        for cause in [
+            TransportCause::Refused,
+            TransportCause::Dropped,
+            TransportCause::Timeout,
+            TransportCause::Dns,
+            TransportCause::Tls,
+            TransportCause::Unknown,
+        ] {
+            let error = SpeleoDbError::Transport {
+                cause,
+                detail: "synthetic".to_owned(),
+            };
+            assert_eq!(
+                super::acquire_outcome_unknown(&error),
+                !matches!(cause, TransportCause::Refused | TransportCause::Dns),
+                "{cause:?}"
+            );
+        }
+        assert!(super::acquire_outcome_unknown(&SpeleoDbError::Status {
+            status: 502,
+            message: "synthetic".to_owned(),
+        }));
+        assert!(super::acquire_outcome_unknown(&SpeleoDbError::Parse(
+            "synthetic".to_owned()
+        )));
+        assert!(!super::acquire_outcome_unknown(&SpeleoDbError::Status {
+            status: 403,
+            message: "synthetic".to_owned(),
+        }));
+    }
+
+    #[test]
     fn push_and_done_report_not_editing_when_the_gate_is_closed_over_clean_work() {
         // Same arm even with nothing to push: "there was no edit session" is a fact
         // about the session, not about the dirty bit, and the frontend needs it to
@@ -3146,8 +3341,8 @@ mod tests {
         );
         assert!(
             state.speleodb_abandon_lock_release_params().is_some(),
-            "the abandon variant (unlink / take-remote) is NOT vetoed - both verbs \
-             are only ever reached with un-pushed edits"
+            "the abandon variant (unlink) is NOT vetoed - the verb walks away from \
+             the un-pushed edits on purpose"
         );
     }
 
@@ -3346,10 +3541,26 @@ mod tests {
         state.set_edit_enabled(true);
         assert_eq!(
             state.speleodb_remote_state(&base, "tok-1", false, &link, Some("u@x")),
-            RemoteState::UpToDate,
-            "a session that really does hold the lock still gets the shortcut - our \
-             own landed push must not be painted as a conflict"
+            RemoteState::Conflict,
+            "R3: holding the lock is not enough either - it is the account's, so the \
+             other session holds it too, and this one uploaded nothing that can be def456"
         );
+
+        record_own_upload(&state, "abc123", "def456");
+        assert_eq!(
+            state.speleodb_remote_state(&base, "tok-1", false, &link, Some("u@x")),
+            RemoteState::UpToDate,
+            "a session that holds the lock AND uploaded def456 still gets the shortcut - \
+             our own landed push must not be painted as a conflict"
+        );
+    }
+
+    /// Record that this process's upload on `base` was answered with `landed` (R3:
+    /// the push's own record, the licence the authorship shortcut needs).
+    fn record_own_upload(state: &AppState, base: &str, landed: &str) {
+        let generation = state.speleodb_session_generation();
+        state.speleodb_note_upload_sent(generation, REMOTE_ID, Some(base.to_owned()), "m");
+        state.speleodb_note_upload_answered(generation, REMOTE_ID, Some(landed));
     }
 
     /// [#258 review] The provenance-scoped unwind releases what THIS process took, and
@@ -3419,10 +3630,12 @@ mod tests {
             last_verify_at: None,
             undo_mode: None,
         };
+        record_own_upload(&state, "abc123", "def456");
         assert_eq!(
             state.speleodb_remote_state(&base, "tok-1", false, &link, Some("u@x")),
             RemoteState::UpToDate,
-            "precondition: gate + record + holder together DO license the shortcut"
+            "precondition: gate + record + holder + our own upload together DO license \
+             the shortcut"
         );
 
         state.set_edit_enabled(false);
@@ -3562,15 +3775,27 @@ mod tests {
             "a second refresh must preserve the conflict and the shut edit gate"
         );
 
-        // The other side of the line: a process that really did take this lock keeps
-        // the shortcut, so its own landed push is not painted as a conflict.
+        // Taking the lock does not make the other session's commit ours either
+        // (R3): the lock is the account's, so that session holds it too.
         state.set_edit_enabled(true);
         state.speleodb_note_lock_acquired(Some(REMOTE_ID));
         let third = state.speleodb_link_status().expect("refresh 3");
         assert_eq!(
             third.remote_state,
+            RemoteState::Conflict,
+            "holding the per-account lock licenses nothing: this process uploaded \
+             nothing that can be def456"
+        );
+
+        // The other side of the line: a commit an upload of THIS process was
+        // answered with is ours, so its own landed push is not painted as a
+        // conflict (a refresh that read BASE before that landing).
+        record_own_upload(&state, "abc123", "def456");
+        let fourth = state.speleodb_link_status().expect("refresh 4");
+        assert_eq!(
+            fourth.remote_state,
             RemoteState::UpToDate,
-            "an acquire made by THIS process still licenses the authorship recovery"
+            "a revision this process uploaded still licenses the authorship recovery"
         );
     }
 
@@ -3936,10 +4161,10 @@ mod tests {
         // took" and mint a record on it. Unknown provenance must answer like a failed
         // probe: no claim.
         let start_editing = prod_source()
-            .split_once("fn speleodb_start_editing")
+            .split_once("fn speleodb_start_editing_flow")
             .map(|(_, rest)| rest)
             .and_then(|rest| rest.split("\n    fn ").next())
-            .expect("speleodb_start_editing body precedes the next method");
+            .expect("speleodb_start_editing_flow body precedes the next method");
         let probe = start_editing
             .split_once("match self.speleodb_lock_holder_checked(")
             .map(|(_, rest)| rest)
@@ -4502,10 +4727,10 @@ mod tests {
         // binary. The sibling above reaches the arm behaviourally and pins the release
         // half; this pins which failures skip it.
         let start_editing = prod_source()
-            .split_once("fn speleodb_start_editing")
+            .split_once("fn speleodb_start_editing_flow")
             .map(|(_, rest)| rest)
             .and_then(|rest| rest.split("\n    fn ").next())
-            .expect("speleodb_start_editing body precedes the next method");
+            .expect("speleodb_start_editing_flow body precedes the next method");
         let fast_forward = start_editing
             .split_once("ReconcileVerdict::FastForward => {")
             .map(|(_, rest)| rest)
@@ -4580,8 +4805,8 @@ mod tests {
 
     #[test]
     fn logout_does_not_release_a_lock_over_unpushed_edits() {
-        // Logging out is not the same act as surrendering the lock. Unlike unlink /
-        // take-remote - the verbs that legitimately bypass the veto - a logout
+        // Logging out is not the same act as surrendering the lock. Unlike unlink -
+        // the verb that legitimately bypasses the veto - a logout
         // neither deletes the link row nor discards the edits, so releasing here
         // leaves the project free for a colleague to lock and push while the work
         // is still only on this machine. The lock left held is recoverable: the
@@ -4886,6 +5111,16 @@ mod tests {
                     .any(|w| w.code == "delete_project_lock_release_failed"),
                 "the stub never answers, so the release failed - which must surface as \
                  a non-fatal warning, not a failed delete, got {:?}",
+                result.warnings
+            );
+            // Demo item 4: the warning names the cause in plain words, never the
+            // raw diagnostic. Injection: `{e}` back in the message fails this.
+            assert!(
+                result
+                    .warnings
+                    .iter()
+                    .all(|w| !w.message.contains("Network error talking to SpeleoDB")),
+                "{:?}",
                 result.warnings
             );
         });

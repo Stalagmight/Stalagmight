@@ -4,6 +4,7 @@ import { Button } from '../../common/Button';
 import { DialogWrapper } from '../DialogWrapper';
 import { SettingsSection } from './SettingsSection';
 import { invokeIpc } from '../../../utils/ipc';
+import { describeSpeleoError } from '../../../utils/speleoError';
 import { formatNumber } from '../../../i18n/format';
 import { useSpeleoCacheStore } from '../../../store/speleoCacheStore';
 import { useProjectStore } from '../../../store/projectStore';
@@ -83,7 +84,7 @@ export function SpeleoCachePurgeSection() {
       // Handed-back locks change the home screen's lock badges.
       if (report.locks_released.length > 0) void useSpeleoStore.getState().scanLocksOnOpen();
     } catch (e) {
-      setMessage({ lines: [e instanceof Error ? e.message : String(e)], tone: 'warning' });
+      setMessage({ lines: [describeSpeleoError(e)], tone: 'warning' });
     } finally {
       setWorking(false);
       void refresh();

@@ -49,9 +49,9 @@ use stalagmight_lib::parsers::dmp::{DmpDirection, DmpShotType};
 use stalagmight_lib::parsers::tml::{TmlRootPlacement, TmlShotType, TmlUnit};
 use stalagmight_lib::persistence::BackupKind;
 use stalagmight_lib::speleodb::{
-    DoneResult, EndpointRefusal, Permission, PushResult, RemoteState, SpeleoAccessVerification,
-    SpeleoDbAction, SpeleoReadOnlyOpen, StartEditingResult, TransportCause, UpdateResult,
-    Visibility,
+    DoneResult, EditingStopped, EndpointRefusal, Permission, PushResult, RemoteState,
+    SpeleoAccessVerification, SpeleoDbAction, SpeleoReadOnlyOpen, StartEditingResult,
+    TransportCause, UpdateResult, Visibility,
 };
 
 /// One literal of a declaration and the JSON that names it on the wire.
@@ -201,6 +201,7 @@ fn checked() -> Vec<Check> {
         DmpDirection,
         DmpShotType,
         DoneResult,
+        EditingStopped,
         EndpointRefusal,
         ExportValueKind,
         GasUnits,

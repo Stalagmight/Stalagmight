@@ -111,6 +111,23 @@ describe('Close', () => {
     expect(useProjectStore.getState().project).toBeNull();
   });
 
+  // sdbdemo2 P3 (screenshot 06): a read-only session whose lock request got no
+  // reply closed with the connection refused, and the prompt stated the lock as
+  // certain ("Until it is handed back, nobody else can edit the project") although
+  // the tab said the lock was free and the request had never reached SpeleoDB.
+  // Only an edit session knows it holds the lock.
+  it.each([
+    ['an edit session', 'editing', true],
+    ['a read-only session', 'read-only', false],
+  ] as const)('the question from %s says whether the lock is known to be held', async (_case, editState, certain) => {
+    useSpeleoStore.setState({ link: { ...editing, editState } });
+    replies.close_project = [failed()];
+    void useProjectStore.getState().closeProject();
+    const prompt = await waitForPrompt();
+    expect(prompt.lockCertain).toBe(certain);
+    prompt.settle('cancel');
+  });
+
   it('a failed release keeps the project open, pauses editing and asks; Retry closes once it settles', async () => {
     replies.close_project = [failed(), released];
     const closing = useProjectStore.getState().closeProject();
@@ -136,6 +153,35 @@ describe('Close', () => {
     const prompt = await waitForPrompt();
     await expect(prompt.retry()).resolves.toEqual({ ok: false, detail: 'still unreachable' });
     expect(useProjectStore.getState().project).not.toBeNull();
+    prompt.settle('cancel');
+    await closing;
+  });
+
+  // Demo item 4 (screenshot 06): "What went wrong" showed the raw diagnostic. A
+  // release that got no reply carries its cause (`lock_release_transport`), and
+  // the question says it in the words every read-only notice uses for that
+  // cause, naming the server; so does every Retry, including one whose call was
+  // itself rejected. The backend's `error` is for any other failure.
+  it('a release that got no reply is worded by its cause, on the question and on every Retry', async () => {
+    useSpeleoStore.setState({ session: { loggedIn: true, userEmail: 'diver@example.com', endpoint: 'https://synthetic.example' } });
+    const raw = 'The SpeleoDB lock could not be handed back: Network error talking to SpeleoDB: error sending request';
+    let closes = 0;
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command !== 'close_project') return command === 'speleodb_link_status' ? new Promise(() => {}) : [];
+      closes += 1;
+      if (closes === 1) return { ...failed(raw), lock_release_transport: 'Refused' };
+      if (closes === 2) return { ...failed(raw), lock_release_transport: 'Dropped' };
+      throw { message: 'Network error talking to SpeleoDB: error sending request', action: 'Retry', status: null,
+        transport: 'Timeout' };
+    });
+    const closing = useProjectStore.getState().closeProject();
+    const prompt = await waitForPrompt();
+    expect(prompt.detail).toBe('Could not connect to SpeleoDB at https://synthetic.example. Check your network '
+      + 'connection, the server address, and whether the server is running.');
+    await expect(prompt.retry()).resolves.toEqual({ ok: false, detail: 'The connection to SpeleoDB at '
+      + 'https://synthetic.example was lost before it finished answering. Check your network connection and try again.' });
+    await expect(prompt.retry()).resolves.toEqual({ ok: false, detail: 'SpeleoDB at https://synthetic.example did '
+      + 'not respond in time. Check your network connection and that the server is running.' });
     prompt.settle('cancel');
     await closing;
   });

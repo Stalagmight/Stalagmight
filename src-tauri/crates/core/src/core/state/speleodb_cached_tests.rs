@@ -1061,10 +1061,21 @@ fn an_unreachable_server_removes_the_copy_and_says_the_lock_may_stay() {
         let removed = state.speleodb_remove_cached_copy_in(temp.path(), MINE, false);
         assert!(removed.success, "{:?}", removed.error);
         assert!(!temp.path().join(MINE).exists(), "the copy is gone");
-        assert!(removed
+        let warning = removed
             .warnings
             .iter()
-            .any(|w| w.code == "speleodb_lock_not_handed_back"));
+            .find(|w| w.code == "speleodb_lock_not_handed_back")
+            .expect("the lock may stay: said");
+        // Demo item 4: in plain words, never the raw diagnostic. Injection: the
+        // probe's `e.to_string()` as the reason again fails this.
+        assert!(
+            warning.message.contains("could not connect to SpeleoDB")
+                && !warning
+                    .message
+                    .contains("Network error talking to SpeleoDB"),
+            "{}",
+            warning.message
+        );
         assert!(state.speleodb_active_token().is_ok(), "the session is kept");
     });
 }

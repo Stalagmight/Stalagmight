@@ -93,12 +93,12 @@ use stalagmight_lib::persistence::{
     BackupInfo, BackupKind, RawTableData, RepairResult, SalvagedData,
 };
 use stalagmight_lib::speleodb::{
-    DoneResult, EndpointRefusal, Permission, PushResult, RemoteState, SpeleoAccessVerification,
-    SpeleoCollaborator, SpeleoDbAction, SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus,
-    SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
-    SpeleoPublishParams, SpeleoPublishResult, SpeleoReadOnlyOpen, SpeleoReleaseContext,
-    SpeleoRevision, SpeleoSessionStatus, StartEditingResult, TransportCause, UnpushedLocalEdits,
-    UpdateResult, Visibility,
+    DoneResult, EditingStopped, EndpointRefusal, Permission, PushResult, RemoteState,
+    SpeleoAccessVerification, SpeleoCollaborator, SpeleoDbAction, SpeleoErrorDto, SpeleoFileAccess,
+    SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult,
+    SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoReadOnlyOpen,
+    SpeleoReleaseContext, SpeleoRevision, SpeleoSessionStatus, StartEditingResult,
+    TakeRemoteResult, TransportCause, UnpushedLocalEdits, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_attribution::TileAttribution;
 use stalagmight_lib::tile_providers::TileProviderInfo;
@@ -574,6 +574,10 @@ fn main() {
     export::<DoneResult>(&out_dir);
     export::<UpdateResult>(&out_dir);
     export::<PushResult>(&out_dir);
+    // Take the SpeleoDB version, and why an in-place reload stopped an edit
+    // session (SpeleoDB no longer records this account's lock).
+    export::<TakeRemoteResult>(&out_dir);
+    export::<EditingStopped>(&out_dir);
     // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)
     export::<Visibility>(&out_dir);
     export::<SpeleoCollaborator>(&out_dir);
@@ -874,6 +878,8 @@ fn main() {
         "DoneResult",
         "UpdateResult",
         "PushResult",
+        "TakeRemoteResult",
+        "EditingStopped",
         "Visibility",
         "SpeleoCollaborator",
         "SpeleoPublishParams",

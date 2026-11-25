@@ -1,13 +1,16 @@
 import type { SpeleoCachedProject, SpeleoProjectSummary } from '../../types/ipc.generated';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { SpeleoBadgedIcon, HourglassGlyph, PenGlyph } from '../common/SpeleoBadgedIcon';
 import { Tooltip } from '../common';
 import { emailsMatch } from '../../utils/email';
 import {
   hasUnpushedEdits,
+  speleoLockOrigin,
   UNPUSHED_ACCENT,
   type SpeleoLocalStateMap,
+  type SpeleoLockOrigin,
 } from '../../utils/speleoLocalState';
 
 /** Resolved lock state for one recents entry, from the login/app-open scan (#201). */
@@ -16,6 +19,10 @@ export interface SpeleoLockInfo {
   /** Holder email, `null` = free, `undefined` = not scanned (logged out / offline). */
   lockHolder: string | null | undefined;
   lockedByMe: boolean;
+  /** Where this account's lock was taken, when `lockedByMe` (sdbdemo2 issue 3):
+      only `here` says "You are editing". Absent on a hand-built entry, which
+      keeps the plain words. */
+  lockOrigin?: SpeleoLockOrigin;
   readOnly?: boolean;
   /** The SpeleoDB project's server-side name, if the scan resolved it (`undefined`
       when logged out / offline / not scanned). May differ from the local name. */
@@ -35,6 +42,10 @@ export interface SpeleoLockInfo {
  * cannot know whether a project has work that was never pushed - fetched once for
  * the whole list. Omitted / empty simply yields `hasLocalEdits: false`, i.e. no
  * accent, which is the graceful degradation when that call fails.
+ *
+ * `linkedHere` is whether a recent file is linked to the project (always so for a
+ * recents entry): with the local states it decides where this account's lock was
+ * taken (`lockOrigin`), the same way the held-lock prompt decides its row.
  */
 export function resolveSpeleoLock(
   project: { is_remote: boolean; speleodb_project_id?: string | null },
@@ -43,6 +54,7 @@ export function resolveSpeleoLock(
   remoteProjects: Record<string, string> = {},
   localStates: SpeleoLocalStateMap = {},
   summaries: Record<string, SpeleoProjectSummary> = {},
+  linkedHere = true,
 ): SpeleoLockInfo {
   const pid = project.speleodb_project_id ?? undefined;
   const lockHolder = pid !== undefined && pid in remoteLocks ? remoteLocks[pid] : undefined;
@@ -55,9 +67,22 @@ export function resolveSpeleoLock(
     ...(pid && summaries[pid]?.permission === 'READ_ONLY' ? { readOnly: true } : {}),
     lockHolder,
     lockedByMe,
+    ...(lockedByMe ? { lockOrigin: speleoLockOrigin(localStates, pid, linkedHere) } : {}),
     speleoName,
     hasLocalEdits: hasUnpushedEdits(localStates, pid),
   };
+}
+
+/**
+ * The words for a lock this account holds, by where it was taken (sdbdemo2
+ * issue 3): "You are editing" (`youKey`) only for a lock this run claims; the
+ * held-lock prompt's "Held by this account, not by this computer" when this
+ * computer can positively not have taken it; "Held by this account" when it
+ * cannot tell. A hand-built entry with no origin keeps `youKey`.
+ */
+export function ownLockText(t: TFunction, origin: SpeleoLockOrigin | undefined, youKey: string): string {
+  if (origin === undefined || origin === 'here') return t(youKey);
+  return t(origin === 'elsewhere' ? 'speleodb.heldLocks.notThisComputer' : 'speleodb.projectListing.heldByThisAccount');
 }
 
 /**
@@ -213,6 +238,7 @@ export function SpeleoLockBadge({
   isRemote,
   lockHolder,
   lockedByMe,
+  lockOrigin,
   hasLocalEdits = false,
   size = 18,
   testIdPrefix,
@@ -221,6 +247,7 @@ export function SpeleoLockBadge({
   /** Holder email, `null` = free, `undefined` = not scanned (logged out / offline). */
   lockHolder: string | null | undefined;
   lockedByMe: boolean;
+  lockOrigin?: SpeleoLockOrigin;
   /** #270: paint the mark yellow - this machine has edits the server does not. */
   hasLocalEdits?: boolean;
   size?: number;
@@ -233,7 +260,9 @@ export function SpeleoLockBadge({
 
   if (lockedByMe) {
     return (
-      <Tooltip content={t('speleodb.recentBadge.lockedByYou')}>
+      <Tooltip content={t(lockOrigin === undefined || lockOrigin === 'here'
+        ? 'speleodb.recentBadge.lockedByYou'
+        : lockOrigin === 'elsewhere' ? 'speleodb.recentBadge.heldNotHere' : 'speleodb.recentBadge.heldByThisAccount')}>
         <span data-testid={`${testIdPrefix}-badge-locked-me`}>
           <SpeleoBadgedIcon
             badge={<PenGlyph size={10} />}
@@ -294,7 +323,7 @@ export function SpeleoRecentInfo({
   const { t } = useTranslation();
   if (!info.isRemote) return null;
   const detail = info.lockedByMe
-    ? t('speleodb.recentInfo.lockedByYou')
+    ? ownLockText(t, info.lockOrigin, 'speleodb.recentInfo.lockedByYou')
     : info.lockHolder
       ? t('speleodb.recentInfo.lockedByOther', { email: info.lockHolder })
       : null;

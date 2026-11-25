@@ -308,6 +308,12 @@ pub(super) fn write_local(out: &mut Vec<u8>, local: &LocalState) {
         if let Some(base) = &sync.base_commit {
             string(s.key("base"), base);
         }
+        if let Some(digest) = &sync.base_survey {
+            string(s.key("base_survey"), digest);
+        }
+        if let Some(at) = sync.base_survey_edit {
+            time(s.key("base_survey_edit"), at);
+        }
         if sync.unpushed_edits {
             boolean(s.key("unpushed"), true);
         }

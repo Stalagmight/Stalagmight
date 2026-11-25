@@ -70,7 +70,23 @@ upload-failure and unuploaded-work indicators remain visible outside the tab.
 
 Remote opening automatically attempts lock acquisition and reconciliation. No
 explicit editing-without-a-lock feature exists. Offline opening stays read-only;
-transient disconnection after acquisition permits local editing. Confirmed lock
+transient disconnection after acquisition permits local editing. An open opens the
+cached copy offline only when its download got no reply at all: the connection could
+not be made, the name did not resolve, the time ran out, or the connection was lost
+before the whole reply arrived. A reply from the server (a refusal, an invalid
+download, one that is not HTTP) and a TLS failure never open it (F1); a refusal of
+a JSON read whose body was cut short has lost its status and counts as a lost
+reply. Such an offline copy opens read-only and takes no lock by itself; Start
+editing does that once the user asks. While SpeleoDB cannot be reached the
+SpeleoDB tab says the project is offline and what the last lock scan saw, not
+"Ready for editing"; a copy SpeleoDB has a newer revision of says so in the tab
+for as long as that is known, and Start Editing downloads that revision before it
+starts editing (or, over un-uploaded work, raises the divergence prompt). A Start
+Editing that fails says why in the words of its cause, and, when its lock request
+may have reached SpeleoDB without anything confirming it, that the lock is handed
+back at Close; on a project already open its notice is titled "Still read-only".
+A lock request whose connection could not be made, or whose server name did not
+resolve, never left the computer and leaves nothing behind. Confirmed lock
 loss, permission loss or sign-out closes the editing gate. Backend direct mutation
 and upload calls enforce the same ownership requirements.
 
@@ -78,12 +94,43 @@ Explicit Save, its shortcut and Save Changes share a dispatcher: local Save for
 local projects, upload confirmation for linked ones, and a blocked explanation
 without the lock. Upload needs a description, local save and fresh server ownership
 verification; ordinary upload keeps the lock. Clean projects do not upload empty
-revisions. Autosave and autosave retry remain local-only. Save and Close continues
+revisions. Unuploaded changes are decided by content: a copy holding exactly the
+survey of the revision it is based on has none, whatever its mark says (an edit lost
+in a crash or closed with Don't save, or taken back and saved), and from its next
+open on opens, updates and closes as a clean copy (the Don't-save close itself
+still keeps the write lock, since the session was dirty when it closed; the next
+open resumes it). After an upload whose answer was lost (it may have landed) the
+mark stands until an upload is confirmed, and so it does after any edit by a
+program that does not keep the digest of the base's survey. Every upload (Save Changes, Done and the close, quit and
+sign-out uploads) first checks that SpeleoDB's latest revision is still the copy's
+base, or moved only by this session's own upload whose answer was lost; any other
+revision there - including one from another session of the same account, which
+holds the same per-account lock - uploads nothing and raises the divergence prompt.
+Its "Take the SpeleoDB version" replaces the copy with SpeleoDB's latest revision
+and releases nothing (the lock is the account's, and the other session may be
+editing under it): an editing session goes on editing that revision, a read-only
+one stays read-only. The held-lock prompt at sign-in says that a lock this account
+holds may be Stalagmight open on another computer with this account, keeps Not now
+as its default and offers "Release anyway"; a lock this computer cannot have taken
+(no claim of this run, no copy, no recent file linked) is labelled "Held by this
+account, not by this computer", and signing out leaves such a lock alone. The home
+screen uses the same words for the same lock ("You are editing" only for a lock this
+run claims), opening such a project opens it read-only with a notice instead of
+taking the lock over (Resume editing then edits it here too), and Disconnect hands
+back only the locks this run claims: any other lock of the account over a copy here
+is listed with "Release anyway" and left held. A session whose lock another session
+of the account handed back says "Editing stopped" at its next status refresh.
+An upload that landed on top of a revision pushed between that check and the upload
+names it on a banner of its own that stays until dismissed (it stays in the
+Revision History), and every close that ran the upload (the exit and sign-out
+prompts, Save and Close, the older-version confirmation) stops so the banner is
+read. Autosave and autosave retry remain local-only. Save and Close continues
 only after confirmed upload and release, with no newer unuploaded changes. Other
 exits automatically release without upload, protecting unsaved survey and form
 drafts with Discard changes / Cancel. A release that fails or is uncertain never
 leaves silently: Close, project switches and Quit stay put and ask "Couldn't hand
-back the lock" (Retry / Close and keep the lock / Cancel). Dirtiness is independent of validity.
+back the lock" (Retry / Close and keep the lock / Cancel), saying what went wrong in
+the words of its cause, never the raw network diagnostic. Dirtiness is independent of validity.
 Switch to read-only refuses unsaved or unuploaded changes, with Save Changes guidance.
 Reload requires explicit Discard changes / Cancel for pending work, preserves mode,
 and never acquires a lock. Historical checkouts return to the live server version.

@@ -527,7 +527,7 @@ impl AppState {
         // for a history-keeping Unwind (its loaded history stamped inherited), else
         // none - and only while that copy is still the open project.
         self.speleodb_swap_in_revision(
-            native.path(),
+            (native.path(), &hexsha),
             &dest,
             link,
             (
@@ -546,6 +546,7 @@ impl AppState {
         Ok(SpeleoOpenResult {
             local_path,
             offline: None,
+            newer_on_server: None,
             has_unpushed_edits: None,
             read_only: None,
             other_owner: None,

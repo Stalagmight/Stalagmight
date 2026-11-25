@@ -26,6 +26,7 @@ import { useSpeleoActions } from './useSpeleoActions';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
+import i18n from '../i18n';
 
 let saveProjectMock: ReturnType<typeof vi.fn>;
 
@@ -341,9 +342,10 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
   });
 
   it('update (→ fast_forwarded) refreshes geometry + link state', async () => {
-    // The backend FF reload reopens the SAME path, so loadProject short-circuits on
-    // the "already open" guard; without the explicit refresh the old tree would stay
-    // on screen (Update appearing not to reset to tip).
+    // The backend FF reload reopens the SAME path in place; without the explicit
+    // refresh the old tree would stay on screen (Update appearing not to reset to
+    // tip). Never through `loadProject`: that is a project switch, and its
+    // `cancel_loading` ends the backend's edit session (sdbdemo2 issue 1).
     const loadProject = vi.fn(async () => ({ success: true }));
     const refreshProjectState = vi.fn(async () => {});
     const refreshLinkStatus = vi.fn(async () => {});
@@ -356,7 +358,7 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
       await result.current.update();
     });
 
-    expect(loadProject).toHaveBeenCalledWith('/x.stalx', { acquireLock: false });
+    expect(loadProject).not.toHaveBeenCalled();
     expect(refreshProjectState).toHaveBeenCalled();
     expect(refreshLinkStatus).toHaveBeenCalled();
   });
@@ -366,7 +368,9 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
     // too (deleting its refresh calls would leave a stale tree after a Start-editing FF).
     const loadProject = vi.fn(async () => ({ success: true }));
     const refreshProjectState = vi.fn(async () => {});
-    const refreshLinkStatus = vi.fn(async () => {});
+    const refreshLinkStatus = vi.fn(async () => {
+      useSpeleoStore.setState({ link: { editState: 'editing' } as never });
+    });
     useProjectStore.setState({ loadProject, refreshProjectState });
     useSpeleoStore.setState({ applyStartEditing: vi.fn(), refreshLinkStatus });
     invokeIpcMock.mockResolvedValue({ kind: 'fast_forwarded', local_path: '/y.stalx' });
@@ -376,16 +380,15 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
       await result.current.startEditing();
     });
 
-    expect(loadProject).toHaveBeenCalledWith('/y.stalx', { acquireLock: false });
+    expect(loadProject).not.toHaveBeenCalled();
     expect(refreshProjectState).toHaveBeenCalled();
     expect(refreshLinkStatus).toHaveBeenCalled();
   });
 
   /**
-   * [#270] Both fast-forward arms ignored `loadProject`'s answer and carried on.
-   * `takeRemote` has read it since it was written, for the reason that applies
-   * here too: `loadProject` reports `success: false` when a NEWER load superseded
-   * it, so the swapped tree is not what is on screen.
+   * [#270] Both fast-forward arms ignored whether the reload landed and carried on.
+   * A reply that arrives after the user opened another project (or signed in
+   * again) describes a tree that is not on screen.
    *
    * `startEditing`'s own contract makes this load-bearing - `true` means "we hold
    * the lock", and `HeldLockResumeDialog` hands the shell over on it (discarding
@@ -394,12 +397,15 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
    * project/stations/surveyData wholesale, so it must not run either.
    */
   it('startEditing (→ fast_forwarded) refuses when the reload did not land', async () => {
-    const loadProject = vi.fn(async () => ({ success: false, superseded: true }));
     const refreshProjectState = vi.fn(async () => {});
     const refreshLinkStatus = vi.fn(async () => {});
-    useProjectStore.setState({ loadProject, refreshProjectState });
-    useSpeleoStore.setState({ applyStartEditing: vi.fn(), refreshLinkStatus });
-    invokeIpcMock.mockResolvedValue({ kind: 'fast_forwarded', local_path: '/y.stalx' });
+    useProjectStore.setState({ refreshProjectState });
+    useSpeleoStore.setState({ remoteProjectId: 'p1', applyStartEditing: vi.fn(), refreshLinkStatus });
+    invokeIpcMock.mockImplementation(async () => {
+      // Another project was opened while the download ran.
+      useSpeleoStore.setState({ remoteProjectId: 'p2' });
+      return { kind: 'fast_forwarded', local_path: '/y.stalx' };
+    });
     const { result } = renderHook(() => useSpeleoActions());
 
     let held: boolean | undefined;
@@ -413,12 +419,16 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
   });
 
   it('update (→ fast_forwarded) stops when the reload did not land', async () => {
-    const loadProject = vi.fn(async () => ({ success: false, superseded: true }));
     const refreshProjectState = vi.fn(async () => {});
     const refreshLinkStatus = vi.fn(async () => {});
-    useProjectStore.setState({ isDirty: false, loadProject, refreshProjectState });
-    useSpeleoStore.setState({ link: { hasUnpushedEdits: false } as never, applyUpdate: vi.fn(), refreshLinkStatus });
-    invokeIpcMock.mockImplementation(async (cmd) => cmd === 'speleodb_project_access_at' ? { release_context: {} } : { kind: 'fast_forwarded', local_path: '/x.stalx' });
+    useProjectStore.setState({ isDirty: false, refreshProjectState });
+    useSpeleoStore.setState({ remoteProjectId: 'p1', link: { hasUnpushedEdits: false } as never, applyUpdate: vi.fn(), refreshLinkStatus });
+    invokeIpcMock.mockImplementation(async (cmd) => {
+      if (cmd === 'speleodb_project_access_at') return { release_context: {} };
+      // Another project was opened while the download ran.
+      useSpeleoStore.setState({ remoteProjectId: 'p2' });
+      return { kind: 'fast_forwarded', local_path: '/x.stalx' };
+    });
     const { result } = renderHook(() => useSpeleoActions());
 
     await act(async () => {
@@ -542,7 +552,8 @@ describe('useSpeleoActions - discard routes every StartEditingResult (#303)', ()
 
     expect(outcome).toBe('editing');
     expect(applyStartEditing).toHaveBeenCalledWith(fastForwarded);
-    expect(loadProject).toHaveBeenCalledWith('/tip.stalx', { acquireLock: false });
+    // Reconciled in place, never through the project switch (sdbdemo2 issue 1).
+    expect(loadProject).not.toHaveBeenCalled();
 
     const divergence = { kind: 'divergence_needed' } as const;
     invokeIpcMock.mockResolvedValueOnce(divergence);
@@ -749,6 +760,84 @@ describe('useSpeleoActions - startEditing falls to the REFUSING answer (#270)', 
 
     expect(held).toBe(true);
   });
+
+  // The Start editing buttons (the map's read-only pill, the SpeleoDB tab, the held-lock
+  // prompt) after an offline open (F1): the backend's DTO keeps the raw diagnostic in
+  // `message` and the cause in `transport`. The notice is the worded line for the cause,
+  // and no toast repeats it.
+  it('a Start editing whose reply was lost is worded for the lost connection, not the raw error', async () => {
+    useSpeleoReadOnlyNotice.setState({ notice: null });
+    useSpeleoStore.setState({
+      session: { loggedIn: true, userEmail: 'diver@example.com', endpoint: 'https://synthetic.example' },
+    });
+    invokeIpcMock.mockRejectedValue({
+      message: 'Network error talking to SpeleoDB: error sending request', action: 'Retry', status: null,
+      transport: 'Dropped',
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let held: boolean | undefined;
+    await act(async () => {
+      held = await result.current.startEditing();
+    });
+
+    expect(held).toBe(false);
+    const message = useSpeleoReadOnlyNotice.getState().notice?.message ?? '';
+    expect(message).toBe(
+      'The connection to SpeleoDB at https://synthetic.example was lost before it finished answering. ' +
+        'Check your network connection and try again.',
+    );
+    expect(message).not.toMatch(/network error|error sending request|could not connect/i);
+    expect(useUIStore.getState().showToast).not.toHaveBeenCalled();
+    expect(useSpeleoStore.getState().clearSession).not.toHaveBeenCalled();
+  });
+
+  // Demo items 3 and 7 (screenshots 04, 08): Resume editing on a project already
+  // open. The notice is not "Project opened read-only" (nothing was opened), and
+  // when the lock request may have landed and nothing could confirm it
+  // (`lock_may_be_held`), it says the lock may be held and what happens to it, so
+  // the "Couldn't hand back the lock" question at Close is not a surprise.
+  it.each([
+    [true, true],
+    [undefined, false],
+  ] as const)('a failed Resume editing is titled for what happened; lock_may_be_held %s says so: %s', async (flag, said) => {
+    useSpeleoReadOnlyNotice.setState({ notice: null });
+    useSpeleoStore.setState({
+      session: { loggedIn: true, userEmail: 'diver@example.com', endpoint: 'https://synthetic.example' },
+      // The last lock scan saw the lock free.
+      remoteProjectId: 'p1', remoteLocks: { p1: null },
+    });
+    invokeIpcMock.mockRejectedValue({
+      message: 'Network error talking to SpeleoDB: error sending request', action: 'Retry', status: null,
+      transport: 'Dropped', ...(flag ? { lock_may_be_held: flag } : {}),
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+    await act(async () => {
+      await result.current.startEditing();
+    });
+    const notice = useSpeleoReadOnlyNotice.getState().notice;
+    expect(notice?.kind).toBe('stillReadOnly');
+    const sentence = 'The lock request may have reached SpeleoDB; if it did, Stalagmight hands the lock back '
+      + 'when you close the project, or you can try again.';
+    expect(notice?.message).toBe(
+      'The connection to SpeleoDB at https://synthetic.example was lost before it finished answering. '
+        + `Check your network connection and try again.${said ? ` ${sentence}` : ''}`,
+    );
+    // sdbdemo2 P3 (screenshot 07): a lock request that may have landed leaves no
+    // "free when last checked" behind; one that surely did not keeps the scan.
+    expect('p1' in useSpeleoStore.getState().remoteLocks).toBe(!said);
+  });
+
+  it('a Resume editing someone else is in the way of is titled for what happened too', async () => {
+    useSpeleoReadOnlyNotice.setState({ notice: null });
+    useSpeleoStore.setState({ applyStartEditing: vi.fn() });
+    invokeIpcMock.mockResolvedValue({ kind: 'locked_by', email: 'other@example.com' });
+    const { result } = renderHook(() => useSpeleoActions());
+    await act(async () => {
+      await result.current.startEditing();
+    });
+    expect(useSpeleoReadOnlyNotice.getState().notice?.kind).toBe('stillReadOnly');
+  });
 });
 
 /**
@@ -948,20 +1037,339 @@ it('manual refresh waits for fresh lock and permission status even when the revi
   expect(useSpeleoStore.getState().busy).toBe(false);
 });
 
-describe('useSpeleoActions - Take remote ends the edit session (data#3)', () => {
-  it('reopens the server version without taking the lock back', async () => {
-    const loadProject = vi.fn(async () => ({ success: true }));
+// The backend hands no lock back on Take remote (demo item 2): an edit session
+// carries over the reload, a read-only one stays read-only. The frontend reopens
+// without acquiring (data#3) and takes the edit state from the re-read status.
+//
+// sdbdemo2 issues 1 and 2: the real app stayed read-only after Take the SpeleoDB
+// version and after a Resume editing that downloaded a newer revision first. The
+// frontend reconciled the in-place reload through `loadProject`, a project
+// switch whose `cancel_loading` moves the backend's session on - which ends the
+// edit session the reload had just carried or started. The model below is that
+// backend: a project switch ends the bound edit session, and the link status
+// reports the session as it stands.
+describe('useSpeleoActions - an in-place reload keeps the edit session (sdbdemo2 issues 1, 2)', () => {
+  const backend = (editing: boolean) => {
+    const model = { bound: editing };
+    // A project switch: `loadProject` runs `cancel_loading`, which ends the
+    // backend's edit session (the lock itself stays held on SpeleoDB).
+    const loadProject = vi.fn(async () => {
+      model.bound = false;
+      return { success: true };
+    });
+    const refreshLinkStatus = vi.fn(async () => {
+      useSpeleoStore.setState({
+        link: { editState: model.bound ? 'editing' : 'read-only', hasUnpushedEdits: false } as never,
+      });
+    });
     useProjectStore.setState({ isDirty: false, loadProject, refreshProjectState: vi.fn(async () => {}) });
-    useSpeleoStore.setState({ link: { hasUnpushedEdits: true } as never, refreshLinkStatus: vi.fn(async () => {}) });
-    invokeIpcMock.mockImplementation(async (cmd) => (cmd === 'speleodb_take_remote' ? '/remote.stalx' : null));
+    useSpeleoStore.setState({
+      remoteProjectId: 'p1',
+      link: { editState: editing ? 'editing' : 'read-only', hasUnpushedEdits: true } as never,
+      refreshLinkStatus,
+      applyStartEditing: vi.fn((result: { kind: string }) => {
+        if (result.kind === 'editing' || result.kind === 'fast_forwarded') {
+          useSpeleoStore.setState({ link: { editState: 'editing', hasUnpushedEdits: false } as never });
+        }
+      }),
+    });
+    useSpeleoReadOnlyNotice.setState({ notice: null });
+    return { model, loadProject, refreshLinkStatus };
+  };
+
+  it('Take remote while editing goes on editing the SpeleoDB version', async () => {
+    const { loadProject, refreshLinkStatus } = backend(true);
+    invokeIpcMock.mockImplementation(async (cmd) => (cmd === 'speleodb_take_remote' ? { local_path: '/remote.stalx' } : null));
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let took: boolean | undefined;
+    await act(async () => {
+      took = await result.current.takeRemote();
+    });
+
+    expect(took).toBe(true);
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_take_remote');
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_start_editing');
+    expect(loadProject).not.toHaveBeenCalled();
+    expect(refreshLinkStatus).toHaveBeenCalled();
+    expect(useSpeleoStore.getState().link?.editState).toBe('editing');
+    expect(useSpeleoReadOnlyNotice.getState().notice).toBeNull();
+  });
+
+  it('Take remote from a read-only project stays read-only, with no notice', async () => {
+    backend(false);
+    invokeIpcMock.mockImplementation(async (cmd) => (cmd === 'speleodb_take_remote' ? { local_path: '/remote.stalx' } : null));
     const { result } = renderHook(() => useSpeleoActions());
 
     await act(async () => {
       await result.current.takeRemote();
     });
 
-    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_take_remote');
-    expect(loadProject).toHaveBeenCalledWith('/remote.stalx', { acquireLock: false });
     expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_start_editing');
+    expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+    expect(useSpeleoReadOnlyNotice.getState().notice).toBeNull();
+  });
+
+  it('Take remote that comes back read-only from an edit session says so', async () => {
+    const { model } = backend(true);
+    invokeIpcMock.mockImplementation(async (cmd) => {
+      // The session ended meanwhile (a lost-lock signal): the reload carries nothing.
+      model.bound = false;
+      return cmd === 'speleodb_take_remote' ? { local_path: '/remote.stalx' } : null;
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.takeRemote();
+    });
+
+    const notice = useSpeleoReadOnlyNotice.getState().notice;
+    expect(notice?.kind).toBe('stillReadOnly');
+    expect(notice?.message).toBe(i18n.t('speleodb.readOnlyNotice.reloadedNotEditing'));
+  });
+
+  // Farm finding P2-take-remote-editable: another session of the account handed
+  // the lock back on the server, and Take remote came back editable. The backend
+  // now reads the holder before the reload, shuts the gate and says why
+  // (`editing_stopped`); the notice words it as "Editing stopped", never the
+  // generic "editing did not start", and never "your changes are kept" (Take
+  // remote has just discarded them).
+  it.each([
+    [{ kind: 'released' }, 'speleodb.readOnlyNotice.reloadLockReleased', {}],
+    [{ kind: 'held_by', email: 'other@example.com' }, 'speleodb.readOnlyNotice.reloadLockTaken', { email: 'other@example.com' }],
+  ] as const)('Take remote whose lock SpeleoDB no longer records says editing stopped (%o)', async (stopped, key, values) => {
+    const { model } = backend(true);
+    invokeIpcMock.mockImplementation(async (cmd) => {
+      if (cmd !== 'speleodb_take_remote') return null;
+      model.bound = false;
+      return { local_path: '/remote.stalx', editing_stopped: stopped };
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.takeRemote();
+    });
+
+    const notice = useSpeleoReadOnlyNotice.getState().notice;
+    expect(notice?.kind).toBe('lockLost');
+    expect(notice?.message).toBe(i18n.t(key, values));
+    expect(notice?.message).not.toContain('kept on this computer');
+    expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+  });
+
+  it('Reload Project whose lock SpeleoDB no longer records says editing stopped', async () => {
+    const { model } = backend(true);
+    useSpeleoStore.setState((state) => ({ link: { ...state.link, hasUnpushedEdits: false } as never }));
+    invokeIpcMock.mockImplementation(async (cmd) => {
+      if (cmd === 'speleodb_project_access_at') return { release_context: {} };
+      if (cmd !== 'speleodb_update') return null;
+      model.bound = false;
+      return { kind: 'fast_forwarded', local_path: '/remote.stalx', editing_stopped: { kind: 'released' } };
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.update();
+    });
+
+    const notice = useSpeleoReadOnlyNotice.getState().notice;
+    expect(notice?.kind).toBe('lockLost');
+    expect(notice?.message).toBe(i18n.t('speleodb.readOnlyNotice.reloadLockReleased'));
+  });
+
+  it('one Resume editing click on a copy behind downloads, takes the lock and edits', async () => {
+    const { model, loadProject } = backend(false);
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockImplementation(async (cmd) => {
+      if (cmd !== 'speleodb_start_editing') return null;
+      // The backend downloaded the newer revision, reopened it in place and
+      // bound the edit session to it.
+      model.bound = true;
+      return { kind: 'fast_forwarded', local_path: '/remote.stalx' };
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let held: boolean | undefined;
+    await act(async () => {
+      held = await result.current.startEditing();
+    });
+
+    expect(held).toBe(true);
+    expect(loadProject).not.toHaveBeenCalled();
+    expect(useSpeleoStore.getState().link?.editState).toBe('editing');
+    expect(useSpeleoReadOnlyNotice.getState().notice).toBeNull();
+    expect(showToast).toHaveBeenCalledWith(i18n.t('speleodb.editBar.toasts.editing'), 'speleodb-editing', 'success');
+  });
+
+  it('a Resume editing whose reload ends read-only says so instead of nothing', async () => {
+    backend(false);
+    invokeIpcMock.mockImplementation(async (cmd) => (
+      // The backend reports the reload, but the re-read status says read-only.
+      cmd === 'speleodb_start_editing' ? { kind: 'fast_forwarded', local_path: '/remote.stalx' } : null
+    ));
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let held: boolean | undefined;
+    await act(async () => {
+      held = await result.current.startEditing();
+    });
+
+    expect(held).toBe(false);
+    const notice = useSpeleoReadOnlyNotice.getState().notice;
+    expect(notice?.kind).toBe('stillReadOnly');
+    expect(notice?.message).toBe(i18n.t('speleodb.readOnlyNotice.reloadedNotEditing'));
+  });
+});
+
+/**
+ * R3 (same-account overwrite): SpeleoDB's lock is the account's, so another
+ * session of the same account holds it too. The backend refuses an upload when
+ * SpeleoDB's latest revision is not the copy's base and not an upload of this
+ * session (`divergence_needed`, nothing uploaded); the frontend must route that
+ * to the divergence prompt - never a success. A race lost after that check is
+ * reported by the landed result (`replaced_revisions`), on the banner alone.
+ */
+describe('useSpeleoActions - same-account sessions (R3)', () => {
+  const REPLACED = {
+    id: '0123456789abcdef0123456789abcdef01234567',
+    parent_ids: [],
+    author_email: 'diver@example.com',
+    authored_date: null,
+    message: 'Surveyed the sump',
+  };
+
+  beforeEach(() => {
+    // The REAL apply reducers: what the prompt and the banner read is the point.
+    const real = useSpeleoStore.getInitialState();
+    useSpeleoStore.setState({
+      applyDone: real.applyDone,
+      applyPush: real.applyPush,
+      banner: null,
+      replacedRevisions: null,
+      divergence: null,
+      link: {
+        permission: 'READ_AND_WRITE', editState: 'editing', lockHolder: 'diver@example.com', lockedByOther: false,
+        hasUnpushedEdits: true, unwound: false, undoMode: 'full', remoteState: 'up_to_date', noAccess: false,
+        serverError: null,
+      },
+    });
+  });
+
+  it.each([
+    ['Save Changes', 'push', 'speleodb_push'],
+    ['Done (the close, quit and sign-out uploads)', 'done', 'speleodb_done'],
+  ] as const)('%s refused over another session\'s revision opens the divergence prompt', async (_label, verb, command) => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockResolvedValue({ kind: 'divergence_needed' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current[verb]('From B');
+    });
+
+    expect(invokeIpcMock).toHaveBeenCalledWith(command, expect.objectContaining({ message: 'From B' }));
+    expect(outcome).toEqual({ kind: 'divergence_needed' });
+    const s = useSpeleoStore.getState();
+    // The App-level effect opens `speleodb-divergence` on exactly this.
+    expect(s.divergence).toBe(verb);
+    // The work is still marked un-uploaded and the lock still held: nothing landed.
+    expect(s.link?.hasUnpushedEdits).toBe(true);
+    expect(s.link?.editState).toBe('editing');
+    expect(showToast).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), 'success');
+    expect(saveProjectMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['push', { kind: 'pushed', replaced_revisions: [REPLACED] }],
+    ['done', { kind: 'released', replaced_revisions: [REPLACED] }],
+  ] as const)('a %s that replaced a revision pushed meanwhile says so on the banner only', async (verb, reply) => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockResolvedValue(reply);
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current[verb]('From B');
+    });
+
+    expect(useSpeleoStore.getState().replacedRevisions).toEqual([REPLACED]);
+    // One event, one surface: no "Changes uploaded" toast beside it.
+    expect(showToast).not.toHaveBeenCalled();
+    // The upload landed, so the disk is flushed as after any landed upload.
+    expect(saveProjectMock).toHaveBeenCalledWith(undefined, true);
+  });
+
+  // F4R3-locks-push-2: an edit lands after the backend took its snapshot and
+  // before this reply: the push is shown as unconfirmed, but the upload did
+  // land, and the backend gave its only copy of the report with it.
+  // Injection: the downgrade replacing the whole result drops the report.
+  it('a push downgraded for an edit during the reply keeps what it replaced', async () => {
+    useProjectStore.setState({ projectTreeGeneration: 1 });
+    invokeIpcMock.mockImplementation(async () => {
+      useProjectStore.setState({ projectTreeGeneration: 2 });
+      return { kind: 'pushed', replaced_revisions: [REPLACED] };
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.push('From B');
+    });
+    expect(outcome).toEqual({ kind: 'push_unconfirmed', replaced_revisions: [REPLACED] });
+    expect(useSpeleoStore.getState().banner).toEqual({ kind: 'push_unconfirmed' });
+    expect(useSpeleoStore.getState().replacedRevisions).toEqual([REPLACED]);
+  });
+
+  // The Left item of the plan: a release with newer edits behind it raises its
+  // push-failure line, and the replaced report stays beside it.
+  it('a release with newer edits behind it keeps the replaced report beside its failure line', async () => {
+    useProjectStore.setState({ projectTreeGeneration: 1 });
+    invokeIpcMock.mockImplementation(async () => {
+      useProjectStore.setState({ projectTreeGeneration: 2 });
+      return { kind: 'released', replaced_revisions: [REPLACED] };
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+    await act(async () => {
+      await result.current.done('From B');
+    });
+    expect(useSpeleoStore.getState().banner?.kind).toBe('push_failed');
+    expect(useSpeleoStore.getState().replacedRevisions).toEqual([REPLACED]);
+  });
+
+  // F4R3-locks-push-3: the upload landed and replaced a revision, then the
+  // release (or the push's bookkeeping) failed. The failure carries the report.
+  // Injection: the failure arm not raising `replacedRevisionsOf(e)` loses it.
+  it.each(['push', 'done'] as const)('a %s failure after a landing names what it replaced', async (verb) => {
+    invokeIpcMock.mockRejectedValue({
+      message: 'boom', action: 'StayDirty', status: 500, transport: null, unpushed_local: null,
+      newer_schema: null, replaced_revisions: [REPLACED],
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+    await act(async () => {
+      await result.current[verb]('From B');
+    });
+    expect(useSpeleoStore.getState().banner?.kind).toBe('push_failed');
+    expect(useSpeleoStore.getState().replacedRevisions).toEqual([REPLACED]);
+  });
+
+  // F4R3-locks-push-8: the upload also left its undo history out to fit the
+  // size limit, a fact of its own: said beside the replaced report.
+  // Injection: the caveat toast inside `if (!replaced)` again is never shown.
+  it.each([
+    ['push', { kind: 'pushed', undo_history_omitted: true, replaced_revisions: [REPLACED] }, 'pushedWithoutHistory'],
+    ['done', { kind: 'released', undo_history_omitted: true, replaced_revisions: [REPLACED] }, 'releasedWithoutHistory'],
+  ] as const)('a %s that replaced a revision and left its undo history out says both', async (verb, reply, key) => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockResolvedValue(reply);
+    const { result } = renderHook(() => useSpeleoActions());
+    await act(async () => {
+      await result.current[verb]('From B');
+    });
+    expect(useSpeleoStore.getState().replacedRevisions).toEqual([REPLACED]);
+    expect(showToast).toHaveBeenCalledWith(i18n.t(`speleodb.editBar.toasts.${key}`), expect.anything(), 'warning');
+    expect(showToast).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), 'success');
   });
 });

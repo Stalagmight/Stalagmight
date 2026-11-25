@@ -5,6 +5,7 @@
     reason = "test setup and assertions"
 )]
 mod sdk_dates;
+mod transport_causes;
 
 use super::*;
 use serde_json::{json, Value};
@@ -1764,4 +1765,56 @@ fn collaborator_name_lookups_stop_at_their_time_budget() {
     assert_eq!(got.len(), 2);
     assert!(got.iter().all(|c| c.name.is_none()));
     worker.join().expect("server");
+}
+
+/// Pre-PR review of the X3 round, nit 6: the arm for a middleware failure kept
+/// the error's text, which (unlike every other arm, which strips the URL) may
+/// carry the request URL with the project id in its path. No middleware is
+/// installed, so nothing else is known of such a failure either.
+#[test]
+fn a_middleware_failure_keeps_no_url() {
+    let failure = std::io::Error::other(
+        "GET https://synthetic.example/api/v2/projects/11111111-1111-1111-1111-111111111111/ failed",
+    );
+    let error = api_error::<()>(ApiOpError::Transport(HttpError::Middleware(
+        reqwest_middleware::Error::middleware(failure),
+    )));
+    assert!(
+        matches!(
+            &error,
+            SpeleoDbError::Transport { cause: TransportCause::Unknown, detail }
+                if !detail.contains("https://") && !detail.contains("11111111-1111")
+        ),
+        "a transport failure with no URL in its detail: {error:?}"
+    );
+}
+
+/// Delta review of X4, nit 3: the history always came back with
+/// `message: Some(..)`, so the "server keeps no descriptions" rule
+/// (`sync::history_records_descriptions`) only ever ran in tests. An older
+/// server that keeps no descriptions sends an empty one: that, or one of
+/// whitespace alone, is no description.
+#[test]
+fn an_empty_revision_description_reaches_the_history_as_none() {
+    let mut empty = pre_iso_commit(SHA, "2026-11-10T08:18:23Z");
+    empty["message"] = json!("");
+    let mut blank = pre_iso_commit(SHA, "2026-11-10T08:18:23Z");
+    blank["message"] = json!(" \n\t");
+    let described = pre_iso_commit(SHA, "2026-11-10T08:18:23Z");
+    let s = Server::json(json!({"project":pre_iso_project(),"commits":[empty, blank, described]}));
+    let history = get_revisions(&s.base, "t", false, ID).unwrap();
+    s.finish();
+    let messages: Vec<_> = history
+        .commits
+        .iter()
+        .map(|c| c.message.as_deref())
+        .collect();
+    assert_eq!(messages, [None, None, Some("Synthetic")]);
+    // A history of such revisions keeps no descriptions: the fallback runs.
+    assert!(!super::super::sync::history_records_descriptions(
+        &history.commits[..2]
+    ));
+    assert!(super::super::sync::history_records_descriptions(
+        &history.commits
+    ));
 }

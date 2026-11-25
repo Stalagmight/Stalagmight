@@ -39,6 +39,7 @@ mod raw_data;
 mod recent_projects;
 mod speleodb;
 mod speleodb_admin;
+mod speleodb_base_survey;
 mod speleodb_cache;
 mod speleodb_cache_install;
 mod speleodb_cached;
@@ -49,6 +50,7 @@ mod speleodb_foreign;
 mod speleodb_local_state;
 mod speleodb_lock_release;
 mod speleodb_logout;
+mod speleodb_own_uploads;
 mod speleodb_project;
 mod speleodb_pull;
 mod speleodb_push;
@@ -446,6 +448,13 @@ mod speleodb_acquire_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod speleodb_base_survey_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_cached_tests;
@@ -470,6 +479,19 @@ mod speleodb_explicit_release_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod speleodb_fix_interactions_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod speleodb_foreign_claim_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_install_sidecar_tests;
@@ -483,6 +505,13 @@ mod speleodb_nonblocking_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod speleodb_offline_open_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_push_v2_tests;
@@ -492,6 +521,13 @@ mod speleodb_push_v2_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_restore_refusal_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod speleodb_same_account_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,

@@ -4,7 +4,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { selectPushFailure, useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { useScreenOccupant } from '../../hooks/useScreenOccupant';
-import { getErrorMessage } from '../../utils/ipc';
+import { describeSpeleoError } from '../../utils/speleoError';
 import { closeDiscardingLocal } from '../../utils/speleoExit';
 import { commitMessageTooLong } from '../../utils/commitMessage';
 import { saveOpenProjectLocally } from '../../utils/saveOpenProjectLocally';
@@ -12,6 +12,7 @@ import { TOAST_KEYS } from '../../utils/toastKeys';
 import {
   releaseSignOutLocks,
   signOutHasWork,
+  signOutLocks,
   surveySignOut,
   useSpeleoSignOut,
   type SignOutKind,
@@ -42,6 +43,11 @@ type Answer = 'go' | 'keep' | 'upload' | 'discard' | 'retry';
  *   un-uploaded mark intact; the body names them and says they can be opened
  *   and uploaded after connecting again. Nothing here ever discards another
  *   project's work. A lock held on one is handed back with the others.
+ * - A lock of the account this run never claimed, over a copy or a recent file
+ *   here (sdbdemo2 issue 5): it may be the lock Stalagmight on another computer
+ *   with this account is editing under, so it is treated as the held-lock prompt
+ *   treats it - said in the prompt's words, "Release anyway" per project, and left
+ *   held by Disconnect. Cancel keeps the initial focus, so Enter releases nothing.
  * - Nothing to answer: Cancel or Disconnect.
  *
  * A failed hand-back is reported with "Try again" / "Disconnect anyway" instead
@@ -50,12 +56,14 @@ type Answer = 'go' | 'keep' | 'upload' | 'discard' | 'retry';
 export default function SpeleoSignOutDialog() {
   const request = useSpeleoSignOut((s) => s.request);
   if (!request) return null;
-  return <SignOutPrompt key={request.id} kind={request.kind} initial={request.survey} settle={request.settle} />;
+  return <SignOutPrompt key={request.id} kind={request.kind} initial={request.survey}
+    initialError={request.error ?? null} settle={request.settle} />;
 }
 
-function SignOutPrompt({ kind, initial, settle }: {
+function SignOutPrompt({ kind, initial, initialError, settle }: {
   kind: SignOutKind;
   initial: SignOutSurvey | null;
+  initialError: string | null;
   settle: (proceed: boolean) => void;
 }) {
   const { t } = useTranslation();
@@ -72,9 +80,12 @@ function SignOutPrompt({ kind, initial, settle }: {
   const [doing, setDoing] = useState<Answer | null>(null);
   const [releasing, setReleasing] = useState(false);
   const [message, setMessage] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError);
   const [failed, setFailed] = useState<SignOutProject[]>([]);
-  const busy = phase === 'checking' || doing !== null || uploading;
+  // (d) rows released anyway, and the one being released now.
+  const [releasedAnyway, setReleasedAnyway] = useState<ReadonlySet<string>>(new Set());
+  const [releasingAnyway, setReleasingAnyway] = useState<string | null>(null);
+  const busy = phase === 'checking' || doing !== null || uploading || releasingAnyway !== null;
 
   const recheck = async () => {
     setPhase('checking');
@@ -89,16 +100,30 @@ function SignOutPrompt({ kind, initial, settle }: {
       setStep('choose');
       setPhase('review');
     } catch (e) {
-      setError(getErrorMessage(e));
+      setError(describeSpeleoError(e));
       setPhase('checkFailed');
     }
   };
 
   const open = survey?.openProject ?? null;
   const others = survey?.unuploaded ?? [];
-  // Every lock but the open project's: the clean ones, and those of the other
-  // copies with changes, which stay on this computer.
-  const otherLocks = survey ? [...survey.releasable, ...others.filter((p) => p.holdsLock)] : [];
+  // Every lock this run claims but the open project's: the clean ones, and those
+  // of the other copies with changes, which stay on this computer.
+  const otherLocks = survey ? signOutLocks(survey) : [];
+  const unclaimed = (survey?.heldUnclaimed ?? []).filter((p) => !releasedAnyway.has(p.summary.id));
+
+  /** (d) Release anyway: this one lock, now, as the held-lock prompt does. */
+  const releaseAnyway = async (project: SignOutProject) => {
+    setReleasingAnyway(project.summary.id);
+    setError(null);
+    const left = await releaseSignOutLocks([project]);
+    setReleasingAnyway(null);
+    if (left.length === 0) {
+      setReleasedAnyway((done) => new Set(done).add(project.summary.id));
+    } else {
+      setError(t('speleodb.heldLocks.releaseFailed'));
+    }
+  };
   const [openPath] = useState(() => useProjectStore.getState().project?.file_path ?? null);
   const openCurrent = () => (useProjectStore.getState().project?.file_path ?? null) === openPath;
 
@@ -129,9 +154,11 @@ function SignOutPrompt({ kind, initial, settle }: {
       return;
     }
     setDoing(null);
-    if (result === 'diverged') {
+    if (result === 'diverged' || result === 'replaced') {
       // SpeleoDB moved on: the divergence dialog is the way through, so the
-      // sign-out stops here and the user resolves it first.
+      // sign-out stops here and the user resolves it first. An upload that
+      // landed on top of revisions another session pushed meanwhile (R3) stops
+      // it too: the project's banner names them, and is read before signing out.
       settle(false);
     } else if (result === 'newer') {
       setError(t('speleoExitPrompt.errors.newerChanges'));
@@ -170,7 +197,7 @@ function SignOutPrompt({ kind, initial, settle }: {
         const closed = await closeDiscardingLocal();
         outcome = closed.ok ? { ok: true, warning: closed.warning } : { ok: false, error: closed.error };
       } catch (e) {
-        outcome = { ok: false, error: getErrorMessage(e) };
+        outcome = { ok: false, error: describeSpeleoError(e) };
       }
     }
     if (!outcome.ok) {
@@ -229,7 +256,9 @@ function SignOutPrompt({ kind, initial, settle }: {
 
           {choosing && survey && (
             <>
-              <p className="text-sm text-text-secondary">{t('speleoExitPrompt.signOut.intro')}</p>
+              {(open || otherLocks.length > 0 || others.length > 0) && (
+                <p className="text-sm text-text-secondary">{t('speleoExitPrompt.signOut.intro')}</p>
+              )}
 
               {open && (
                 <p className="text-sm text-text-primary" data-testid="speleodb-signout-open">
@@ -253,6 +282,27 @@ function SignOutPrompt({ kind, initial, settle }: {
                   <p className="text-sm text-text-secondary">{t('speleoExitPrompt.signOut.willRelease')}</p>
                   <ul className="list-disc pl-5 text-sm text-text-primary">
                     {otherLocks.map((p) => <li key={p.summary.id}>{name(p)}</li>)}
+                  </ul>
+                </section>
+              )}
+
+              {unclaimed.length > 0 && (
+                <section className="space-y-2" data-testid="speleodb-signout-held-unclaimed">
+                  <p className="text-sm text-text-secondary">
+                    {t('speleoExitPrompt.signOut.heldUnclaimedBody', { count: unclaimed.length })}
+                  </p>
+                  <ul className="space-y-1">
+                    {unclaimed.map((p) => (
+                      <li key={p.summary.id} className="flex items-center justify-between gap-3 text-sm text-text-primary"
+                        data-testid={`speleodb-signout-unclaimed-${p.summary.id}`}>
+                        <span className="min-w-0 break-words">{name(p)}</span>
+                        <Button size="sm" onClick={() => void releaseAnyway(p)} disabled={busy}
+                          aria-label={t('speleodb.heldLocks.releaseOneAria', { name: name(p) })}
+                          data-testid={`speleodb-signout-release-anyway-${p.summary.id}`}>
+                          {releasingAnyway === p.summary.id ? t('speleodb.heldLocks.releasing') : t('speleodb.heldLocks.release')}
+                        </Button>
+                      </li>
+                    ))}
                   </ul>
                 </section>
               )}
@@ -317,7 +367,8 @@ function SignOutPrompt({ kind, initial, settle }: {
             )}
             {choosing && (
               <>
-                <Button onClick={() => settle(false)} disabled={busy} data-testid="speleodb-signout-cancel">
+                {/* The initial focus: never a row's Release anyway (sdbdemo2 issue 5). */}
+                <Button onClick={() => settle(false)} disabled={busy} data-testid="speleodb-signout-cancel" data-autofocus>
                   {t('common.actions.cancel')}
                 </Button>
                 {open ? (

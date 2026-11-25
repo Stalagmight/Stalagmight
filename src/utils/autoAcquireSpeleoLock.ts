@@ -3,28 +3,71 @@ import i18n from '../i18n';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { invokeIpc } from './ipc';
-import { humanizeSpeleoError, speleoErrorAction } from './speleoError';
+import { humanizeSpeleoError, lockMayBeHeld, speleoErrorAction } from './speleoError';
+import { emailsMatch } from './email';
 import { applySpeleoTreeReplacement } from './speleoTreeReplacement';
 import type { StartEditingResult } from '../types/ipc.generated';
+
+/**
+ * What the notice reports, which picks its title: a project that just OPENED
+ * read-only (the automatic Start Editing after an open did not get the lock), or
+ * a Start Editing on a project already open that left it read-only (Resume
+ * editing, Start editing; demo item 7: that one is not an open), or an edit
+ * session a status refresh found over because SpeleoDB no longer gives this
+ * account the lock (sdbdemo2 issue 4).
+ */
+export type ReadOnlyNoticeKind = 'opened' | 'stillReadOnly' | 'lockLost';
 
 interface ReadOnlyNotice {
   path: string;
   sessionGeneration: number;
   message: string;
+  kind: ReadOnlyNoticeKind;
 }
 
 // Independent of activeDialog: an open-project picker closes when its load
 // finishes, and must not dismiss the acquisition result that follows it.
 export const useSpeleoReadOnlyNotice = create<{ notice: ReadOnlyNotice | null }>(() => ({ notice: null }));
 
-export function showSpeleoReadOnlyNotice(message: string): void {
+export function showSpeleoReadOnlyNotice(message: string, kind: ReadOnlyNoticeKind): void {
   const path = useProjectStore.getState().project?.file_path;
   if (!path) return;
   useSpeleoReadOnlyNotice.setState({ notice: {
     path,
     sessionGeneration: useSpeleoStore.getState().sessionGeneration,
     message,
+    kind,
   } });
+}
+
+/**
+ * The read-only notice's text for a failed Start Editing: `message`, and when the
+ * refusal says this account may now hold the lock (`lockMayBeHeld`: a lock
+ * request that may have reached SpeleoDB, which nothing could confirm), one
+ * sentence saying so, so the close that later hands it back, or asks "Couldn't
+ * hand back the lock", is not a surprise (demo item 3).
+ */
+export function startEditingFailureNotice(message: string, error: unknown): string {
+  return lockMayBeHeld(error) ? `${message} ${i18n.t('speleodb.readOnlyNotice.lockMayBeHeld')}` : message;
+}
+
+/**
+ * After a Start Editing refusal that says the lock may now be this account's
+ * (`lockMayBeHeld`), forget what the last lock scan saw for the open project
+ * (sdbdemo2 P3, screenshot 07): offline, the tab read it as "Offline - the lock
+ * was free when last checked" while SpeleoDB recorded this account as the
+ * holder. It now says the lock state is not known, until a scan or a status
+ * that heard from SpeleoDB says what it is. `path` names the project when no
+ * status has said its id yet (a Recents open): its recents entry does.
+ */
+export function forgetLastKnownLockIfMayBeHeld(error: unknown, path?: string): void {
+  if (!lockMayBeHeld(error)) return;
+  const { remoteProjectId, remoteLocks } = useSpeleoStore.getState();
+  const id = remoteProjectId ?? useProjectStore.getState().recentProjects
+    .find((p) => p.file_path === path)?.speleodb_project_id ?? null;
+  if (!id || !(id in remoteLocks)) return;
+  const { [id]: _forgotten, ...rest } = remoteLocks;
+  useSpeleoStore.setState({ remoteLocks: rest });
 }
 
 /** Called once after a new remote project load, never by a refresh or same-file reload. */
@@ -35,7 +78,10 @@ export async function autoAcquireSpeleoLock(path: string, current: () => boolean
   if (!stillCurrent()) return;
   const token = useSpeleoStore.getState().beginBusy();
   try {
-    const result = await invokeIpc<StartEditingResult>('speleodb_start_editing');
+    // `afterOpen`: a lock this account already holds and this run never claimed
+    // is reported, not taken over (sdbdemo2 issue 3): it may be the lock
+    // Stalagmight on another computer with this account is editing under.
+    const result = await invokeIpc<StartEditingResult>('speleodb_start_editing', { afterOpen: true });
     if (!stillCurrent()) return;
     if (result.kind === 'fast_forwarded') {
       const reconciled = await applySpeleoTreeReplacement({
@@ -54,21 +100,31 @@ export async function autoAcquireSpeleoLock(path: string, current: () => boolean
           heldLockPromptOpen: heldLocks.length > 0 && state.heldLockPromptOpen };
       });
     }
-    if (result.kind === 'locked_by') {
-      // Opened with un-uploaded work of our own (a fast-forward copy, or "Open my
-      // local copy"): say that it is safe, not just that the project is read-only.
-      const keeps = useSpeleoStore.getState().link?.hasUnpushedEdits === true;
+    // Opened with un-uploaded work of our own (a fast-forward copy, or "Open my
+    // local copy"): say that it is safe, not just that the project is read-only.
+    const keeps = useSpeleoStore.getState().link?.hasUnpushedEdits === true;
+    if (result.kind === 'locked_by' && emailsMatch(result.email, useSpeleoStore.getState().session?.userEmail ?? null)) {
+      // This account's own lock, which this computer did not take: the same
+      // words as the held-lock prompt, and Resume editing edits it here too
+      // (with the kept-changes sentence over un-uploaded work: pre-PR should-fix 3).
+      showSpeleoReadOnlyNotice(i18n.t(keeps
+        ? 'speleodb.readOnlyNotice.heldByYourAccountKeepsChanges'
+        : 'speleodb.readOnlyNotice.heldByYourAccount'), 'opened');
+    } else if (result.kind === 'locked_by') {
       const key = result.email
         ? (keeps ? 'speleoExitPrompt.readOnly.lockedByKeepsChanges' : 'speleodb.readOnlyNotice.lockedBy')
         : (keeps ? 'speleoExitPrompt.readOnly.unavailableKeepsChanges' : 'speleodb.readOnlyNotice.unavailable');
-      showSpeleoReadOnlyNotice(i18n.t(key, { email: result.email }));
+      showSpeleoReadOnlyNotice(i18n.t(key, { email: result.email }), 'opened');
     }
     // Divergence already has its own resolution dialog. Successful acquisition is silent.
     void useSpeleoStore.getState().refreshLinkStatus();
   } catch (error) {
     if (!stillCurrent()) return;
     if (speleoErrorAction(error) === 'ReLogin') useSpeleoStore.getState().clearSession();
-    showSpeleoReadOnlyNotice(humanizeSpeleoError(error, i18n.t('speleodb.readOnlyNotice.failed')));
+    forgetLastKnownLockIfMayBeHeld(error, path);
+    showSpeleoReadOnlyNotice(startEditingFailureNotice(
+      humanizeSpeleoError(error, i18n.t('speleodb.readOnlyNotice.failed')), error,
+    ), 'opened');
   } finally {
     useSpeleoStore.getState().endBusy(token);
   }

@@ -166,6 +166,89 @@ test('an expired session opens the cached copy read-only and signs the app out',
   expect(commands.filter((c) => c.includes('Command: speleodb_start_editing'))).toHaveLength(0);
 });
 
+test('an offline open\'s Start Editing that lost its reply is worded, never the raw network error', async ({ page }) => {
+  // F1: SpeleoDB lost every reply, so the open fell back to the cached copy. The
+  // copy opens read-only with no automatic Start Editing (F1-transport-1: an
+  // acquire sent into that fault can land while every read around it is lost).
+  // Start editing pressed then loses its reply too: the backend keeps the raw
+  // diagnostic in `message` and the cause in `transport`.
+  const commands = await seed(page, {
+    signedIn: true,
+    copies: [copy(MINE, 'Synthetic mine', 'mine')],
+    open: { local_path: PROJECT_PATH, offline: true, has_unpushed_edits: false },
+  });
+  await page.evaluate(() => {
+    const overrides = (window as unknown as { __MOCK_IPC_OVERRIDES__: Record<string, unknown> }).__MOCK_IPC_OVERRIDES__;
+    Object.defineProperty(overrides, 'speleodb_start_editing', {
+      enumerable: true,
+      get: () => Promise.reject({
+        message: 'Network error talking to SpeleoDB: error sending request', action: 'Retry', status: null,
+        transport: 'Dropped', unpushed_local: null, newer_schema: null, lock_may_be_held: true,
+      }),
+    });
+  });
+  await page.getByTestId(`system-card-remote-${MINE}`).click();
+  await expect(page.getByTestId('single-system-view')).toBeVisible();
+  await expect(page.getByTestId('toast')).toContainText('SpeleoDB is unreachable');
+  await expect(page.getByTestId('speleodb-readonly-banner')).toBeVisible();
+  expect(commands.filter((c) => c.includes('Command: speleodb_start_editing'))).toHaveLength(0);
+  // A status refresh that reached SpeleoDB again knows the permission, which is
+  // what offers Resume editing; the Start editing it runs then loses its reply.
+  await page.evaluate((id) => {
+    const store = (window as unknown as {
+      __E2E_TEST__: { speleoStore: { getState: () => { link: Record<string, unknown> }; setState: (s: unknown) => void } };
+    }).__E2E_TEST__.speleoStore;
+    store.setState({ link: { ...store.getState().link, permission: 'READ_AND_WRITE' }, remoteLocks: { [id]: null } });
+  }, MINE);
+  // Demo item 6 (screenshot 03): offline, the tab says what was last known about
+  // the lock, not "Ready for editing" beside the read-only badge.
+  await openSpeleoTab(page);
+  await expect(page.getByTestId('speleodb-workspace-lock-state'))
+    .toHaveText('Offline - the lock was free when last checked');
+  await expect(page.getByTestId('speleodb-workspace-project-header')).toContainText('Connection unavailable');
+  await page.getByTestId('speleodb-readonly-resume').click();
+  const notice = page.getByTestId('speleodb-read-only-dialog');
+  await expect(notice).toContainText(
+    'The connection to SpeleoDB at https://synthetic.example was lost before it finished answering.',
+  );
+  await expect(notice).not.toContainText('Network error');
+  await expect(notice).not.toContainText('error sending request');
+  // Demo items 7 and 3: the project was already open, so the notice is not titled
+  // as an open; and the lock request may have landed, so it says what happens to
+  // a lock it took before Close comes to ask.
+  await expect(notice).toContainText('Still read-only');
+  await expect(notice).not.toContainText('Project opened read-only');
+  await expect(notice).toContainText('The lock request may have reached SpeleoDB; if it did, Stalagmight hands '
+    + 'the lock back when you close the project, or you can try again.');
+  expect(commands.filter((c) => c.includes('Command: speleodb_start_editing'))).toHaveLength(1);
+  await page.getByTestId('speleodb-read-only-continue').click();
+  await expect(notice).toHaveCount(0);
+});
+
+test('an offline open behind SpeleoDB keeps saying so in the SpeleoDB tab after the toast', async ({ page }) => {
+  // Demo item 5 (screenshot 12): the history answered and named a newer revision,
+  // only the download was lost. The toast says so and fades; the SpeleoDB tab
+  // keeps saying it for as long as the status knows it, and that Resume editing
+  // downloads the newer revision before it starts editing.
+  await seed(page, {
+    signedIn: true,
+    copies: [copy(MINE, 'Synthetic mine', 'mine')],
+    open: { local_path: PROJECT_PATH, offline: true, newer_on_server: true, has_unpushed_edits: false },
+  });
+  await page.evaluate(() => {
+    const w = window as unknown as { __speleoLinkStatusOverrides: Record<string, unknown> };
+    w.__speleoLinkStatusOverrides = {
+      ...w.__speleoLinkStatusOverrides, permission: 'READ_AND_WRITE', remote_state: 'remote_ahead',
+    };
+  });
+  await page.getByTestId(`system-card-remote-${MINE}`).click();
+  await expect(page.getByTestId('single-system-view')).toBeVisible();
+  await expect(page.getByTestId('toast')).toContainText('SpeleoDB has a newer revision of this project');
+  await openSpeleoTab(page);
+  await expect(page.getByTestId('speleodb-workspace-newer-on-server'))
+    .toHaveText('SpeleoDB has a newer revision than this copy. Resume editing downloads it first.');
+});
+
 test('signed in: only this account\'s copies and unknown-owner copies are listed', async ({ page }) => {
   await seed(page, {
     signedIn: true,

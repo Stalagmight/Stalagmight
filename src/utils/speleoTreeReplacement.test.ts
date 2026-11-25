@@ -5,6 +5,7 @@ import { speleoProjectSessionIssuedFor, useSpeleoStore } from '../store/speleoSt
 import { useUIStore } from '../store/uiStore';
 import { runProjectSwitch } from './projectTransition';
 import { applySpeleoTreeReplacement } from './speleoTreeReplacement';
+import { TOAST_KEYS } from './toastKeys';
 
 let refreshProjectState: ReturnType<typeof vi.fn>;
 let checkHistoryDiscarded: ReturnType<typeof vi.fn>;
@@ -51,6 +52,19 @@ beforeEach(() => {
 });
 
 describe('applySpeleoTreeReplacement', () => {
+  // sdbdemo2 P3: the open's "SpeleoDB has a newer revision ... which is older"
+  // toast stayed up after Resume editing had downloaded that revision.
+  it('dismisses the offline-open toast once a revision replaced the copy, and nothing else', async () => {
+    useUIStore.setState({ toasts: [] });
+    useUIStore.getState().showToast('Synthetic: the copy is older', TOAST_KEYS.SPELEODB_OFFLINE_OPEN, 'warning');
+    useUIStore.getState().showToast('Synthetic: unrelated', TOAST_KEYS.SPELEODB_UP_TO_DATE, 'info');
+
+    await applySpeleoTreeReplacement(speleoProjectSessionIssuedFor('p1'), true);
+
+    const leaving = Object.fromEntries(useUIStore.getState().toasts.map((t) => [t.key, t.leaving === true]));
+    expect(leaving).toEqual({ [TOAST_KEYS.SPELEODB_OFFLINE_OPEN]: true, [TOAST_KEYS.SPELEODB_UP_TO_DATE]: false });
+  });
+
   it('reconciles every store that owns per-tree state', async () => {
     const applied = await applySpeleoTreeReplacement(speleoProjectSessionIssuedFor('p1'), true);
 

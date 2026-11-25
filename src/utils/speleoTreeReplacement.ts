@@ -8,6 +8,7 @@ import {
 import { useUIStore } from '../store/uiStore';
 import { runTreeReplacement } from './projectTransition';
 import { HISTORY_BANNER_CLEARED } from '../store/projectHistoryBannerActions';
+import { TOAST_KEYS } from './toastKeys';
 import { FILE_STATUS_CLEARED } from '../store/projectFileStatusActions';
 
 /**
@@ -54,8 +55,9 @@ export async function applySpeleoTreeReplacement(
     // normally drives it. That effect keys on `file_path` + `isLoading`, and an in-place
     // revision swap changes NEITHER: the backend closes and reopens DIFFERENT bytes at
     // the SAME path (`speleodb_revisions.rs`), and the frontend deliberately does not
-    // call `loadProject` (it would short-circuit on the already-open project), so the
-    // effect never re-fires. Without this a restored revision with an unreadable history
+    // call `loadProject` (it would short-circuit on the already-open project, and
+    // its `cancel_loading` would move the backend's session on and end the edit
+    // session the reload kept: sdbdemo2 issues 1 and 2), so the effect never re-fires. Without this a restored revision with an unreadable history
     // showed no banner at all, and restoring a clean revision left the previous tree's
     // banner standing over a healthy project.
     //
@@ -65,6 +67,11 @@ export async function applySpeleoTreeReplacement(
     // project - the reply then corrects it, but the flash is the same wrong claim the
     // banner exists to avoid making.
     if (treeReplaced) {
+      // A revision from SpeleoDB replaced the copy: the open's "copy may be out of
+      // date" / "SpeleoDB has a newer revision ... which is older" toast no longer
+      // describes what is on screen (sdbdemo2 P3: it stayed up after Resume
+      // editing had downloaded that revision).
+      ui.dismissToastsByKey(TOAST_KEYS.SPELEODB_OFFLINE_OPEN);
       useProjectStore.setState({ ...HISTORY_BANNER_CLEARED, ...FILE_STATUS_CLEARED });
       void useProjectStore.getState().checkHistoryDiscarded();
       // The new bytes may be a version 2 file a newer Stalagmight wrote, or an

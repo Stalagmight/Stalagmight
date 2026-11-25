@@ -91,6 +91,7 @@ import { createProjectFileStatusActions, FILE_STATUS_CLEARED, type ProjectFileSt
 import { createProjectWarningActions, type ProjectWarningActions } from './projectWarningActions';
 import { runProjectSwitch, runConfirmedProjectSwitch, reserveProjectRequest, isProjectRequestCurrent, beginProjectMutation, isProjectMutationCurrent } from '../utils/projectTransition';
 import { releaseFailed, resolveReleaseFailure, settleOpenLockBeforeLeaving } from '../utils/speleoReleaseFailure';
+import { ownSpeleoRelease } from '../utils/speleoLockLost';
 import { TOAST_KEYS } from '../utils/toastKeys';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
@@ -1456,11 +1457,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // Default: release a held SpeleoDB lock (never over un-uploaded edits -
         // the backend keeps it). The exit prompt's "Keep the lock" passes
         // `releaseLock: false`; its confirmed "Discard changes" `discardLocal: true`.
-        const close = (releaseLock: boolean, discardLocal = false) => invokeIpc<CommandResult>('close_project',
-          { releaseLock, discardLocal }, { purpose: 'close project and release resources' });
+        const close = (releaseLock: boolean, discardLocal = false) => ownSpeleoRelease(closeContext.remoteProjectId, () => invokeIpc<CommandResult>('close_project',
+          { releaseLock, discardLocal }, { purpose: 'close project and release resources' }));
         let result = await close(opts?.releaseLock ?? true, opts?.discardLocal === true);
         // A release that failed or is uncertain closed nothing: ask (Retry / Close and keep the lock / Cancel).
-        if (releaseFailed(result)) { reconcileFailedClose(); result = await resolveReleaseFailure('close', result, close); }
+        if (releaseFailed(result)) {
+          reconcileFailedClose();
+          result = await resolveReleaseFailure('close', result, close, closeContext.link?.editState === 'editing');
+        }
         if (result.success && isProjectMutationCurrent(request)) {
           clearOpenProjectState(set);
         } else if (!result.success) {

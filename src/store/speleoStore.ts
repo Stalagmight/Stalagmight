@@ -10,6 +10,7 @@ import type {
   SpeleoLinkStatus,
   SpeleoLoginResult,
   SpeleoProjectSummary,
+  SpeleoRevision,
   SpeleoSessionStatus,
   StartEditingResult,
   UndoMode,
@@ -18,6 +19,13 @@ import type {
 import { invokeIpc } from '../utils/ipc';
 import { emailsMatch } from '../utils/email';
 import { endpointsMatch } from '../utils/speleoEndpoint';
+import {
+  ownReleaseMark,
+  ownReleaseSince,
+  ownSpeleoRelease,
+  speleoLockLostMessage,
+} from '../utils/speleoLockLost';
+import { showSpeleoReadOnlyNotice } from '../utils/autoAcquireSpeleoLock';
 import { useProjectStore } from './projectStore';
 
 /**
@@ -70,11 +78,42 @@ export type DivergenceOrigin = 'start' | 'update' | 'done' | 'push' | 'reverify'
     is transient action feedback; `no_anchor` (no georeferenced zero datum on
     push/unlock) is the #200 non-blocking notice; `push_failed` (#260) is the
     durable surface for a push/unlock that threw (the toast alone auto-clears
-    after 3 s, leaving a failed upload with no trace). */
+    after 3 s, leaving a failed upload with no trace). An upload that replaced
+    another session's revisions (R3) has a slot of its own, `replacedRevisions`,
+    so that no later outcome in this slot can wipe it. */
 export type SpeleoBanner =
   | { kind: 'push_unconfirmed' }
   | { kind: 'no_anchor' }
   | PushFailedBanner;
+
+/** This session's own release of the open project's lock landed: the edit
+    session is over by its own hand, so a later status that names no holder is no
+    loss (pre-PR review of the X3 round, must-fix 1). */
+export function markOwnReleaseEnded(): void {
+  useSpeleoStore.setState((state) => (state.link?.editState === 'editing'
+    ? { link: { ...state.link, editState: 'read-only' } }
+    : {}));
+}
+
+/** A hand-off verb found SpeleoDB diverged from the copy: the SpeleoDB tab says so
+    ("Resolve synchronization conflict") from now on, not only while the prompt it
+    raised is open (sdbdemo2 P3, screenshot 16b: after Cancel the tab showed no
+    conflict until a status refresh). The status's own verdict replaces it then. */
+function conflictSeen(link: SpeleoLinkState): { link: SpeleoLinkState } {
+  return { link: { ...link, remoteState: 'conflict' } };
+}
+
+/** [R3] Fold the revisions a landed upload reports it replaced into the ones
+    already on screen: newest report first, each revision once. Nothing reported
+    leaves the slot as it is: only a dismissal or leaving the project clears it. */
+function withReplaced(
+  current: SpeleoRevision[] | null,
+  revisions: SpeleoRevision[] | undefined,
+): SpeleoRevision[] | null {
+  if (!revisions?.length) return current;
+  const reported = new Set(revisions.map((r) => r.id.toLowerCase()));
+  return [...revisions, ...(current ?? []).filter((r) => !reported.has(r.id.toLowerCase()))];
+}
 
 /** [#260] The last push/unlock failed. Carries the already-humanized error plus
     enough context for the banner's Retry to re-issue the SAME verb with the SAME
@@ -253,6 +292,7 @@ export interface SpeleoLinkSnapshot {
   remoteProjectId: string | null;
   divergence: DivergenceOrigin | null;
   banner: SpeleoBanner | null;
+  replacedRevisions: SpeleoRevision[] | null;
 }
 
 interface SpeleoStore {
@@ -300,6 +340,18 @@ interface SpeleoStore {
   divergence: DivergenceOrigin | null;
   /** Transient banner (#200 seam). */
   banner: SpeleoBanner | null;
+  /**
+   * [R3] The upload landed, but SpeleoDB put it on top of these revisions,
+   * which another session (of this account, which holds the same per-account
+   * lock) uploaded between the push's check that nothing had moved and the
+   * upload itself; newest first. Their changes are not in ours; they are still
+   * in the project's revision history. Persistent until dismissed, in a slot of
+   * its own: it is the only report of the lost race, the work it names is at
+   * risk of being overlooked (notifications.md: data at risk never rides a
+   * toast), and no later push, release or Start editing outcome may take its
+   * place (F4R3-locks-push-4). Cleared by its Dismiss and by leaving the project.
+   */
+  replacedRevisions: SpeleoRevision[] | null;
   /**
    * Lock holder per accessible SpeleoDB project (`project_id` → holder email, or
    * `null` = free), from the single login/app-open `list_projects` scan (#201).
@@ -486,6 +538,13 @@ interface SpeleoStore {
     /** Cached data has no confirmed relationship to the current server tip. */
     offline?: boolean;
     /**
+     * With `offline`: SpeleoDB's history answered and names a revision newer than
+     * the copy (`SpeleoOpenResult.newer_on_server`). A clean copy then seeds
+     * `remote_ahead`, so the SpeleoDB tab says the copy is behind from the start,
+     * not only the open's toast (demo item 5).
+     */
+    newerOnServer?: boolean;
+    /**
      * WHICH SpeleoDB project this seed is for.
      *
      * The seed used to omit it, leaving `remoteProjectId` to the status refresh - which
@@ -530,6 +589,13 @@ interface SpeleoStore {
   /** First successful mutation while editing flips the dirty indicator on. */
   markDirty: () => void;
   /**
+   * A save found that the copy holds exactly its BASE revision's survey again
+   * (an edit taken back) and cleared the backend's un-uploaded mark with it
+   * (`CommandResult.speleodb_unpushed_cleared`). Mirror that, or the exit prompt
+   * asks about work that is not there.
+   */
+  clearUnpushedMark: () => void;
+  /**
    * [#303] A FORWARD edit, as opposed to an undo/redo: dirty, AND no longer merely
    * "where the Unwind walk left it". Mirrors the backend pairing - `mark_remote_dirty()`
    * followed by `speleodb_forget_unwind_position()` at commands.rs:757-761 (and the
@@ -571,6 +637,12 @@ interface SpeleoStore {
       so it never wipes an unrelated banner. */
   clearPushFailedBanner: () => void;
   dismissBanner: () => void;
+  /** [R3] Report revisions a landed upload replaced: folded into the replaced
+      slot (see `replacedRevisions`). For a result the push/done reducers do not
+      see, such as a failure after the landing. */
+  raiseReplacedRevisions: (revisions: SpeleoRevision[] | undefined) => void;
+  /** [R3] The replaced banner's Dismiss. */
+  dismissReplacedRevisions: () => void;
 }
 
 /**
@@ -665,6 +737,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   remoteProjectId: null,
   divergence: null,
   banner: null,
+  replacedRevisions: null,
   remoteLocks: {},
   remoteProjects: {},
   remoteSummaries: {},
@@ -785,6 +858,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               remoteProjectId: null,
               divergence: null,
               banner: null,
+              replacedRevisions: null,
             };
       }
       // Remote. Keep an already-seeded link only when it was seeded for THIS
@@ -805,6 +879,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         remoteProjectId: null,
         divergence: null,
         banner: null,
+        replacedRevisions: null,
         link: {
           // Read-only until the status confirms we hold the write lock. The
           // backend agrees: `project_load` re-derives its edit gate as
@@ -863,6 +938,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       const seq = ++linkStatusSeq;
       const requestedLink = get().link;
       const requestedGeneration = get().sessionGeneration;
+      const releaseMark = ownReleaseMark();
+      const requestedProject = get().remoteProjectId;
       try {
         const status = await invokeIpc<SpeleoLinkStatus>('speleodb_link_status');
         if (get().sessionGeneration !== requestedGeneration) return;
@@ -873,7 +950,19 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // newer one that already landed.
         if (seq < linkStatusApplied) return;
         linkStatusApplied = seq;
+        // sdbdemo2 issue 4: a refresh that ends an edit session because SpeleoDB
+        // no longer gives this account the lock (another session of the account
+        // handed it back, someone else holds it, access changed) says so.
+        // Not when this session's own release overlapped the refresh: that lock was
+        // given back here, not lost (pre-PR review, must-fix 1).
+        // Keyed by the project the status is about (its own answer, else the
+        // one open when the refresh was issued): a release of another project's
+        // lock is no reason to stay quiet about this one's.
+        const lost = ownReleaseSince(releaseMark, status.project_id ?? requestedProject)
+          ? null
+          : speleoLockLostMessage(requestedLink, status, get().session?.userEmail ?? null);
         get().seedFromStatus(status);
+        if (lost) showSpeleoReadOnlyNotice(lost, 'lockLost');
       } catch {
         // Best-effort - leave the prior link state (the backend gate is the
         // real enforcement; the shell just can't refresh its indicator).
@@ -1005,7 +1094,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   releaseLock: async (projectId) => {
     // Throws on failure so the dialog keeps itself open and surfaces the error.
-    await invokeIpc<null>('speleodb_release_lock', { projectId });
+    await ownSpeleoRelease(projectId, () => invokeIpc<null>('speleodb_release_lock', { projectId }));
+    // The OPEN project's own lock, released here: its edit session is over by this
+    // session's hand, not lost (pre-PR review, must-fix 1).
+    if (projectId === get().remoteProjectId) markOwnReleaseEnded();
     // Optimistic local update (avoids a full re-scan per release when the user frees
     // several one by one): drop this lock from the prompt's list and mark the project
     // free in the badge map. `heldLocks` going empty is what auto-closes the dialog.
@@ -1068,6 +1160,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         : null,
       divergence: null,
       banner: null,
+      replacedRevisions: null,
       // The revision-history line fetches per the open remote project id, which it
       // can no longer read token-lessly; drop it so it hides (rather than error-fetching)
       // until a re-login re-seeds it from the next status refresh.
@@ -1094,6 +1187,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           remoteProjectId: null,
           divergence: null,
           banner: null,
+          replacedRevisions: null,
         };
       }
       const editState = s.edit_enabled ? 'editing' : 'read-only';
@@ -1132,7 +1226,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       };
     }),
 
-  setLinkOnOpen: ({ permission, forPath = null, hasUnpushedEdits = false, offline = false, projectId = null }) =>
+  setLinkOnOpen: ({ permission, forPath = null, hasUnpushedEdits = false, offline = false, newerOnServer = false, projectId = null }) =>
     set({
       // Committed in the SAME synchronous `set()` as the rest of the seed, so nothing
       // can observe the new project's link beside the old project's id. `syncProjectLink`
@@ -1163,18 +1257,21 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // A pull just took the server tip, so up-to-date is true by construction -
         // but only for a pull. A seed that already knows the copy holds un-pushed
         // edits, or an offline cache, has no confirmed server tip; claim nothing until a refresh
-        // resolves it rather than render a self-contradictory "up to date + dirty".
-        remoteState: offline || hasUnpushedEdits ? 'unknown' : 'up_to_date',
+        // resolves it rather than render a self-contradictory "up to date + dirty". The one
+        // thing an offline open can know is that SpeleoDB is ahead of a clean copy.
+        remoteState: offline && newerOnServer && !hasUnpushedEdits ? 'remote_ahead'
+          : offline || hasUnpushedEdits ? 'unknown' : 'up_to_date',
         noAccess: false,
         serverError: null,
       },
       divergence: null,
       banner: null,
+      replacedRevisions: null,
     }),
 
   snapshotLink: () => {
-    const { link, projectLinkKind, linkPath, remoteProjectId, divergence, banner } = get();
-    return { link, projectLinkKind, linkPath, remoteProjectId, divergence, banner };
+    const { link, projectLinkKind, linkPath, remoteProjectId, divergence, banner, replacedRevisions } = get();
+    return { link, projectLinkKind, linkPath, remoteProjectId, divergence, banner, replacedRevisions };
   },
 
   // `busy: false` mirrors `clearLink`: the seed's caller is done either way, and a
@@ -1206,6 +1303,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       remoteProjectId: null,
       divergence: null,
       banner: null,
+      replacedRevisions: null,
       busy: false,
     });
   },
@@ -1231,7 +1329,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           };
         }
         case 'divergence_needed':
-          return { divergence: 'start' };
+          return { divergence: 'start', ...conflictSeen(state.link) };
         case 'locked_by':
           // Someone else holds it - mark locked even when the holder email is
           // unknown (keep the last-known email rather than nulling it).
@@ -1260,7 +1358,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
             divergence: null,
           };
         case 'divergence_needed':
-          return { divergence: 'update' };
+          return { divergence: 'update', ...conflictSeen(state.link) };
         // fast_forwarded: the caller reloads + re-seeds.
         default:
           return {};
@@ -1277,7 +1375,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         case 'released':
           // Lock released and edits are on the server - clear the holder (or we'd
           // read as still holding it), drop the dirty bit + any push-unconfirmed
-          // banner, and reset the remote state.
+          // banner, and reset the remote state. An upload that replaced revisions
+          // pushed meanwhile (R3) says so instead.
           return {
             link: {
               ...state.link,
@@ -1291,11 +1390,22 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
             },
             divergence: null,
             banner: null,
+            replacedRevisions: withReplaced(
+              state.replacedRevisions,
+              r.kind === 'released' ? r.replaced_revisions : undefined,
+            ),
           };
         case 'divergence_needed':
-          return { divergence: 'done' };
+          return { divergence: 'done', ...conflictSeen(state.link) };
         case 'push_unconfirmed':
-          return { banner: { kind: 'push_unconfirmed' } };
+          // A landing with a late edit still names what it replaced (R3).
+          return {
+            banner: { kind: 'push_unconfirmed' },
+            replacedRevisions: withReplaced(
+              state.replacedRevisions,
+              r.kind === 'push_unconfirmed' ? r.replaced_revisions : undefined,
+            ),
+          };
         case 'not_editing':
           // Nothing was uploaded and nothing was released: the backend's edit gate
           // was already closed (typically a 401 auto-drop, which runs
@@ -1316,7 +1426,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       switch (kind) {
         case 'pushed':
           // Lock retained (still editing); edits are now on the server. Clear a
-          // prior push-unconfirmed banner since this push landed.
+          // prior push-unconfirmed banner since this push landed - or say that it
+          // replaced revisions pushed meanwhile (R3).
           return {
             link: {
               ...state.link,
@@ -1326,11 +1437,21 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               serverError: null,
             },
             banner: null,
+            replacedRevisions: withReplaced(
+              state.replacedRevisions,
+              r.kind === 'pushed' ? r.replaced_revisions : undefined,
+            ),
           };
         case 'divergence_needed':
-          return { divergence: 'push' };
+          return { divergence: 'push', ...conflictSeen(state.link) };
         case 'push_unconfirmed':
-          return { banner: { kind: 'push_unconfirmed' } };
+          return {
+            banner: { kind: 'push_unconfirmed' },
+            replacedRevisions: withReplaced(
+              state.replacedRevisions,
+              r.kind === 'push_unconfirmed' ? r.replaced_revisions : undefined,
+            ),
+          };
         case 'not_editing':
           // See applyDone: nothing left this machine, so nothing about the local
           // copy's relationship to the server may be marked resolved.
@@ -1344,6 +1465,13 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     set((state) =>
       state.link && !state.link.hasUnpushedEdits
         ? { link: { ...state.link, hasUnpushedEdits: true } }
+        : {},
+    ),
+
+  clearUnpushedMark: () =>
+    set((state) =>
+      state.link?.hasUnpushedEdits
+        ? { link: { ...state.link, hasUnpushedEdits: false } }
         : {},
     ),
 
@@ -1381,6 +1509,14 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     set((state) => (state.banner?.kind === 'push_failed' ? { banner: null } : {})),
 
   dismissBanner: () => set({ banner: null }),
+
+  raiseReplacedRevisions: (revisions) =>
+    set((state) => {
+      const next = withReplaced(state.replacedRevisions, revisions);
+      return next === state.replacedRevisions ? {} : { replacedRevisions: next };
+    }),
+
+  dismissReplacedRevisions: () => set({ replacedRevisions: null }),
 }));
 
 /**

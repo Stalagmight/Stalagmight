@@ -943,6 +943,8 @@ fn extras_of(migrated: &Migrated) -> Extras {
         });
         extras.local.speleodb = LocalSync {
             base_commit: link.base_commit_sha.clone(),
+            base_survey: None,
+            base_survey_edit: None,
             unpushed_edits: link.has_unpushed_edits,
             last_edit_at: time(link.last_edit_at.as_ref()),
             last_verify_at: time(link.last_verify_at.as_ref()),

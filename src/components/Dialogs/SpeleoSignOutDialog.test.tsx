@@ -22,7 +22,7 @@ const ok = { success: true, warnings: [], error: null, line_ids: [] };
 const summary = (id: string): SpeleoProjectSummary => ({
   id, name: `Cave ${id}`, permission: 'READ_AND_WRITE', lock_holder: ME, type_tag: 'stalx', latest_commit_sha: null,
 });
-const entry = (id: string, holdsLock = true): SignOutProject => ({ summary: summary(id), holdsLock, lastEditAt: null });
+const entry = (id: string, holdsLock = true): SignOutProject => ({ summary: summary(id), holdsLock, claimedHere: true, lastEditAt: null });
 const link = (o: Partial<SpeleoLinkState> = {}): SpeleoLinkState => ({
   permission: 'READ_AND_WRITE', editState: 'editing', lockHolder: ME, lockedByOther: false,
   hasUnpushedEdits: true, unwound: false, undoMode: 'full', remoteState: 'up_to_date',
@@ -33,9 +33,9 @@ let closeProject: ReturnType<typeof vi.fn>;
 let released: string[];
 
 /** Open the dialog the way `guardSpeleoSignOut` does; resolves with its answer. */
-function show(survey: SignOutSurvey | null, kind: 'signOut' | 'switch' = 'signOut'): Promise<boolean> {
+function show(survey: SignOutSurvey | null, kind: 'signOut' | 'switch' = 'signOut', error: string | null = null): Promise<boolean> {
   const answer = new Promise<boolean>((resolve) => {
-    useSpeleoSignOut.setState({ request: { id: Math.random(), kind, survey, settle: (go) => {
+    useSpeleoSignOut.setState({ request: { id: Math.random(), kind, survey, error, settle: (go) => {
       useSpeleoSignOut.setState({ request: null });
       resolve(go);
     } } });
@@ -87,7 +87,7 @@ function expectButtonsOnlyInFooter(expected: Array<[testId: string, label: strin
 
 describe('SpeleoSignOutDialog', () => {
   it('nothing to answer: the locks to hand back are listed, with Cancel and Disconnect', async () => {
-    const answer = show({ openProject: null, releasable: [entry('a'), entry('b')], unuploaded: [] });
+    const answer = show({ openProject: null, releasable: [entry('a'), entry('b')], unuploaded: [], heldUnclaimed: [] });
     expect(screen.getByTestId('speleodb-signout-releasable')).toHaveTextContent('Cave a');
     expectButtonsOnlyInFooter([['speleodb-signout-cancel', 'Cancel'], ['speleodb-signout-go', 'Disconnect']]);
     expect(screen.getByTestId('speleodb-signout-go')).toHaveAttribute('data-primary-action', '');
@@ -96,8 +96,48 @@ describe('SpeleoSignOutDialog', () => {
     expect(released).toEqual(['a', 'b']);
   });
 
+  // sdbdemo2 issue 5 (screenshots 27, 28): the account's lock that this run never
+  // claimed, over a copy here, was listed as "every project you are editing" and
+  // handed back behind a plain Disconnect. It is now said in the held-lock
+  // prompt's words, with Release anyway per project, and Disconnect leaves it held.
+  it('a lock this run never claimed is asked about the way the held-lock prompt does', async () => {
+    const answer = show({
+      openProject: null, releasable: [entry('mine')], unuploaded: [],
+      heldUnclaimed: [{ ...entry('shared'), claimedHere: false }],
+    });
+    const section = screen.getByTestId('speleodb-signout-held-unclaimed');
+    expect(section).toHaveTextContent('Stalagmight on this computer did not take it');
+    expect(section).toHaveTextContent('another computer with this account');
+    expect(section).toHaveTextContent('disconnecting leaves it held');
+    expect(screen.getByTestId('speleodb-signout-release-anyway-shared')).toHaveTextContent('Release anyway');
+    expect(screen.getByTestId('speleodb-signout-releasable')).toHaveTextContent('Cave mine');
+    expect(screen.getByTestId('speleodb-signout-releasable')).not.toHaveTextContent('Cave shared');
+    // Cancel is the initial focus, never a row's Release anyway.
+    expect(screen.getByTestId('speleodb-signout-cancel')).toHaveAttribute('data-autofocus');
+
+    await userEvent.click(screen.getByTestId('speleodb-signout-go'));
+    expect(await answer).toBe(true);
+    expect(released).toEqual(['mine']);
+  });
+
+  it('Release anyway hands back that one lock, and Disconnect goes on', async () => {
+    const answer = show({
+      openProject: null, releasable: [], unuploaded: [],
+      heldUnclaimed: [{ ...entry('shared'), claimedHere: false }, { ...entry('other'), claimedHere: false }],
+    });
+    // Nothing of this computer's to hand back: the "hands back every project" line is not said.
+    expect(screen.getByTestId('speleodb-signout-dialog')).not.toHaveTextContent('hands back every project');
+    await userEvent.click(screen.getByTestId('speleodb-signout-release-anyway-shared'));
+    await vi.waitFor(() => expect(screen.queryByTestId('speleodb-signout-unclaimed-shared')).toBeNull());
+    expect(released).toEqual(['shared']);
+    expect(screen.getByTestId('speleodb-signout-unclaimed-other')).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('speleodb-signout-go'));
+    expect(await answer).toBe(true);
+    expect(released).toEqual(['shared']);
+  });
+
   it('open project with changes: Cancel, Discard, Keep on this computer, Upload and disconnect, all in the footer', () => {
-    void show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [entry('x')] });
+    void show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [entry('x')], heldUnclaimed: [] });
     expect(screen.getByTestId('speleodb-signout-open')).toHaveTextContent('"Cave open", the project you have open, has changes');
     expectButtonsOnlyInFooter([
       ['speleodb-signout-cancel', 'Cancel'],
@@ -111,14 +151,14 @@ describe('SpeleoSignOutDialog', () => {
   });
 
   it('an account switch says so on its buttons', () => {
-    void show({ openProject: entry('open'), releasable: [], unuploaded: [] }, 'switch');
+    void show({ openProject: entry('open'), releasable: [], unuploaded: [], heldUnclaimed: [] }, 'switch');
     expect(screen.getByText('Before you switch accounts')).toBeInTheDocument();
     expect(screen.getByTestId('speleodb-signout-open-upload')).toHaveTextContent('Upload and switch');
   });
 
   it('without the open project\'s lock there is no Upload; Keep and Discard remain', () => {
     useSpeleoStore.setState({ link: link({ editState: 'read-only' }) });
-    void show({ openProject: entry('open'), releasable: [], unuploaded: [] });
+    void show({ openProject: entry('open'), releasable: [], unuploaded: [], heldUnclaimed: [] });
     expectButtonsOnlyInFooter([
       ['speleodb-signout-cancel', 'Cancel'],
       ['speleodb-signout-open-discard', 'Discard'],
@@ -127,12 +167,12 @@ describe('SpeleoSignOutDialog', () => {
   });
 
   it('there is no "keep the lock" answer anywhere in a sign-out', () => {
-    void show({ openProject: entry('open'), releasable: [], unuploaded: [entry('x')] });
+    void show({ openProject: entry('open'), releasable: [], unuploaded: [entry('x')], heldUnclaimed: [] });
     expect(screen.queryByText(/keep the lock/i)).toBeNull();
   });
 
   it('other projects with changes are a plain list of names: kept on this computer, no buttons of their own', async () => {
-    const answer = show({ openProject: null, releasable: [entry('a')], unuploaded: [entry('x'), entry('y', false)] });
+    const answer = show({ openProject: null, releasable: [entry('a')], unuploaded: [entry('x'), entry('y', false)], heldUnclaimed: [] });
     const list = screen.getByTestId('speleodb-signout-unuploaded');
     expect(list).toHaveTextContent('The changes stay on this computer, and you can open and upload them after you connect again');
     expect(screen.getByTestId('speleodb-signout-row-x')).toHaveTextContent(/^Cave x$/);
@@ -153,7 +193,7 @@ describe('SpeleoSignOutDialog', () => {
   });
 
   it('Upload and disconnect: the description step, then the normal upload, the other locks and the sign-out', async () => {
-    const answer = show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [] });
+    const answer = show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [], heldUnclaimed: [] });
     await userEvent.click(screen.getByTestId('speleodb-signout-open-upload'));
     expectButtonsOnlyInFooter([
       ['speleodb-signout-open-back', 'Back'],
@@ -170,7 +210,7 @@ describe('SpeleoSignOutDialog', () => {
   });
 
   it('Back from the upload step returns to the choices', async () => {
-    void show({ openProject: entry('open'), releasable: [], unuploaded: [] });
+    void show({ openProject: entry('open'), releasable: [], unuploaded: [], heldUnclaimed: [] });
     await userEvent.click(screen.getByTestId('speleodb-signout-open-upload'));
     await userEvent.click(screen.getByTestId('speleodb-signout-open-back'));
     expect(screen.getByTestId('speleodb-signout-open-keep')).toBeVisible();
@@ -183,7 +223,7 @@ describe('SpeleoSignOutDialog', () => {
       return null;
     });
     let settled: boolean | null = null;
-    void show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [] }).then((v) => { settled = v; });
+    void show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [], heldUnclaimed: [] }).then((v) => { settled = v; });
     await userEvent.click(screen.getByTestId('speleodb-signout-open-upload'));
     await userEvent.type(screen.getByTestId('speleodb-signout-message'), 'm');
     await userEvent.click(screen.getByTestId('speleodb-signout-open-upload-confirm'));
@@ -195,7 +235,21 @@ describe('SpeleoSignOutDialog', () => {
 
   it('a divergence cancels the sign-out so its own dialog can take over', async () => {
     doneMock.mockResolvedValue({ kind: 'divergence_needed' });
-    const answer = show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [] });
+    const answer = show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [], heldUnclaimed: [] });
+    await userEvent.click(screen.getByTestId('speleodb-signout-open-upload'));
+    await userEvent.type(screen.getByTestId('speleodb-signout-message'), 'm');
+    await userEvent.click(screen.getByTestId('speleodb-signout-open-upload-confirm'));
+    expect(await answer).toBe(false);
+    expect(released).toEqual([]);
+  });
+
+  it('R3: an upload that replaced a revision pushed meanwhile stops the sign-out, so its banner is read', async () => {
+    const replaced = {
+      id: '0123456789abcdef0123456789abcdef01234567', parent_ids: [], author_email: 'diver@example.com',
+      authored_date: null, message: 'Surveyed the sump',
+    };
+    doneMock.mockResolvedValue({ kind: 'released', replaced_revisions: [replaced] });
+    const answer = show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [], heldUnclaimed: [] });
     await userEvent.click(screen.getByTestId('speleodb-signout-open-upload'));
     await userEvent.type(screen.getByTestId('speleodb-signout-message'), 'm');
     await userEvent.click(screen.getByTestId('speleodb-signout-open-upload-confirm'));
@@ -205,7 +259,7 @@ describe('SpeleoSignOutDialog', () => {
 
   it('Discard: a "lost forever" step listing what is lost, then the discarding close and the sign-out', async () => {
     useProjectStore.setState({ isDirty: true });
-    const answer = show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [entry('x')] });
+    const answer = show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [entry('x')], heldUnclaimed: [] });
     await userEvent.click(screen.getByTestId('speleodb-signout-open-discard'));
     expect(closeProject).not.toHaveBeenCalled();
     expect(screen.getByText('Are you sure?')).toBeInTheDocument();
@@ -237,7 +291,7 @@ describe('SpeleoSignOutDialog', () => {
       useProjectStore.setState({ project: null });
       return { ...ok, warnings: [{ code, message, severity: 'warning' }] };
     });
-    const answer = show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [] });
+    const answer = show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [], heldUnclaimed: [] });
     await userEvent.click(screen.getByTestId('speleodb-signout-open-discard'));
     await userEvent.click(screen.getByTestId('speleodb-signout-open-discard-confirm'));
     expect(await answer).toBe(true);
@@ -252,7 +306,7 @@ describe('SpeleoSignOutDialog', () => {
   it('a clean discarding close shows no warning', async () => {
     const showToast = vi.fn();
     useUIStore.setState({ showToast: showToast as never });
-    const answer = show({ openProject: entry('open'), releasable: [], unuploaded: [] });
+    const answer = show({ openProject: entry('open'), releasable: [], unuploaded: [], heldUnclaimed: [] });
     await userEvent.click(screen.getByTestId('speleodb-signout-open-discard'));
     await userEvent.click(screen.getByTestId('speleodb-signout-open-discard-confirm'));
     expect(await answer).toBe(true);
@@ -260,7 +314,7 @@ describe('SpeleoSignOutDialog', () => {
   });
 
   it('Back from the discard step discards nothing', async () => {
-    void show({ openProject: entry('open'), releasable: [], unuploaded: [] });
+    void show({ openProject: entry('open'), releasable: [], unuploaded: [], heldUnclaimed: [] });
     await userEvent.click(screen.getByTestId('speleodb-signout-open-discard'));
     await userEvent.click(screen.getByTestId('speleodb-signout-open-discard-back'));
     expect(screen.getByTestId('speleodb-signout-open-discard')).toBeVisible();
@@ -270,7 +324,7 @@ describe('SpeleoSignOutDialog', () => {
   it('a discard that fails stays on the confirmation with the reason, and does not sign out', async () => {
     closeProject.mockResolvedValue({ ...ok, success: false, error: 'Synthetic close failure' });
     let settled: boolean | null = null;
-    void show({ openProject: entry('open'), releasable: [], unuploaded: [] }).then((v) => { settled = v; });
+    void show({ openProject: entry('open'), releasable: [], unuploaded: [], heldUnclaimed: [] }).then((v) => { settled = v; });
     await userEvent.click(screen.getByTestId('speleodb-signout-open-discard'));
     await userEvent.click(screen.getByTestId('speleodb-signout-open-discard-confirm'));
     expect(await screen.findByTestId('speleodb-signout-error')).toHaveTextContent('Synthetic close failure');
@@ -282,7 +336,7 @@ describe('SpeleoSignOutDialog', () => {
   it('Keep on this computer saves the open project locally, then hands every lock back and signs out', async () => {
     const saveProject = vi.fn(async () => { useProjectStore.setState({ isDirty: false }); return ok; });
     useProjectStore.setState({ isDirty: true, saveProject } as never);
-    const answer = show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [entry('x'), entry('y', false)] });
+    const answer = show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [entry('x'), entry('y', false)], heldUnclaimed: [] });
     await userEvent.click(screen.getByTestId('speleodb-signout-open-keep'));
     expect(await answer).toBe(true);
     expect(saveProject).toHaveBeenCalledOnce();
@@ -297,7 +351,7 @@ describe('SpeleoSignOutDialog', () => {
     const saveProject = vi.fn(async () => ({ success: false, error: 'Synthetic disk failure' }));
     useProjectStore.setState({ isDirty: true, saveProject } as never);
     let settled: boolean | null = null;
-    void show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [] }).then((v) => { settled = v; });
+    void show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [], heldUnclaimed: [] }).then((v) => { settled = v; });
     await userEvent.click(screen.getByTestId('speleodb-signout-open-keep'));
     expect(await screen.findByTestId('speleodb-signout-error')).toHaveTextContent('could not be saved');
     expect(screen.getByTestId('speleodb-signout-open-keep')).toBeEnabled();
@@ -311,7 +365,7 @@ describe('SpeleoSignOutDialog', () => {
       if (command !== 'speleodb_release_lock') return Promise.resolve(null);
       return new Promise((resolve) => { finish = () => { released.push(args.projectId); resolve(null); }; });
     });
-    const answer = show({ openProject: entry('open'), releasable: [], unuploaded: [] });
+    const answer = show({ openProject: entry('open'), releasable: [], unuploaded: [], heldUnclaimed: [] });
     await userEvent.click(screen.getByTestId('speleodb-signout-open-keep'));
     expect(await screen.findByTestId('speleodb-signout-releasing')).toBeVisible();
     expect(screen.getByTestId('speleodb-signout-open-keep')).toHaveTextContent('Handing back');
@@ -328,7 +382,7 @@ describe('SpeleoSignOutDialog', () => {
       if (command === 'speleodb_release_lock') throw new Error('Synthetic offline');
       return null;
     });
-    const answer = show({ openProject: entry('open'), releasable: [], unuploaded: [] });
+    const answer = show({ openProject: entry('open'), releasable: [], unuploaded: [], heldUnclaimed: [] });
     await userEvent.click(screen.getByTestId('speleodb-signout-open-keep'));
     expect(await screen.findByTestId('speleodb-signout-release-failed')).toHaveTextContent('Cave open');
     expectButtonsOnlyInFooter([
@@ -349,7 +403,7 @@ describe('SpeleoSignOutDialog', () => {
       }
       return null;
     });
-    const answer = show({ openProject: null, releasable: [entry('a'), entry('b')], unuploaded: [] });
+    const answer = show({ openProject: null, releasable: [entry('a'), entry('b')], unuploaded: [], heldUnclaimed: [] });
     await userEvent.click(screen.getByTestId('speleodb-signout-go'));
     const failed = await screen.findByTestId('speleodb-signout-release-failed');
     expect(failed).toHaveTextContent('Cave b');
@@ -366,7 +420,7 @@ describe('SpeleoSignOutDialog', () => {
       if (command === 'speleodb_release_lock') throw new Error('Synthetic offline');
       return null;
     });
-    const answer = show({ openProject: null, releasable: [entry('a')], unuploaded: [] });
+    const answer = show({ openProject: null, releasable: [entry('a')], unuploaded: [], heldUnclaimed: [] });
     await userEvent.click(screen.getByTestId('speleodb-signout-go'));
     await screen.findByTestId('speleodb-signout-release-failed');
     await userEvent.click(screen.getByTestId('speleodb-signout-anyway'));
@@ -386,8 +440,37 @@ describe('SpeleoSignOutDialog', () => {
     expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_list_projects', undefined, expect.anything());
   });
 
+  // sdbdemo2 P3 (screenshot 26): the first failed check said only "SpeleoDB could
+  // not be reached"; the cause appeared after Try again. It is there at once now.
+  it('the first failed check says its cause at once', () => {
+    void show(null, 'signOut', 'Could not connect to SpeleoDB at https://sdb.example.');
+    expect(screen.getByTestId('speleodb-signout-check-failed')).toBeVisible();
+    expect(screen.getByTestId('speleodb-signout-error'))
+      .toHaveTextContent('Could not connect to SpeleoDB at https://sdb.example.');
+  });
+
+  // Demo item 4: a re-check that got no reply says why in the words every
+  // read-only notice uses for that cause, naming the server, never the raw
+  // diagnostic the backend keeps for the log.
+  it('a re-check that got no reply is worded by its cause, not the raw diagnostic', async () => {
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'speleodb_list_projects') {
+        throw { message: 'Network error talking to SpeleoDB: error sending request', action: 'Retry', status: null,
+          transport: 'Refused' };
+      }
+      return null;
+    });
+    void show(null);
+    await userEvent.click(screen.getByTestId('speleodb-signout-retry'));
+    expect(await screen.findByTestId('speleodb-signout-error')).toHaveTextContent(
+      'Could not connect to SpeleoDB at https://sdb.example. Check your network connection, the server address, '
+        + 'and whether the server is running.',
+    );
+    expect(screen.getByTestId('speleodb-signout-error')).not.toHaveTextContent(/network error/i);
+  });
+
   it('Cancel aborts the sign-out and releases nothing', async () => {
-    const answer = show({ openProject: null, releasable: [entry('a')], unuploaded: [] }, 'switch');
+    const answer = show({ openProject: null, releasable: [entry('a')], unuploaded: [], heldUnclaimed: [] }, 'switch');
     expect(screen.getByTestId('speleodb-signout-go')).toHaveTextContent('Switch account');
     await userEvent.click(screen.getByTestId('speleodb-signout-cancel'));
     expect(await answer).toBe(false);
@@ -395,7 +478,7 @@ describe('SpeleoSignOutDialog', () => {
   });
 
   it('Escape cancels too', async () => {
-    const answer = show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [] });
+    const answer = show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [], heldUnclaimed: [] });
     await userEvent.keyboard('{Escape}');
     expect(await answer).toBe(false);
     expect(released).toEqual([]);

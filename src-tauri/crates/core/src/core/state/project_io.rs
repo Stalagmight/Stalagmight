@@ -403,13 +403,23 @@ impl AppState {
         } else {
             Mode::Normal
         };
-        let bytes = match crate::persistence::stalx_v2::encode(project, &extras, mode) {
+        let mut bytes = match crate::persistence::stalx_v2::encode(project, &extras, mode) {
             Ok(bytes) => bytes,
             Err(e) => {
                 tracing::error!(error = %e, "Encoding the project failed");
                 return CommandResult::failure(format!("Can't save: {e}"));
             }
         };
+        // A SpeleoDB copy whose survey is BASE's again (an edit taken back) holds
+        // no un-uploaded work: its mark goes with this write (S2).
+        let mark_cleared = !detached
+            && match super::speleodb_base_survey::clear_stale_mark(&bytes, &mut extras) {
+                Some(cleared) => {
+                    bytes = cleared;
+                    true
+                }
+                None => false,
+            };
         let guard = match (on_disk, to_open_file, file.fingerprint.as_ref()) {
             (OnDisk::Overwrite, _, _) => Guard::Overwrite,
             (OnDisk::Checked, true, Some(fp)) => Guard::Expect(fp),
@@ -484,6 +494,9 @@ impl AppState {
             return CommandResult::success().with_unlinked_copy_path(target.display().to_string());
         }
         project.file_path = Some(target.clone());
+        if mark_cleared {
+            file.extras.local.speleodb.unpushed_edits = false;
+        }
         let written = bytes.len();
         file.saved_bytes = Some((fingerprint.clone(), std::sync::Arc::from(bytes)));
         file.fingerprint = Some(fingerprint);
@@ -524,6 +537,7 @@ impl AppState {
         let mut result = CommandResult::success();
         result.saved_path = Some(target.display().to_string());
         result.legacy_converted = converted;
+        result.speleodb_unpushed_cleared = mark_cleared.then_some(true);
         result
     }
 
