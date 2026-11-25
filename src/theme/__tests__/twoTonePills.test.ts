@@ -51,6 +51,8 @@ import {
   type PillColors,
 } from '../pillColors';
 
+import { sampled } from './sweepDensity';
+
 const THEMES = Object.keys(themeTokens);
 
 const HARD = [
@@ -68,7 +70,14 @@ const HARD = [
   ...[0, 60, 120, 180, 240, 300].flatMap((h) => [hexOfOklch({ L: 0.5, C: 0.15, h }), hexOfOklch({ L: 0.88, C: 0.12, h })]),
 ];
 
-const PAIRS: Array<[string, string]> = HARD.flatMap((a) => HARD.filter((b) => b !== a).map((b) => [a, b] as [string, string]));
+/** The hardest colours, whose pairs are always all swept (near-white, near-black, yellow, blue, grey, black, white). */
+const CORE = new Set(HARD.slice(0, 7));
+
+const PAIRS: Array<[string, string]> = sampled(
+  HARD.flatMap((a) => HARD.filter((b) => b !== a).map((b) => [a, b] as [string, string])),
+  3,
+  ([a, b]) => CORE.has(a) && CORE.has(b),
+);
 
 /** The floors of one half: its text and muted part, and its leading dot when it holds it, on each of its backgrounds. */
 function checkHalf(label: string, half: PillColors, backgrounds: readonly string[], failures: string[], withDot = false) {

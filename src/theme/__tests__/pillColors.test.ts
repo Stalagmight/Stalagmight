@@ -26,6 +26,7 @@
 import { describe, expect, it } from 'vitest';
 import { themeTokens } from '../tokens';
 import { COMMENT_PALETTE, LIGHT_LINE_COLORS, LINE_COLORS, contrastRatio } from '../../utils/colors';
+import { hueStep } from './sweepDensity';
 import { CSS_COLOR_NAMES, hexOfOklch, oklchOfHex } from '../cssColor';
 import {
   BORDER_MIN,
@@ -51,7 +52,7 @@ function sweepColors(): string[] {
   const out: string[] = [];
   for (const L of [0.12, 0.25, 0.4, 0.55, 0.7, 0.85, 0.95, 0.99]) {
     for (const C of [0, 0.03, 0.08, 0.15, 0.25, 0.37]) {
-      for (let h = 0; h < 360; h += 10) out.push(hexOfOklch({ L, C, h }));
+      for (let h = 0; h < 360; h += hueStep(10)) out.push(hexOfOklch({ L, C, h }));
     }
   }
   for (let v = 0; v <= 255; v += 15) {
