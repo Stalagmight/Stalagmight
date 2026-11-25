@@ -277,19 +277,27 @@ export function useCollisionAnswers(
   collisions: readonly NameCollision[] | undefined,
 ): [CollisionAnswer[], (index: number, answer: CollisionAnswer) => void] {
   const key = useMemo(
-    () => (collisions ?? []).map((c) => `${c.line_id}:${c.name}:${c.letter.station.id}:${c.alternative.station.id}`).join('|'),
+    () =>
+      JSON.stringify((collisions ?? []).map((c) => [c.line_id, c.name, c.letter.station.id, c.alternative.station.id])),
     [collisions],
   );
   const count = collisions?.length ?? 0;
-  const [picked, setPicked] = useState<{ key: string; answers: CollisionAnswer[] }>({ key: '', answers: [] });
+  const [picked, setPicked] = useState<{ key: string; answers: CollisionAnswer[] }>({ key, answers: [] });
+  // Other collisions forget the picks made for the last ones, so a pick never
+  // comes back when the collisions return (React's "adjust state when a prop
+  // changes" pattern: a render-time update, no effect).
+  if (picked.key !== key) setPicked({ key, answers: [] });
   const answers = useMemo<CollisionAnswer[]>(
-    () => (picked.key === key ? picked.answers : Array.from({ length: count }, () => 'letter')),
+    () =>
+      Array.from({ length: count }, (_, i): CollisionAnswer => (picked.key === key ? picked.answers[i] : undefined) ?? 'letter'),
     [picked, key, count],
   );
   const set = (index: number, answer: CollisionAnswer) =>
     setPicked((prev) => {
-      const next: CollisionAnswer[] =
-        prev.key === key ? [...prev.answers] : Array.from({ length: count }, () => 'letter');
+      const next: CollisionAnswer[] = Array.from(
+        { length: count },
+        (_, i): CollisionAnswer => (prev.key === key ? prev.answers[i] : undefined) ?? 'letter',
+      );
       next[index] = answer;
       return { key, answers: next };
     });

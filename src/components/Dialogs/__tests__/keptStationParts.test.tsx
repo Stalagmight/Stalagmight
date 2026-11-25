@@ -205,13 +205,32 @@ describe('useCollisionAnswers', () => {
     expect(result.current[0]).toEqual(['letter', 'letter']);
   });
 
-  it('keeps a pick made right after the rows appear', () => {
+  // A pick belongs to the collisions it was made for: going to other
+  // collisions and back starts from the letter again. Injection: keep the
+  // stored pick across a key change and the last expectation reads 'alternative'.
+  it('forgets a pick when the collisions change and come back', () => {
     const { result, rerender } = renderHook(({ c }: { c: NameCollision[] | undefined }) => useCollisionAnswers(c), {
-      initialProps: { c: undefined as NameCollision[] | undefined },
+      initialProps: { c: [collision] as NameCollision[] | undefined },
     });
-    rerender({ c: [collision] });
     act(() => result.current[1](0, 'alternative'));
     expect(result.current[0]).toEqual(['alternative']);
+    rerender({ c: [other] });
+    expect(result.current[0]).toEqual(['letter']);
+    rerender({ c: [collision] });
+    expect(result.current[0]).toEqual(['letter']);
+  });
+
+  // The key quotes each part, so a name holding the old separators cannot
+  // make two different lists look alike. Injection: join the parts with ':'
+  // and '|' again, and the one-collision list reads as the two-collision one.
+  it('tells collisions apart whatever their names hold', () => {
+    const tricky: NameCollision = { ...collision, name: `0:15:29|${SIDE}:5` };
+    const { result, rerender } = renderHook(({ c }: { c: NameCollision[] }) => useCollisionAnswers(c), {
+      initialProps: { c: [tricky] },
+    });
+    act(() => result.current[1](0, 'alternative'));
+    rerender({ c: [collision, other] });
+    expect(result.current[0]).toEqual(['letter', 'letter']);
   });
 
   it('starts over when the collisions change', () => {
