@@ -16,7 +16,7 @@
  *   unanswered, so a dialog that has a preview always sends them (an empty
  *   list included).
  */
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { displayStationName, formatStationLabel } from '../../utils/formatters';
@@ -267,25 +267,39 @@ export function StickyDialogFooter({ children, testId }: { children: ReactNode; 
 /**
  * The user's answers to `collisions`, each the letter until changed, reset
  * whenever the collisions change (another keep, another line).
+ *
+ * The defaults are worked out during render, keyed by the collisions'
+ * content, never in an effect: an effect runs after the rows are on screen,
+ * so a pick made in between was overwritten with the letter and the dialog
+ * sent the other station's rename.
  */
 export function useCollisionAnswers(
   collisions: readonly NameCollision[] | undefined,
 ): [CollisionAnswer[], (index: number, answer: CollisionAnswer) => void] {
   const key = useMemo(
-    () => (collisions ?? []).map((c) => `${c.line_id}:${c.name}:${c.letter.station.id}:${c.alternative.station.id}`).join('|'),
+    () =>
+      JSON.stringify((collisions ?? []).map((c) => [c.line_id, c.name, c.letter.station.id, c.alternative.station.id])),
     [collisions],
   );
-  const [answers, setAnswers] = useState<CollisionAnswer[]>([]);
-  useEffect(() => {
-    setAnswers((collisions ?? []).map(() => 'letter'));
-    // The key stands for the collisions' content.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  const count = collisions?.length ?? 0;
+  const [picked, setPicked] = useState<{ key: string; answers: CollisionAnswer[] }>({ key, answers: [] });
+  // Other collisions forget the picks made for the last ones, so a pick never
+  // comes back when the collisions return (React's "adjust state when a prop
+  // changes" pattern: a render-time update, no effect).
+  if (picked.key !== key) setPicked({ key, answers: [] });
+  const answers = useMemo<CollisionAnswer[]>(
+    () =>
+      Array.from({ length: count }, (_, i): CollisionAnswer => (picked.key === key ? picked.answers[i] : undefined) ?? 'letter'),
+    [picked, key, count],
+  );
   const set = (index: number, answer: CollisionAnswer) =>
-    setAnswers((prev) => {
-      const next = [...prev];
+    setPicked((prev) => {
+      const next: CollisionAnswer[] = Array.from(
+        { length: count },
+        (_, i): CollisionAnswer => (prev.key === key ? prev.answers[i] : undefined) ?? 'letter',
+      );
       next[index] = answer;
-      return next;
+      return { key, answers: next };
     });
   return [answers, set];
 }
