@@ -483,6 +483,15 @@ shell with no `CI` env it watches forever and a piped or backgrounded invocation
 never returns. Use `pnpm exec vitest run` (or `CI=1 pnpm test`) for a
 deterministic run. CI is unaffected.
 
+**Trap: a file of slow synchronous tests fails the run with every test green.**
+The vitest worker reports progress to the main process over an RPC whose reply
+must arrive within 60 s. Synchronous tests never yield between them, so the
+reply waits until the whole file is done. If that takes over a minute on CI's
+runner (the full `twoTonePills` sweep took 67 s there), vitest ends with
+`Error: [vitest-worker]: Timeout calling "onTaskUpdate"` and exits 1. Call
+`yieldBetweenTests()` (`src/test/yieldBetweenTests.ts`) at the top of such a
+file; the pill colour sweeps in `src/theme/__tests__/` do.
+
 ### Playwright
 
 ```bash

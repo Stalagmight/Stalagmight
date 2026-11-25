@@ -20,6 +20,7 @@
  * ring 3:1 on the glow" for a near-black line on cave.
  */
 import { describe, expect, it } from 'vitest';
+import { yieldBetweenTests } from '../../test/yieldBetweenTests';
 import { themeTokens } from '../tokens';
 import { CSS_COLOR_NAMES, hexOfOklch, oklchOfHex } from '../cssColor';
 import { COMMENT_PALETTE, LIGHT_LINE_COLORS, LINE_COLORS, contrastRatio } from '../../utils/colors';
@@ -38,6 +39,9 @@ import {
 import { prosePillStyle } from '../../components/common/LinePill';
 
 const THEMES = Object.keys(themeTokens);
+
+// Seconds of synchronous sweeping per file: let the worker answer vitest's 60 s RPC between tests.
+yieldBetweenTests();
 
 function sweepColors(): string[] {
   const out: string[] = [];

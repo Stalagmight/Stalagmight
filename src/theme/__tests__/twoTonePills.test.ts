@@ -22,6 +22,7 @@
  * cave (on every theme but nord at the old 3:1 floor).
  */
 import { describe, expect, it } from 'vitest';
+import { yieldBetweenTests } from '../../test/yieldBetweenTests';
 import { themeTokens } from '../tokens';
 import { hexOfOklch, oklchOfHex } from '../cssColor';
 import { contrastRatio } from '../../utils/colors';
@@ -52,6 +53,9 @@ import {
 } from '../pillColors';
 
 const THEMES = Object.keys(themeTokens);
+
+// Seconds of synchronous sweeping per file: let the worker answer vitest's 60 s RPC between tests.
+yieldBetweenTests();
 
 const HARD = [
   '#f6f6f2', // near-white
