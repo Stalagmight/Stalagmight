@@ -20,10 +20,10 @@
  * ring 3:1 on the glow" for a near-black line on cave.
  */
 import { describe, expect, it } from 'vitest';
+import { yieldBetweenTests } from '../../test/yieldBetweenTests';
 import { themeTokens } from '../tokens';
 import { CSS_COLOR_NAMES, hexOfOklch, oklchOfHex } from '../cssColor';
 import { COMMENT_PALETTE, LIGHT_LINE_COLORS, LINE_COLORS, contrastRatio } from '../../utils/colors';
-import { ringHues } from './sweepDensity';
 import {
   HOME_DOT_MIN,
   PILL_DOT_MIN,
@@ -40,11 +40,14 @@ import { prosePillStyle } from '../../components/common/LinePill';
 
 const THEMES = Object.keys(themeTokens);
 
+// Seconds of synchronous sweeping per file: let the worker answer vitest's 60 s RPC between tests.
+yieldBetweenTests();
+
 function sweepColors(): string[] {
   const out: string[] = [];
   for (const L of [0.12, 0.25, 0.4, 0.55, 0.7, 0.85, 0.95, 0.99]) {
     for (const C of [0, 0.03, 0.08, 0.15, 0.25, 0.37]) {
-      for (const h of ringHues(20)) out.push(hexOfOklch({ L, C, h }));
+      for (let h = 0; h < 360; h += 20) out.push(hexOfOklch({ L, C, h }));
     }
   }
   out.push('#000', '#fff', '#050505', '#101010', '#f6f6f2', '#fdfdfd', '#ffff00', '#ffe600', '#0000ff', '#1f4fff', '#8a8a8a');

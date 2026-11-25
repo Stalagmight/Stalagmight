@@ -483,23 +483,14 @@ shell with no `CI` env it watches forever and a piped or backgrounded invocation
 never returns. Use `pnpm exec vitest run` (or `CI=1 pnpm test`) for a
 deterministic run. CI is unaffected.
 
-**The pill colour sweeps sample by default.** `src/theme/__tests__/pillColors`,
-`prosePillColors` and `twoTonePills` check a deterministic subset by default.
-- Single colours: the hue rings are three times wider, plus the yellow and
-  blue peaks, and every hard colour, app palette and CSS name is always in.
-- Pairs: every pair that holds one of the core colours (near-white,
-  near-black, yellow, blue, grey, black, white) is swept both ways, plus every
-  third of the rest.
-
-The full sweeps are about 50 s of unbroken CPU. Run inside the whole suite on
-CI's runner, they made the `check` job fail with `Timeout calling
-"onTaskUpdate"` even though every test passed. CI therefore runs them in full in
-a step of their own after `pnpm test`. Run the full sweep locally whenever
-`pillColors.ts`, `pillBlend.ts` or `proseGlow.ts` changes:
-
-```bash
-STALAGMIGHT_FULL_COLOUR_SWEEP=1 pnpm exec vitest run src/theme
-```
+**Trap: a file of slow synchronous tests fails the run with every test green.**
+The vitest worker reports progress to the main process over an RPC whose reply
+must arrive within 60 s. Synchronous tests never yield between them, so the
+reply waits until the whole file is done. If that takes over a minute on CI's
+runner (the full `twoTonePills` sweep took 67 s there), vitest ends with
+`Error: [vitest-worker]: Timeout calling "onTaskUpdate"` and exits 1. Call
+`yieldBetweenTests()` (`src/test/yieldBetweenTests.ts`) at the top of such a
+file; the pill colour sweeps in `src/theme/__tests__/` do.
 
 ### Playwright
 
