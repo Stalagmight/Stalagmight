@@ -85,11 +85,15 @@ their word and proceed.
 
 These rules prevent leaking private and proprietary survey data.
 
+- Fixtures already tracked in the repo are approved goldens, committed deliberately by
+  maintainers: `e2e/fixtures/` (including `naharon_sources/`), `e2e-playwright/fixtures/`,
+  `src-tauri/tests/fixtures/` and the vendored crates' test data. Tests may use them, and their
+  presence in history doesn't block a PR. The rules below are about adding new ones.
 - Never commit fixture files (`*.stalx`, `*.tml`, `*.tmlu`, `*.mak`, `*.dat`, `*.wpj`, `*.srv`,
   `*.dmp`, `*.gpx`, `*.csv`, ...), even with the user's consent. The user commits and pushes
   fixtures manually.
-- Never open a PR whose current state or history contains fixture files, even if leaving them
-  out breaks tests.
+- Never open a PR that adds fixture files, in its final state or anywhere in its commits, even if
+  leaving them out breaks tests.
 - Fixtures outside the repo may be used in tests only with the user's consent, in tests marked
   skip that run only when the external path exists.
 - Never extract parts of an external fixture into a test. Build fully synthetic data that
