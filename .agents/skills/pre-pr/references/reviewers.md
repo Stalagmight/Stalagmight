@@ -151,7 +151,7 @@ attacker-controlled sizes or counts.
 Do not flag these without evidence that the change alters established behavior:
 
 - Mid-section shot insertion intentionally renumbers later stations. See
-  `insert_shot_after` and `insert_shot_before` in `src-tauri/crates/models/src/section.rs`
-  and `src-tauri/crates/models/src/project/shots.rs`.
+  `insert_shot_after` and `insert_shot_before` in `src-tauri/crates/models/src/project/shots.rs`
+  and the `_with_id` variants in `src-tauri/crates/models/src/section.rs`.
 - Existing `src-tauri/crates/models/src/project.rs` formatting.
 - `#[serde(default)]` config tolerance of unknown fields.

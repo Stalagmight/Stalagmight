@@ -102,9 +102,11 @@ Run only the rows whose surface is present, with the same diff expression as the
 - A failing gate is a 🔴 in its own right.
 - This table is not the whole merge gate. `cargo test`, vitest and `typecheck:agent` are the
   pre-push checklist's job; say they were deferred to CI.
-- The file-size ratchets cover only `src-tauri/src` and `src/`, and nothing gates
-  `.github/workflows/**`. Say so when the diff has a large file elsewhere or a workflow edit.
-- A change to `.md` files alone runs no CI (`paths-ignore: **/*.md`).
+- The Rust ratchet covers `src-tauri/src` and `src-tauri/crates/*/src`, the TS ratchet only
+  `src/`, and nothing gates `.github/workflows/**`. Say so when the diff has a large file
+  elsewhere or a workflow edit.
+- An `.md`-only change skips `check` and `smoke`; `leak-scan` (private-leaks, em-dash,
+  third-party) still runs.
 
 ## 6. Synthesize
 
@@ -158,4 +160,4 @@ writer configured" in Coverage.
   the invocation).
 - The log path follows `git rev-parse --show-toplevel`, so cwd picks the checkout. For a branch in
   another clone, or when probing by hand, set `STALAGMIGHT_REVIEW_LOG` to an absolute path.
-- Only this definition logs, so the log samples Claude runs only.
+- The Codex skill (and OpenCode through it) logs to the same writer when one is configured.
