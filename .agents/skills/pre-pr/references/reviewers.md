@@ -1,8 +1,9 @@
 # Pre-PR Reviewer Briefs
 
-Read this file completely before launching reviewers. Give the shared contract and
-landmine brief to every reviewer verbatim. Give each reviewer exactly one method
-brief. Do not pass author intent or conclusions.
+The single source for both `/pre-pr` (Claude Code) and `$pre-pr` (Codex). Read this file
+completely before launching reviewers. Give the shared contract and landmine brief to every
+reviewer verbatim. Give each reviewer exactly one method brief. Do not pass author intent or
+conclusions.
 
 ## Shared contract
 
@@ -37,8 +38,9 @@ Substitute literal SHAs before sending this contract:
 > code or input change that would make it fail. Flag tests for which you cannot name
 > a credible failure injection.
 >
-> Put the highest-signal findings first. End with two mandatory sections:
-> **What I did not reach** and **Test injections**.
+> Put the highest-signal findings first. End with two mandatory sections of at most
+> about five lines each: **What I did not reach** and **Test injections**. Be terse:
+> no restating the diff, no narrative.
 
 ## Reviewer A - adversarial, lens-free
 
@@ -93,7 +95,8 @@ attacker-controlled sizes or counts.
   comments.
 - State range boundaries as inclusive or exclusive and demand boundary tests.
 - Metadata-only comment or LRUD edits must touch the project and push undo but must
-  not call `reconcile_geometry()`.
+  not call `reconcile_geometry()`. The dirty signal is the `modified_at` timestamp;
+  there is no `is_dirty` boolean.
 
 ### Persistence
 
@@ -128,8 +131,10 @@ attacker-controlled sizes or counts.
 ### Project conventions
 
 - Telemetry is self-describing JSON plus gzip v3. New commands, tools, dialogs, and
-  sources must be represented in both the Rust registry and TypeScript telemetry
-  lists. New commands use `command.<name>`.
+  sources must be in both `EVENT_NAMES`/`SOURCE_NAMES`
+  (`src-tauri/crates/telemetry/src/telemetry/registry.rs`) and the lists in
+  `src/utils/telemetry.ts`, or `registry_covers_all_*` fails. New commands use
+  `command.<name>`.
 - IPC TypeScript types are generated. Never hand-edit `src/types/ipc/` or
   `src/types/ipc.generated.ts`.
 - Put heavy O(N) checks behind `#[cfg(debug_assertions)]`. Use `debugLog()` rather
@@ -146,7 +151,7 @@ attacker-controlled sizes or counts.
 Do not flag these without evidence that the change alters established behavior:
 
 - Mid-section shot insertion intentionally renumbers later stations. See
-  `insert_shot_after`, `insert_shot_before`, and the `CreateShot` comment in
-  `src-tauri/src/core/state/commands.rs`.
-- Existing `project.rs` formatting.
+  `insert_shot_after` and `insert_shot_before` in `src-tauri/crates/models/src/project/shots.rs`
+  and the `_with_id` variants in `src-tauri/crates/models/src/section.rs`.
+- Existing `src-tauri/crates/models/src/project.rs` formatting.
 - `#[serde(default)]` config tolerance of unknown fields.

@@ -182,9 +182,12 @@ Use the same shape every run:
    `file:line | why | fix-or-test`.
 3. **Should-fix**: material non-blocking risks in the same format.
 4. **Nits**: terse, low-risk observations.
-5. **Coverage**: pinned SHAs and file count; reviewers run or skipped with model,
-   effort, seconds, reached and unreached areas; gates run, failed, deferred, or
-   irrelevant; untracked-file coverage; logging status.
+5. **Coverage**, at most about five lines: pinned SHAs and file count; reviewers run
+   or skipped; gates run, failed, deferred, or irrelevant; untracked-file coverage;
+   logging status.
+
+The PR body later carries one line from this report: the verdict and whether the
+must-fixes are fixed. Do not paste Coverage or reviewer output into it.
 
 If there are no findings, say so explicitly and include residual risks and testing
 gaps. Never approve solely because deterministic gates pass.

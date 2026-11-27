@@ -2,10 +2,9 @@
 
 Tauri desktop app for processing underwater cave survey data (Rust backend + React/TypeScript frontend).
 
-It is year 2026. No em-dashes: write an ASCII hyphen instead, instead of '—' use '-'. This covers the
-hyphen, non-breaking hyphen, figure dash, en dash, em dash, horizontal bar and
-minus sign (U+2010..U+2015,U+2212). Box-drawing 
-characters in ASCII diagrams are fine.
+It is year 2026. No Unicode dashes: write an ASCII hyphen `-` instead of any of U+2010..U+2015
+or U+2212 (hyphen, non-breaking hyphen, figure dash, en dash, em dash, horizontal bar, minus
+sign). Box-drawing characters in ASCII diagrams are fine.
 
 ## Quick Reference
 
@@ -21,191 +20,121 @@ characters in ASCII diagrams are fine.
 
 ## Critical Rules
 
-### Pinned Toolchain - enable corepack
+### Pinned toolchain
 
-pnpm `11.18.0` (via `"packageManager"` in `package.json`) and node `24.x` (via
-`.nvmrc`) are pinned so every machine + CI runs the same versions. First-time
-setup on a clean clone:
+pnpm `11.18.0` (`"packageManager"` in `package.json`) and node `24.x` (`.nvmrc`) are pinned.
+On a clean clone run `corepack enable`, `pnpm install`, then `./scripts/dev.sh`. Details are in
+[docs/toolchain.md](docs/toolchain.md).
 
-```bash
-corepack enable      # makes `pnpm` honor packageManager (pins to 11.18.0)
-pnpm install         # build scripts are pre-approved (pnpm-workspace.yaml)
-./scripts/dev.sh
-```
+- Bumping pnpm means regenerating the corepack integrity hash in `packageManager`.
+- Build-script approvals are an `allowBuilds:` map in `pnpm-workspace.yaml` (`esbuild: true`),
+  never a list.
+- `pnpm-lock.yaml` stays at `lockfileVersion: '9.0'`; don't commit lockfile-only drift.
 
-Rules that keep the pin working (full detail in [docs/toolchain.md](docs/toolchain.md)):
+### No `cd` in shell commands
 
-- Bumping pnpm means regenerating the corepack integrity hash in
-  `packageManager` - a stale or npm-format hash makes corepack refuse to run.
-- Build-script approvals live in `pnpm-workspace.yaml` as an `allowBuilds:` map
-  keyed by package (`esbuild: true`), never a list - other shapes fail on
-  pnpm 11 or are silently ignored on pnpm 10.
-- `pnpm-lock.yaml` stays at `lockfileVersion: '9.0'`; don't commit
-  lockfile-only drift.
+The shell keeps its working directory between commands, which once created and committed
+`src-tauri/src-tauri/`. Use path flags instead: `cargo --manifest-path src-tauri/Cargo.toml`,
+`git -C <dir>`, `pnpm --dir <dir>`.
 
-### Never Use `cd` in Bash Commands
-
-The shell session persists working directory changes, causing commands to run from wrong locations. This has caused files to be created in `src-tauri/src-tauri/` and committed to git.
-
-```bash
-# BAD - persists directory change
-cd src-tauri && cargo check
-
-# GOOD - use manifest path
-cargo check --manifest-path src-tauri/Cargo.toml
-
-# GOOD - subshell isolates change
-(cd src-tauri && cargo check)
-```
-
-### Pre-Push Checklist
+### Pre-push checklist
 
 All must pass before pushing:
 
 ```bash
 pnpm tsc --noEmit
-pnpm typecheck:agent                                      # agent-harness typecheck (CI check-job gate)
-pnpm typecheck:playwright                                 # e2e-playwright specs + IPC mock (CI smoke-job gate)
-pnpm test:mock-contract                                    # IPC mock <-> generate_handler! contract (CI smoke-job gate)
-pnpm exec vitest run                                      # vitest unit + component (CI check-job gate; plain "pnpm test" watches and never exits locally)
-pnpm test:ui
-pnpm lint:e2e-parallel                                    # Playwright parallel-safety (CI smoke-job gate)
-pnpm lint:pw-timing:test                                  # Playwright timing-reporter fixtures (CI smoke-job gate)
-pnpm lint:rust-file-size                                  # Rust file-size ratchet (CI check-job gate)
-pnpm lint:ts-file-size                                     # TS file-size ratchet (CI check-job gate)
-pnpm lint:private-leaks                                   # no internal/personal refs in the public tree (CI leak-scan gate)
-pnpm lint:third-party:test && pnpm lint:third-party      # THIRD-PARTY-LICENSES.md matches the lockfiles (CI leak-scan gate; regen: pnpm gen:third-party)
-pnpm lint:readonly-gates:test && pnpm lint:readonly-gates # read-only gating tripwire (CI check-job gate)
-pnpm lint:test-ids:test && pnpm lint:test-ids            # interactive UI test-ID contract (CI check-job gate)
-pnpm lint:no-em-dash:test && pnpm lint:no-em-dash        # Unicode-dash guard (CI leak-scan gate)
-cargo fmt --manifest-path src-tauri/Cargo.toml --check   # root package (run without --check to fix)
-for m in src-tauri/crates/*/Cargo.toml; do cargo fmt --manifest-path "$m" --check; done   # every member (CI runs this loop, NOT --all - see docs/linting.md)
-TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --features telemetry --all-targets   # deny-level lint gate
+pnpm typecheck:agent
+pnpm typecheck:playwright
+pnpm test:mock-contract
+pnpm exec vitest run                                      # not "pnpm test": it watches and never exits locally
+pnpm test:ui                                              # only the specs your change affects
+pnpm lint:e2e-parallel
+pnpm lint:pw-timing:test
+pnpm lint:rust-file-size
+pnpm lint:ts-file-size
+pnpm lint:private-leaks
+pnpm lint:third-party:test && pnpm lint:third-party      # regen: pnpm gen:third-party
+pnpm lint:readonly-gates:test && pnpm lint:readonly-gates
+pnpm lint:test-ids:test && pnpm lint:test-ids
+pnpm lint:no-em-dash:test && pnpm lint:no-em-dash
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+for m in src-tauri/crates/*/Cargo.toml; do cargo fmt --manifest-path "$m" --check; done   # CI runs this loop, not --all
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --features telemetry --all-targets
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml --workspace --features telemetry
-for v in compass_data igrf; do cargo test --locked --manifest-path src-tauri/vendor/$v/Cargo.toml; done   # workspace-excluded vendored crates; no telemetry feature/env (CI check-job gates)
+for v in compass_data igrf; do cargo test --locked --manifest-path src-tauri/vendor/$v/Cargo.toml; done
 ```
 
-Running full `pnpm test:ui` is not recommended as it is heavy. You must select
-playwright tests relevant to the code and funcitonality changed/affected by the
-changes made and run those selectively.
+- Run only the Playwright specs relevant to the change; the full `pnpm test:ui` is heavy.
+- Run Rust tests exactly as above: without `--workspace` only the app crate runs, and without
+  `--features telemetry` the registry-coverage tests are skipped.
+- For one crate, use `-p`, e.g. `cargo test --manifest-path src-tauri/Cargo.toml -p
+  stalagmight-core --lib fuzz_undo`. `--features telemetry` exists only on `stalagmight`,
+  `stalagmight-telemetry` and `stalagmight-speleodb`.
+- On Windows use `./scripts/test.ps1`; a bare `cargo test` aborts with
+  `STATUS_ENTRYPOINT_NOT_FOUND`.
+- Details are in [docs/testing-recipes.md](docs/testing-recipes.md).
 
-Rust tests must run with `--workspace`, `--features telemetry` and
-`TELEMETRY_ENDPOINT` set, exactly as above - without `--workspace` only the
-app crate runs, and a plain `cargo test` skips the registry-coverage tests, so
-either omission can pass locally while CI fails. For fast iteration on one
-crate use `-p`, e.g.
-`cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib fuzz_undo`
-(`--features telemetry` only applies to the packages that define the feature:
-`stalagmight`, `stalagmight-telemetry`, `stalagmight-speleodb`). On
-**Windows**, use `./scripts/test.ps1` instead (a bare `cargo test` aborts at
-startup with `STATUS_ENTRYPOINT_NOT_FOUND`). All explained in
-[docs/testing-recipes.md](docs/testing-recipes.md).
+### Pre-PR review is required before every PR
 
-### Pre-PR Review - required before every PR
+Never open a PR (`gh pr create`, push-to-open, or marking ready) until the pre-PR review has run
+at least once on the current change: `/pre-pr` in Claude Code or `$pre-pr` in Codex. If it hasn't
+run, run it first and decline any request to skip it. If the user says it has already run, take
+their word and proceed.
 
-Never open a PR (`gh pr create`, push-to-open, or marking ready) until the repository
-pre-PR review has run at least once on the current change: `/pre-pr` in Claude Code or
-`$pre-pr` in Codex. If it hasn't run, run it first and decline any request to skip it.
-If the user states that the pre-PR review has already run, take them at their word and
-proceed.
+### Fixtures: never commit, extract or push them
 
-Never open a PR in which either the current state or history contains fixture files 
-(*.stalx, *.tml, *.tmlu, *.mak, *.dat, *.wpj, *.srv, *.dmp, *.gpx, *.csv,...) even if 
-not including them breaks tests or behaviour. User MUST commit and PR/push fixtures 
-deliberately and manually. LLM-driven push/PR of these fixtures is not allowed.
+These rules prevent leaking private and proprietary survey data.
 
-### Rust lints + formatting are CI-gated
+- Fixtures already tracked in the repo are approved goldens, committed deliberately by
+  maintainers: `e2e/fixtures/` (including `naharon_sources/`), `e2e-playwright/fixtures/`,
+  `src-tauri/tests/fixtures/` and the vendored crates' test data. Tests may use them, and their
+  presence in history doesn't block a PR. Don't modify or regenerate them; the user does that.
+- Any other tracked fixture-type file (e.g. `src-tauri/cave.stalx`) is unclassified: leave it
+  alone and ask the user.
+- Never commit fixture files (`*.stalx`, `*.tml`, `*.tmlu`, `*.mak`, `*.dat`, `*.wpj`, `*.srv`,
+  `*.dmp`, `*.gpx`, `*.csv`, ...), even with the user's consent. The user commits and pushes
+  fixtures manually.
+- Never open a PR that adds fixture files, in its final state or anywhere in its commits, even if
+  leaving them out breaks tests.
+- Fixtures outside the repo may be used in tests only with the user's consent, in tests marked
+  skip that run only when the external path exists.
+- Never extract parts of an external fixture into a test. Build fully synthetic data that
+  reproduces the issue.
 
-The `check` job enforces **both** `cargo fmt --check` (root package + every
-workspace member, via the loop above) and `cargo clippy --workspace`
-(deny-level) on `src-tauri`; run `cargo fmt` and fix clippy findings before
-pushing. The full policy - the strict anti-AI-slop clippy config
-(`[workspace.lints]` in `src-tauri/Cargo.toml`, inherited by every member),
-the per-test-module `#[expect]` idiom (no `#[allow]`, no `clippy.toml`), the
-rustfmt scope (the vendored crates under `src-tauri/vendor/` and `scripts/lib/slice-rs`
-are not gated), and which lints were deliberately deferred - is in
-[docs/linting.md](docs/linting.md).
+### Writing: PRs, commits and comments
 
-### Playwright Tests Require a Headless Environment
+- PR body: at most ~300 words, covering what changed, why, and how it was verified, plus one
+  line with the `/pre-pr` verdict. Don't paste the review's Coverage section or reviewer output.
+- Commit message: a semantic subject line and at most 3 lines of body.
+- Commit at each green checkpoint without waiting to be asked. Fix your own unpushed work by
+  amending it rather than stacking `fix:` commits.
+- Comments explain why, in the code's own terms. New and edited comments carry no issue or PR
+  numbers, plan sections or rule shorthand; those belong in commits and PRs.
+- Doc comments stay under about 10 lines. Longer reasoning goes in `docs/`.
+- Don't describe what the code used to do; git history keeps that.
 
-Only run `pnpm test:ui` when a display server is available or in a headless environment (e.g. `xvfb-run`). Do **not** run Playwright tests in a bare terminal without a display - they will fail.
+### Rust lints and formatting are CI-gated
 
-### Dev Server
+The `check` job enforces `cargo fmt --check` (root package plus every member, via the loop above)
+and deny-level `cargo clippy --workspace`. Fix both before pushing. The anti-AI-slop lint config,
+the per-test-module `#[expect]` idiom (no `#[allow]`, no `clippy.toml`) and the rustfmt scope are
+in [docs/linting.md](docs/linting.md).
 
-Always use `./scripts/dev.sh` to restart the dev server (handles process cleanup).
+### Other rules
 
-### IPC Types Are Generated
-
-TypeScript IPC types are generated from Rust via `ts-rs`. Do **not** hand-edit
-or create files under `src/types/ipc/`, `src/types/ipc.generated.ts`, or
-`src-tauri/bindings/`. The first two are regenerated by `pnpm gen:ipc-types`;
-`src-tauri/bindings/` falls out of `cargo test --workspace` (every member
-crate exports there via `#[ts(export, export_to = "../../bindings/")]`; the
-app crate must not host bindings-defaulted exports) and is committed, so CI
-fails if the tests leave it dirty - run the generator or the tests and commit
-what they write. See [docs/ipc-typegen.md](docs/ipc-typegen.md) for the full
-picture, including the one drift shape the gate cannot see.
-
-### Commit Early, Commit Often
-
-Make small, frequent commits as you work. Don't accumulate large uncommitted changesets.
-Do not wait for user to prompt for commits, make commits as you go.
-
-### Never commit or extract fixtures and limit their use
-The following rules exist to prevent leaking private and propriatary data.
-
-Commiting fixtures (*.stalx, *.tml, *.tmlu, *.mak, *.dat, *.wpj, *.srv, *.dmp, *.gpx, 
-*.csv, ...) is strictly prohibitted even with users explicit consent. User can and 
-should commit and push them manually if they wish to include them in the public repo.
-
-Fixtures outside of this repository may be used for testing purposes with users explicit
-consent. These tests should be marked skip and only run when the required fixtures are
-available through the external paths.
-
-When constructing tests (for example to prevent regressions), never extract parts of 
-external fixtures. You can create fully synthetic data that reporoduces the issue such
-that no data is leaked.
-
-### Changelog
-
-Update `CHANGELOG.md` every time a new version is tagged.
+- Run Playwright only with a display or under a headless wrapper (`xvfb-run`); it fails in a bare
+  terminal.
+- Restart the dev server with `./scripts/dev.sh`; it handles process cleanup.
+- IPC types are generated by `ts-rs`; never hand-edit them. `src/types/ipc/` and
+  `src/types/ipc.generated.ts` come from `pnpm gen:ipc-types`; `src-tauri/bindings/` comes only
+  from `cargo test --workspace`, and CI fails if it is left dirty. Run whichever your change needs
+  and commit what it writes. The app crate must not host bindings-defaulted exports. See
+  [docs/ipc-typegen.md](docs/ipc-typegen.md).
+- Update `CHANGELOG.md` every time a new version is tagged.
 
 ## Documentation
 
-| Document | Contents |
-|----------|----------|
-| [Docs index](docs/README.md) | Every page under `docs/`, grouped, with a contributor reading order |
-| [SPEC.md](docs/SPEC.md) | **Full specification** - data model, UI design, workflows, file formats, validation rules |
-| [Testing Guide](docs/TESTING.md) | Which tier a test belongs in, and the UI testability requirements |
-| [Testing Recipes](docs/testing-recipes.md) | Commands per tier, Playwright/agent-harness/Rust/vitest patterns, mock conventions, troubleshooting |
-| [Linting & Format Policy](docs/linting.md) | Rust clippy/rustfmt CI gates, the anti-AI-slop policy, the per-test-module `#[expect]` idiom, considered-but-deferred lints |
-| [Toolchain](docs/toolchain.md) | The pnpm/node pins: corepack integrity hash, `allowBuilds` build-script approvals, lockfile version policy |
-| [Architecture](docs/architecture.md) | Workspace crate layout, state flow, command pattern, key files, Rust patterns |
-| [Project Structure](docs/project-structure.md) | Directory tree, tech stack |
-| [Configuration](docs/configuration.md) | Config file locations, options, logging |
-| [Saving](docs/saving.md) | Save pipeline, auto-save, undo persistence, atomic writes |
-| [Inclination convention](docs/inclination.md) | Pitch is +down everywhere; where each importer normalises, and the v12 migration |
-| [SpeleoDB dev testing](docs/speleodb-dev-testing.md) | Dev box env vars, the superuser test account, env-gated self-seeding live tests, verified v2 API contract |
-| [Roadmap](docs/roadmap.md) | Historical record of the v1.0 phases; live work is in the issue tracker |
-| [Telemetry](docs/telemetry.md) | Event reference, source tracking, adding telemetry to new features |
-| [IPC Type Generation](docs/ipc-typegen.md) | How IPC TS types are generated and updated |
-| [Performance](docs/performance.md) | Algorithm choices, renderer cost model, profiling guide |
-| [Debug Gates](docs/debug-gates.md) | Where dev-only logs / asserts / profile harnesses live, and how to turn them on |
-| [macOS Build](docs/macos-build.md) | macOS build scripts and known issues |
-| [Agent Harness](docs/agent-harness.md) | LLM-agent harness (MCP + webdriverio) to drive the real app: tools, oracles, stress scenarios, replay + repro reports. Runs on the repo-pinned Node. |
-| [UAT ledger](docs/uat/ledger.md) | Acceptance tier: one line per real-app UAT run, the per-RC checklist, and the machine-readable records. |
-| [App modes](docs/app-modes.md) | Survey/Plan/Export modes and the read-only contract every mutation path must check |
-| [Loop closures](docs/closures.md) | Raw Data View vs Closures Computed View, the least-squares solve, co-location with the move tools |
-| [Undo/Redo](docs/undo-redo.md) | Command-pattern undo: two-phase capture, `UndoData` variants, batch commands, persistence, lock ordering |
-| [Move tools](docs/move-tools.md) | Move Station/Shot/Segment: scope, the shared drag-preview engine, Ctrl+drag panning, immovable stations |
-| [Map renderer](docs/map-renderer.md) | The custom WebGL survey layers: tessellation, shaders, labels, incremental updates |
-| [Color palettes](docs/color-palettes.md) | Depth / distance palettes and the Levels range: storage (config only, never .stalx), the byte-exact default, live preview, export |
-| [Gas planning](docs/gas-planning.md) | Plan mode's gas engine: gas-weighted reachability over the survey graph, turnaround and stage-drop points |
-| [DMP import](docs/dmp-import.md) | The mNemo `.dmp` import wizard: phases, virtual connections, suggestion scoring, overlap handling |
-| [Ariane import](docs/ariane-import.md) | Reading `.tml`/`.tmlu`: schema, topology reconstruction, unit conversion, azimuth semantics, limitations |
-| [Ariane export](docs/ariane-export.md) | Writing `.tml`/`.tmlu`: data mapping, topology, color conversion, station-comment co-encoding |
-| [Releasing](docs/releasing.md) | Changelog -> tag -> release: `scripts/release.sh`, the CI workflows, where version numbers live |
-| [UI style guide](docs/style-guide.md) | Design tokens, typography, buttons, panels, tables, forms, accessibility |
-| [Notifications](docs/notifications.md) | Which surface (toast, banner, dialog, log) an event gets: decision tree, severity, dedup keys, copy rules |
-| [macOS pan/zoom lockup](docs/debugging-macos-pan-zoom.md) | Postmortem of the macOS UI lockup, and how to re-enable the pan/zoom debug toolkit |
-| [Touch support](docs/touch-support.md) | What touch/pointer support exists, the long-press paths, and the verified gaps |
+Start at [docs/README.md](docs/README.md): every page under `docs/`, grouped, with a reading order.
+The most-used pages are [SPEC.md](docs/SPEC.md), [TESTING.md](docs/TESTING.md),
+[testing-recipes.md](docs/testing-recipes.md), [architecture.md](docs/architecture.md),
+[saving.md](docs/saving.md) and [undo-redo.md](docs/undo-redo.md).

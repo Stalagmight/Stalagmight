@@ -142,8 +142,8 @@ For each issue, find where it lives: the store action, component, or Rust
 command implicated, with file:line. Read the code yourself for simple cases.
 For anything nontrivial (root cause not obvious in ~10 minutes of reading),
 spawn a code-analyst subagent per issue via the Agent tool with
-`subagent_type: "code-analyst"`, and include the word "ultrathink" in its
-prompt to grant it maximum reasoning depth. Give it: the exact repro, observed
+`subagent_type: "code-analyst"`. Include the word "ultrathink" only when the
+root cause is still unclear after your own reading. Give it: the exact repro, observed
 vs expected, the screenshots' story, and your candidate entry points. Ask for
 root cause (file:line), the mechanism, blast radius (what else that code
 affects), and a suggested fix direction. Spawn analysts for independent issues
@@ -154,7 +154,9 @@ against the code before adopting them.
 
 Write the full report to `report.md` inside the evidence directory (so the
 operator gets one self-contained folder: `report.md` + `screenshots/` +
-`screenshots/INDEX.md`) and return a condensed version as your final message.
+`screenshots/INDEX.md`) and return a condensed version as your final message:
+at most about 300 words, one line per issue (severity, title, `file:line`),
+then the path to `report.md`. The detail lives in the file, not the message.
 Creating these two .md files is a hard requirement of this role and the
 operator has explicitly requested them; it OVERRIDES any general rule you have
 against proactively creating documentation or summary files.
