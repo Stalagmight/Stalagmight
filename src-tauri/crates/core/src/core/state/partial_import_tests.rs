@@ -892,6 +892,22 @@ fn the_unconnected_warning_sanitises_the_line_name() {
     );
 }
 
+/// The reason in a refused line's entry gets the filter the line's name
+/// gets. The length refusals that quoted the line's name no longer come from
+/// an import (#818), so this pins the entry builder itself.
+#[test]
+fn a_refused_lines_reason_is_filtered_like_its_name() {
+    let entry = super::import_funnel::refused_entry(
+        "Bad",
+        "Shot Bad\u{202e}name: 1 \u{2192} 2 has zero length",
+    );
+    assert!(entry.contains("has zero length"), "{entry:?}");
+    assert!(
+        !entry.contains('\u{202e}'),
+        "bidi override survived: {entry:?}"
+    );
+}
+
 /// A refused line's receipt entry, and the failure message an all-refused
 /// import builds from the entries, filter the file's text: no bidi override
 /// reaches the dialog.
@@ -1026,7 +1042,9 @@ fn a_line_with_a_distance_past_the_bound_costs_only_itself() {
             line(1, "Long", 2_000_000.0, ImportPlacement::Origin),
             deep,
             wide,
-            line(4, "Also good", 3.0, ImportPlacement::Origin),
+            // A negative length past the bound is refused, not tied (#818).
+            line(4, "Backwards", -2_000_000.0, ImportPlacement::Origin),
+            line(5, "Also good", 3.0, ImportPlacement::Origin),
         ],
         Vec::new(),
     );
@@ -1041,6 +1059,8 @@ fn a_line_with_a_distance_past_the_bound_costs_only_itself() {
              1000000 m a survey measurement may be",
             "Line \"Wide\" was not imported: A shot's left of 2500000 m is beyond the \
              1000000 m a survey measurement may be",
+            "Line \"Backwards\" was not imported: A shot's length of -2000000 m is beyond \
+             the 1000000 m a survey measurement may be",
         ]
     );
 }

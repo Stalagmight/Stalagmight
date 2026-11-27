@@ -76,7 +76,7 @@ use crate::models::station_naming::{
 use crate::models::survey::changeset::{PreviewRow, RecordedPreview};
 use crate::models::survey::{
     ArchivedStation, ClosureEnd, ClosureId, ClosureStrategy, EditContext, Line, Placement, Project,
-    Shot, ZeroDatum, MAX_SHOT_UUID_CHARS,
+    Shot, ZeroDatum, MAX_MEASUREMENT_M, MAX_SHOT_UUID_CHARS,
 };
 use crate::models::{
     clamp_section_name, reminted_shot_uuid_avoiding, reverse_shots, sanitize_display_text,
@@ -680,10 +680,10 @@ fn prepared_shots(config: &ImportLineConfig) -> Vec<ShotData> {
 }
 
 /// Whether the import ties `shot` (#818): its length is zero, or negative
-/// after a correction. A non-finite length is not a tie; [`check_new_line`]
-/// refuses it.
+/// after a correction. A non-finite length, or a negative one past the
+/// measurement bound, is not a tie: [`check_new_line`] refuses it, in words.
 fn is_coincident_tie(shot: &ShotData) -> bool {
-    shot.length.is_finite() && shot.length <= 0.0
+    shot.length.is_finite() && shot.length <= 0.0 && shot.length >= -MAX_MEASUREMENT_M
 }
 
 /// `config` with every shot of no length given the negligible length the
@@ -1201,10 +1201,7 @@ pub(super) fn import_lines(
                     purpose = "import every line that can be imported (#814)",
                     "Line refused; skipping it and importing the rest"
                 );
-                let entry = format!(
-                    "Line \"{line_name}\" was not imported: {}",
-                    receipt_reason(&why)
-                );
+                let entry = refused_entry(&line_name, &why);
                 if request.on_refused == RefusedLine::FailImport {
                     return Err(whole_import_undone(&entry));
                 }
@@ -1344,6 +1341,14 @@ fn receipt_line_name(config: &ImportLineConfig, idx: usize) -> String {
 /// failure message built from it.
 fn receipt_reason(reason: &str) -> String {
     sanitize_display_text(reason, MAX_RECEIPT_NAME_LEN)
+}
+
+/// The receipt entry for a line refused before anything was added (#814).
+pub(super) fn refused_entry(line_name: &str, why: &str) -> String {
+    format!(
+        "Line \"{line_name}\" was not imported: {}",
+        receipt_reason(why)
+    )
 }
 
 /// The receipt entry for a line that imported but whose `placement` could
