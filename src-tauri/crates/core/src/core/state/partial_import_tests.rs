@@ -11,7 +11,8 @@ use crate::core::command::{CommandResult, ImportReceipt};
 use crate::core::Command;
 use crate::models::survey::Project;
 use crate::models::{
-    GpsCoordinates, ImportClosure, ImportLineConfig, ImportPlacement, LineId, ShotData, StationRef,
+    ClosureStrategy, GpsCoordinates, ImportClosure, ImportLineConfig, ImportPlacement, LineId,
+    ShotData, StationRef,
 };
 use crate::persistence::stalx_v2::{self, Extras, Mode};
 
@@ -26,8 +27,9 @@ fn shot(length: f64) -> ShotData {
     }
 }
 
-/// A two-shot config. `length` 0.0 makes a line the funnel refuses ("has
-/// zero length"), the shape a bad row in any importer produces.
+/// A two-shot config whose second shot has `length`. A NaN makes a line the
+/// funnel refuses, the shape a bad row in any importer produces; a zero or
+/// negative one imports as a 1 mm tie (#818).
 fn line(index: u32, name: &str, length: f64, placement: ImportPlacement) -> ImportLineConfig {
     ImportLineConfig {
         cave_section: None,
@@ -169,7 +171,7 @@ fn a_refused_line_costs_only_itself() {
         &state,
         vec![
             line(0, "Good", 5.0, ImportPlacement::Origin),
-            line(1, "Bad", 0.0, ImportPlacement::Origin),
+            line(1, "Bad", f64::NAN, ImportPlacement::Origin),
             line(2, "Also good", 3.0, ImportPlacement::Origin),
         ],
         Vec::new(),
@@ -184,7 +186,7 @@ fn a_refused_line_costs_only_itself() {
     assert_eq!(receipt.shot_count, 4);
     assert_eq!(
         problems(&result),
-        ["Line \"Bad\" was not imported: Shot Bad: 1 \u{2192} 2 has zero length"],
+        ["Line \"Bad\" was not imported: Line has a shot with a non-finite (NaN/inf) value"],
         "the refused line gets its own receipt entry, apart from the warnings"
     );
     assert!(
@@ -208,7 +210,7 @@ fn a_line_joining_a_refused_one_imports_on_its_own() {
     let result = import(
         &state,
         vec![
-            line(0, "Bad", 0.0, ImportPlacement::Origin),
+            line(0, "Bad", f64::NAN, ImportPlacement::Origin),
             line(
                 1,
                 "Branch",
@@ -238,7 +240,7 @@ fn a_line_joining_a_refused_one_imports_on_its_own() {
     assert_eq!(
         problems(&result),
         [
-            "Line \"Bad\" was not imported: Shot Bad: 1 \u{2192} 2 has zero length",
+            "Line \"Bad\" was not imported: Line has a shot with a non-finite (NaN/inf) value",
             "Line \"Branch\" was imported on its own: the line it joins was not imported",
         ]
     );
@@ -359,8 +361,8 @@ fn every_line_refused_fails_and_names_each() {
     let result = import(
         &state,
         vec![
-            line(0, "First bad", 0.0, ImportPlacement::Origin),
-            line(1, "Second bad", -1.0, ImportPlacement::Origin),
+            line(0, "First bad", f64::NAN, ImportPlacement::Origin),
+            line(1, "Second bad", f64::NAN, ImportPlacement::Origin),
         ],
         Vec::new(),
     );
@@ -381,7 +383,7 @@ fn every_line_refused_fails_and_names_each() {
 fn the_nothing_imported_message_names_five_and_counts_the_rest() {
     let state = new_state();
     let lines = (0..8)
-        .map(|i| line(i, &format!("Bad {i}"), 0.0, ImportPlacement::Origin))
+        .map(|i| line(i, &format!("Bad {i}"), f64::NAN, ImportPlacement::Origin))
         .collect();
     let result = import(&state, lines, Vec::new());
     let error = result.error.unwrap_or_default();
@@ -401,7 +403,7 @@ fn one_undo_removes_a_partial_import_and_redo_restores_it() {
         &state,
         vec![
             line(0, "Good", 5.0, ImportPlacement::Origin),
-            line(1, "Bad", 0.0, ImportPlacement::Origin),
+            line(1, "Bad", f64::NAN, ImportPlacement::Origin),
             line(2, "Unmerged", 3.0, from_nowhere()),
         ],
         Vec::new(),
@@ -430,19 +432,102 @@ fn one_undo_removes_a_partial_import_and_redo_restores_it() {
 fn a_refused_line_names_its_shot_by_its_line_and_stations() {
     // The refused line never gets a line id, so a shot named by an id
     // ("Shot <id>:2") would point at whichever line landed next. The shot is
-    // named by the line's own name and its station positions instead.
+    // named by the line's own name and its station positions instead. An
+    // import ties a shot with no length (#818), so a line created onto a
+    // station, which builds through the same funnel, is what still refuses it.
+    let state = new_state();
+    let good = import(
+        &state,
+        vec![line(0, "Good", 5.0, ImportPlacement::Origin)],
+        Vec::new(),
+    );
+    assert!(good.success, "{:?}", good.error);
+    let target = StationRef::new(line_named(&project(&state), "Good"), 0);
+    let result = state.execute_create_and_merge(
+        Some("Bad".to_string()),
+        None,
+        None,
+        "#ff0000".to_string(),
+        None,
+        vec![shot(10.0), shot(0.0)],
+        0,
+        target,
+        ClosureStrategy::Batch,
+    );
+    assert!(!result.success);
+    assert_eq!(
+        result.error.as_deref(),
+        Some("Shot Bad: 1 \u{2192} 2 has zero length")
+    );
+}
+
+/// #818: every importer funnels through `import_lines`, which gives a shot
+/// with no length (zero, or negative after a correction) the coincident-tie
+/// length instead of refusing its whole line. One receipt line counts them. A
+/// non-finite length is still refused.
+#[test]
+fn a_shot_with_no_length_imports_as_a_coincident_tie() {
     let state = new_state();
     let result = import(
         &state,
         vec![
-            line(0, "Good", 5.0, ImportPlacement::Origin),
-            line(1, "Bad", 0.0, ImportPlacement::Origin),
+            line(0, "Zero", 0.0, ImportPlacement::Origin),
+            line(1, "Negative", -2.0, ImportPlacement::Origin),
         ],
         Vec::new(),
     );
-    assert_eq!(
-        problems(&result)[0],
-        "Line \"Bad\" was not imported: Shot Bad: 1 \u{2192} 2 has zero length"
+    assert!(result.success, "{:?}", result.error);
+    let p = project(&state);
+    assert_eq!(names(&p), ["Zero", "Negative"]);
+    for l in p.lines() {
+        let tie = l.shots[1].length - crate::parsers::geo::COINCIDENT_TIE_EPSILON_M;
+        assert!(tie.abs() < 1e-12, "{}", l.shots[1].length);
+    }
+    let receipt = receipt(&result);
+    assert!(problems(&result).is_empty(), "{:?}", problems(&result));
+    assert!(
+        receipt
+            .warnings
+            .iter()
+            .any(|w| w.starts_with("2 shots with no length were given a negligible")),
+        "{:?}",
+        receipt.warnings
+    );
+}
+
+/// The DMP wizard's all-or-nothing route gets the same tie: a MNemo shot of
+/// length 0 no longer fails the whole wizard import (#818).
+#[test]
+fn the_all_or_nothing_route_ties_a_shot_with_no_length() {
+    let state = new_state();
+    let result = state.execute_import_lines_all_or_nothing(
+        vec![line(0, "Zero", 0.0, ImportPlacement::Origin)],
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(names(&project(&state)), ["Zero"]);
+}
+
+/// A tie in a line that is then refused for another reason (here a NaN)
+/// never landed, so the receipt does not count it.
+#[test]
+fn a_refused_lines_ties_are_not_counted() {
+    let state = new_state();
+    let mut bad = line(0, "Bad", 0.0, ImportPlacement::Origin);
+    bad.shots.push(shot(f64::NAN));
+    let result = import(
+        &state,
+        vec![bad, line(1, "Good", 5.0, ImportPlacement::Origin)],
+        Vec::new(),
+    );
+    assert!(result.success, "{:?}", result.error);
+    let warnings = &receipt(&result).warnings;
+    assert!(
+        !warnings.iter().any(|w| w.contains("with no length")),
+        "{warnings:?}"
     );
 }
 
@@ -493,7 +578,7 @@ fn a_partial_import_records_no_line_hashes_but_the_file_hash() {
     let result = state.execute_import_lines(
         vec![
             line(0, "Good", 5.0, ImportPlacement::Origin),
-            line(1, "Bad", 0.0, ImportPlacement::Origin),
+            line(1, "Bad", f64::NAN, ImportPlacement::Origin),
         ],
         Vec::new(),
         Some("file".to_string()),
@@ -538,7 +623,7 @@ fn an_unconnected_line_still_records_the_line_hashes() {
 #[test]
 fn the_all_or_nothing_route_rolls_back_on_a_refused_or_unconnected_line() {
     for bad in [
-        line(1, "Bad", 0.0, ImportPlacement::Origin),
+        line(1, "Bad", f64::NAN, ImportPlacement::Origin),
         line(1, "Bad", 3.0, from_nowhere()),
         line(
             1,
@@ -807,12 +892,27 @@ fn the_unconnected_warning_sanitises_the_line_name() {
     );
 }
 
-/// A refused line's reason names the line and its stations from the file's
-/// own text (`Shot <name>: 1 -> 2 has zero length`), so its receipt entry, and
-/// the failure message an all-refused import builds from the entries, filter
-/// that text like the line's name: no bidi override reaches the dialog.
+/// The reason in a refused line's entry gets the filter the line's name
+/// gets. The length refusals that quoted the line's name no longer come from
+/// an import (#818), so this pins the entry builder itself.
 #[test]
 fn a_refused_lines_reason_is_filtered_like_its_name() {
+    let entry = super::import_funnel::refused_entry(
+        "Bad",
+        "Shot Bad\u{202e}name: 1 \u{2192} 2 has zero length",
+    );
+    assert!(entry.contains("has zero length"), "{entry:?}");
+    assert!(
+        !entry.contains('\u{202e}'),
+        "bidi override survived: {entry:?}"
+    );
+}
+
+/// A refused line's receipt entry, and the failure message an all-refused
+/// import builds from the entries, filter the file's text: no bidi override
+/// reaches the dialog.
+#[test]
+fn a_refused_lines_entry_is_filtered_like_its_name() {
     let hostile = "Bad\u{202e}name";
 
     let state = new_state();
@@ -820,13 +920,13 @@ fn a_refused_lines_reason_is_filtered_like_its_name() {
         &state,
         vec![
             line(0, "Good", 5.0, ImportPlacement::Origin),
-            line(1, hostile, 0.0, ImportPlacement::Origin),
+            line(1, hostile, f64::NAN, ImportPlacement::Origin),
         ],
         Vec::new(),
     );
     assert!(result.success, "{:?}", result.error);
     let entry = &problems(&result)[0];
-    assert!(entry.contains("has zero length"), "{entry:?}");
+    assert!(entry.contains("non-finite"), "{entry:?}");
     assert!(
         !entry.contains('\u{202e}'),
         "bidi override survived: {entry:?}"
@@ -835,7 +935,7 @@ fn a_refused_lines_reason_is_filtered_like_its_name() {
     let state = new_state();
     let result = import(
         &state,
-        vec![line(0, hostile, 0.0, ImportPlacement::Origin)],
+        vec![line(0, hostile, f64::NAN, ImportPlacement::Origin)],
         Vec::new(),
     );
     assert!(!result.success);
@@ -853,7 +953,7 @@ fn a_refused_lines_reason_is_filtered_like_its_name() {
 fn the_line_problems_are_capped_in_the_receipt() {
     let state = new_state();
     let mut lines: Vec<ImportLineConfig> = (0..60)
-        .map(|i| line(i, &format!("Bad {i}"), 0.0, ImportPlacement::Origin))
+        .map(|i| line(i, &format!("Bad {i}"), f64::NAN, ImportPlacement::Origin))
         .collect();
     lines.push(line(60, "Good", 5.0, ImportPlacement::Origin));
     let result = import(&state, lines, Vec::new());
@@ -942,7 +1042,9 @@ fn a_line_with_a_distance_past_the_bound_costs_only_itself() {
             line(1, "Long", 2_000_000.0, ImportPlacement::Origin),
             deep,
             wide,
-            line(4, "Also good", 3.0, ImportPlacement::Origin),
+            // A negative length past the bound is refused, not tied (#818).
+            line(4, "Backwards", -2_000_000.0, ImportPlacement::Origin),
+            line(5, "Also good", 3.0, ImportPlacement::Origin),
         ],
         Vec::new(),
     );
@@ -957,6 +1059,8 @@ fn a_line_with_a_distance_past_the_bound_costs_only_itself() {
              1000000 m a survey measurement may be",
             "Line \"Wide\" was not imported: A shot's left of 2500000 m is beyond the \
              1000000 m a survey measurement may be",
+            "Line \"Backwards\" was not imported: A shot's length of -2000000 m is beyond \
+             the 1000000 m a survey measurement may be",
         ]
     );
 }

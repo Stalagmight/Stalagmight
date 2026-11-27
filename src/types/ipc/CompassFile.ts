@@ -2,4 +2,4 @@
 import type { CompassSurveySummary } from "./CompassSurveySummary";
 import type { InvalidShotCounts } from "./InvalidShotCounts";
 
-export interface CompassFile { cave_name: string, survey_count: number, shot_count: number, excluded_shot_count: number, invalid_shot_counts: InvalidShotCounts, has_backsights: boolean, datum: string | null, utm_zone: number | null, has_georeference: boolean, declination_mode: string, length_unit: string | null, surveys: Array<CompassSurveySummary>, warnings: Array<string>, }
+export interface CompassFile { cave_name: string, survey_count: number, shot_count: number, excluded_shot_count: number, invalid_shot_counts: InvalidShotCounts, skipped_shot_counts: InvalidShotCounts, has_backsights: boolean, datum: string | null, utm_zone: number | null, has_georeference: boolean, declination_mode: string, length_unit: string | null, surveys: Array<CompassSurveySummary>, warnings: Array<string>, }

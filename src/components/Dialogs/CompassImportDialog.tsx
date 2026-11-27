@@ -22,12 +22,15 @@ interface CompassImportDialogProps {
 }
 
 /**
- * How many of `invalid_shot_counts`'s four counters apply under the given
- * LIVE toggles - the ONE counter matching both `includeExcluded` (which set
- * of shots reaches the length check) and `applyCorrections` (how each
- * shot's length resolves before that check).
+ * How many of a no-length count's four counters (`invalid_shot_counts`,
+ * `skipped_shot_counts`) apply under the given LIVE toggles - the ONE
+ * counter matching both `includeExcluded` (which set of shots reaches the
+ * length check) and `applyCorrections` (how each shot's length resolves
+ * before that check). The `invalid_shot_counts` shots import as 1 mm
+ * coincident ties (#818); the `skipped_shot_counts` ones, each a station
+ * tied to itself, are skipped.
  */
-function invalidShotCountFor(
+function noLengthShotCountFor(
   counts: InvalidShotCounts,
   includeExcluded: boolean,
   applyCorrections: boolean
@@ -39,23 +42,24 @@ function invalidShotCountFor(
 
 /**
  * What the backend's converter actually lands for a shot_count/
- * excluded_shot_count/invalid_shot_counts triple, under the live toggles -
- * exact in all four `(includeExcluded, applyCorrections)` combinations,
+ * excluded_shot_count/skipped_shot_counts triple, under the live toggles,
  * mirroring pass 1 of `convert_compass_to_import_configs` (#437 follow-up,
- * review of #550). Shared by the header total and each per-survey row so
- * the rows always sum to the header.
+ * review of #550). Zero-length shots land as 1 mm ties, so nothing is
+ * subtracted for them (#818), except a station tied to itself with no
+ * length, which is skipped. Shared by the header total and each per-survey
+ * row so the rows always sum to the header.
  */
 function landingShotCountFor(
   shotCount: number,
   excludedShotCount: number,
-  invalidCounts: InvalidShotCounts,
+  skippedCounts: InvalidShotCounts,
   includeExcluded: boolean,
   applyCorrections: boolean
 ): number {
   return (
     shotCount -
     (includeExcluded ? 0 : excludedShotCount) -
-    invalidShotCountFor(invalidCounts, includeExcluded, applyCorrections)
+    noLengthShotCountFor(skippedCounts, includeExcluded, applyCorrections)
   );
 }
 
@@ -67,7 +71,7 @@ function surveyLandingShotCount(
   return landingShotCountFor(
     survey.shot_count,
     survey.excluded_shot_count,
-    survey.invalid_shot_counts,
+    survey.skipped_shot_counts,
     includeExcluded,
     applyCorrections
   );
@@ -105,22 +109,27 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
   const fileName = useMemo(() => extractFilename(filePath), [filePath]);
 
   // What the backend's converter actually lands under the two LIVE toggles -
-  // see `landingShotCountFor` / `invalidShotCountFor` above for the exact
+  // see `landingShotCountFor` / `noLengthShotCountFor` above for the exact
   // arithmetic (#437, review of #550).
   const invalidShotCount = useMemo(
-    () => invalidShotCountFor(compassFile.invalid_shot_counts, includeExcluded, applyCorrections),
+    () => noLengthShotCountFor(compassFile.invalid_shot_counts, includeExcluded, applyCorrections),
     [compassFile.invalid_shot_counts, includeExcluded, applyCorrections]
+  );
+  const skippedShotCount = useMemo(
+    () => noLengthShotCountFor(compassFile.skipped_shot_counts, includeExcluded, applyCorrections),
+    [compassFile.skipped_shot_counts, includeExcluded, applyCorrections]
   );
 
   const landingShotCount = landingShotCountFor(
     compassFile.shot_count,
     compassFile.excluded_shot_count,
-    compassFile.invalid_shot_counts,
+    compassFile.skipped_shot_counts,
     includeExcluded,
     applyCorrections
   );
 
-  // "(N excluded, M invalid)" - only the parts that are non-zero and, for
+  // "(N excluded, M shots with no length, imported as 1 mm ties, K skipped:
+  // a station tied to itself)" - only the parts that are non-zero and, for
   // excluded, only while the toggle would actually drop them.
   const shotCountFootnote = useMemo(() => {
     const parts: string[] = [];
@@ -132,8 +141,11 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
     if (invalidShotCount > 0) {
       parts.push(t('dialogs.compassImport.stats.invalidSuffix', { count: invalidShotCount }));
     }
+    if (skippedShotCount > 0) {
+      parts.push(t('dialogs.compassImport.stats.skippedSuffix', { count: skippedShotCount }));
+    }
     return parts.join(', ');
-  }, [includeExcluded, compassFile.excluded_shot_count, invalidShotCount, t]);
+  }, [includeExcluded, compassFile.excluded_shot_count, invalidShotCount, skippedShotCount, t]);
 
   const handleImport = useCallback(async () => {
     setIsImporting(true);

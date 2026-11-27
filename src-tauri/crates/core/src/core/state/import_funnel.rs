@@ -64,6 +64,7 @@
 //! across-one-shot skip set in one pass, so an import of thousands of lines
 //! stays linear in the survey.
 
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -75,7 +76,7 @@ use crate::models::station_naming::{
 use crate::models::survey::changeset::{PreviewRow, RecordedPreview};
 use crate::models::survey::{
     ArchivedStation, ClosureEnd, ClosureId, ClosureStrategy, EditContext, Line, Placement, Project,
-    Shot, ZeroDatum, MAX_SHOT_UUID_CHARS,
+    Shot, ZeroDatum, MAX_MEASUREMENT_M, MAX_SHOT_UUID_CHARS,
 };
 use crate::models::{
     clamp_section_name, reminted_shot_uuid_avoiding, reverse_shots, sanitize_display_text,
@@ -155,6 +156,9 @@ pub(super) struct ImportOutcome {
     /// Create-time validation warnings of the imported shots.
     pub(super) warnings: Vec<ValidationWarning>,
     pub(super) shot_count: u32,
+    /// Shots with no length given the coincident-tie length (#818), counted
+    /// only for the lines that landed.
+    pub(super) coincident_ties: u32,
     pub(super) closures_created: u32,
     /// Closures skipped (an end not imported) or refused.
     pub(super) closures_dropped: u32,
@@ -675,6 +679,31 @@ fn prepared_shots(config: &ImportLineConfig) -> Vec<ShotData> {
     shots
 }
 
+/// Whether the import ties `shot` (#818): its length is zero, or negative
+/// after a correction. A non-finite length, or a negative one past the
+/// measurement bound, is not a tie: [`check_new_line`] refuses it, in words.
+fn is_coincident_tie(shot: &ShotData) -> bool {
+    shot.length.is_finite() && shot.length <= 0.0 && shot.length >= -MAX_MEASUREMENT_M
+}
+
+/// `config` with every shot of no length given the negligible length the
+/// Ariane and Walls parsers give such a leg (#818), and how many it changed.
+/// [`check_new_line`] would refuse the whole line, and the survey model has no
+/// zero-length shot: as a tie, its stations share a map position and any
+/// depth reading at its two ends is kept. Every importer funnels through
+/// [`import_lines`]; a line created by hand with no length is still refused.
+fn with_coincident_ties(config: &ImportLineConfig) -> (Cow<'_, ImportLineConfig>, u32) {
+    let ties = config.shots.iter().filter(|s| is_coincident_tie(s)).count();
+    if ties == 0 {
+        return (Cow::Borrowed(config), 0);
+    }
+    let mut tied = config.clone();
+    for shot in tied.shots.iter_mut().filter(|s| is_coincident_tie(s)) {
+        shot.length = crate::parsers::geo::COINCIDENT_TIE_EPSILON_M;
+    }
+    (Cow::Owned(tied), ties as u32)
+}
+
 /// The legacy line-level surveyor and date as the credit of every shot that
 /// has none (0.6.0's `Line::new` template).
 fn legacy_template(config: &ImportLineConfig) -> Option<Arc<SurveyCredit>> {
@@ -1153,6 +1182,8 @@ pub(super) fn import_lines(
         // Sanitised where the file-controlled name is born (0.6.0's F12c):
         // the DMP route never calls `decorate_receipt`.
         let line_name = receipt_line_name(config, idx);
+        let (tied, ties) = with_coincident_ties(config);
+        let config: &ImportLineConfig = &tied;
         let built = match builder.build(
             project,
             config,
@@ -1170,10 +1201,7 @@ pub(super) fn import_lines(
                     purpose = "import every line that can be imported (#814)",
                     "Line refused; skipping it and importing the rest"
                 );
-                let entry = format!(
-                    "Line \"{line_name}\" was not imported: {}",
-                    receipt_reason(&why)
-                );
+                let entry = refused_entry(&line_name, &why);
                 if request.on_refused == RefusedLine::FailImport {
                     return Err(whole_import_undone(&entry));
                 }
@@ -1188,6 +1216,7 @@ pub(super) fn import_lines(
         created.insert(config.line_index, built.id);
         outcome.line_ids.push(built.id);
         outcome.shot_count = outcome.shot_count.saturating_add(config.shots.len() as u32);
+        outcome.coincident_ties = outcome.coincident_ties.saturating_add(ties);
         outcome.warnings.extend(built.warnings);
         if let Some((_, station, target)) = built.junction {
             outcome.junctions.push(station);
@@ -1306,13 +1335,20 @@ fn receipt_line_name(config: &ImportLineConfig, idx: usize) -> String {
     )
 }
 
-/// Why a line was refused, as a receipt entry carries it. The reason names
-/// the line and its stations from the file's own text (`Shot Main: 1 -> 2 has
-/// zero length`), so it gets the same filter and bound as the line's name: no
-/// bidi override or control character reaches the receipt or the failure
-/// message built from it.
+/// Why a line was refused, or could not be placed, as a receipt entry carries
+/// it: with the same filter and bound as the line's name, so no bidi override
+/// or control character from the file's text reaches the receipt or the
+/// failure message built from it.
 fn receipt_reason(reason: &str) -> String {
     sanitize_display_text(reason, MAX_RECEIPT_NAME_LEN)
+}
+
+/// The receipt entry for a line refused before anything was added (#814).
+pub(super) fn refused_entry(line_name: &str, why: &str) -> String {
+    format!(
+        "Line \"{line_name}\" was not imported: {}",
+        receipt_reason(why)
+    )
 }
 
 /// The receipt entry for a line that imported but whose `placement` could

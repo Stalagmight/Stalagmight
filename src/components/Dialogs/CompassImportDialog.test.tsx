@@ -56,6 +56,7 @@ const compassFile: CompassFile = {
   shot_count: 0,
   excluded_shot_count: 0,
   invalid_shot_counts: ZERO_INVALID_COUNTS,
+  skipped_shot_counts: ZERO_INVALID_COUNTS,
   has_backsights: false,
   datum: null,
   utm_zone: null,
@@ -170,11 +171,12 @@ describe('CompassImportDialog warning surfacing (#110)', () => {
 });
 
 /**
- * #437 (+ review of #550): the header "Shots" stat must show what the
- * backend will actually land under BOTH live toggles - include-excluded AND
- * apply-corrections - with a footnote naming what was dropped and why. The
- * per-survey rows use the same arithmetic and must sum to the header, in
- * all four toggle combinations.
+ * #437 (+ review of #550, #818): the header "Shots" stat must show what the
+ * backend will actually land under the include-excluded toggle (zero-length
+ * shots are no longer dropped, they land as 1 mm ties), with a footnote
+ * naming the excluded shots and the tie count, which still follows BOTH live
+ * toggles. The per-survey rows use the same arithmetic and must sum to the
+ * header, in all four toggle combinations.
  *
  * Fixture: survey A has a shot that is invalid only WITHOUT corrections and
  * a `#|X#`-flagged shot invalid either way; survey B has a shot invalid
@@ -184,9 +186,10 @@ describe('CompassImportDialog warning surfacing (#110)', () => {
  *
  * Injection: flip `landingShotCountFor`'s
  * `includeExcluded ? 0 : excludedShotCount` term at CompassImportDialog.tsx
- * and the default-toggle assertion goes red; flip `invalidShotCountFor`'s
- * `applyCorrections ? ... : ...` selection and the corrections-toggle
- * assertion goes red.
+ * and the default-toggle assertion goes red; re-add a
+ * `- noLengthShotCountFor(invalid_shot_counts...)` subtraction and the count
+ * assertions go red; flip `noLengthShotCountFor`'s `applyCorrections ? ... : ...` selection and
+ * the corrections-toggle footnote assertion goes red.
  */
 describe('CompassImportDialog honest shot count (#437, #550)', () => {
   const twoSurveyFile: CompassFile = {
@@ -212,6 +215,7 @@ describe('CompassImportDialog honest shot count (#437, #550)', () => {
           excluded_corrected: 1,
           excluded_uncorrected: 1,
         },
+        skipped_shot_counts: ZERO_INVALID_COUNTS,
         declination: 0,
       },
       {
@@ -226,39 +230,42 @@ describe('CompassImportDialog honest shot count (#437, #550)', () => {
           excluded_corrected: 0,
           excluded_uncorrected: 0,
         },
+        skipped_shot_counts: ZERO_INVALID_COUNTS,
         declination: 0,
       },
     ],
   };
 
-  it('shows the landing count with an excluded+invalid footnote by default (corrections on)', async () => {
+  it('shows the landing count with an excluded+tie footnote by default (corrections on)', async () => {
     render(<CompassImportDialog compassFile={twoSurveyFile} filePath="/tmp/cave.dat" />);
 
-    // 6 raw - 2 excluded - 1 invalid(non_excluded_corrected) = 3 landing.
-    expect(await screen.findByTestId('compass-shot-count')).toHaveTextContent('3');
-    expect(screen.getByTestId('compass-shot-count-footnote')).toHaveTextContent('2 excluded, 1 invalid');
+    // 6 raw - 2 excluded = 4 landing; the 1 non_excluded_corrected tie lands.
+    expect(await screen.findByTestId('compass-shot-count')).toHaveTextContent('4');
+    expect(screen.getByTestId('compass-shot-count-footnote')).toHaveTextContent(
+      '2 excluded, 1 shot with no length, imported as a 1 mm tie'
+    );
 
-    // A: 3 - 1 excluded - 0 invalid = 2; B: 3 - 1 excluded - 1 invalid = 1.
+    // A: 3 - 1 excluded = 2; B: 3 - 1 excluded = 2.
     expect(screen.getByTestId('compass-survey-shots-0')).toHaveTextContent('2');
-    expect(screen.getByTestId('compass-survey-shots-1')).toHaveTextContent('1');
-    expect(2 + 1).toBe(3);
+    expect(screen.getByTestId('compass-survey-shots-1')).toHaveTextContent('2');
+    expect(2 + 2).toBe(4);
   });
 
-  it('shows the invalid-only footnote (no excluded part) once include-excluded is checked', async () => {
+  it('shows the tie-only footnote (no excluded part) once include-excluded is checked', async () => {
     render(<CompassImportDialog compassFile={twoSurveyFile} filePath="/tmp/cave.dat" />);
 
     await userEvent.click(screen.getByTestId('compass-include-excluded'));
 
-    // 6 raw - 0 excluded (included) - (1 non_excluded_corrected + 1 excluded_corrected) = 4.
-    expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('4');
+    // 6 raw - 0 excluded (included) = 6; ties (1 + 1 corrected) all land.
+    expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('6');
     const footnote = screen.getByTestId('compass-shot-count-footnote');
-    expect(footnote).toHaveTextContent('2 invalid');
+    expect(footnote).toHaveTextContent('2 shots with no length, imported as 1 mm ties');
     expect(footnote).not.toHaveTextContent('excluded');
 
-    // A: 3 - 0 - (0 + 1) = 2; B: 3 - 0 - (1 + 0) = 2.
-    expect(screen.getByTestId('compass-survey-shots-0')).toHaveTextContent('2');
-    expect(screen.getByTestId('compass-survey-shots-1')).toHaveTextContent('2');
-    expect(2 + 2).toBe(4);
+    // A: 3 - 0 = 3; B: 3 - 0 = 3.
+    expect(screen.getByTestId('compass-survey-shots-0')).toHaveTextContent('3');
+    expect(screen.getByTestId('compass-survey-shots-1')).toHaveTextContent('3');
+    expect(3 + 3).toBe(6);
   });
 
   it('switches to the uncorrected invalid counter once apply-corrections is unchecked', async () => {
@@ -266,9 +273,11 @@ describe('CompassImportDialog honest shot count (#437, #550)', () => {
 
     await userEvent.click(screen.getByTestId('compass-apply-corrections'));
 
-    // 6 raw - 2 excluded - 2 invalid(non_excluded_uncorrected) = 2 landing.
-    expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('2');
-    expect(screen.getByTestId('compass-shot-count-footnote')).toHaveTextContent('2 excluded, 2 invalid');
+    // 6 raw - 2 excluded = 4 landing; 2 non_excluded_uncorrected ties.
+    expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('4');
+    expect(screen.getByTestId('compass-shot-count-footnote')).toHaveTextContent(
+      '2 excluded, 2 shots with no length, imported as 1 mm ties'
+    );
   });
 
   it('combines include-excluded and apply-corrections off correctly', async () => {
@@ -277,10 +286,89 @@ describe('CompassImportDialog honest shot count (#437, #550)', () => {
     await userEvent.click(screen.getByTestId('compass-include-excluded'));
     await userEvent.click(screen.getByTestId('compass-apply-corrections'));
 
-    // 6 raw - 0 excluded (included) - (2 non_excluded_uncorrected + 1 excluded_uncorrected) = 3.
+    // 6 raw - 0 excluded (included) = 6; 2 + 1 uncorrected ties land.
+    expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('6');
+    const footnote = screen.getByTestId('compass-shot-count-footnote');
+    expect(footnote).toHaveTextContent('3 shots with no length, imported as 1 mm ties');
+    expect(footnote).not.toHaveTextContent('excluded');
+  });
+});
+
+/**
+ * A station tied to itself with no length is skipped by the converter, not
+ * tied (#818 keeps that skip), so the landing count drops it under the live
+ * toggles, the per-survey row too, and the footnote names it.
+ *
+ * Fixture: 5 shots, 1 excluded, no ties; skipped { non_excluded_corrected 1,
+ * non_excluded_uncorrected 2, excluded_corrected 1, excluded_uncorrected 0 }.
+ *
+ * Injection: drop the `- noLengthShotCountFor(skippedCounts...)` term from
+ * `landingShotCountFor` and every count goes red; read the skipped counters
+ * without the toggles (or the tie counters instead) and the corrections or
+ * include-excluded case goes red; drop the `skippedSuffix` part and the
+ * footnote assertions go red.
+ */
+describe('CompassImportDialog skipped stations tied to themselves (#818)', () => {
+  const skipped = {
+    non_excluded_corrected: 1,
+    non_excluded_uncorrected: 2,
+    excluded_corrected: 1,
+    excluded_uncorrected: 0,
+  };
+  const selfTieFile: CompassFile = {
+    ...compassFile,
+    survey_count: 1,
+    shot_count: 5,
+    excluded_shot_count: 1,
+    skipped_shot_counts: skipped,
+    surveys: [
+      {
+        name: 'A',
+        date: '2026-01-01',
+        team: null,
+        shot_count: 5,
+        excluded_shot_count: 1,
+        invalid_shot_counts: ZERO_INVALID_COUNTS,
+        skipped_shot_counts: skipped,
+        declination: 0,
+      },
+    ],
+  };
+
+  it('leaves out the skipped shot by default (corrections on)', async () => {
+    render(<CompassImportDialog compassFile={selfTieFile} filePath="/tmp/cave.dat" />);
+
+    // 5 raw - 1 excluded - 1 skipped = 3.
+    expect(await screen.findByTestId('compass-shot-count')).toHaveTextContent('3');
+    expect(screen.getByTestId('compass-shot-count-footnote')).toHaveTextContent(
+      '1 excluded, 1 skipped: a station tied to itself'
+    );
+    expect(screen.getByTestId('compass-survey-shots-0')).toHaveTextContent('3');
+  });
+
+  it('switches to the uncorrected skipped counter once apply-corrections is unchecked', async () => {
+    render(<CompassImportDialog compassFile={selfTieFile} filePath="/tmp/cave.dat" />);
+
+    await userEvent.click(screen.getByTestId('compass-apply-corrections'));
+
+    // 5 raw - 1 excluded - 2 skipped = 2.
+    expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('2');
+    expect(screen.getByTestId('compass-shot-count-footnote')).toHaveTextContent(
+      '1 excluded, 2 skipped: stations tied to themselves'
+    );
+    expect(screen.getByTestId('compass-survey-shots-0')).toHaveTextContent('2');
+  });
+
+  it('adds the excluded skipped counter once include-excluded is checked', async () => {
+    render(<CompassImportDialog compassFile={selfTieFile} filePath="/tmp/cave.dat" />);
+
+    await userEvent.click(screen.getByTestId('compass-include-excluded'));
+
+    // 5 raw - 0 excluded (included) - (1 + 1) skipped = 3.
     expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('3');
     const footnote = screen.getByTestId('compass-shot-count-footnote');
-    expect(footnote).toHaveTextContent('3 invalid');
+    expect(footnote).toHaveTextContent('2 skipped: stations tied to themselves');
     expect(footnote).not.toHaveTextContent('excluded');
+    expect(screen.getByTestId('compass-survey-shots-0')).toHaveTextContent('3');
   });
 });

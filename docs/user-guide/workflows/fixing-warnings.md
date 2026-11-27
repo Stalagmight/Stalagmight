@@ -53,6 +53,10 @@ Some entries are not about a shot's readings:
 - A part of the survey the Closures Computed View could not adjust (a warning):
   **Go to station**, then fix the closures or zero datums the message names, or
   ignore it.
+- A piece of the survey that nothing places, with no zero datum and no
+  connection to a part that has one (a warning): merge a station onto the
+  survey or give the piece a zero datum, or ignore it when the piece is meant
+  to stay separate. See the [Warnings panel](../screens/warnings-panel.md).
 
 Switch back to the **Raw Data View** before **Edit zero datum** or **Remove
 this loop closure**: editing is off in the Closures Computed View. See

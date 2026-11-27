@@ -1561,8 +1561,10 @@
         "shotsTooltip": "Shots that will actually be imported under the current toggles",
         "excludedSuffix_one": "{{count}} excluded",
         "excludedSuffix_other": "{{count}} excluded",
-        "invalidSuffix_one": "{{count}} invalid",
-        "invalidSuffix_other": "{{count}} invalid",
+        "invalidSuffix_one": "{{count}} shot with no length, imported as a 1 mm tie",
+        "invalidSuffix_other": "{{count}} shots with no length, imported as 1 mm ties",
+        "skippedSuffix_one": "{{count}} skipped: a station tied to itself",
+        "skippedSuffix_other": "{{count}} skipped: stations tied to themselves",
         "datum": "Datum",
         "georeference": "Georeference",
         "noGeoreference": "None"
