@@ -56,6 +56,7 @@ const compassFile: CompassFile = {
   shot_count: 0,
   excluded_shot_count: 0,
   invalid_shot_counts: ZERO_INVALID_COUNTS,
+  skipped_shot_counts: ZERO_INVALID_COUNTS,
   has_backsights: false,
   datum: null,
   utm_zone: null,
@@ -186,8 +187,8 @@ describe('CompassImportDialog warning surfacing (#110)', () => {
  * Injection: flip `landingShotCountFor`'s
  * `includeExcluded ? 0 : excludedShotCount` term at CompassImportDialog.tsx
  * and the default-toggle assertion goes red; re-add a
- * `- invalidShotCountFor(...)` subtraction and the count assertions go red;
- * flip `invalidShotCountFor`'s `applyCorrections ? ... : ...` selection and
+ * `- noLengthShotCountFor(invalid_shot_counts...)` subtraction and the count
+ * assertions go red; flip `noLengthShotCountFor`'s `applyCorrections ? ... : ...` selection and
  * the corrections-toggle footnote assertion goes red.
  */
 describe('CompassImportDialog honest shot count (#437, #550)', () => {
@@ -214,6 +215,7 @@ describe('CompassImportDialog honest shot count (#437, #550)', () => {
           excluded_corrected: 1,
           excluded_uncorrected: 1,
         },
+        skipped_shot_counts: ZERO_INVALID_COUNTS,
         declination: 0,
       },
       {
@@ -228,6 +230,7 @@ describe('CompassImportDialog honest shot count (#437, #550)', () => {
           excluded_corrected: 0,
           excluded_uncorrected: 0,
         },
+        skipped_shot_counts: ZERO_INVALID_COUNTS,
         declination: 0,
       },
     ],
@@ -288,5 +291,84 @@ describe('CompassImportDialog honest shot count (#437, #550)', () => {
     const footnote = screen.getByTestId('compass-shot-count-footnote');
     expect(footnote).toHaveTextContent('3 shots with no length, imported as 1 mm ties');
     expect(footnote).not.toHaveTextContent('excluded');
+  });
+});
+
+/**
+ * A station tied to itself with no length is skipped by the converter, not
+ * tied (#818 keeps that skip), so the landing count drops it under the live
+ * toggles, the per-survey row too, and the footnote names it.
+ *
+ * Fixture: 5 shots, 1 excluded, no ties; skipped { non_excluded_corrected 1,
+ * non_excluded_uncorrected 2, excluded_corrected 1, excluded_uncorrected 0 }.
+ *
+ * Injection: drop the `- noLengthShotCountFor(skippedCounts...)` term from
+ * `landingShotCountFor` and every count goes red; read the skipped counters
+ * without the toggles (or the tie counters instead) and the corrections or
+ * include-excluded case goes red; drop the `skippedSuffix` part and the
+ * footnote assertions go red.
+ */
+describe('CompassImportDialog skipped stations tied to themselves (#818)', () => {
+  const skipped = {
+    non_excluded_corrected: 1,
+    non_excluded_uncorrected: 2,
+    excluded_corrected: 1,
+    excluded_uncorrected: 0,
+  };
+  const selfTieFile: CompassFile = {
+    ...compassFile,
+    survey_count: 1,
+    shot_count: 5,
+    excluded_shot_count: 1,
+    skipped_shot_counts: skipped,
+    surveys: [
+      {
+        name: 'A',
+        date: '2026-01-01',
+        team: null,
+        shot_count: 5,
+        excluded_shot_count: 1,
+        invalid_shot_counts: ZERO_INVALID_COUNTS,
+        skipped_shot_counts: skipped,
+        declination: 0,
+      },
+    ],
+  };
+
+  it('leaves out the skipped shot by default (corrections on)', async () => {
+    render(<CompassImportDialog compassFile={selfTieFile} filePath="/tmp/cave.dat" />);
+
+    // 5 raw - 1 excluded - 1 skipped = 3.
+    expect(await screen.findByTestId('compass-shot-count')).toHaveTextContent('3');
+    expect(screen.getByTestId('compass-shot-count-footnote')).toHaveTextContent(
+      '1 excluded, 1 skipped: a station tied to itself'
+    );
+    expect(screen.getByTestId('compass-survey-shots-0')).toHaveTextContent('3');
+  });
+
+  it('switches to the uncorrected skipped counter once apply-corrections is unchecked', async () => {
+    render(<CompassImportDialog compassFile={selfTieFile} filePath="/tmp/cave.dat" />);
+
+    await userEvent.click(screen.getByTestId('compass-apply-corrections'));
+
+    // 5 raw - 1 excluded - 2 skipped = 2.
+    expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('2');
+    expect(screen.getByTestId('compass-shot-count-footnote')).toHaveTextContent(
+      '1 excluded, 2 skipped: stations tied to themselves'
+    );
+    expect(screen.getByTestId('compass-survey-shots-0')).toHaveTextContent('2');
+  });
+
+  it('adds the excluded skipped counter once include-excluded is checked', async () => {
+    render(<CompassImportDialog compassFile={selfTieFile} filePath="/tmp/cave.dat" />);
+
+    await userEvent.click(screen.getByTestId('compass-include-excluded'));
+
+    // 5 raw - 0 excluded (included) - (1 + 1) skipped = 3.
+    expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('3');
+    const footnote = screen.getByTestId('compass-shot-count-footnote');
+    expect(footnote).toHaveTextContent('2 skipped: stations tied to themselves');
+    expect(footnote).not.toHaveTextContent('excluded');
+    expect(screen.getByTestId('compass-survey-shots-0')).toHaveTextContent('3');
   });
 });

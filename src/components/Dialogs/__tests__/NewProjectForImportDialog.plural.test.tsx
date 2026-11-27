@@ -33,6 +33,12 @@ const dialogData: {
           excluded_corrected: number;
           excluded_uncorrected: number;
         };
+        skipped_shot_counts: {
+          non_excluded_corrected: number;
+          non_excluded_uncorrected: number;
+          excluded_corrected: number;
+          excluded_uncorrected: number;
+        };
         cave_name?: string;
       }
     | undefined;
@@ -146,6 +152,12 @@ describe('NewProjectForImportDialog summary plurals (#447)', () => {
         excluded_corrected: 0,
         excluded_uncorrected: 0,
       },
+      skipped_shot_counts: {
+        non_excluded_corrected: 0,
+        non_excluded_uncorrected: 0,
+        excluded_corrected: 0,
+        excluded_uncorrected: 0,
+      },
       cave_name: 'Naharon',
     };
     dialogData.importType = 'compass';
@@ -168,6 +180,12 @@ describe('NewProjectForImportDialog summary plurals (#447)', () => {
         excluded_corrected: 0,
         excluded_uncorrected: 0,
       },
+      skipped_shot_counts: {
+        non_excluded_corrected: 0,
+        non_excluded_uncorrected: 0,
+        excluded_corrected: 0,
+        excluded_uncorrected: 0,
+      },
       cave_name: '',
     };
     dialogData.importType = 'compass';
@@ -177,12 +195,48 @@ describe('NewProjectForImportDialog summary plurals (#447)', () => {
     expect(screen.getByText('2 surveys - 4 shots')).toBeInTheDocument();
   });
 
+  // A station tied to itself with no length is skipped, not tied: the count
+  // drops the ones skipped under the dialog's defaults (corrections on,
+  // excluded shots left out), and only those.
+  it('leaves out the Compass stations tied to themselves that the import skips', () => {
+    dialogData.compassFile = {
+      survey_count: 2,
+      shot_count: 5,
+      excluded_shot_count: 1,
+      invalid_shot_counts: {
+        non_excluded_corrected: 0,
+        non_excluded_uncorrected: 0,
+        excluded_corrected: 0,
+        excluded_uncorrected: 0,
+      },
+      skipped_shot_counts: {
+        non_excluded_corrected: 1,
+        non_excluded_uncorrected: 2,
+        excluded_corrected: 1,
+        excluded_uncorrected: 1,
+      },
+      cave_name: '',
+    };
+    dialogData.importType = 'compass';
+
+    render(<NewProjectForImportDialog />);
+
+    // 5 raw - 1 excluded - 1 skipped (non_excluded_corrected) = 3.
+    expect(screen.getByText('2 surveys - 3 shots')).toBeInTheDocument();
+  });
+
   it('pluralizes the Compass summary (surveys_other) with no cave name', () => {
     dialogData.compassFile = {
       survey_count: 2,
       shot_count: 5,
       excluded_shot_count: 0,
       invalid_shot_counts: {
+        non_excluded_corrected: 0,
+        non_excluded_uncorrected: 0,
+        excluded_corrected: 0,
+        excluded_uncorrected: 0,
+      },
+      skipped_shot_counts: {
         non_excluded_corrected: 0,
         non_excluded_uncorrected: 0,
         excluded_corrected: 0,

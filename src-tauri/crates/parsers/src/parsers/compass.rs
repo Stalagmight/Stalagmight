@@ -70,7 +70,13 @@ pub struct CompassFile {
     /// arithmetic; it is exact in all four `(include_excluded,
     /// apply_corrections)` toggle states, unlike a single count computed
     /// under one fixed pair of assumptions (#437 follow-up, review of #550).
+    /// A shot from a station to itself is not counted here but in
+    /// `skipped_shot_counts`.
     pub invalid_shot_counts: InvalidShotCounts,
+    /// Shots with no length from a station to itself (`A2 A2 0 0 0`): they
+    /// connect nothing, so the converter skips them and they never land.
+    /// Same four-way split as `invalid_shot_counts`.
+    pub skipped_shot_counts: InvalidShotCounts,
     pub has_backsights: bool,
     pub datum: Option<String>,
     pub utm_zone: Option<i32>,
@@ -98,6 +104,9 @@ pub struct CompassSurveySummary {
     /// See `CompassFile::invalid_shot_counts`; same accounting, scoped to
     /// this survey.
     pub invalid_shot_counts: InvalidShotCounts,
+    /// See `CompassFile::skipped_shot_counts`; same accounting, scoped to
+    /// this survey.
+    pub skipped_shot_counts: InvalidShotCounts,
     pub declination: f64,
 }
 
@@ -501,10 +510,12 @@ fn excluded_shot_count(survey: &Survey) -> u32 {
 ///   one fixed corrections setting, went stale the moment the user flipped
 ///   that checkbox.
 ///
-/// Since #818 these shots land, so the landed count is
-/// `shot_count - (include_excluded ? 0 : excluded_shot_count)`; the four
-/// counters, picking the pair matching the live `apply_corrections` toggle,
-/// are how many of those landed shots are ties, exact in all four toggle
+/// Since #818 these shots land, except one from a station to itself, which
+/// the converter skips. So the landed count is
+/// `shot_count - (include_excluded ? 0 : excluded_shot_count) - skipped`,
+/// where `skipped` picks the counters of `skipped_shot_counts` matching the
+/// live toggles; the four `invalid_shot_counts` counters, picked the same
+/// way, are how many of the landed shots are ties, exact in all four toggle
 /// states.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
@@ -522,13 +533,28 @@ pub struct InvalidShotCounts {
     pub excluded_uncorrected: u32,
 }
 
+/// Whether a resolved length is no length: zero, negative after a
+/// correction, or not finite. The converter and the preview's counts share
+/// it, so the dialog's numbers follow what an import lands.
+fn has_no_length(length_m: f64) -> bool {
+    !length_m.is_finite() || length_m <= 0.0
+}
+
+/// A survey's shots with no length (`has_no_length`), in two sets of
+/// counters: the ties (`CompassFile::invalid_shot_counts`), then the shots
+/// from a station to itself the converter skips
+/// (`CompassFile::skipped_shot_counts`).
+///
 /// `anchor_lat_lng` is deliberately `None` here rather than resolving the
 /// real GPS anchor: it only feeds `Auto`-mode declination, which affects
 /// azimuth, never length, so it cannot change these counts. Any warnings
 /// `build_ctx` would emit are scratch - `build_preview` already carries the
 /// parser's own warnings and must not duplicate conversion-time ones it
 /// isn't otherwise running.
-fn invalid_shot_counts(survey: &Survey, file_state: &CompassFileState) -> InvalidShotCounts {
+fn no_length_shot_counts(
+    survey: &Survey,
+    file_state: &CompassFileState,
+) -> (InvalidShotCounts, InvalidShotCounts) {
     let opts_corrected = CompassImportOptions {
         include_excluded: false,
         apply_corrections: true,
@@ -543,28 +569,34 @@ fn invalid_shot_counts(survey: &Survey, file_state: &CompassFileState) -> Invali
     scratch.clear();
     let ctx_uncorrected = build_ctx(survey, file_state, None, &opts_uncorrected, &mut scratch);
 
-    let mut counts = InvalidShotCounts::default();
+    let mut ties = InvalidShotCounts::default();
+    let mut skipped = InvalidShotCounts::default();
     for shot in &survey.shots {
         let excluded = parse_flags(shot.flags.as_ref()).exclude_all;
         let (_, length_corrected, _) = shot_geometry(shot, &ctx_corrected);
         let (_, length_uncorrected, _) = shot_geometry(shot, &ctx_uncorrected);
+        let counts = if shot.from == shot.to {
+            &mut skipped
+        } else {
+            &mut ties
+        };
         if excluded {
-            if length_corrected <= 0.0 {
+            if has_no_length(length_corrected) {
                 counts.excluded_corrected += 1;
             }
-            if length_uncorrected <= 0.0 {
+            if has_no_length(length_uncorrected) {
                 counts.excluded_uncorrected += 1;
             }
         } else {
-            if length_corrected <= 0.0 {
+            if has_no_length(length_corrected) {
                 counts.non_excluded_corrected += 1;
             }
-            if length_uncorrected <= 0.0 {
+            if has_no_length(length_uncorrected) {
                 counts.non_excluded_uncorrected += 1;
             }
         }
     }
-    counts
+    (ties, skipped)
 }
 
 fn add_invalid_shot_counts(a: InvalidShotCounts, b: InvalidShotCounts) -> InvalidShotCounts {
@@ -587,15 +619,20 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
         .iter()
         .map(|s| excluded_shot_count(&s.survey))
         .sum::<u32>();
-    let per_survey_invalid_counts: Vec<InvalidShotCounts> = parsed
+    let per_survey_counts: Vec<(InvalidShotCounts, InvalidShotCounts)> = parsed
         .surveys
         .iter()
-        .map(|s| invalid_shot_counts(&s.survey, &s.state))
+        .map(|s| no_length_shot_counts(&s.survey, &s.state))
         .collect();
-    let invalid_shot_counts_total = per_survey_invalid_counts
-        .iter()
-        .copied()
-        .fold(InvalidShotCounts::default(), add_invalid_shot_counts);
+    let (invalid_shot_counts_total, skipped_shot_counts_total) = per_survey_counts.iter().fold(
+        (InvalidShotCounts::default(), InvalidShotCounts::default()),
+        |(ties, skipped), &(t, k)| {
+            (
+                add_invalid_shot_counts(ties, t),
+                add_invalid_shot_counts(skipped, k),
+            )
+        },
+    );
     let has_backsights = parsed
         .surveys
         .iter()
@@ -604,18 +641,21 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
     let surveys = parsed
         .surveys
         .iter()
-        .zip(per_survey_invalid_counts)
-        .map(|(s, invalid_counts)| CompassSurveySummary {
-            name: s.survey.name.clone(),
-            date: s.survey.date.to_string(),
-            team: non_empty(&s.survey.team),
-            shot_count: s.survey.shots.len() as u32,
-            excluded_shot_count: excluded_shot_count(&s.survey),
-            invalid_shot_counts: invalid_counts,
-            // Preview-only field, but it crosses IPC as a ts-rs `number`;
-            // a NaN would serialize as JSON null (#275).
-            declination: finite_or_zero(s.survey.parameters.declination),
-        })
+        .zip(per_survey_counts)
+        .map(
+            |(s, (invalid_counts, skipped_counts))| CompassSurveySummary {
+                name: s.survey.name.clone(),
+                date: s.survey.date.to_string(),
+                team: non_empty(&s.survey.team),
+                shot_count: s.survey.shots.len() as u32,
+                excluded_shot_count: excluded_shot_count(&s.survey),
+                invalid_shot_counts: invalid_counts,
+                skipped_shot_counts: skipped_counts,
+                // Preview-only field, but it crosses IPC as a ts-rs `number`;
+                // a NaN would serialize as JSON null (#275).
+                declination: finite_or_zero(s.survey.parameters.declination),
+            },
+        )
         .collect();
     CompassFile {
         cave_name: parsed.cave_name.clone(),
@@ -623,6 +663,7 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
         shot_count,
         excluded_shot_count: excluded_shot_count_total,
         invalid_shot_counts: invalid_shot_counts_total,
+        skipped_shot_counts: skipped_shot_counts_total,
         has_backsights,
         datum: parsed.datum.map(|d| format!("{d:?}")),
         utm_zone: parsed.utm_zone.map(i32::from),
@@ -1455,7 +1496,7 @@ pub fn convert_compass_to_import_configs(
             // A station tied to itself carries no connection and would put a
             // station twice into one chain. It used to be dropped with the
             // other zero-length shots; it still is, and says so (#275).
-            if shot.from == shot.to && (!length_m.is_finite() || length_m <= 0.0) {
+            if shot.from == shot.to && has_no_length(length_m) {
                 warnings.push(format!(
                     "Shot {} -> {}: skipped (a station tied to itself).",
                     shot.from, shot.to
@@ -2108,13 +2149,20 @@ mod tests {
     ///   non-excluded with `LENGTH 0.15`, valid uncorrected but invalid once
     ///   `-0.20` lands (-> `non_excluded_corrected`).
     ///
+    /// Each survey also ties stations to themselves, which the converter
+    /// skips when they have no length (`skipped_shot_counts`, not ties):
+    /// `A6 A6 0.00` has no length only uncorrected, `A7 A7 -1.00 #|X#` has
+    /// none either way, and `B2 B2 0.15` has none only corrected. With a
+    /// length, a station tied to itself lands like any shot.
+    ///
     /// The landed count is asserted against the preview in all four toggle
     /// combinations.
     ///
-    /// Injection: zero any ONE of the four `InvalidShotCounts` fields and its
-    /// pinned value above goes red; drop `excluded_shot_count` and the
-    /// default-toggle landed count goes red. Re-dropping zero-length shots in
-    /// the converter reds every toggle state's landed count (#818).
+    /// Injection: zero any ONE of the eight counters and its pinned value
+    /// above goes red, and so does at least one toggle state's landed count;
+    /// drop `excluded_shot_count` and the default-toggle landed count goes
+    /// red. Re-dropping zero-length shots in the converter, or counting a
+    /// skipped station tied to itself as a tie, reds the landed counts (#818).
     #[test]
     fn preview_shot_counts_match_the_landed_count_in_all_four_toggle_states() {
         let dir = tempfile::tempdir().unwrap();
@@ -2131,7 +2179,9 @@ mod tests {
              A2 A3 10.00 90.00 0.00 1.00 2.00 3.00 4.00 #|X#\r\n\
              A3 A4 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n\
              A4 A5 0.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n\
-             A5 A6 -1.00 90.00 0.00 1.00 2.00 3.00 4.00 #|X#\r\n";
+             A5 A6 -1.00 90.00 0.00 1.00 2.00 3.00 4.00 #|X#\r\n\
+             A6 A6 0.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n\
+             A7 A7 -1.00 90.00 0.00 1.00 2.00 3.00 4.00 #|X#\r\n";
         let survey_b = "Synthetic Cave\r\n\
              SURVEY NAME: B\r\n\
              SURVEY DATE: 7 10 1979\r\n\
@@ -2141,17 +2191,18 @@ mod tests {
              \r\n\
              FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT FLAGS COMMENTS\r\n\
              \r\n\
-             B1 B2 0.15 90.00 0.00 1.00 2.00 3.00 4.00\r\n";
+             B1 B2 0.15 90.00 0.00 1.00 2.00 3.00 4.00\r\n\
+             B2 B2 0.15 90.00 0.00 1.00 2.00 3.00 4.00\r\n";
         let dat = format!("{survey_a}\x0c\r\n{survey_b}\x0c\r\n");
         let path = dir.path().join("excluded.dat");
         std::fs::write(&path, &dat).unwrap();
 
         let parsed = parse_compass(&path).unwrap();
         let preview = build_preview(&parsed);
-        assert_eq!(preview.shot_count, 6, "raw shot count across both surveys");
+        assert_eq!(preview.shot_count, 9, "raw shot count across both surveys");
         assert_eq!(
-            preview.excluded_shot_count, 2,
-            "shots 2 and 5 in survey A are #|X#-flagged"
+            preview.excluded_shot_count, 3,
+            "shots 2, 5 and 7 in survey A are #|X#-flagged"
         );
         let counts = preview.invalid_shot_counts;
         assert_eq!(
@@ -2170,11 +2221,30 @@ mod tests {
             counts.excluded_uncorrected, 1,
             "survey A shot 5's raw -1.00 is invalid without corrections"
         );
+        assert_eq!(
+            preview.skipped_shot_counts,
+            InvalidShotCounts {
+                non_excluded_corrected: 1,
+                non_excluded_uncorrected: 1,
+                excluded_corrected: 1,
+                excluded_uncorrected: 1,
+            },
+            "B2 B2 corrected, A6 A6 uncorrected, A7 A7 either way"
+        );
         assert_eq!(preview.surveys.len(), 2);
         assert_eq!(preview.surveys[0].name, "A");
-        assert_eq!(preview.surveys[0].excluded_shot_count, 2);
+        assert_eq!(preview.surveys[0].excluded_shot_count, 3);
         assert_eq!(
             preview.surveys[0].invalid_shot_counts,
+            InvalidShotCounts {
+                non_excluded_corrected: 0,
+                non_excluded_uncorrected: 1,
+                excluded_corrected: 1,
+                excluded_uncorrected: 1,
+            }
+        );
+        assert_eq!(
+            preview.surveys[0].skipped_shot_counts,
             InvalidShotCounts {
                 non_excluded_corrected: 0,
                 non_excluded_uncorrected: 1,
@@ -2193,18 +2263,36 @@ mod tests {
                 excluded_uncorrected: 0,
             }
         );
+        assert_eq!(
+            preview.surveys[1].skipped_shot_counts,
+            InvalidShotCounts {
+                non_excluded_corrected: 1,
+                non_excluded_uncorrected: 0,
+                excluded_corrected: 0,
+                excluded_uncorrected: 0,
+            }
+        );
 
         // Exact landing arithmetic for the given toggles, mirroring what the
         // dialog computes from these same fields. Since #818 a shot with no
-        // length lands (as a 1 mm tie), so only the exclusion toggle removes
-        // shots; `invalid_shot_counts` names the ties, pinned above.
-        let landing = |include_excluded: bool, _apply_corrections: bool| -> u32 {
-            preview.shot_count
-                - if include_excluded {
-                    0
-                } else {
-                    preview.excluded_shot_count
-                }
+        // length lands (as a 1 mm tie) unless it ties a station to itself,
+        // so the exclusion toggle and the skipped counters remove shots;
+        // `invalid_shot_counts` names the ties, pinned above.
+        let landing = |include_excluded: bool, apply_corrections: bool| -> u32 {
+            let skipped = preview.skipped_shot_counts;
+            let (non_excluded, excluded) = if apply_corrections {
+                (skipped.non_excluded_corrected, skipped.excluded_corrected)
+            } else {
+                (
+                    skipped.non_excluded_uncorrected,
+                    skipped.excluded_uncorrected,
+                )
+            };
+            if include_excluded {
+                preview.shot_count - non_excluded - excluded
+            } else {
+                preview.shot_count - preview.excluded_shot_count - non_excluded
+            }
         };
 
         for include_excluded in [false, true] {

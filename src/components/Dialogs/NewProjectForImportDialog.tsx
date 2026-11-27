@@ -289,11 +289,16 @@ export default function NewProjectForImportDialog() {
               {t('dialogs.newProjectForImport.summary.separator')}
               {/* This dialog has no include-excluded / apply-corrections toggles
                   of its own - it hands off to CompassImportDialog, which
-                  defaults to `include_excluded: false`, so the landing count
-                  here subtracts only the excluded shots; zero-length shots
-                  land as 1 mm ties (#818). */}
+                  defaults to `include_excluded: false, apply_corrections:
+                  true`, so the landing count here subtracts the excluded
+                  shots and the stations tied to themselves skipped under
+                  those defaults (`skipped_shot_counts.non_excluded_corrected`);
+                  other zero-length shots land as 1 mm ties (#818). */}
               {t('dialogs.newProjectForImport.summary.shots', {
-                count: compassFile.shot_count - compassFile.excluded_shot_count,
+                count:
+                  compassFile.shot_count -
+                  compassFile.excluded_shot_count -
+                  compassFile.skipped_shot_counts.non_excluded_corrected,
               })}
               {compassFile.cave_name
                 ? `${t('dialogs.newProjectForImport.summary.separator')}${compassFile.cave_name}`
