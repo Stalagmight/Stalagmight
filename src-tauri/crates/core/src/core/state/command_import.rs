@@ -60,6 +60,18 @@ fn capped<T: Ord + Copy>(ids: impl IntoIterator<Item = T>) -> Vec<T> {
 /// source, file name and unit note in `decorate_receipt`).
 fn receipt_of(outcome: &ImportOutcome, closures_requested: u32) -> ImportReceipt {
     let mut warnings = Vec::new();
+    let ties = outcome.coincident_ties;
+    if ties > 0 {
+        let one = ties == 1;
+        warnings.push(format!(
+            "{ties} shot{} with no length {} given a negligible {} m length, so the stations \
+             on either end share one position on the map; any depth reading recorded at its \
+             two ends is kept",
+            if one { "" } else { "s" },
+            if one { "was" } else { "were" },
+            crate::parsers::geo::COINCIDENT_TIE_EPSILON_M,
+        ));
+    }
     if let Some(warning) = &outcome.surface_elevation_warning {
         warnings.push(warning.clone());
     }

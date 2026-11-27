@@ -52,7 +52,8 @@ readings disagree.
   Next**.
 - Errors can only be fixed. Warnings can also be ignored with **Ignore (keep
   value, don't warn again)**.
-- Three entries are not about a shot's readings. They sit on a nearby shot:
+- Four entries are not about a shot's readings. They sit on a shot near the
+  problem:
   - A [GPS fix](../concepts/zero-datums-and-gps-fixes.md) far from where the
     survey puts its station (a warning, listed on a shot next to the fix).
     The message gives the distance, its bearing and the limit. **Go to
@@ -68,6 +69,12 @@ readings disagree.
     shown there as measured (a warning, listed once that view, Plan or Export
     has been computed). The message says why, **Go to station** takes you to
     it, and it can be ignored.
+  - A piece of the survey that nothing places: a line, or lines joined
+    to it, with no zero datum and no connection to a part of the survey that
+    has one (a warning, listed on the piece's first shot). It is listed only
+    in a project with a zero datum. Merge a station onto the survey or give
+    the piece a zero datum. **Go to station** shows it, and it can be ignored
+    when the piece is meant to stay separate.
 - **Edit zero datum** and **Remove this loop closure** are off where editing
   is off, for example in the Closures Computed View.
 - **Show warnings** in a notice above the map opens this tab, see
